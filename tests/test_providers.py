@@ -788,6 +788,340 @@ class CodexHttpProviderTests(unittest.TestCase):
             with self.assertRaises(ProbeFailure):
                 provider.fetch()
 
+    def test_401_reloads_auth_json_and_retries(self) -> None:
+        # Regression: previously the provider cached _access_token at __init__ and never
+        # reloaded it, so running `codex login` after a 401 left aimonitor stuck on the
+        # stale token forever. The 401 path must re-read ~/.codex/auth.json from disk.
+        provider = self._make_provider()
+        self.assertEqual(provider._access_token, "test_access_token")
+
+        refreshed_auth = json.dumps(
+            {"tokens": {"access_token": "fresh_token", "account_id": "test_account_id"}}
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH") as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = refreshed_auth
+            with patch(
+                "ai_monitor.providers._http_json",
+                side_effect=[ProbeFailure("HTTP 401", ""), self.NORMAL_RESPONSE],
+            ):
+                status = provider.fetch()
+
+        self.assertEqual(provider._access_token, "fresh_token")
+        self.assertEqual(status.five_hour_percent_left, 80)
+
+    def test_401_with_valid_refresh_token_refreshes_silently(self) -> None:
+        # When the access_token is server-side revoked but the refresh_token still
+        # works, the OAuth refresh grant should mint a new pair, persist it to
+        # auth.json, and the retry should succeed — all without surfacing a
+        # re-auth prompt to the user. This is the common case after OpenAI rotates
+        # a session (e.g. sign-in elsewhere) while the refresh credential is intact.
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        auth_path = Path(tmpdir.name) / "auth.json"
+        auth_path.write_text(
+            json.dumps(
+                {
+                    "auth_mode": "chatgpt",
+                    "OPENAI_API_KEY": "sk-preserve-me",
+                    "tokens": {
+                        "access_token": "stale_access",
+                        "refresh_token": "good_refresh",
+                        "account_id": "acct_1",
+                        "id_token": "old_id",
+                    },
+                    "last_refresh": "2026-06-13T17:49:29.038739Z",
+                }
+            )
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            provider = CodexHttpProvider()
+
+            refresh_response = {
+                "access_token": "fresh_access",
+                "id_token": "fresh_id",
+                "refresh_token": "fresh_refresh",
+                "expires_in": 864000,
+            }
+
+            with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+                with patch(
+                    "ai_monitor.providers._http_json",
+                    side_effect=[
+                        ProbeFailure(
+                            "HTTP 401",
+                            '{"error":{"code":"token_invalidated"}}',
+                        ),
+                        refresh_response,
+                        self.NORMAL_RESPONSE,
+                    ],
+                ) as mock_http:
+                    status = provider.fetch()
+
+        # Three HTTP calls: usage(401) → refresh(200) → usage(200)
+        self.assertEqual(mock_http.call_count, 3)
+        self.assertEqual(status.five_hour_percent_left, 80)
+        # New access_token must be loaded into the provider for subsequent cycles.
+        self.assertEqual(provider._access_token, "fresh_access")
+        # auth.json must be merged, not clobbered — preserve unrelated fields.
+        on_disk = json.loads(auth_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["auth_mode"], "chatgpt")
+        self.assertEqual(on_disk["OPENAI_API_KEY"], "sk-preserve-me")
+        self.assertEqual(on_disk["tokens"]["access_token"], "fresh_access")
+        self.assertEqual(on_disk["tokens"]["refresh_token"], "fresh_refresh")
+        self.assertEqual(on_disk["tokens"]["id_token"], "fresh_id")
+        self.assertEqual(on_disk["tokens"]["account_id"], "acct_1")
+        # File mode must stay 0600 — auth.json holds long-lived OAuth credentials.
+        self.assertEqual(auth_path.stat().st_mode & 0o777, 0o600)
+
+    def test_401_with_invalidated_refresh_token_surfaces_reauth(self) -> None:
+        # If the refresh_token itself is revoked (refresh_token_invalidated from
+        # auth.openai.com), no amount of retrying will help — the user has to run
+        # `codex login` interactively. Surface the [1]-actionable message and stop.
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        auth_path = Path(tmpdir.name) / "auth.json"
+        auth_path.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "access_token": "stale_access",
+                        "refresh_token": "dead_refresh",
+                        "account_id": "acct_1",
+                    }
+                }
+            )
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            provider = CodexHttpProvider()
+            with patch(
+                "ai_monitor.providers._http_json",
+                side_effect=[
+                    ProbeFailure("HTTP 401", '{"error":{"code":"token_invalidated"}}'),
+                    ProbeFailure(
+                        "HTTP 401",
+                        '{"error":{"code":"refresh_token_invalidated",'
+                        '"message":"Your session has ended. Please log in again."}}',
+                    ),
+                ],
+            ) as mock_http:
+                with self.assertRaises(ProbeFailure) as ctx:
+                    provider.fetch()
+
+        self.assertEqual(mock_http.call_count, 2)
+        self.assertIn("re-authenticate", str(ctx.exception).lower())
+        # Auth.json must NOT be modified — the refresh failed before the write step.
+        on_disk = json.loads(auth_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["tokens"]["access_token"], "stale_access")
+        self.assertEqual(on_disk["tokens"]["refresh_token"], "dead_refresh")
+
+    def test_401_with_unchanged_auth_json_surfaces_reauth_error(self) -> None:
+        # If the file on disk still has the same (stale) token, don't waste a retry HTTP
+        # call — surface the "re-authenticate" message immediately. The _AUTH_PATH patch
+        # must stay active through fetch() so the 401-triggered reload sees the same JSON
+        # the constructor saw, not whatever ~/.codex/auth.json holds on the test host.
+        same_auth = json.dumps(
+            {"tokens": {"access_token": "test_access_token", "account_id": "test_account_id"}}
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH") as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = same_auth
+            provider = CodexHttpProvider()
+            with patch("ai_monitor.providers._http_json") as mock_http:
+                mock_http.side_effect = ProbeFailure("HTTP 401", "")
+                with self.assertRaises(ProbeFailure) as ctx:
+                    provider.fetch()
+        self.assertIn("re-authenticate", str(ctx.exception).lower())
+        # Exactly one HTTP call — no retry against the same token
+        self.assertEqual(mock_http.call_count, 1)
+
+    def test_refresh_tokens_returns_false_when_response_missing_access_token(self) -> None:
+        # _refresh_tokens returns False when the OAuth endpoint responds 200 but omits
+        # access_token (e.g. a shape change or error JSON without an HTTP error status).
+        # fetch() treats this like no refresh_token: falls back to the disk-reload path.
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        auth_path = Path(tmpdir.name) / "auth.json"
+        auth_path.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "access_token": "stale_access",
+                        "refresh_token": "some_refresh",
+                        "account_id": "acct_1",
+                    }
+                }
+            )
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            provider = CodexHttpProvider()
+            with patch(
+                "ai_monitor.providers._http_json",
+                side_effect=[
+                    ProbeFailure("HTTP 401", ""),
+                    {"token_type": "Bearer"},  # refresh response with no access_token
+                ],
+            ) as mock_http:
+                with self.assertRaises(ProbeFailure) as ctx:
+                    provider.fetch()
+
+        # usage(401) → refresh(200/no access_token) → _refresh_tokens returns False
+        # → raise original 401 → reload path sees same token → surfaces re-auth
+        self.assertEqual(mock_http.call_count, 2)
+        self.assertIn("re-authenticate", str(ctx.exception).lower())
+        # auth.json must be untouched — no partial write on a no-access_token response
+        on_disk = json.loads(auth_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk["tokens"]["access_token"], "stale_access")
+
+    def test_transient_refresh_failure_falls_back_to_reload_then_succeeds(self) -> None:
+        # When the refresh endpoint returns a transient error (e.g. 500, not
+        # refresh_token_invalidated), fetch() should fall back to the disk-reload path.
+        # If auth.json was meanwhile updated (e.g. by `codex login`), the retry succeeds.
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        auth_path = Path(tmpdir.name) / "auth.json"
+        auth_path.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "access_token": "stale_access",
+                        "refresh_token": "some_refresh",
+                        "account_id": "acct_1",
+                    }
+                }
+            )
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            provider = CodexHttpProvider()
+
+        normal_response = self.NORMAL_RESPONSE
+        call_count = 0
+
+        # usage_url and refresh_url calls are distinguishable by URL argument.
+        def side_effect_fn(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # initial usage call → 401
+                raise ProbeFailure("HTTP 401", "")
+            elif call_count == 2:
+                # refresh call → transient 500; also update disk to simulate `codex login`
+                auth_path.write_text(
+                    json.dumps(
+                        {
+                            "tokens": {
+                                "access_token": "refreshed_by_login",
+                                "account_id": "acct_1",
+                            }
+                        }
+                    )
+                )
+                raise ProbeFailure("HTTP 500", "internal server error")
+            else:
+                # retry usage call → success
+                return normal_response
+
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            with patch("ai_monitor.providers._http_json", side_effect=side_effect_fn):
+                status = provider.fetch()
+
+        # usage(401) → refresh(500) → reload → usage(200)
+        self.assertEqual(call_count, 3)
+        self.assertEqual(status.five_hour_percent_left, 80)
+        self.assertEqual(provider._access_token, "refreshed_by_login")
+
+    def test_transient_refresh_failure_and_missing_auth_json_surfaces_reauth(self) -> None:
+        # If auth.json disappears while recovering (e.g. the user deleted it),
+        # _load_creds raises FileNotFoundError — fetch() must surface the re-auth message.
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        auth_path = Path(tmpdir.name) / "auth.json"
+        auth_path.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "access_token": "stale_access",
+                        "refresh_token": "some_refresh",
+                        "account_id": "acct_1",
+                    }
+                }
+            )
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            provider = CodexHttpProvider()
+
+        call_count = 0
+
+        def side_effect_fn(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ProbeFailure("HTTP 401", "")
+            else:
+                # refresh call → 500 and delete auth.json mid-flight
+                auth_path.unlink()
+                raise ProbeFailure("HTTP 500", "internal server error")
+
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            with patch("ai_monitor.providers._http_json", side_effect=side_effect_fn):
+                with self.assertRaises(ProbeFailure) as ctx:
+                    provider.fetch()
+
+        self.assertEqual(call_count, 2)
+        self.assertIn("re-authenticate", str(ctx.exception).lower())
+
+    def test_reload_succeeds_but_retry_still_401_surfaces_reauth(self) -> None:
+        # If auth.json was updated (new token present) but that new token is also rejected
+        # with 401, fetch() must raise the re-auth ProbeFailure, not loop forever.
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        auth_path = Path(tmpdir.name) / "auth.json"
+        auth_path.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "access_token": "stale_access",
+                        "refresh_token": "some_refresh",
+                        "account_id": "acct_1",
+                    }
+                }
+            )
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            provider = CodexHttpProvider()
+
+        call_count = 0
+
+        def side_effect_fn(url, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ProbeFailure("HTTP 401", "")
+            elif call_count == 2:
+                # refresh call → 500; write a new (also-rejected) token to disk
+                auth_path.write_text(
+                    json.dumps(
+                        {
+                            "tokens": {
+                                "access_token": "also_stale",
+                                "account_id": "acct_1",
+                            }
+                        }
+                    )
+                )
+                raise ProbeFailure("HTTP 500", "server error")
+            else:
+                # retry usage call → 401 again (server still rejects)
+                raise ProbeFailure("HTTP 401", "")
+
+        with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
+            with patch("ai_monitor.providers._http_json", side_effect=side_effect_fn):
+                with self.assertRaises(ProbeFailure) as ctx:
+                    provider.fetch()
+
+        self.assertEqual(call_count, 3)
+        self.assertIn("re-authenticate", str(ctx.exception).lower())
+
 
 class ClaudeHttpProviderTests(unittest.TestCase):
     # Real API: {five_hour: {utilization, resets_at}, seven_day: {...}, seven_day_opus: {...}}

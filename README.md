@@ -35,7 +35,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 ## Requirements
 
 - Python 3.10+
-- Codex: `~/.codex/auth.json` present (created by `codex login`)
+- Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow.
 - Claude: `~/.claude/` credentials present (created by `claude login`)
 - Gemini: `~/.gemini/oauth_creds.json` present (created by `gemini` sign-in)
 - Copilot: `gh` CLI on `PATH` and authenticated (`gh auth login`)
@@ -178,5 +178,5 @@ Project docs:
 
 - **README.md** — setup, usage, architecture overview
 - **HISTORY.md** — change log for every session (features, bugs, regressions)
-- **tasks.md** — backlog and in-progress work
+- **TASKS.md** — backlog and in-progress work
 - **pyproject.toml** — dependencies (`ruff`, `pytest`) and tool config

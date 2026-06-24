@@ -738,7 +738,7 @@ Expected: All checks passed!
 Run: `uv run python -m ai_monitor --once --providers Claude,Gemini 2>&1 | head -30`
 Expected: Dashboard renders. If any provider has an auth error, `[N] fix <Name>` should appear in the footer.
 
-- [ ] **Step 4: Update tasks.md**
+- [ ] **Step 4: Update TASKS.md**
 
 Add completed task entry:
 
@@ -753,6 +753,6 @@ Add entry for this feature.
 - [ ] **Step 6: Final commit**
 
 ```bash
-git add tasks.md HISTORY.md
+git add TASKS.md HISTORY.md
 git commit -m "docs: add auth fix actions to task list and history"
 ```

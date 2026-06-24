@@ -253,6 +253,35 @@ class IsAuthErrorTests(unittest.TestCase):
         expected = {"Claude", "Codex", "Gemini", "Copilot", "Cursor", "Vibe"}
         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
 
+    def test_codex_action_guards_against_blind_clobber(self) -> None:
+        # Regression: 2026-06-13. The bare `codex login` command wipes ~/.codex/auth.json at the
+        # start of its OAuth flow, so an abandoned login leaves the user fully logged out — and a
+        # mistakenly-pressed [1] (or a re-press after the 5s cooldown) can clobber a token that
+        # was just successfully refreshed. The guard must show the existing file state AND require
+        # an explicit Enter before invoking `codex login`.
+        kind, target = AUTH_ACTIONS["Codex"]
+        self.assertEqual(kind, "cli")
+        self.assertIn("ls -la ~/.codex/auth.json", target)
+        self.assertIn("read -p", target)
+        self.assertIn("Ctrl-C", target)
+        # The destructive call is still there — the guard precedes it, doesn't replace it.
+        self.assertIn("codex login", target)
+        # AppleScript safety: the do-script string is wrapped in double quotes, so the target
+        # must not contain unescaped double quotes that would break out of the AppleScript string.
+        self.assertNotIn('"', target)
+
+    def test_codex_action_target_survives_applescript_embedding(self) -> None:
+        # `_launch_fix` embeds the target via f-string into a double-quoted AppleScript literal:
+        #   'tell application "Terminal" to do script "{target}"'
+        # If `target` contains an unescaped `"` the AppleScript closes early and the rest is
+        # parsed as a separate statement (best case: syntax error; worst case: arbitrary
+        # AppleScript executes). Pin this invariant for every CLI action.
+        for name, (kind, target) in AUTH_ACTIONS.items():
+            if kind == "cli":
+                self.assertNotIn(
+                    '"', target, f"AUTH_ACTIONS[{name!r}] target contains an unescaped double quote"
+                )
+
 
 class ProductionAuthMessageRoutingTests(unittest.TestCase):
     # These tests pin the verbatim error strings emitted by providers.py so the

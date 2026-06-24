@@ -40,7 +40,16 @@ from .ui import (
 
 AUTH_ACTIONS: dict[str, tuple[str, str]] = {
     "Claude": ("cli", "claude login"),
-    "Codex": ("cli", "codex login"),
+    # `codex login` is destructive: it wipes ~/.codex/auth.json at the start of the OAuth flow,
+    # so an abandoned login (e.g. user dismisses the browser) leaves them fully logged out — even
+    # if the previous token was healthy. Guard the [1] shortcut by surfacing the current auth.json
+    # state and requiring an explicit Enter before clobbering. See HISTORY.md 2026-06-13.
+    "Codex": (
+        "cli",
+        "ls -la ~/.codex/auth.json 2>&1; "
+        "read -p '[Enter] runs codex login (overwrites token), [Ctrl-C] aborts: ' _; "
+        "codex login",
+    ),
     "Gemini": ("cli", "gemini"),
     "Copilot": ("cli", "gh auth login"),
     "Cursor": ("browser", "https://cursor.sh"),

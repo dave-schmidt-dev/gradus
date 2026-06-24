@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -58,7 +59,14 @@ def _http_json(
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        raise ProbeFailure(f"HTTP {exc.code}", f"{method} {url} → HTTP {exc.code}") from exc
+        # Capture the error body in raw_text so callers can inspect provider-specific
+        # error codes (e.g. Codex distinguishes token_invalidated from
+        # refresh_token_invalidated, which determines whether a silent refresh helps).
+        try:
+            err_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:  # pragma: no cover - defensive
+            err_body = ""
+        raise ProbeFailure(f"HTTP {exc.code}", err_body) from exc
     except urllib.error.URLError as exc:
         raise ProbeFailure(f"Network error: {exc.reason}", f"{method} {url}") from exc
     try:
@@ -969,6 +977,10 @@ class CodexHttpProvider:
 
     _USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
     _AUTH_PATH = Path.home() / ".codex" / "auth.json"
+    # OAuth values extracted from the Codex CLI binary (`strings /opt/homebrew/bin/codex`):
+    # the refresh endpoint and the public client_id used for the ChatGPT desktop/CLI app.
+    _REFRESH_URL = "https://auth.openai.com/oauth/token"
+    _CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
     def __init__(self) -> None:
         if not self._AUTH_PATH.exists():
@@ -982,30 +994,122 @@ class CodexHttpProvider:
             raise FileNotFoundError(f"Failed to read Codex auth: {exc}") from exc
         tokens = data.get("tokens") or {}
         self._access_token: str = tokens.get("access_token", "")
+        self._refresh_token: str = tokens.get("refresh_token", "")
         self._account_id: str = tokens.get("account_id", "")
         if not self._access_token:
             raise FileNotFoundError("Codex auth.json missing tokens.access_token")
 
-    def fetch(self) -> CodexStatus:
+    def _request_usage(self) -> dict[str, Any]:
+        return _http_json(
+            self._USAGE_URL,
+            headers={
+                "Authorization": f"Bearer {self._access_token}",
+                "Account-Id": self._account_id,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+        )
+
+    def _refresh_tokens(self) -> bool:
+        """Try the OAuth refresh_token grant and persist new tokens on success.
+
+        Returns True if auth.json was updated with new tokens, False if there is no
+        refresh_token available. Raises ProbeFailure with the re-auth message if the
+        endpoint reports the refresh_token itself is invalidated (user must log in
+        interactively).
+        """
+        if not self._refresh_token:
+            return False
+        body = json.dumps(
+            {
+                "client_id": self._CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": self._refresh_token,
+                "scope": "openid profile email",
+            }
+        ).encode("utf-8")
         try:
-            payload = _http_json(
-                self._USAGE_URL,
+            resp = _http_json(
+                self._REFRESH_URL,
+                method="POST",
                 headers={
-                    "Authorization": f"Bearer {self._access_token}",
-                    "Account-Id": self._account_id,
-                    "Accept": "application/json",
                     "Content-Type": "application/json",
+                    "Accept": "application/json",
                 },
+                body=body,
             )
         except ProbeFailure as exc:
-            if "HTTP 401" in str(exc):
-                # Clear cached token so next init reloads
-                self._access_token = ""
+            # Auth0 / OpenAI surface refresh_token_invalidated when the refresh token
+            # is itself revoked — at that point only an interactive `codex login` can
+            # recover. Any other 4xx/5xx is transient or shape-related; let the caller
+            # decide whether to surface or retry.
+            if "refresh_token_invalidated" in (exc.raw_text or ""):
                 raise ProbeFailure(
                     "Codex session expired: run `codex` to re-authenticate",
-                    str(exc),
+                    exc.raw_text,
                 ) from exc
             raise
+        new_access = resp.get("access_token")
+        if not new_access:
+            return False
+        # Merge into the on-disk file so we don't drop OPENAI_API_KEY, auth_mode, or
+        # account_id (the refresh response only returns id/access/refresh tokens).
+        try:
+            on_disk = json.loads(self._AUTH_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            on_disk = {}
+        tokens = dict(on_disk.get("tokens") or {})
+        tokens["access_token"] = new_access
+        if resp.get("id_token"):
+            tokens["id_token"] = resp["id_token"]
+        if resp.get("refresh_token"):
+            tokens["refresh_token"] = resp["refresh_token"]
+        on_disk["tokens"] = tokens
+        on_disk["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        # Atomic write: tempfile in the same dir, chmod 600 before rename so the new
+        # file is never world-readable even momentarily.
+        tmp = self._AUTH_PATH.with_suffix(self._AUTH_PATH.suffix + ".tmp")
+        tmp.write_text(json.dumps(on_disk, indent=2), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self._AUTH_PATH)
+        self._load_creds()
+        return True
+
+    def fetch(self) -> CodexStatus:
+        expired = ProbeFailure("Codex session expired: run `codex` to re-authenticate", "")
+        try:
+            payload = self._request_usage()
+        except ProbeFailure as exc:
+            if "HTTP 401" not in str(exc):
+                raise
+            # Two recovery paths on 401:
+            #   1. The on-disk refresh_token still works → mint a new access_token
+            #      ourselves (silent, the common case after server-side rotation).
+            #   2. The user already ran `codex login` since startup → reload creds
+            #      from disk and retry once.
+            # If both fail, the user has to re-authenticate interactively.
+            try:
+                if self._refresh_tokens():
+                    payload = self._request_usage()
+                else:
+                    raise exc
+            except ProbeFailure as refresh_exc:
+                if "re-authenticate" in str(refresh_exc):
+                    raise
+                # Refresh hit a transient/other error — fall back to the reload path.
+                old_token = self._access_token
+                try:
+                    self._load_creds()
+                except FileNotFoundError:
+                    raise ProbeFailure(str(expired), str(exc)) from exc
+                if self._access_token == old_token:
+                    raise ProbeFailure(str(expired), str(exc)) from exc
+                try:
+                    payload = self._request_usage()
+                except ProbeFailure as retry_exc:
+                    if "HTTP 401" in str(retry_exc):
+                        raise ProbeFailure(str(expired), str(retry_exc)) from retry_exc
+                    raise
 
         raw_text = json.dumps(payload, indent=2, sort_keys=True)
 
