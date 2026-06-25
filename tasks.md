@@ -1,40 +1,7 @@
 # tasks
 
-- [x] Build a terminal monitor that probes Codex and Claude usage locally.
-- [x] Refresh the dashboard every minute by default.
-- [x] Add parser coverage for representative Codex and Claude output.
-- [x] Document setup and usage.
-- [x] Prepare the repo for GitHub with screenshots, docs, and ignore rules.
-- [x] Make Gemini auth-related probe failures explicit instead of generic stats parse errors.
-- [x] Repair all provider probes after CLI output changes (Codex PTY noise, Claude compact usage panel, Gemini bundled internal quota probe).
-- [x] Add GitHub Copilot as a fourth monitored provider with premium request parsing and dashboard rows aligned with the other cards.
-- [x] Refine Copilot card semantics to monthly remaining/reset/pace with one-decimal percentage output.
-- [x] Show an explicit updating state during timed refresh instead of a frozen countdown at 0s.
-- [x] Fix updating-state redraw spam and keep refresh in-place without flooding full frames.
-- [x] Switch Copilot month reset target to UTC and add a color progress bar for `month rem`.
-- [x] Restore live startup and countdown timers while preserving in-place terminal repaint behavior.
-- [x] Replace terminal repaint strategy with cursor-relative redraw to keep animated frames in-place across terminals with inconsistent absolute-home/alternate-screen support.
-- [x] Fix frame accumulation regression: cursor-relative repaint fails when content exceeds terminal height; replaced with full-clear (`\033[2J\033[H`) repaint strategy.
-- [x] Replace hand-rolled ANSI rendering with `rich` library (Live, Panel, Table.grid, custom PercentageBar). See `plans/rich-rendering-refactor-tasks.md` for full task breakdown.
-- [x] Make the display more compact (reduce vertical space per card, tighter grid). (Achieved as side effect of Rich Panel rendering.)
-- [x] Add Mistral (vibe) as a fifth monitored provider. (Cookie-based auth to console.mistral.ai API.)
-- [x] Add Cursor agent usage as a sixth monitored provider. (Direct API to api2.cursor.sh with SQLite token.)
-- [x] Add keyboard shortcuts in live mode (e.g., `r` to force refresh, `q` to quit).
-- [x] Add config file for enabling/disabling providers.
-- [x] Add notification hooks when usage crosses thresholds (e.g., under 20%).
-- [x] Add direct HTTP API probes for all 4 PTY providers (Copilot, Codex, Claude, Gemini). Use `--compare` to validate parity before switching defaults.
-- [x] Make HTTP providers the default; removed all PTY infrastructure (`pty_session.py`, 4 PTY provider classes, `parsing.py` parse functions, `--compare` flag). Net ~1,500 lines removed.
-- [x] Auth fix actions: numbered key hints for auth-errored providers, launching Terminal or browser to fix.
-- [x] Fix Gemini token refresh (missing client_id/secret), stale creds reload, launch debounce, file logging.
-- [x] Fix Vibe usage parsing so Mistral `usage_percentage` matches the billing console.
-- [x] Clean up Cursor nested JSON parsing so `planUsage` and `planInfo` match the live API payload.
-- [x] Remove the low-value Cursor `pl` plan row from the TUI card.
-- [x] Make Cursor percentage tracking use the included API-spend bucket (`remaining / limit`) instead of Cursor's inconsistent `totalPercentUsed` field.
-- [x] Rename the Cursor TUI row label from `mo` to `ap` so it matches the included API-spend metric.
-- [x] Graceful network error handling: retain cached data during transient outages, show offline in title, stale after 5m.
-- [x] Fix Vibe pace shown as `n/a` after Mistral's 2026-05-27 Le Chat → Vibe rebrand (API dropped `start_date`/`end_date`); derive cycle boundaries client-side from `reset_at` (monthly, anchored to 1st UTC).
-- [x] Add PaceLabel narrow-mode rendering: collapse pace cell to arrow notation (`↑Npt`, `↓Npt`, `=`, `—`) when console width < 93 chars.
-- [x] Fix Cursor/Claude/Vibe spurious re-auth prompts by caching browser cookies locally to survive Safari disk-sync lag.
+> Live queue for current/pending/future work only — never history. Completed work goes to `HISTORY.md`; `done` rows are ported and deleted in the same change.
+
 - [ ] Add `--web` mode to serve the dashboard as a local HTML page.
 - [ ] Add system tray / menu bar integration.
 - [ ] **(Parked) Antigravity premium-model credits (Opus, gpt-oss).** Not probeable via REST: metered as Codeium-style AI credits over the local language-server gRPC path, authenticated by `agy`'s Keychain credential — no JSON endpoint replicable with the existing provider pattern. **Revisit only if** Google exposes a REST credits endpoint, or it becomes worth a separate gRPC spike (needs `exa.*` protos + Keychain token extraction). Status: parked.
