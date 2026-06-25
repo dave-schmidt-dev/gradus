@@ -24,7 +24,6 @@ from rich.live import Live
 from .providers import (
     ClaudeHttpProvider,
     CodexHttpProvider,
-    CopilotHttpProvider,
     CursorProvider,
     GeminiHttpProvider,
     ProviderSnapshot,
@@ -50,8 +49,7 @@ AUTH_ACTIONS: dict[str, tuple[str, str]] = {
         "read -p '[Enter] runs codex login (overwrites token), [Ctrl-C] aborts: ' _; "
         "codex login",
     ),
-    "Gemini": ("cli", "gemini"),
-    "Copilot": ("cli", "gh auth login"),
+    "Gemini": ("cli", "agy"),
     "Cursor": ("browser", "https://cursor.sh"),
     "Vibe": ("browser", "https://console.mistral.ai"),
 }
@@ -124,7 +122,7 @@ def _launch_fix(kind: str, target: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Monitor Codex, Claude, Gemini, and Copilot usage in real time."
+        description="Monitor Codex, Claude, Antigravity, Cursor, and Vibe usage in real time."
     )
     parser.add_argument("--interval", type=int, default=120, help="Refresh interval in seconds.")
     parser.add_argument("--once", action="store_true", help="Fetch one snapshot and exit.")
@@ -185,14 +183,6 @@ def initialize_providers(
         except Exception as exc:  # noqa: BLE001
             providers.append(("Gemini", exc))
 
-    if enabled is None or "Copilot" in enabled:
-        try:
-            copilot = CopilotHttpProvider()
-            providers.append(("Copilot", copilot))
-            cleanup.append(copilot)
-        except Exception as exc:  # noqa: BLE001
-            providers.append(("Copilot", exc))
-
     if enabled is None or "Cursor" in enabled:
         try:
             cursor = CursorProvider()
@@ -252,7 +242,6 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
         "could not load usage data",
         "empty claude output",
         "empty gemini output",
-        "empty copilot output",
         "missing current session",
         "data not available yet",
         "http 429",
@@ -473,7 +462,7 @@ def main() -> int:
                     while not future.done():
                         live.update(
                             build_loading_screen(
-                                "Getting initial usage from Claude, Codex, Copilot, Cursor, Gemini, and Vibe…",
+                                "Getting initial usage from Claude, Codex, Antigravity, Cursor, and Vibe…",
                                 datetime.now(),
                                 time.monotonic() - started,
                             )

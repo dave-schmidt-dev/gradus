@@ -145,10 +145,6 @@ class ProviderPanelTests(unittest.TestCase):
             "pro_percent_left": 83,
             "pro_reset": "resets in 22h 23m",
         }
-        self.copilot_data = {
-            "premium_percent_left": 97.6,
-            "premium_reset": "Resets Apr 01 12:00 AM",
-        }
 
     def test_codex_panel_contains_labels_and_values(self) -> None:
         snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=self.codex_data)
@@ -168,20 +164,14 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("73%", output)
 
     def test_gemini_panel_shows_flash_and_pro(self) -> None:
+        # Canonical provider key stays "Gemini"; the panel now renders as
+        # "Antigravity" (agy), which draws from the same Gemini request-quota pool.
         snap = ProviderSnapshot(name="Gemini", ok=True, source="cli", data=self.gemini_data)
         output = _capture(build_provider_panel(snap, self.now), width=44)
-        self.assertIn("Gemini", output)
-        # Card covers Antigravity (agy), which shares the Gemini quota pool.
         self.assertIn("Antigravity", output)
+        self.assertNotIn("Gemini", output)
         self.assertIn("fl", output)
         self.assertIn("pr", output)
-
-    def test_copilot_panel_shows_monthly_metrics(self) -> None:
-        snap = ProviderSnapshot(name="Copilot", ok=True, source="cli", data=self.copilot_data)
-        output = _capture(build_provider_panel(snap, self.now), width=44)
-        self.assertIn("Copilot", output)
-        self.assertIn("mo", output)
-        self.assertIn("98%", output)
 
     def test_error_panel_shows_error_message(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=False, source="cli", error="connection timeout")
@@ -336,20 +326,6 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("1w", output)
         self.assertNotIn("▓", output)
         self.assertNotIn("91%", output)
-
-    def test_empty_view_copilot(self) -> None:
-        snap = ProviderSnapshot(
-            name="Copilot",
-            ok=True,
-            source="cli",
-            data={
-                "premium_percent_left": 0,
-                "premium_reset": "Resets Apr 01 at 12:00 AM",
-            },
-        )
-        output = _capture(build_provider_panel(snap, self.now), width=70)
-        self.assertIn("until", output)
-        self.assertNotIn("▓", output)
 
     def test_empty_view_cursor(self) -> None:
         snap = ProviderSnapshot(
@@ -592,7 +568,6 @@ class NoANSIRegressionTests(unittest.TestCase):
             ("Codex", {"five_hour_percent_left": 50, "weekly_percent_left": 80}),
             ("Claude", {"session_percent_left": 30, "weekly_percent_left": 90}),
             ("Gemini", {"flash_percent_left": 75, "pro_percent_left": 60}),
-            ("Copilot", {"premium_percent_left": 95.0}),
         ):
             with self.subTest(provider=name):
                 snap = ProviderSnapshot(name=name, ok=True, source="cli", data=data)
@@ -761,7 +736,7 @@ class AuthFixFooterTests(unittest.TestCase):
                 name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
             ),
         ]
-        fix_actions = {"1": ("Gemini", "cli", "gemini")}
+        fix_actions = {"1": ("Gemini", "cli", "agy")}
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
         output = _capture(dashboard, width=80)
         self.assertIn("[1]", output)
@@ -777,7 +752,7 @@ class AuthFixFooterTests(unittest.TestCase):
         ]
         fix_actions = {
             "1": ("Cursor", "browser", "https://cursor.sh"),
-            "2": ("Gemini", "cli", "gemini"),
+            "2": ("Gemini", "cli", "agy"),
         }
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
         output = _capture(dashboard, width=100)
@@ -811,7 +786,7 @@ class AuthFixFooterTests(unittest.TestCase):
         snaps = [
             ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
         ]
-        fix_actions = {"1": ("Gemini", "cli", "gemini")}
+        fix_actions = {"1": ("Gemini", "cli", "agy")}
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
         output = _capture(dashboard, width=80)
         self.assertIn("auth error", output)

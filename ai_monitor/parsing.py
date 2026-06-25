@@ -1,4 +1,4 @@
-"""Status dataclasses for Codex, Claude, Gemini, Copilot, Cursor, and Vibe providers."""
+"""Status dataclasses for Codex, Claude, Gemini, Cursor, and Vibe providers."""
 
 from __future__ import annotations
 
@@ -44,18 +44,6 @@ class GeminiStatus:
     pro_reset: str | None
     account_email: str | None
     account_tier: str | None
-    raw_text: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass(slots=True)
-class CopilotStatus:
-    premium_requests: int | None
-    sample_duration_seconds: int | None
-    premium_percent_left: float | None
-    premium_reset: str | None
     raw_text: str
 
     def to_dict(self) -> dict[str, Any]:

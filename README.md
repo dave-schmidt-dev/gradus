@@ -1,6 +1,6 @@
 # ai_monitor
 
-Real-time terminal monitor for local `codex`, `claude`, `gemini`, `copilot`, `cursor`, and `vibe` usage.
+Real-time terminal monitor for local `codex`, `claude`, `agy`, `cursor`, and `vibe` usage.
 
 Probes provider APIs directly using locally authenticated credentials — no PTY, no CLI scraping. Each provider uses its own HTTP or internal API path, so probes are fast and reliable.
 
@@ -12,14 +12,12 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 
 - Monitors Codex usage via the OpenAI usage API
 - Monitors Claude usage via the Anthropic account API
-- Monitors Gemini usage via the Cloud Code internal quota API (OAuth); the same card also covers Google Antigravity (`agy`), which shares the Gemini request-quota pool. (Antigravity's premium-model credits — Opus, gpt-oss — are metered separately over a Codeium gRPC path with no probeable REST endpoint; see HISTORY.md 2026-05-23.)
-- Monitors Copilot premium-request usage via the GitHub Copilot internal API
+- Monitors Antigravity (`agy`) usage via the Cloud Code internal quota API (OAuth), using the shared `~/.gemini/oauth_creds.json` token and the same per-model request-quota pool. (Antigravity's premium-model credits — Opus, gpt-oss — are metered separately over a Codeium gRPC path with no probeable REST endpoint; see HISTORY.md 2026-05-23.)
 - Monitors Cursor credit usage via the Cursor Dashboard API
 - Monitors Vibe usage via the Mistral billing API
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude 5-hour and 1-week session usage, reset times, and pace indicators
-- Shows Gemini Flash and Pro pool remaining percentages with reset countdowns
-- Shows Copilot monthly premium remaining (`month rem`) with a color progress bar, monthly reset (`month reset`), and monthly pace (`month pace`) in the same card style
+- Shows Antigravity Flash and Pro pool remaining percentages with reset countdowns
 - Shows Cursor included API-spend remaining, reset, and billing-cycle pace
 - Shows Vibe monthly remaining (`month rem`), reset, and billing-cycle pace
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
@@ -37,8 +35,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Python 3.10+
 - Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow.
 - Claude: `~/.claude/` credentials present (created by `claude login`)
-- Gemini: `~/.gemini/oauth_creds.json` present (created by `gemini` sign-in)
-- Copilot: `gh` CLI on `PATH` and authenticated (`gh auth login`)
+- Antigravity (`agy`): `~/.gemini/oauth_creds.json` present (created by `agy` sign-in)
 - Cursor: app or browser session authenticated
 - Mistral console session authenticated (Safari/Chrome cookie extraction supported)
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
@@ -69,7 +66,7 @@ Optional config file (`.ai_monitor.json` in your current working directory):
 
 ```json
 {
-  "providers": ["Claude", "Codex", "Copilot", "Cursor", "Gemini", "Vibe"],
+  "providers": ["Claude", "Codex", "Cursor", "Gemini", "Vibe"],
   "interval": 120,
   "threshold": 20
 }
@@ -93,12 +90,12 @@ Codex and Claude cards show:
 - `5h`: remaining usage for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining usage for the current 1-week window, weekly reset time, pace indicator
 
-Gemini card shows:
+Antigravity card shows:
 
 - `fl`: Flash pool remaining, reset countdown
 - `pr`: Pro pool remaining, reset countdown
 
-Copilot / Cursor / Vibe cards show:
+Cursor / Vibe cards show:
 
 - `mo`: monthly remaining percentage, billing-cycle reset, pace indicator
 - `ap`: Cursor included API-spend remaining percentage, billing-cycle reset, pace indicator
@@ -139,8 +136,7 @@ Example:
 
 ## Notes
 
-- Gemini probing calls `loadCodeAssist` before `retrieveUserQuota` to register the session; auth failures surface as a clear re-authenticate message.
-- Copilot probing calls the `gh auth token` helper to retrieve a live GitHub token without storing it locally.
+- Gemini/Antigravity probing calls `loadCodeAssist` before `retrieveUserQuota` to register the session; auth failures surface as a clear re-authenticate message.
 - Claude probing reads `~/.claude/` OAuth credentials directly; run `claude login` to refresh if probes fail.
 - During each timed refresh, the header switches from `refresh XXs` to a single in-place `updating …` state until all providers complete, then resumes the countdown.
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
@@ -152,17 +148,16 @@ Example:
 
 ## Limitations
 
-- This depends on current local CLI/API behavior across `codex`, `claude`, `gemini`, `copilot`, `cursor`, and `vibe`.
+- This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `cursor`, and `vibe`.
 - If any vendor changes its TUI wording or layout, the parser may need to be updated.
 - Reset windows are only shown when the CLI output exposes them.
 - Terminal rendering can vary across fonts and terminal emulators.
-- Copilot currently relies on the status-line remaining percentage signal; if Copilot CLI omits it, `month rem` and `month pace` can still show `n/a`.
 
 ## Known Issues
 
 - **Claude `/usage` may return "only available for subscription plans"** even on valid Team or Pro seats. This is a server-side issue where the Anthropic usage API returns empty limit buckets (`five_hour`, `seven_day`, `seven_day_sonnet` are all null). The PTY probe itself works correctly. When the API starts returning data again, the Claude card will populate automatically.
-- Gemini prefers a direct internal quota probe and only falls back to PTY `/stats` scraping if that path is unavailable.
-- If Gemini falls back to PTY probing and shows a **waiting for authentication** screen, `ai_monitor` now reports that directly. Run `gemini` once and complete sign-in, then rerun the monitor.
+- The Antigravity card prefers a direct internal quota probe and only falls back to PTY `/stats` scraping if that path is unavailable.
+- If the Antigravity card falls back to PTY probing and shows a **waiting for authentication** screen, `ai_monitor` now reports that directly. Run `agy` once and complete sign-in, then rerun the monitor.
 
 ## Development
 

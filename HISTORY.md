@@ -1,5 +1,10 @@
 # History
 
+## 2026-06-24
+
+- **Removed the GitHub Copilot provider entirely (no longer useful).** Deleted `CopilotStatus`, `CopilotHttpProvider`, the Copilot render spec/rows/empty-view/monthly-reset helper, the auth action, provider registration, and all Copilot tests. | files: ai_monitor/parsing.py, ai_monitor/providers.py, ai_monitor/ui.py, ai_monitor/__main__.py, tests/test_main.py, tests/test_providers.py, tests/test_ui.py
+- **Relabeled the Google card "Gemini · Antigravity" → "Antigravity" (user dropped the Gemini CLI for `agy`).** Display-only title change via `DISPLAY_TITLES`; canonical provider key stays `"Gemini"`; probe unchanged (shared `~/.gemini/oauth_creds.json` token + cloudcode-pa quota pool that `agy` draws from). Re-auth action changed `gemini` → `agy`. | files: ai_monitor/ui.py, ai_monitor/__main__.py, tests/test_ui.py, tests/test_main.py
+
 ## 2026-06-15
 
 - **[bug] Codex card flipped back to `auth error — press [1] to fix` two days after the 06-13 re-auth.** Pressed `[1]` did not silently resolve it: the underlying `~/.codex/auth.json` access_token was server-side revoked (`x-openai-ide-error-code: token_invalidated` from `chatgpt.com/backend-api/wham/usage`) even though the JWT `exp` was 8 days in the future. The Codex CLI itself recovers from this state by silently exchanging its `refresh_token` for a new access_token at `https://auth.openai.com/oauth/token`; aimonitor's provider had no refresh path and just kept replaying the dead token every cycle. In this specific incident the `refresh_token` was *also* revoked (`refresh_token_invalidated`, "Your session has ended. Please log in again."), so only an interactive `codex login` could recover today — but every prior 401 that the provider surfaced may have been one a silent refresh could have fixed. | files: ai_monitor/providers.py
