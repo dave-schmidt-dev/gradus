@@ -1,8 +1,13 @@
 # ai_monitor ledger — minimal machine state. NO `freeze` field (computed on read).
 invariants:
-  INV-1: {gate_test_status: missing}    # covered | missing
-  INV-2: {gate_test_status: missing}
-  INV-3: {gate_test_status: missing}
-  INV-4: {gate_test_status: missing}
-  INV-5: {gate_test_status: missing}
-resolutions: {}                          # INV-x: {resolved_at_date: "YYYY-MM-DD", note: "..."}
+  INV-1: {gate_test_status: covered}    # covered | missing
+  INV-2: {gate_test_status: covered}
+  INV-3: {gate_test_status: covered}
+  INV-4: {gate_test_status: covered}
+  INV-5: {gate_test_status: covered}
+resolutions:                             # INV-x: {resolved_at_date: "YYYY-MM-DD", note: "..."}
+  INV-1: {resolved_at_date: "2026-07-05", note: "project_data() allowlist (SAFE_DATA_KEYS); gate test_payload_data_is_safe_allowlist + real-data PII sweep of .state/snapshot.json both clean."}
+  INV-2: {resolved_at_date: "2026-07-05", note: "set_headless gate on providers.py choke-points; gate test_write_snapshot_is_read_only_no_side_effects + HeadlessReadOnlyTests assert 0 subprocess.Popen/run across all 5 providers incl. 401 recovery. Antigravity ok:false headless (Keychain subprocess gated); cache READS allowed."}
+  INV-3: {resolved_at_date: "2026-07-05", note: "Vibe usage_percent -> 100-x normalized once in build_windows; gate test_vibe_percent_left_is_remaining."}
+  INV-4: {resolved_at_date: "2026-07-05", note: "pace_delta canonical signed fraction, unclamped; ui pace labels delegate to it; gate test_pace_delta_unit_and_sign + 11 ui characterization tests."}
+  INV-5: {resolved_at_date: "2026-07-05", note: "build_snapshot_payload always emits 5 canonical providers + schema_version + tz-aware updated_at; gate test_payload_matches_contract_schema. Acceptance #1-#3 verified on real run."}

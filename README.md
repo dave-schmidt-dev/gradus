@@ -57,6 +57,7 @@ python3 -m ai_monitor --interval 60
 python3 -m ai_monitor --json
 python3 -m ai_monitor --debug
 python3 -m ai_monitor --providers Claude,Codex,Antigravity
+python3 -m ai_monitor --write-snapshot
 ./monitor --once
 ```
 
@@ -133,6 +134,52 @@ Example:
   ]
 }
 ```
+
+## Router-facing snapshot (`--write-snapshot`)
+
+A sibling process or router can read `.state/snapshot.json` instantly — no probing, no browser, no credential I/O. The file is credential-free and gitignored (deliberately not `.cache/`, which holds auth cookies/tokens that a consuming router must never read).
+
+Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m ai_monitor --write-snapshot` as a one-shot headless run.
+
+**Read-only guarantee.** The `--write-snapshot` path never opens a browser, spawns a subprocess, refreshes a token, evicts a cookie cache, or sends notifications. Providers with missing or expired credentials surface as `ok: false`; the file is still written and the process exits 0. Exit 1 means the file write itself failed.
+
+**Headless coverage.** Codex and any provider whose `.cache/` cookie file is still warm run headlessly — reading a cached cookie file is a benign read, allowed. Antigravity is always `ok: false` headless: its only credential is an OAuth token read via a `security` subprocess, which the read-only path forbids. A running TUI covers it.
+
+**launchd refresher (manual install).** A ~120 s background job keeps the snapshot current without the TUI running.
+
+- Wrapper: `~/.launchd/scripts/ai_monitor_snapshot.sh`
+- Plist: `~/Library/LaunchAgents/local.ai-monitor-snapshot.plist` (StartInterval 120, RunAtLoad, Background)
+- Logs: `~/Library/Logs/homelab/ai-monitor-snapshot/`
+- Install: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.ai-monitor-snapshot.plist`
+- Uninstall: `launchctl bootout gui/$(id -u)/local.ai-monitor-snapshot`
+
+**Schema** (`schema_version: 1`):
+
+```json
+{
+  "schema_version": 1,
+  "updated_at": "<tz-aware ISO 8601>",
+  "providers": [
+    {
+      "name": "Codex",
+      "ok": true,
+      "error": null,
+      "windows": [
+        {
+          "id": "five_hour",
+          "percent_left": 74,
+          "reset_iso": "2026-07-05T18:30:00+00:00",
+          "window_hours": 5,
+          "pace_delta": 0.12
+        }
+      ],
+      "data": { "...PII-scrubbed usage/reset fields only..." }
+    }
+  ]
+}
+```
+
+All 5 canonical providers are always present (Codex, Claude, Antigravity, Cursor, Vibe); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
 
 ## Notes
 
