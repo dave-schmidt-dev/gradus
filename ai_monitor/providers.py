@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1309,10 +1310,20 @@ class AntigravityProvider:
 
     `agy` stores its OAuth token in the macOS Keychain (service ``gemini``,
     account ``antigravity``) as a ``go-keyring-base64:``-wrapped JSON blob. We read
-    it **read-only**: we never refresh or rewrite it, because refreshing could
-    rotate the shared refresh-token and lock `agy` itself out. When the access
-    token expires (roughly hourly), we surface an auth error and the `agy`
-    re-auth action prompts the user to run `agy`, which refreshes its own token.
+    it **read-only** with respect to `agy`'s *stored* credentials: we never write
+    the Keychain and never mint or persist a token ourselves.
+
+    The access token expires roughly hourly, and only `agy` refreshes it — so
+    when `agy` isn't running the card would otherwise flip to an auth error until
+    the user manually re-runs `agy`. To avoid that toil we *nudge* `agy` to
+    refresh its **own** token: on expiry we run ``agy models`` — a non-interactive,
+    quota-free authenticated command that makes `agy`'s own OAuth client refresh
+    and persist a fresh token to the Keychain — then re-read it. We never handle
+    `agy`'s client secret or refresh token; `agy` does its own refresh the proper
+    way. The nudge is gated OFF under headless mode (INV-2: no subprocess spawn on
+    the read-only path) and cooldown-limited so a dead refresh token can't make us
+    spawn `agy` every cycle. If the nudge doesn't clear the expiry we fall back to
+    surfacing the "run `agy`" auth error.
     """
 
     _KEYCHAIN_SERVICE = "gemini"
@@ -1320,6 +1331,13 @@ class AntigravityProvider:
     _KEYCHAIN_PREFIX = "go-keyring-base64:"
     # `agy` talks to the daily mirror, not prod cloudcode-pa; match it.
     _SUMMARY_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+    # Lightweight, non-interactive, quota-free authenticated command that makes
+    # `agy` refresh + persist its own Keychain token as a side effect (~1s).
+    _REFRESH_TRIGGER_CMD = ("agy", "models")
+    # Don't re-spawn the refresh nudge more than once per this window (seconds):
+    # if `agy`'s refresh token is itself dead, the nudge can't help and we must
+    # not spawn `agy` on every ~120s refresh cycle.
+    _REFRESH_COOLDOWN_SECONDS = 300
     # cloudcode-pa rejects the default `Python-urllib/x.y` User-Agent as abuse
     # (403 PERMISSION_DENIED); any real UA is accepted. Identify honestly.
     _USER_AGENT = "ai-monitor (antigravity quota probe)"
@@ -1329,6 +1347,8 @@ class AntigravityProvider:
         self._token = self._load_keychain_token()
         if not self._token.get("access_token"):
             raise FileNotFoundError("Antigravity token not found in Keychain: run `agy` to sign in")
+        # Monotonic timestamp of the last `agy models` refresh nudge (cooldown).
+        self._last_refresh_trigger = 0.0
 
     @classmethod
     def _load_keychain_token(cls) -> dict[str, Any]:
@@ -1393,6 +1413,48 @@ class AntigravityProvider:
         now = datetime.now(target.tzinfo) if target.tzinfo else datetime.now()
         return target.timestamp() <= now.timestamp() + leeway_seconds
 
+    def _trigger_agy_self_refresh(self) -> bool:
+        """Nudge `agy` to refresh its OWN Keychain token, then re-read it.
+
+        Runs ``agy models`` — a non-interactive, quota-free authenticated command
+        that makes `agy`'s own OAuth client refresh and persist a fresh token to
+        the Keychain (~1s) — and returns True if the re-read token is no longer
+        expired.
+
+        We never touch `agy`'s credentials ourselves: `agy` refreshes and persists
+        its own token via its own OAuth client and secret. Gated OFF in headless
+        mode (INV-2: no subprocess spawn on the read-only path) and rate-limited by
+        a cooldown so a dead refresh token can't make us spawn `agy` every cycle.
+        Any spawn failure (agy not on PATH, timeout, non-zero exit) degrades to
+        False and the caller surfaces the "run `agy`" auth error.
+        """
+        if _is_headless():
+            return False
+        now = time.monotonic()
+        if now - self._last_refresh_trigger < self._REFRESH_COOLDOWN_SECONDS:
+            return False
+        self._last_refresh_trigger = now
+        try:
+            subprocess.run(
+                list(self._REFRESH_TRIGGER_CMD),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        # `agy` persists the refreshed token to the Keychain on success; re-read.
+        # A failed `agy models` can leave the item missing/unreadable — degrade to
+        # False (the caller surfaces the "run `agy`" error) rather than let the
+        # FileNotFoundError escape this bool-returning method.
+        try:
+            self._token = self._load_keychain_token()
+        except FileNotFoundError:
+            return False
+        return not self._token_expired(self._token)
+
     def _auth_headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self._access_token()}",
@@ -1438,18 +1500,45 @@ class AntigravityProvider:
     def fetch(self) -> AntigravityStatus:
         # Re-read the Keychain each fetch so we pick up `agy`'s own refreshes.
         self._token = self._load_keychain_token()
-        if self._token_expired(self._token):
+        if self._token_expired(self._token) and not self._trigger_agy_self_refresh():
             raise ProbeFailure(
                 "Antigravity token expired: run `agy` to re-authenticate",
                 "keychain token past expiry",
             )
 
-        payload = _http_json(
-            self._SUMMARY_URL,
-            method="POST",
-            headers=self._auth_headers(),
-            body=b"{}",  # summary RPC requires an empty body; any field -> HTTP 400
-        )
+        try:
+            payload = _http_json(
+                self._SUMMARY_URL,
+                method="POST",
+                headers=self._auth_headers(),
+                body=b"{}",  # summary RPC requires an empty body; any field -> HTTP 400
+            )
+        except ProbeFailure as exc:
+            # Non-auth failures (network, 400/403/5xx) propagate unchanged so the
+            # upstream transient-retry logic can handle them.
+            if "401" not in str(exc):
+                raise
+            # A 401 means the opaque access token was revoked server-side. Nudge
+            # `agy` to refresh its own token once and retry; if the nudge or the
+            # retry can't recover, surface the actionable "run `agy`" auth error —
+            # never a raw "HTTP 401", which wouldn't drive the auth-fix CTA.
+            reauth = ProbeFailure(
+                "Antigravity token expired: run `agy` to re-authenticate",
+                "keychain token past expiry (401)",
+            )
+            if not self._trigger_agy_self_refresh():
+                raise reauth from exc
+            try:
+                payload = _http_json(
+                    self._SUMMARY_URL,
+                    method="POST",
+                    headers=self._auth_headers(),
+                    body=b"{}",
+                )
+            except ProbeFailure as retry_exc:
+                if "401" in str(retry_exc):
+                    raise reauth from retry_exc
+                raise
 
         raw_text = json.dumps(payload, indent=2, sort_keys=True)
         groups = payload.get("groups") or []

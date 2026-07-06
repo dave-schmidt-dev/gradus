@@ -1194,17 +1194,171 @@ class AntigravityProviderTests(unittest.TestCase):
             status = provider.fetch()
         self.assertEqual(status.weekly_percent_left, 96)
 
-    def test_expired_token_raises_run_agy_and_skips_network(self) -> None:
+    # ---- self-heal: nudge `agy` to refresh its OWN token via `agy models` ----
+
+    def test_expired_token_nudge_fails_then_raises_run_agy_and_skips_network(self) -> None:
+        # Expired token: we nudge `agy` once; if it still can't refresh, surface the
+        # run-agy error and never probe the summary endpoint with a dead token.
         provider = self._make_provider()
         expired = self._token(expiry="2000-01-01T00:00:00+00:00")
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
+            patch("ai_monitor.providers.subprocess.run") as mock_run,  # nudge is a no-op
             patch("ai_monitor.providers._http_json") as mock_http,
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertIn("agy", str(ctx.exception))
-        mock_http.assert_not_called()  # never probe the network with a dead token
+        mock_run.assert_called_once()  # we DID try to nudge agy
+        mock_http.assert_not_called()  # but never probed the network with a dead token
+
+    def test_expired_token_nudges_agy_and_self_heals(self) -> None:
+        # Expired -> `agy models` refreshes agy's own token -> re-read is valid ->
+        # the summary probe succeeds without any user action.
+        expired = self._token(expiry="2000-01-01T00:00:00+00:00")
+        fresh = self._token()  # far-future expiry, as if agy just refreshed
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[expired, fresh]),
+            patch("ai_monitor.providers.subprocess.run") as mock_run,
+            patch("ai_monitor.providers._http_json", return_value=self.SUMMARY_RESPONSE),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 86)
+        # Pin the exact command: non-interactive + quota-free. Never `agy --print`.
+        self.assertEqual(list(mock_run.call_args[0][0]), ["agy", "models"])
+
+    def test_nudge_is_gated_off_in_headless(self) -> None:
+        # INV-2: the refresh nudge must never spawn a subprocess on the headless path.
+        provider = self._make_provider()
+        provider._token = self._token(expiry="2000-01-01T00:00:00+00:00")
+        try:
+            providers.set_headless(True)
+            with patch("ai_monitor.providers.subprocess.run") as mock_run:
+                self.assertFalse(provider._trigger_agy_self_refresh())
+                mock_run.assert_not_called()
+        finally:
+            providers.set_headless(False)
+
+    def test_nudge_cooldown_prevents_respawn(self) -> None:
+        # A dead refresh token must not make us spawn `agy` on every refresh cycle.
+        expired = self._token(expiry="2000-01-01T00:00:00+00:00")
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
+            patch("ai_monitor.providers.subprocess.run") as mock_run,
+        ):
+            self.assertFalse(provider._trigger_agy_self_refresh())  # spawns
+            self.assertFalse(provider._trigger_agy_self_refresh())  # within cooldown
+        mock_run.assert_called_once()
+
+    def test_agy_not_installed_falls_back_to_run_agy(self) -> None:
+        expired = self._token(expiry="2000-01-01T00:00:00+00:00")
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
+            patch("ai_monitor.providers.subprocess.run", side_effect=FileNotFoundError),
+            patch("ai_monitor.providers._http_json") as mock_http,
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("agy", str(ctx.exception))
+        mock_http.assert_not_called()
+
+    def test_nudge_survives_keychain_unreadable_after_agy(self) -> None:
+        # If `agy models` runs but the Keychain re-read then fails, the nudge must
+        # degrade to the run-agy error, not let FileNotFoundError escape.
+        expired = self._token(expiry="2000-01-01T00:00:00+00:00")
+        provider = self._make_provider()
+        with (
+            patch.object(
+                AntigravityProvider,
+                "_load_keychain_token",
+                side_effect=[expired, FileNotFoundError("gone")],
+            ),
+            patch("ai_monitor.providers.subprocess.run"),
+            patch("ai_monitor.providers._http_json") as mock_http,
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("agy", str(ctx.exception))
+        mock_http.assert_not_called()
+
+    def test_401_nudge_fails_surfaces_run_agy_not_raw_401(self) -> None:
+        # 401 + unrecoverable nudge -> actionable "run agy" error (drives the CTA),
+        # never a bare "HTTP 401".
+        valid = self._token()
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=valid),
+            patch("ai_monitor.providers.subprocess.run", side_effect=FileNotFoundError),
+            patch("ai_monitor.providers._http_json", side_effect=ProbeFailure("HTTP 401", "{}")),
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        msg = str(ctx.exception)
+        self.assertIn("agy", msg)
+        self.assertNotIn("HTTP 401", msg)
+
+    def test_401_retry_still_401_surfaces_run_agy(self) -> None:
+        # 401 -> nudge succeeds -> retry still 401 -> actionable "run agy" error.
+        valid = self._token()
+
+        def _http(url, **kwargs):
+            raise ProbeFailure("HTTP 401", "{}")
+
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[valid, valid]),
+            patch("ai_monitor.providers.subprocess.run"),  # nudge "succeeds"
+            patch("ai_monitor.providers._http_json", side_effect=_http),
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        msg = str(ctx.exception)
+        self.assertIn("agy", msg)
+        self.assertNotIn("HTTP 401", msg)
+
+    def test_non_401_probe_failure_propagates_unchanged(self) -> None:
+        # A network/5xx failure must NOT be rewritten to a run-agy error, and must
+        # not trigger a nudge (so upstream transient-retry logic still applies).
+        valid = self._token()
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=valid),
+            patch("ai_monitor.providers.subprocess.run") as mock_run,
+            patch(
+                "ai_monitor.providers._http_json",
+                side_effect=ProbeFailure("Network error: timed out", "x"),
+            ),
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("Network error", str(ctx.exception))
+        mock_run.assert_not_called()
+
+    def test_401_nudges_agy_and_retries(self) -> None:
+        # Token looks valid but the server 401s the opaque token; nudge agy to
+        # refresh its own token once, then retry the summary probe.
+        valid = self._token()
+        state = {"summary_calls": 0}
+
+        def _http(url, **kwargs):
+            state["summary_calls"] += 1
+            if state["summary_calls"] == 1:
+                raise ProbeFailure("HTTP 401", '{"error":"unauthenticated"}')
+            return self.SUMMARY_RESPONSE
+
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[valid, valid]),
+            patch("ai_monitor.providers.subprocess.run") as mock_run,
+            patch("ai_monitor.providers._http_json", side_effect=_http),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertEqual(state["summary_calls"], 2)  # original + one retry
+        mock_run.assert_called_once()
 
     def test_keychain_decode_go_keyring_base64(self) -> None:
         import base64
