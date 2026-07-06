@@ -1203,7 +1203,11 @@ class AntigravityProviderTests(unittest.TestCase):
         expired = self._token(expiry="2000-01-01T00:00:00+00:00")
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
-            patch("ai_monitor.providers.subprocess.run") as mock_run,  # nudge is a no-op
+            # nudge runs (exit 0) but the re-read token is still expired.
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ) as mock_run,
             patch("ai_monitor.providers._http_json") as mock_http,
         ):
             with self.assertRaises(ProbeFailure) as ctx:
@@ -1220,13 +1224,43 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[expired, fresh]),
-            patch("ai_monitor.providers.subprocess.run") as mock_run,
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ) as mock_run,
             patch("ai_monitor.providers._http_json", return_value=self.SUMMARY_RESPONSE),
         ):
             status = provider.fetch()
         self.assertEqual(status.five_hour_percent_left, 86)
         # Pin the exact command: non-interactive + quota-free. Never `agy --print`.
         self.assertEqual(list(mock_run.call_args[0][0]), ["agy", "models"])
+
+    def test_nudge_returns_false_when_agy_models_exits_nonzero(self) -> None:
+        # Honest success signal: if `agy models` exits non-zero it did NOT refresh,
+        # so don't trust a still-readable (stale/rejected) token.
+        stale = self._token()  # future expiry, but agy failed to refresh it
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=stale),
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=1),
+            ),
+        ):
+            self.assertFalse(provider._trigger_agy_self_refresh())
+
+    def test_nudge_returns_false_when_refreshed_token_has_no_access_token(self) -> None:
+        # A malformed re-read (no access_token, no expiry) must not count as success.
+        provider = self._make_provider()
+        provider._token = self._token(expiry="2000-01-01T00:00:00+00:00")
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value={}),
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ),
+        ):
+            self.assertFalse(provider._trigger_agy_self_refresh())
 
     def test_nudge_is_gated_off_in_headless(self) -> None:
         # INV-2: the refresh nudge must never spawn a subprocess on the headless path.
@@ -1246,7 +1280,10 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
-            patch("ai_monitor.providers.subprocess.run") as mock_run,
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ) as mock_run,
         ):
             self.assertFalse(provider._trigger_agy_self_refresh())  # spawns
             self.assertFalse(provider._trigger_agy_self_refresh())  # within cooldown
@@ -1276,7 +1313,10 @@ class AntigravityProviderTests(unittest.TestCase):
                 "_load_keychain_token",
                 side_effect=[expired, FileNotFoundError("gone")],
             ),
-            patch("ai_monitor.providers.subprocess.run"),
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ),
             patch("ai_monitor.providers._http_json") as mock_http,
         ):
             with self.assertRaises(ProbeFailure) as ctx:
@@ -1310,7 +1350,11 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[valid, valid]),
-            patch("ai_monitor.providers.subprocess.run"),  # nudge "succeeds"
+            # nudge "succeeds" (exit 0, re-read valid) so we reach the retry.
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ),
             patch("ai_monitor.providers._http_json", side_effect=_http),
         ):
             with self.assertRaises(ProbeFailure) as ctx:
@@ -1352,7 +1396,10 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[valid, valid]),
-            patch("ai_monitor.providers.subprocess.run") as mock_run,
+            patch(
+                "ai_monitor.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ) as mock_run,
             patch("ai_monitor.providers._http_json", side_effect=_http),
         ):
             status = provider.fetch()

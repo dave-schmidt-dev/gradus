@@ -320,6 +320,20 @@ class ProductionAuthMessageRoutingTests(unittest.TestCase):
         )
         self.assertTrue(_is_auth_error(snap))
 
+    def test_antigravity_expired_routes_to_cta_not_offline(self) -> None:
+        # The nudge-can't-recover fallback must drive the [N] fix CTA, NOT be
+        # swallowed as a transient "offline" error. The old "token expired" wording
+        # matched the transient markers (snapshot.py) and hid the CTA — showing a
+        # misleading "(offline Xm)" for an actionable auth failure.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=False,
+            source="api",
+            error="Antigravity session expired: run `agy` to re-authenticate",
+        )
+        self.assertTrue(_is_auth_error(snap))
+        self.assertFalse(_is_transient_probe_error(snap))
+
 
 class BuildFixActionsTests(unittest.TestCase):
     def test_single_auth_error(self) -> None:

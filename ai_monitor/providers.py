@@ -1435,7 +1435,7 @@ class AntigravityProvider:
             return False
         self._last_refresh_trigger = now
         try:
-            subprocess.run(
+            result = subprocess.run(
                 list(self._REFRESH_TRIGGER_CMD),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
@@ -1445,15 +1445,21 @@ class AntigravityProvider:
             )
         except (OSError, subprocess.SubprocessError):
             return False
+        if result.returncode != 0:
+            # `agy models` couldn't authenticate (e.g. `agy`'s own refresh token is
+            # dead): don't claim success on a token it didn't actually refresh, or
+            # we'd retry with the same rejected bearer before surfacing the error.
+            return False
         # `agy` persists the refreshed token to the Keychain on success; re-read.
-        # A failed `agy models` can leave the item missing/unreadable — degrade to
-        # False (the caller surfaces the "run `agy`" error) rather than let the
-        # FileNotFoundError escape this bool-returning method.
+        # A failed re-read (missing/unreadable item) degrades to False rather than
+        # letting FileNotFoundError escape this bool-returning method.
         try:
             self._token = self._load_keychain_token()
         except FileNotFoundError:
             return False
-        return not self._token_expired(self._token)
+        # Honest success signal: only True when a usable, non-expired token is
+        # actually present after the refresh (guards a malformed/empty re-read).
+        return bool(self._token.get("access_token")) and not self._token_expired(self._token)
 
     def _auth_headers(self) -> dict[str, str]:
         return {
@@ -1502,7 +1508,7 @@ class AntigravityProvider:
         self._token = self._load_keychain_token()
         if self._token_expired(self._token) and not self._trigger_agy_self_refresh():
             raise ProbeFailure(
-                "Antigravity token expired: run `agy` to re-authenticate",
+                "Antigravity session expired: run `agy` to re-authenticate",
                 "keychain token past expiry",
             )
 
@@ -1523,7 +1529,7 @@ class AntigravityProvider:
             # retry can't recover, surface the actionable "run `agy`" auth error —
             # never a raw "HTTP 401", which wouldn't drive the auth-fix CTA.
             reauth = ProbeFailure(
-                "Antigravity token expired: run `agy` to re-authenticate",
+                "Antigravity session expired: run `agy` to re-authenticate",
                 "keychain token past expiry (401)",
             )
             if not self._trigger_agy_self_refresh():
