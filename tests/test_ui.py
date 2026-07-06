@@ -139,11 +139,11 @@ class ProviderPanelTests(unittest.TestCase):
             "weekly_percent_left": 64,
             "secondary_reset": "Resets Mar 17 at 8 PM",
         }
-        self.gemini_data = {
-            "flash_percent_left": 98,
-            "flash_reset": "resets in 15h 36m",
-            "pro_percent_left": 83,
-            "pro_reset": "resets in 22h 23m",
+        self.antigravity_data = {
+            "five_hour_percent_left": 86,
+            "five_hour_reset": "resets in 3h 19m",
+            "weekly_percent_left": 96,
+            "weekly_reset": "resets in 5d 18h",
         }
 
     def test_codex_panel_contains_labels_and_values(self) -> None:
@@ -163,15 +163,19 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("1w", output)
         self.assertIn("73%", output)
 
-    def test_gemini_panel_shows_flash_and_pro(self) -> None:
-        # Canonical provider key stays "Gemini"; the panel now renders as
-        # "Antigravity" (agy), which draws from the same Gemini request-quota pool.
-        snap = ProviderSnapshot(name="Gemini", ok=True, source="cli", data=self.gemini_data)
+    def test_antigravity_panel_shows_five_hour_and_weekly(self) -> None:
+        # Antigravity (agy) is now a first-class provider: grouped quota with a
+        # 5-hour and a weekly window for the Gemini model group.
+        snap = ProviderSnapshot(
+            name="Antigravity", ok=True, source="cli", data=self.antigravity_data
+        )
         output = _capture(build_provider_panel(snap, self.now), width=44)
         self.assertIn("Antigravity", output)
         self.assertNotIn("Gemini", output)
-        self.assertIn("fl", output)
-        self.assertIn("pr", output)
+        self.assertIn("5h", output)
+        self.assertIn("1w", output)
+        self.assertIn("86%", output)
+        self.assertIn("96%", output)
 
     def test_error_panel_shows_error_message(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=False, source="cli", error="connection timeout")
@@ -254,39 +258,39 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertNotIn("▓", output)
         self.assertNotIn("88%", output)
 
-    def test_empty_view_gemini_requires_both_zero(self) -> None:
-        # fl=0 but pr has usage → normal view
+    def test_empty_view_antigravity_requires_both_zero(self) -> None:
+        # 5h=0 but weekly has usage → normal view
         snap = ProviderSnapshot(
-            name="Gemini",
+            name="Antigravity",
             ok=True,
             source="cli",
             data={
-                "flash_percent_left": 0,
-                "flash_reset": "Resets at 23:58",
-                "pro_percent_left": 83,
-                "pro_reset": "Resets Mar 15 at 06:45",
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 83,
+                "weekly_reset": "Resets Mar 15 at 06:45",
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=50)
         self.assertNotIn("until", output)
         self.assertIn("▓", output)
 
-    def test_empty_view_gemini_both_zero(self) -> None:
+    def test_empty_view_antigravity_both_zero(self) -> None:
         snap = ProviderSnapshot(
-            name="Gemini",
+            name="Antigravity",
             ok=True,
             source="cli",
             data={
-                "flash_percent_left": 0,
-                "flash_reset": "Resets at 23:58",
-                "pro_percent_left": 0,
-                "pro_reset": "Resets Mar 15 at 06:45",
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 15 at 06:45",
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=50)
         self.assertIn("until", output)
-        self.assertIn("fl", output)
-        self.assertIn("pr", output)
+        self.assertIn("5h", output)
+        self.assertIn("1w", output)
         self.assertNotIn("▓", output)
 
     def test_empty_view_claude_weekly_zero(self) -> None:
@@ -567,7 +571,7 @@ class NoANSIRegressionTests(unittest.TestCase):
         for name, data in (
             ("Codex", {"five_hour_percent_left": 50, "weekly_percent_left": 80}),
             ("Claude", {"session_percent_left": 30, "weekly_percent_left": 90}),
-            ("Gemini", {"flash_percent_left": 75, "pro_percent_left": 60}),
+            ("Antigravity", {"five_hour_percent_left": 75, "weekly_percent_left": 60}),
         ):
             with self.subTest(provider=name):
                 snap = ProviderSnapshot(name=name, ok=True, source="cli", data=data)
@@ -692,7 +696,7 @@ class AuthFixPanelTests(unittest.TestCase):
 
     def test_auth_error_shows_cta_with_key(self) -> None:
         snap = ProviderSnapshot(
-            name="Gemini", ok=False, source="api", error="auth failed: run gemini"
+            name="Antigravity", ok=False, source="api", error="auth failed: run agy"
         )
         panel = build_provider_panel(snap, self.now, auth_fix_key="1")
         output = _capture(panel, width=60)
@@ -700,7 +704,7 @@ class AuthFixPanelTests(unittest.TestCase):
         self.assertIn("[1]", output)
         self.assertIn("to fix", output)
         # Raw error text should NOT appear
-        self.assertNotIn("run gemini", output)
+        self.assertNotIn("run agy", output)
 
     def test_non_auth_error_shows_raw_error(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=False, source="api", error="connection timeout")
@@ -731,35 +735,35 @@ class AuthFixFooterTests(unittest.TestCase):
 
     def test_footer_shows_fix_hints(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
+            ProviderSnapshot(name="Antigravity", ok=False, source="api", error="auth failed"),
             ProviderSnapshot(
                 name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
             ),
         ]
-        fix_actions = {"1": ("Gemini", "cli", "agy")}
+        fix_actions = {"1": ("Antigravity", "cli", "agy")}
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
         output = _capture(dashboard, width=80)
         self.assertIn("[1]", output)
-        self.assertIn("fix Gemini", output)
+        self.assertIn("fix Antigravity", output)
         # Standard hints still present
         self.assertIn("[q]", output)
         self.assertIn("[r]", output)
 
     def test_footer_multiple_fix_hints_in_order(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
+            ProviderSnapshot(name="Antigravity", ok=False, source="api", error="auth failed"),
             ProviderSnapshot(name="Cursor", ok=False, source="api", error="login required"),
         ]
         fix_actions = {
             "1": ("Cursor", "browser", "https://cursor.sh"),
-            "2": ("Gemini", "cli", "agy"),
+            "2": ("Antigravity", "cli", "agy"),
         }
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
         output = _capture(dashboard, width=100)
         self.assertIn("[1]", output)
         self.assertIn("fix Cursor", output)
         self.assertIn("[2]", output)
-        self.assertIn("fix Gemini", output)
+        self.assertIn("fix Antigravity", output)
 
     def test_footer_no_fix_hints_when_empty(self) -> None:
         snaps = [
@@ -784,9 +788,9 @@ class AuthFixFooterTests(unittest.TestCase):
     def test_auth_error_panel_gets_cta_in_dashboard(self) -> None:
         """Verify the panel inside the dashboard shows the CTA, not raw error."""
         snaps = [
-            ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
+            ProviderSnapshot(name="Antigravity", ok=False, source="api", error="auth failed"),
         ]
-        fix_actions = {"1": ("Gemini", "cli", "agy")}
+        fix_actions = {"1": ("Antigravity", "cli", "agy")}
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
         output = _capture(dashboard, width=80)
         self.assertIn("auth error", output)

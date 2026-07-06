@@ -40,7 +40,7 @@ THEME = Theme(
         "bar.red": "color(203)",
         "accent.codex": "color(111)",
         "accent.claude": "color(219)",
-        "accent.gemini": "color(80)",
+        "accent.antigravity": "color(80)",
         "accent.cursor": "color(214)",
         "accent.vibe": "color(208)",
     }
@@ -114,27 +114,27 @@ PROVIDER_RENDER_SPECS = {
             ),
         ),
     ),
-    "Gemini": ProviderRenderSpec(
-        title="Gemini",
-        subtitle="Gemini usage",
+    "Antigravity": ProviderRenderSpec(
+        title="Antigravity",
+        subtitle="Antigravity usage",
         windows=(
             WindowRenderSpec(
-                "flash",
-                "fl",
-                "fl ↻",
+                "five_hour",
+                "5h",
+                "5h ↻",
                 None,
-                "flash_percent_left",
-                "flash_reset",
-                24.0,
+                "five_hour_percent_left",
+                "five_hour_reset",
+                5.0,
             ),
             WindowRenderSpec(
-                "pro",
-                "pr",
-                "pr ↻",
+                "weekly",
+                "1w",
+                "1w ↻",
                 None,
-                "pro_percent_left",
-                "pro_reset",
-                24.0 * 30,
+                "weekly_percent_left",
+                "weekly_reset",
+                24.0 * 7.0,
             ),
         ),
     ),
@@ -344,9 +344,9 @@ def _provider_is_empty(snapshot: ProviderSnapshot) -> bool:
         usage = data.get("usage_percent")
         pct_left = max(0.0, 100.0 - float(usage)) if isinstance(usage, (int, float)) else None
         return _is_empty_window(pct_left)
-    if name == "Gemini":
-        return _is_empty_window(data.get("flash_percent_left")) and _is_empty_window(
-            data.get("pro_percent_left")
+    if name == "Antigravity":
+        return _is_empty_window(data.get("five_hour_percent_left")) and _is_empty_window(
+            data.get("weekly_percent_left")
         )
     return False
 
@@ -418,21 +418,16 @@ def _style_for_percent(percent: float | None) -> str:
 ACCENT_STYLES: dict[str, str] = {
     "Codex": "accent.codex",
     "Claude": "accent.claude",
-    "Gemini": "accent.gemini",
+    "Antigravity": "accent.antigravity",
     "Cursor": "accent.cursor",
     "Vibe": "accent.vibe",
 }
 
-# Display-only title overrides. The provider key (used for config, dispatch, and
-# thresholds) stays canonical; only the rendered panel title changes. The "Gemini"
-# key now renders as "Antigravity": the card tracks Antigravity (`agy`) usage,
-# which draws from the same per-model request quota on cloudcode-pa that the probe
-# reads via the shared ~/.gemini/oauth_creds.json token. (Antigravity's
-# premium-model credits — Opus, gpt-oss — are metered separately via a Codeium
-# gRPC path that has no probeable REST endpoint; see HISTORY.md 2026-05-23.)
-DISPLAY_TITLES: dict[str, str] = {
-    "Gemini": "Antigravity",
-}
+# Display-only title overrides, keyed by canonical provider name. Empty now that
+# the Antigravity card is a first-class provider (no longer a relabeled Gemini
+# probe); kept as the extension point for any future rename that must not disturb
+# a provider's config/dispatch/threshold key.
+DISPLAY_TITLES: dict[str, str] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +517,6 @@ def build_provider_panel(
             "premium_percent_left",
             "session_percent_left",
             "five_hour_percent_left",
-            "flash_percent_left",
         ):
             value = snapshot.data.get(key)
             if isinstance(value, (int, float)) and float(value) < threshold:

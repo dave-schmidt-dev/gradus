@@ -1,11 +1,10 @@
-"""Provider probes for Codex, Claude, Gemini, and Cursor usage."""
+"""Provider probes for Codex, Claude, Antigravity, and Cursor usage."""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,10 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from .parsing import (
+    AntigravityStatus,
     ClaudeStatus,
     CodexStatus,
     CursorStatus,
-    GeminiStatus,
     VibeStatus,
 )
 
@@ -1245,148 +1244,106 @@ class ClaudeHttpProvider:
         pass
 
 
-class GeminiHttpProvider:
-    """Fetch Gemini usage via Cloud Code internal API using OAuth credentials."""
+class AntigravityProvider:
+    """Fetch Antigravity (`agy`) grouped quota via the Cloud Code internal API.
 
-    _CREDS_PATH = Path.home() / ".gemini" / "oauth_creds.json"
-    _PROJECTS_PATH = Path.home() / ".gemini" / "projects.json"
-    _TOKEN_URL = "https://oauth2.googleapis.com/token"
-    _QUOTA_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
-    _LOAD_URL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
+    `agy` (the Antigravity CLI) meters usage differently from the legacy Gemini
+    per-model quota: it reports quota *groups* (Gemini models; Claude+GPT models),
+    each with a 5-hour and a weekly window, via `retrieveUserQuotaSummary`. That
+    endpoint is gated to `agy`'s own OAuth client, so the shared
+    ``~/.gemini/oauth_creds.json`` token (a different client) is denied — we must
+    use `agy`'s token.
 
-    def __init__(self, cwd: str) -> None:
-        if not self._CREDS_PATH.exists():
-            raise FileNotFoundError(f"Gemini OAuth creds not found: {self._CREDS_PATH}")
-        self._creds = self._load_creds()
-        self._ensure_client_credentials()
-        self._maybe_refresh()
-        self._project_id = self._get_project_id(cwd)
+    `agy` stores its OAuth token in the macOS Keychain (service ``gemini``,
+    account ``antigravity``) as a ``go-keyring-base64:``-wrapped JSON blob. We read
+    it **read-only**: we never refresh or rewrite it, because refreshing could
+    rotate the shared refresh-token and lock `agy` itself out. When the access
+    token expires (roughly hourly), we surface an auth error and the `agy`
+    re-auth action prompts the user to run `agy`, which refreshes its own token.
+    """
 
-    def _load_creds(self) -> dict[str, Any]:
+    _KEYCHAIN_SERVICE = "gemini"
+    _KEYCHAIN_ACCOUNT = "antigravity"
+    _KEYCHAIN_PREFIX = "go-keyring-base64:"
+    # `agy` talks to the daily mirror, not prod cloudcode-pa; match it.
+    _SUMMARY_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+    # cloudcode-pa rejects the default `Python-urllib/x.y` User-Agent as abuse
+    # (403 PERMISSION_DENIED); any real UA is accepted. Identify honestly.
+    _USER_AGENT = "ai-monitor (antigravity quota probe)"
+    _ACCOUNTS_PATH = Path.home() / ".gemini" / "google_accounts.json"
+
+    def __init__(self) -> None:
+        self._token = self._load_keychain_token()
+        if not self._token.get("access_token"):
+            raise FileNotFoundError("Antigravity token not found in Keychain: run `agy` to sign in")
+
+    @classmethod
+    def _load_keychain_token(cls) -> dict[str, Any]:
+        """Read and decode `agy`'s Keychain token blob into its oauth2.Token dict.
+
+        Returns the inner ``token`` object ({access_token, refresh_token, expiry,
+        token_type}); an empty dict if the item is missing or unreadable.
+        """
         try:
-            return json.loads(self._CREDS_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise FileNotFoundError(f"Failed to read Gemini credentials: {exc}") from exc
+            result = subprocess.run(
+                [
+                    "security",
+                    "find-generic-password",
+                    "-w",
+                    "-s",
+                    cls._KEYCHAIN_SERVICE,
+                    "-a",
+                    cls._KEYCHAIN_ACCOUNT,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise FileNotFoundError(f"Could not read Antigravity Keychain item: {exc}") from exc
+        if result.returncode != 0:
+            raise FileNotFoundError("Antigravity token not found in Keychain: run `agy` to sign in")
+        blob = result.stdout.strip()
+        if blob.startswith(cls._KEYCHAIN_PREFIX):
+            import base64
 
-    def _ensure_client_credentials(self) -> None:
-        """Load client_id/client_secret from creds file, extracting from CLI bundle if missing."""
-        if self._creds.get("client_id") and self._creds.get("client_secret"):
-            return
-        client_id, client_secret = self._extract_client_credentials_from_cli()
-        if client_id and client_secret:
-            self._creds["client_id"] = client_id
-            self._creds["client_secret"] = client_secret
+            payload = blob[len(cls._KEYCHAIN_PREFIX) :]
             try:
-                self._CREDS_PATH.write_text(json.dumps(self._creds, indent=2), encoding="utf-8")
-                log.debug("Wrote Gemini OAuth client credentials to %s", self._CREDS_PATH)
-            except OSError as exc:
-                log.warning("Could not write Gemini client credentials: %s", exc)
+                blob = base64.b64decode(payload + "=" * (-len(payload) % 4)).decode("utf-8")
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise FileNotFoundError(
+                    f"Antigravity Keychain blob is not valid base64: {exc}"
+                ) from exc
+        try:
+            outer = json.loads(blob)
+        except json.JSONDecodeError as exc:
+            raise FileNotFoundError(f"Antigravity Keychain blob is not valid JSON: {exc}") from exc
+        token = outer.get("token")
+        return token if isinstance(token, dict) else {}
+
+    def _access_token(self) -> str:
+        return str(self._token.get("access_token", ""))
 
     @staticmethod
-    def _extract_client_credentials_from_cli() -> tuple[str, str]:
-        """Extract OAuth client_id and client_secret from the installed Gemini CLI bundle."""
-        import re
-
-        gemini_path = shutil.which("gemini")
-        if not gemini_path:
-            return ("", "")
+    def _token_expired(token: dict[str, Any], leeway_seconds: int = 30) -> bool:
+        """True if the token's ISO-8601 `expiry` is in the past (with leeway)."""
+        expiry = token.get("expiry")
+        if not isinstance(expiry, str):
+            return False  # unknown expiry — let the API decide
         try:
-            real_path = Path(gemini_path).resolve()
-            bundle_dir = real_path.parent
-            for js_file in bundle_dir.glob("chunk-*.js"):
-                text = js_file.read_text(encoding="utf-8", errors="ignore")
-                cid_match = re.search(
-                    r'OAUTH_CLIENT_ID\s*=\s*"([^"]+\.apps\.googleusercontent\.com)"', text
-                )
-                csec_match = re.search(r'OAUTH_CLIENT_SECRET\s*=\s*"(GOCSPX-[^"]+)"', text)
-                if cid_match and csec_match:
-                    log.debug("Extracted Gemini OAuth client credentials from %s", js_file)
-                    return (cid_match.group(1), csec_match.group(1))
-        except (OSError, ValueError) as exc:
-            log.warning("Could not extract Gemini client credentials from CLI: %s", exc)
-        return ("", "")
-
-    def _maybe_refresh(self) -> None:
-        expiry = self._creds.get("expiry_date")
-        if expiry is None:
-            return
-        # expiry_date is epoch milliseconds
-        now_ms = datetime.now(timezone.utc).timestamp() * 1000
-        if float(expiry) > now_ms + 60_000:
-            return  # still valid
-        # Re-read creds from disk — user may have re-authenticated externally
-        try:
-            self._creds = self._load_creds()
-            self._ensure_client_credentials()
-            # Check again after reload — file may have fresh token
-            reloaded_expiry = self._creds.get("expiry_date")
-            if reloaded_expiry and float(reloaded_expiry) > now_ms + 60_000:
-                return
-        except (FileNotFoundError, OSError):
-            pass
-        refresh_token = self._creds.get("refresh_token")
-        client_id = self._creds.get("client_id")
-        client_secret = self._creds.get("client_secret")
-        if not refresh_token or not client_id or not client_secret:
-            return
-        try:
-            body = json.dumps(
-                {
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                }
-            ).encode()
-            result = _http_json(
-                self._TOKEN_URL,
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                body=body,
-            )
-            if result.get("access_token"):
-                self._creds["access_token"] = result["access_token"]
-                if result.get("expiry_date"):
-                    self._creds["expiry_date"] = result["expiry_date"]
-                elif result.get("expires_in"):
-                    self._creds["expiry_date"] = now_ms + float(result["expires_in"]) * 1000
-                try:
-                    self._CREDS_PATH.write_text(json.dumps(self._creds, indent=2), encoding="utf-8")
-                except OSError as write_exc:
-                    log.warning("Could not write refreshed Gemini credentials: %s", write_exc)
-        except ProbeFailure as exc:
-            log.warning("Gemini token refresh failed: %s", exc)
-
-    def _get_project_id(self, cwd: str) -> str:
-        """Look up project ID for cwd from ~/.gemini/projects.json."""
-        try:
-            data = json.loads(self._PROJECTS_PATH.read_text(encoding="utf-8"))
-            projects = data.get("projects") or {}
-            # Try exact match, then parent directories
-            path = Path(cwd).resolve()
-            for candidate in [path, *path.parents]:
-                pid = projects.get(str(candidate))
-                if pid:
-                    return str(pid)
-        except (OSError, json.JSONDecodeError):
-            pass
-        return "projects"  # fallback default project
+            target = datetime.fromisoformat(expiry)
+        except ValueError:
+            return False
+        now = datetime.now(target.tzinfo) if target.tzinfo else datetime.now()
+        return target.timestamp() <= now.timestamp() + leeway_seconds
 
     def _auth_headers(self) -> dict[str, str]:
-        token = self._creds.get("access_token", "")
         return {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {self._access_token()}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "User-Agent": self._USER_AGENT,
         }
-
-    @staticmethod
-    def _find_bucket(buckets: list[dict[str, Any]], *model_ids: str) -> dict[str, Any] | None:
-        for model_id in model_ids:
-            for bucket in buckets:
-                if bucket.get("modelId") == model_id:
-                    return bucket
-        return None
 
     @staticmethod
     def _percent_from_fraction(bucket: dict[str, Any] | None) -> int | None:
@@ -1402,80 +1359,62 @@ class GeminiHttpProvider:
         return max(0, min(100, int(round(value * 100))))
 
     @staticmethod
-    def _read_gemini_account_email() -> str | None:
-        path = Path.home() / ".gemini" / "google_accounts.json"
+    def _find_gemini_group(groups: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Return the Gemini-models quota group (5h + weekly windows)."""
+        for group in groups:
+            name = str(group.get("displayName", "")).lower()
+            buckets = group.get("buckets") or []
+            if name.startswith("gemini") or any(
+                str(b.get("bucketId", "")).startswith("gemini") for b in buckets
+            ):
+                return group
+        return None
+
+    @classmethod
+    def _read_account_email(cls) -> str | None:
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(cls._ACCOUNTS_PATH.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
         active = payload.get("active")
         return active if isinstance(active, str) and "@" in active else None
 
-    def fetch(self) -> GeminiStatus:
-        self._maybe_refresh()
-
-        # Call loadCodeAssist to register session (required before retrieveUserQuota)
-        try:
-            _http_json(
-                self._LOAD_URL,
-                method="POST",
-                headers=self._auth_headers(),
-                body=json.dumps(
-                    {
-                        "cloudaicompanionProject": self._project_id,
-                        "metadata": {
-                            "ideType": "IDE_UNSPECIFIED",
-                            "platform": "PLATFORM_UNSPECIFIED",
-                            "pluginType": "GEMINI",
-                            "duetProject": self._project_id,
-                        },
-                    }
-                ).encode(),
+    def fetch(self) -> AntigravityStatus:
+        # Re-read the Keychain each fetch so we pick up `agy`'s own refreshes.
+        self._token = self._load_keychain_token()
+        if self._token_expired(self._token):
+            raise ProbeFailure(
+                "Antigravity token expired: run `agy` to re-authenticate",
+                "keychain token past expiry",
             )
-        except ProbeFailure as exc:
-            if "HTTP 401" in str(exc):
-                raise ProbeFailure(
-                    "Gemini auth failed: run `gemini` to re-authenticate",
-                    str(exc),
-                ) from exc
-            # loadCodeAssist failure is non-fatal; continue to quota call
-            log.debug("loadCodeAssist failed (non-fatal): %s", exc)
 
         payload = _http_json(
-            self._QUOTA_URL,
+            self._SUMMARY_URL,
             method="POST",
             headers=self._auth_headers(),
-            body=json.dumps({"project": self._project_id}).encode(),
+            body=b"{}",  # summary RPC requires an empty body; any field -> HTTP 400
         )
 
         raw_text = json.dumps(payload, indent=2, sort_keys=True)
-        buckets = payload.get("buckets") or []
-        if not buckets:
-            raise ProbeFailure("Gemini quota response has no buckets", raw_text[:500])
+        groups = payload.get("groups") or []
+        if not groups:
+            raise ProbeFailure("Antigravity quota response has no groups", raw_text[:500])
 
-        flash_bucket = self._find_bucket(
-            buckets,
-            "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        )
-        pro_bucket = self._find_bucket(
-            buckets,
-            "gemini-3.1-pro-preview",
-            "gemini-3-pro-preview",
-            "gemini-2.5-pro",
-        )
+        gemini_group = self._find_gemini_group(groups)
+        if gemini_group is None:
+            raise ProbeFailure("Antigravity quota: no Gemini group found", raw_text[:500])
 
-        account_email = self._read_gemini_account_email()
+        buckets = {b.get("window"): b for b in (gemini_group.get("buckets") or [])}
+        five_hour = buckets.get("5h")
+        weekly = buckets.get("weekly")
 
-        return GeminiStatus(
-            flash_percent_left=self._percent_from_fraction(flash_bucket),
-            pro_percent_left=self._percent_from_fraction(pro_bucket),
-            flash_reset=_format_reset_time(flash_bucket.get("resetTime")) if flash_bucket else None,
-            pro_reset=_format_reset_time(pro_bucket.get("resetTime")) if pro_bucket else None,
-            account_email=account_email,
-            account_tier=payload.get("tier"),
+        return AntigravityStatus(
+            five_hour_percent_left=self._percent_from_fraction(five_hour),
+            weekly_percent_left=self._percent_from_fraction(weekly),
+            five_hour_reset=_format_reset_time(five_hour.get("resetTime")) if five_hour else None,
+            weekly_reset=_format_reset_time(weekly.get("resetTime")) if weekly else None,
+            account_email=self._read_account_email(),
+            account_tier=None,
             raw_text=raw_text,
         )
 

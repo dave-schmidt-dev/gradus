@@ -225,7 +225,7 @@ class IsAuthErrorTests(unittest.TestCase):
 
     def test_case_insensitive(self) -> None:
         snap = ProviderSnapshot(
-            name="Gemini", ok=False, source="api", error="AUTH FAILED: run gemini to fix"
+            name="Antigravity", ok=False, source="api", error="AUTH FAILED: run agy to fix"
         )
         self.assertTrue(_is_auth_error(snap))
 
@@ -250,7 +250,7 @@ class IsAuthErrorTests(unittest.TestCase):
         self.assertFalse(_is_auth_error(snap))
 
     def test_all_five_providers_in_auth_actions(self) -> None:
-        expected = {"Claude", "Codex", "Gemini", "Cursor", "Vibe"}
+        expected = {"Claude", "Codex", "Antigravity", "Cursor", "Vibe"}
         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
 
     def test_codex_action_guards_against_blind_clobber(self) -> None:
@@ -324,22 +324,23 @@ class ProductionAuthMessageRoutingTests(unittest.TestCase):
 class BuildFixActionsTests(unittest.TestCase):
     def test_single_auth_error(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
+            ProviderSnapshot(name="Antigravity", ok=False, source="api", error="auth failed"),
         ]
         actions = _build_fix_actions(snaps)
-        self.assertEqual(actions, {"1": ("Gemini", "cli", "agy")})
+        self.assertEqual(actions, {"1": ("Antigravity", "cli", "agy")})
 
     def test_multiple_auth_errors_alphabetical(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
+            ProviderSnapshot(name="Antigravity", ok=False, source="api", error="auth failed"),
             ProviderSnapshot(name="Claude", ok=False, source="api", error="authenticate required"),
             ProviderSnapshot(
                 name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
             ),
         ]
         actions = _build_fix_actions(snaps)
-        self.assertEqual(actions["1"], ("Claude", "cli", "claude login"))
-        self.assertEqual(actions["2"], ("Gemini", "cli", "agy"))
+        # Alphabetical: "Antigravity" now sorts ahead of "Claude".
+        self.assertEqual(actions["1"], ("Antigravity", "cli", "agy"))
+        self.assertEqual(actions["2"], ("Claude", "cli", "claude login"))
         self.assertEqual(len(actions), 2)
 
     def test_no_auth_errors_returns_empty(self) -> None:
@@ -355,11 +356,11 @@ class BuildFixActionsTests(unittest.TestCase):
     def test_non_auth_error_excluded(self) -> None:
         snaps = [
             ProviderSnapshot(name="Claude", ok=False, source="api", error="rate limited"),
-            ProviderSnapshot(name="Gemini", ok=False, source="api", error="sign in required"),
+            ProviderSnapshot(name="Antigravity", ok=False, source="api", error="sign in required"),
         ]
         actions = _build_fix_actions(snaps)
         self.assertEqual(len(actions), 1)
-        self.assertEqual(actions["1"], ("Gemini", "cli", "agy"))
+        self.assertEqual(actions["1"], ("Antigravity", "cli", "agy"))
 
     def test_browser_action_type(self) -> None:
         snaps = [

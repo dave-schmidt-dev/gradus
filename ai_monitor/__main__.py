@@ -22,10 +22,10 @@ from rich.console import Console
 from rich.live import Live
 
 from .providers import (
+    AntigravityProvider,
     ClaudeHttpProvider,
     CodexHttpProvider,
     CursorProvider,
-    GeminiHttpProvider,
     ProviderSnapshot,
     VibeProvider,
     fetch_provider_snapshot,
@@ -49,7 +49,7 @@ AUTH_ACTIONS: dict[str, tuple[str, str]] = {
         "read -p '[Enter] runs codex login (overwrites token), [Ctrl-C] aborts: ' _; "
         "codex login",
     ),
-    "Gemini": ("cli", "agy"),
+    "Antigravity": ("cli", "agy"),
     "Cursor": ("browser", "https://cursor.sh"),
     "Vibe": ("browser", "https://console.mistral.ai"),
 }
@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
         "--providers",
         type=str,
         default=None,
-        help="Comma-separated list of providers to enable (e.g. Claude,Codex,Gemini).",
+        help="Comma-separated list of providers to enable (e.g. Claude,Codex,Antigravity).",
     )
     return parser.parse_args()
 
@@ -175,13 +175,13 @@ def initialize_providers(
         except Exception as exc:  # noqa: BLE001
             providers.append(("Claude", exc))
 
-    if enabled is None or "Gemini" in enabled:
+    if enabled is None or "Antigravity" in enabled:
         try:
-            gemini = GeminiHttpProvider(cwd)
-            providers.append(("Gemini", gemini))
-            cleanup.append(gemini)
+            antigravity = AntigravityProvider()
+            providers.append(("Antigravity", antigravity))
+            cleanup.append(antigravity)
         except Exception as exc:  # noqa: BLE001
-            providers.append(("Gemini", exc))
+            providers.append(("Antigravity", exc))
 
     if enabled is None or "Cursor" in enabled:
         try:
@@ -241,7 +241,6 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
         "failed to load usage data",
         "could not load usage data",
         "empty claude output",
-        "empty gemini output",
         "missing current session",
         "data not available yet",
         "http 429",
@@ -293,7 +292,6 @@ def _extract_percent_left(snap: ProviderSnapshot) -> float | None:
         "premium_percent_left",
         "session_percent_left",
         "five_hour_percent_left",
-        "flash_percent_left",
     ):
         value = snap.data.get(key)
         if isinstance(value, (int, float)):

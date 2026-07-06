@@ -12,12 +12,12 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 
 - Monitors Codex usage via the OpenAI usage API
 - Monitors Claude usage via the Anthropic account API
-- Monitors Antigravity (`agy`) usage via the Cloud Code internal quota API (OAuth), using the shared `~/.gemini/oauth_creds.json` token and the same per-model request-quota pool. (Antigravity's premium-model credits — Opus, gpt-oss — are metered separately over a Codeium gRPC path with no probeable REST endpoint; see HISTORY.md 2026-05-23.)
+- Monitors Antigravity (`agy`) usage via the Cloud Code `retrieveUserQuotaSummary` API — the same grouped quota `agy`'s own Models & Quota panel shows. Authenticates read-only with `agy`'s OAuth token from the macOS Keychain (service `gemini`, account `antigravity`); the monitor never refreshes or rewrites that token, so it can't disturb `agy`'s own auth.
 - Monitors Cursor credit usage via the Cursor Dashboard API
 - Monitors Vibe usage via the Mistral billing API
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude 5-hour and 1-week session usage, reset times, and pace indicators
-- Shows Antigravity Flash and Pro pool remaining percentages with reset countdowns
+- Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel)
 - Shows Cursor included API-spend remaining, reset, and billing-cycle pace
 - Shows Vibe monthly remaining (`month rem`), reset, and billing-cycle pace
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
@@ -35,7 +35,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Python 3.10+
 - Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow.
 - Claude: `~/.claude/` credentials present (created by `claude login`)
-- Antigravity (`agy`): `~/.gemini/oauth_creds.json` present (created by `agy` sign-in)
+- Antigravity (`agy`): signed in via `agy` (stores its OAuth token in the macOS Keychain). The monitor reads it read-only; the first read may prompt for Keychain access — choose "Always Allow" so background refreshes stay silent. When the token expires (~hourly) and `agy` isn't running to refresh it, the card shows an auth error; run `agy` to refresh.
 - Cursor: app or browser session authenticated
 - Mistral console session authenticated (Safari/Chrome cookie extraction supported)
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
@@ -56,7 +56,7 @@ python3 -m ai_monitor --interval 30
 python3 -m ai_monitor --interval 60
 python3 -m ai_monitor --json
 python3 -m ai_monitor --debug
-python3 -m ai_monitor --providers Claude,Codex,Gemini
+python3 -m ai_monitor --providers Claude,Codex,Antigravity
 ./monitor --once
 ```
 
@@ -66,7 +66,7 @@ Optional config file (`.ai_monitor.json` in your current working directory):
 
 ```json
 {
-  "providers": ["Claude", "Codex", "Cursor", "Gemini", "Vibe"],
+  "providers": ["Claude", "Codex", "Cursor", "Antigravity", "Vibe"],
   "interval": 120,
   "threshold": 20
 }
@@ -90,10 +90,10 @@ Codex and Claude cards show:
 - `5h`: remaining usage for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining usage for the current 1-week window, weekly reset time, pace indicator
 
-Antigravity card shows:
+Antigravity card shows (Gemini model group — the pool `agy` consumes):
 
-- `fl`: Flash pool remaining, reset countdown
-- `pr`: Pro pool remaining, reset countdown
+- `5h`: remaining quota for the current 5-hour window, reset time, pace indicator
+- `1w`: remaining quota for the current 1-week window, weekly reset time, pace indicator
 
 Cursor / Vibe cards show:
 
@@ -136,7 +136,7 @@ Example:
 
 ## Notes
 
-- Gemini/Antigravity probing calls `loadCodeAssist` before `retrieveUserQuota` to register the session; auth failures surface as a clear re-authenticate message.
+- Antigravity probing reads `agy`'s Keychain token and POSTs an empty body to `retrieveUserQuotaSummary` (the endpoint rejects a non-empty body with HTTP 400 and the default `Python-urllib` User-Agent with HTTP 403; the provider sets an explicit User-Agent). An expired token surfaces a clear "run `agy`" re-authenticate message.
 - Claude probing reads `~/.claude/` OAuth credentials directly; run `claude login` to refresh if probes fail.
 - During each timed refresh, the header switches from `refresh XXs` to a single in-place `updating …` state until all providers complete, then resumes the countdown.
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
@@ -156,8 +156,8 @@ Example:
 ## Known Issues
 
 - **Claude `/usage` may return "only available for subscription plans"** even on valid Team or Pro seats. This is a server-side issue where the Anthropic usage API returns empty limit buckets (`five_hour`, `seven_day`, `seven_day_sonnet` are all null). The PTY probe itself works correctly. When the API starts returning data again, the Claude card will populate automatically.
-- The Antigravity card prefers a direct internal quota probe and only falls back to PTY `/stats` scraping if that path is unavailable.
-- If the Antigravity card falls back to PTY probing and shows a **waiting for authentication** screen, `ai_monitor` now reports that directly. Run `agy` once and complete sign-in, then rerun the monitor.
+- The Antigravity card tracks only the Gemini model group (the pool `agy` actually consumes). The Claude+GPT group `agy` also reports is intentionally not shown — it sits idle at 100% for this account and would just add noise.
+- The Antigravity token is minted under `agy`'s own OAuth client, so this path is coupled to `agy`'s internal API. If a future `agy` release changes the Keychain layout or the `retrieveUserQuotaSummary` contract, the card will show an error until the provider is updated.
 
 ## Development
 

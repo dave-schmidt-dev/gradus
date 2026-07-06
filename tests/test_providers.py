@@ -7,15 +7,14 @@ import json
 import tempfile
 import time
 import unittest
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ai_monitor.providers import (
+    AntigravityProvider,
     ClaudeHttpProvider,
     CodexHttpProvider,
     CursorProvider,
-    GeminiHttpProvider,
     ProbeFailure,
     VibeProvider,
     _format_reset_time,
@@ -1113,132 +1112,139 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIn("claude.ai", str(ctx.exception).lower())
 
 
-class GeminiHttpProviderTests(unittest.TestCase):
-    QUOTA_RESPONSE = {
-        "buckets": [
+class AntigravityProviderTests(unittest.TestCase):
+    # Real shape of retrieveUserQuotaSummary: grouped quota, two windows per group.
+    SUMMARY_RESPONSE = {
+        "groups": [
             {
-                "modelId": "gemini-2.5-flash",
-                "remainingFraction": 0.75,
-                "resetTime": "2026-04-21T00:00:00Z",
+                "displayName": "Gemini Models",
+                "description": "Models within this group: Gemini Flash, Gemini Pro",
+                "buckets": [
+                    {
+                        "bucketId": "gemini-weekly",
+                        "window": "weekly",
+                        "resetTime": "2026-07-11T20:52:22Z",
+                        "remainingFraction": 0.95879453,
+                    },
+                    {
+                        "bucketId": "gemini-5h",
+                        "window": "5h",
+                        "resetTime": "2026-07-06T05:31:46Z",
+                        "remainingFraction": 0.8624946,
+                    },
+                ],
             },
             {
-                "modelId": "gemini-2.5-pro",
-                "remainingFraction": 0.40,
-                "resetTime": "2026-04-21T00:00:00Z",
+                "displayName": "Claude and GPT models",
+                "buckets": [
+                    {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1},
+                    {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1},
+                ],
             },
         ],
-        "tier": "STANDARD",
     }
 
-    def _make_provider(self) -> GeminiHttpProvider:
-        creds = {
-            "access_token": "ya29.test",
-            "refresh_token": "1//test",
-            "expiry_date": int(datetime.now().timestamp() * 1000) + 3_600_000,  # 1h from now
+    def _token(self, expiry: str = "2999-01-01T00:00:00+00:00") -> dict:
+        return {
+            "access_token": "ya29.agy-token",
+            "refresh_token": "1//agy-refresh",
+            "token_type": "Bearer",
+            "expiry": expiry,
         }
-        projects = {"projects": {"/test/cwd": "test-project"}}
-        with (
-            patch.object(GeminiHttpProvider, "_CREDS_PATH") as mock_creds_path,
-            patch.object(GeminiHttpProvider, "_PROJECTS_PATH") as mock_proj_path,
-        ):
-            mock_creds_path.exists.return_value = True
-            mock_creds_path.read_text.return_value = json.dumps(creds)
-            mock_proj_path.read_text.return_value = json.dumps(projects)
-            return GeminiHttpProvider("/test/cwd")
 
-    def test_flash_and_pro_buckets(self) -> None:
+    def _make_provider(self, token: dict | None = None) -> AntigravityProvider:
+        with patch.object(
+            AntigravityProvider, "_load_keychain_token", return_value=token or self._token()
+        ):
+            return AntigravityProvider()
+
+    def test_parses_gemini_group_5h_and_weekly(self) -> None:
         provider = self._make_provider()
-        # loadCodeAssist returns empty dict, retrieveUserQuota returns quota
-        with patch(
-            "ai_monitor.providers._http_json",
-            side_effect=[{}, self.QUOTA_RESPONSE],
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch(
+                "ai_monitor.providers._http_json", return_value=self.SUMMARY_RESPONSE
+            ) as mock_http,
         ):
             status = provider.fetch()
-        self.assertEqual(status.flash_percent_left, 75)
-        self.assertEqual(status.pro_percent_left, 40)
-        self.assertIsNotNone(status.flash_reset)
-        self.assertIsNotNone(status.pro_reset)
-        self.assertEqual(status.account_tier, "STANDARD")
+        self.assertEqual(status.five_hour_percent_left, 86)
+        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertIsNotNone(status.five_hour_reset)
+        self.assertIsNotNone(status.weekly_reset)
+        # The endpoint rejects a non-empty body (400) and the default urllib UA (403).
+        _, kwargs = mock_http.call_args
+        self.assertEqual(kwargs["body"], b"{}")
+        self.assertIn("antigravity", kwargs["headers"]["User-Agent"].lower())
+        self.assertTrue(kwargs["headers"]["Authorization"].startswith("Bearer "))
 
-    def test_token_not_refreshed_when_valid(self) -> None:
-        """Token with future expiry should not trigger refresh."""
+    def test_selects_gemini_group_not_third_party(self) -> None:
+        # Gemini weekly is 96%, the Claude+GPT group is 100%; we must read Gemini's.
         provider = self._make_provider()
-        with patch(
-            "ai_monitor.providers._http_json", side_effect=[{}, self.QUOTA_RESPONSE]
-        ) as mock_http:
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=self.SUMMARY_RESPONSE),
+        ):
             status = provider.fetch()
-        # loadCodeAssist + retrieveUserQuota = 2 calls, no refresh call
-        self.assertEqual(mock_http.call_count, 2)
-        self.assertEqual(status.flash_percent_left, 75)
+        self.assertEqual(status.weekly_percent_left, 96)
 
-    def test_expired_token_refresh_includes_client_credentials(self) -> None:
-        """Token refresh must send client_id and client_secret from creds file."""
-        creds = {
-            "access_token": "ya29.expired",
-            "refresh_token": "1//test-refresh",
-            "client_id": "test-client-id.apps.googleusercontent.com",
-            "client_secret": "GOCSPX-test-secret",
-            "expiry_date": 0,  # long expired
-        }
-        projects = {"projects": {"/test/cwd": "test-project"}}
-        refresh_response = {
-            "access_token": "ya29.refreshed",
-            "expires_in": 3599,
-        }
+    def test_expired_token_raises_run_agy_and_skips_network(self) -> None:
+        provider = self._make_provider()
+        expired = self._token(expiry="2000-01-01T00:00:00+00:00")
         with (
-            patch.object(GeminiHttpProvider, "_CREDS_PATH") as mock_creds_path,
-            patch.object(GeminiHttpProvider, "_PROJECTS_PATH") as mock_proj_path,
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
+            patch("ai_monitor.providers._http_json") as mock_http,
         ):
-            mock_creds_path.exists.return_value = True
-            mock_creds_path.read_text.return_value = json.dumps(creds)
-            mock_creds_path.write_text = MagicMock()
-            mock_proj_path.read_text.return_value = json.dumps(projects)
-            provider = GeminiHttpProvider("/test/cwd")
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("agy", str(ctx.exception))
+        mock_http.assert_not_called()  # never probe the network with a dead token
 
-            # refresh + loadCodeAssist + retrieveUserQuota = 3 calls
-            # Keep path mocks active — _maybe_refresh re-reads creds from disk
-            with patch(
-                "ai_monitor.providers._http_json",
-                side_effect=[refresh_response, {}, self.QUOTA_RESPONSE],
-            ) as mock_http:
-                status = provider.fetch()
+    def test_keychain_decode_go_keyring_base64(self) -> None:
+        import base64
 
-        # First call should be the refresh with client credentials from creds file
-        refresh_call = mock_http.call_args_list[0]
-        refresh_body = json.loads(refresh_call[1]["body"])
-        self.assertEqual(refresh_body["client_id"], "test-client-id.apps.googleusercontent.com")
-        self.assertEqual(refresh_body["client_secret"], "GOCSPX-test-secret")
-        self.assertEqual(refresh_body["refresh_token"], "1//test-refresh")
-        self.assertEqual(status.flash_percent_left, 75)
-
-    def test_missing_client_credentials_extracts_from_cli(self) -> None:
-        """When creds file lacks client_id, extraction from CLI bundle is attempted."""
-        creds = {
-            "access_token": "ya29.test",
-            "refresh_token": "1//test",
-            "expiry_date": int(datetime.now().timestamp() * 1000) + 3_600_000,
+        inner = {
+            "auth_method": "consumer",
+            "token": {
+                "access_token": "ya29.decoded",
+                "refresh_token": "1//r",
+                "token_type": "Bearer",
+                "expiry": "2999-01-01T00:00:00+00:00",
+            },
         }
-        projects = {"projects": {"/test/cwd": "test-project"}}
-        extracted = ("extracted-id.apps.googleusercontent.com", "GOCSPX-extracted")
-        with (
-            patch.object(GeminiHttpProvider, "_CREDS_PATH") as mock_creds_path,
-            patch.object(GeminiHttpProvider, "_PROJECTS_PATH") as mock_proj_path,
-            patch.object(
-                GeminiHttpProvider,
-                "_extract_client_credentials_from_cli",
-                return_value=extracted,
-            ),
-        ):
-            mock_creds_path.exists.return_value = True
-            mock_creds_path.read_text.return_value = json.dumps(creds)
-            mock_creds_path.write_text = MagicMock()
-            mock_proj_path.read_text.return_value = json.dumps(projects)
-            provider = GeminiHttpProvider("/test/cwd")
+        wrapped = "go-keyring-base64:" + base64.b64encode(json.dumps(inner).encode()).decode()
+        fake = MagicMock(returncode=0, stdout=wrapped, stderr="")
+        with patch("ai_monitor.providers.subprocess.run", return_value=fake):
+            token = AntigravityProvider._load_keychain_token()
+        self.assertEqual(token["access_token"], "ya29.decoded")
 
-        self.assertEqual(provider._creds["client_id"], "extracted-id.apps.googleusercontent.com")
-        self.assertEqual(provider._creds["client_secret"], "GOCSPX-extracted")
-        # Should have written the updated creds back to disk
-        mock_creds_path.write_text.assert_called_once()
+    def test_keychain_decode_plain_json(self) -> None:
+        # go-keyring stores small UTF-8 secrets without the base64 wrapper.
+        inner = {"token": {"access_token": "ya29.plain", "token_type": "Bearer"}}
+        fake = MagicMock(returncode=0, stdout=json.dumps(inner), stderr="")
+        with patch("ai_monitor.providers.subprocess.run", return_value=fake):
+            token = AntigravityProvider._load_keychain_token()
+        self.assertEqual(token["access_token"], "ya29.plain")
+
+    def test_missing_keychain_item_raises(self) -> None:
+        fake = MagicMock(returncode=44, stdout="", stderr="could not be found")
+        with patch("ai_monitor.providers.subprocess.run", return_value=fake):
+            with self.assertRaises(FileNotFoundError):
+                AntigravityProvider._load_keychain_token()
+
+    def test_init_raises_when_no_access_token(self) -> None:
+        with patch.object(AntigravityProvider, "_load_keychain_token", return_value={}):
+            with self.assertRaises(FileNotFoundError):
+                AntigravityProvider()
+
+    def test_missing_gemini_group_raises(self) -> None:
+        provider = self._make_provider()
+        only_third_party = {"groups": [self.SUMMARY_RESPONSE["groups"][1]]}
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=only_third_party),
+        ):
+            with self.assertRaises(ProbeFailure):
+                provider.fetch()
 
 
 if __name__ == "__main__":

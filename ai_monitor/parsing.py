@@ -1,4 +1,4 @@
-"""Status dataclasses for Codex, Claude, Gemini, Cursor, and Vibe providers."""
+"""Status dataclasses for Codex, Claude, Antigravity, Cursor, and Vibe providers."""
 
 from __future__ import annotations
 
@@ -37,11 +37,18 @@ class ClaudeStatus:
 
 
 @dataclass(slots=True)
-class GeminiStatus:
-    flash_percent_left: int | None
-    pro_percent_left: int | None
-    flash_reset: str | None
-    pro_reset: str | None
+class AntigravityStatus:
+    """Antigravity (`agy`) grouped quota for the Gemini model group.
+
+    `agy` meters usage per group (Gemini models; Claude+GPT models), each with a
+    5-hour and a weekly window. This tracks the Gemini group — the pool the user
+    actually consumes — mirroring the 5h/weekly shape of CodexStatus.
+    """
+
+    five_hour_percent_left: int | None
+    weekly_percent_left: int | None
+    five_hour_reset: str | None
+    weekly_reset: str | None
     account_email: str | None
     account_tier: str | None
     raw_text: str
