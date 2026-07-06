@@ -526,5 +526,169 @@ class MergeWithPreviousTests(unittest.TestCase):
         self.assertNotIn("cached", merged[0].source)
 
 
+class WriteSnapshotTests(unittest.TestCase):
+    """Test the headless ``--write-snapshot`` command (Task 2.2, INV-2 gate).
+
+    The headless path must be strictly read-only: it engages ``set_headless``
+    before constructing providers, fires no threshold notifications, launches no
+    subprocess (browser / osascript / cookie extraction), and returns 0 as long
+    as the snapshot file is written — even when every provider probe failed.
+    """
+
+    def _snapshots(self) -> list[ProviderSnapshot]:
+        """Return a canonical five-provider mix including a failed probe."""
+        return [
+            ProviderSnapshot(
+                name="Codex",
+                ok=True,
+                source="cli",
+                data={"five_hour_percent_left": 75, "weekly_percent_left": 90},
+            ),
+            ProviderSnapshot(
+                name="Claude",
+                ok=True,
+                source="api",
+                data={"session_percent_left": 50},
+            ),
+            ProviderSnapshot(name="Antigravity", ok=False, source="api", error="auth failed"),
+            ProviderSnapshot(name="Cursor", ok=False, source="api", error="session expired"),
+            ProviderSnapshot(name="Vibe", ok=False, source="api", error="connection timeout"),
+        ]
+
+    def _drive(
+        self,
+        snapshots: list[ProviderSnapshot],
+        *,
+        providers: str | None = None,
+        write_ok: bool = True,
+    ):
+        """Drive ``main()`` down the ``--write-snapshot`` branch under full spying.
+
+        Args:
+            snapshots: What ``collect_snapshots`` should return.
+            providers: Optional ``--providers`` filter value.
+            write_ok: What the patched ``write_snapshot`` returns.
+
+        Returns:
+            A ``SimpleNamespace`` of the return code, captured payload, and mocks.
+        """
+        from types import SimpleNamespace
+
+        captured: dict[str, object] = {}
+
+        def fake_write(payload, *args, **kwargs):
+            captured["payload"] = payload
+            return write_ok
+
+        ns = argparse.Namespace(
+            write_snapshot=True,
+            debug=False,
+            json=False,
+            once=False,
+            providers=providers,
+            interval=120,
+        )
+        set_headless_spy = MagicMock()
+        with (
+            patch("ai_monitor.__main__.parse_args", return_value=ns),
+            patch(
+                "ai_monitor.__main__.initialize_providers",
+                return_value=([("Codex", object())], []),
+            ),
+            patch("ai_monitor.__main__.set_headless", set_headless_spy),
+            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
+            patch("ai_monitor.__main__._check_thresholds") as mock_check,
+            patch("ai_monitor.__main__._notify_threshold") as mock_notify,
+            patch("ai_monitor.__main__.read_prior_snapshot", return_value=None),
+            patch("ai_monitor.__main__.write_snapshot", side_effect=fake_write) as mock_write,
+            patch("ai_monitor.__main__.subprocess.Popen") as mock_popen,
+            patch("ai_monitor.__main__.subprocess.run") as mock_run,
+            patch("ai_monitor.providers.subprocess.Popen") as mock_p_popen,
+            patch("ai_monitor.providers.subprocess.run") as mock_p_run,
+        ):
+            rc = main()
+
+        return SimpleNamespace(
+            rc=rc,
+            payload=captured.get("payload"),
+            set_headless=set_headless_spy,
+            check=mock_check,
+            notify=mock_notify,
+            write=mock_write,
+            popen=mock_popen,
+            run=mock_run,
+            p_popen=mock_p_popen,
+            p_run=mock_p_run,
+        )
+
+    def test_write_snapshot_is_read_only_no_side_effects(self) -> None:
+        """INV-2 gate: headless snapshot is read-only with zero side effects."""
+        res = self._drive(self._snapshots())
+
+        # Read-only mode was engaged before providers were constructed.
+        res.set_headless.assert_called_once_with(True)
+        # No notifications: neither the threshold check nor the notifier ran.
+        res.check.assert_not_called()
+        res.notify.assert_not_called()
+        # No subprocess of any kind (browser, osascript, cookie extraction).
+        res.popen.assert_not_called()
+        res.run.assert_not_called()
+        res.p_popen.assert_not_called()
+        res.p_run.assert_not_called()
+        # Snapshot was written and the process exited 0.
+        self.assertEqual(res.rc, 0)
+        res.write.assert_called_once()
+        self.assertIn("schema_version", res.payload)
+        self.assertEqual(len(res.payload["providers"]), 5)
+
+    def test_write_snapshot_exit_zero_when_all_providers_failed(self) -> None:
+        """Every probe ok:false but the file was written ⇒ exit 0."""
+        snapshots = [
+            ProviderSnapshot(name=name, ok=False, source="api", error="down")
+            for name in ("Codex", "Claude", "Antigravity", "Cursor", "Vibe")
+        ]
+        res = self._drive(snapshots, write_ok=True)
+        self.assertEqual(res.rc, 0)
+        self.assertTrue(all(not p["ok"] for p in res.payload["providers"]))
+
+    def test_write_snapshot_exit_one_on_write_failure(self) -> None:
+        """``write_snapshot`` returned False ⇒ exit 1."""
+        res = self._drive(self._snapshots(), write_ok=False)
+        self.assertEqual(res.rc, 1)
+
+    def test_write_snapshot_emits_all_five_providers_when_filtered(self) -> None:
+        """A ``--providers`` filter still yields all five canonical entries."""
+        codex_only = [
+            ProviderSnapshot(
+                name="Codex",
+                ok=True,
+                source="cli",
+                data={"five_hour_percent_left": 60},
+            )
+        ]
+        res = self._drive(codex_only, providers="Codex")
+        self.assertEqual(res.rc, 0)
+        names = {p["name"] for p in res.payload["providers"]}
+        self.assertEqual(names, {"Codex", "Claude", "Antigravity", "Cursor", "Vibe"})
+        by_name = {p["name"]: p for p in res.payload["providers"]}
+        self.assertTrue(by_name["Codex"]["ok"])
+        for other in ("Claude", "Antigravity", "Cursor", "Vibe"):
+            self.assertFalse(by_name[other]["ok"])
+
+    def test_write_snapshot_payload_validates_schema(self) -> None:
+        """The captured payload satisfies the documented INV-5 shape."""
+        from datetime import datetime
+
+        res = self._drive(self._snapshots())
+        payload = res.payload
+        self.assertEqual(payload["schema_version"], 1)
+        updated = datetime.fromisoformat(payload["updated_at"])
+        self.assertIsNotNone(updated.tzinfo)
+        self.assertEqual(len(payload["providers"]), 5)
+        for provider in payload["providers"]:
+            for key in ("name", "ok", "error", "windows", "data"):
+                self.assertIn(key, provider)
+
+
 if __name__ == "__main__":
     unittest.main()

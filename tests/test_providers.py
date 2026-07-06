@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from ai_monitor import providers
 from ai_monitor.providers import (
     AntigravityProvider,
     ClaudeHttpProvider,
@@ -1251,6 +1252,149 @@ class AntigravityProviderTests(unittest.TestCase):
         ):
             with self.assertRaises(ProbeFailure):
                 provider.fetch()
+
+
+def _raise_http_401(*args: object, **kwargs: object) -> None:
+    """urlopen side-effect that always raises HTTP 401.
+
+    Drives every provider's cached-cred → HTTP-401 recovery path (the hardest
+    case for INV-2) without touching the real network.
+    """
+    import urllib.error
+
+    raise urllib.error.HTTPError("https://example.com", 401, "Unauthorized", {}, None)
+
+
+class HeadlessReadOnlyTests(unittest.TestCase):
+    """INV-2: with headless mode ON, constructing and fetching any provider must
+    invoke neither subprocess.Popen nor subprocess.run, read no browser/Keychain
+    path, and write no auth/cache file — even on a cached-cred → HTTP-401 path.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._root = Path(self._tmpdir.name)
+        self._vibe_cache = self._root / "vibe_cookies.json"
+        self._cursor_cache = self._root / "cursor_token.json"
+        self._claude_cache = self._root / "claude_cookies.json"
+        self._codex_auth = self._root / "auth.json"
+        self._patchers = [
+            patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
+            patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
+            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
+            patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
+        ]
+        for p in self._patchers:
+            p.start()
+
+    def tearDown(self) -> None:
+        # SR-3: a leaked headless=True silently disables browser-opens for every
+        # later test, so restore the default before anything else can run.
+        providers.set_headless(False)
+        for p in self._patchers:
+            p.stop()
+        self._tmpdir.cleanup()
+
+    def _seed_codex_and_cursor(self) -> None:
+        """Give Codex and Cursor a valid cached credential so fetch() reaches the
+        cached-cred → 401 recovery path instead of failing at construction."""
+        self._codex_auth.write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "access_token": "cached_access",
+                        "refresh_token": "cached_refresh",
+                        "account_id": "acct",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        self._cursor_cache.write_text(
+            json.dumps({"access_token": _make_jwt(3600), "refresh_token": "rt"}),
+            encoding="utf-8",
+        )
+
+    def _construct_and_fetch_all(self) -> None:
+        """Construct + fetch all five providers, tolerating expected auth failures.
+
+        Under headless mode fetch() is EXPECTED to fail with a truthful auth
+        error (ProbeFailure) or, for Antigravity, a FileNotFoundError at
+        construction — that is the correct outcome, so both are swallowed.
+        """
+        factories = [
+            lambda: VibeProvider(str(self._root)),
+            CursorProvider,
+            CodexHttpProvider,
+            ClaudeHttpProvider,
+            AntigravityProvider,
+        ]
+        for factory in factories:
+            try:
+                provider = factory()
+                provider.fetch()
+            except (ProbeFailure, FileNotFoundError):
+                pass
+
+    def test_headless_no_subprocess_any_provider(self) -> None:
+        # INV-2 proof: neither Popen nor run may fire across construct+fetch for
+        # all five providers, including the cached-cred → 401 recovery on
+        # Codex/Cursor. If either count is non-zero, a choke-point is ungated.
+        self._seed_codex_and_cursor()
+        providers.set_headless(True)
+        with (
+            patch("ai_monitor.providers.subprocess.Popen") as popen,
+            patch("ai_monitor.providers.subprocess.run") as run,
+            patch("urllib.request.urlopen", side_effect=_raise_http_401),
+        ):
+            self._construct_and_fetch_all()
+        self.assertEqual(popen.call_count, 0)
+        self.assertEqual(run.call_count, 0)
+
+    def test_headless_no_cred_or_cache_writes(self) -> None:
+        # INV-2: no auth.json rewrite and no cache write/eviction, even on 401.
+        self._seed_codex_and_cursor()
+        original_auth = self._codex_auth.read_text(encoding="utf-8")
+        original_cursor = self._cursor_cache.read_text(encoding="utf-8")
+        providers.set_headless(True)
+        with (
+            patch("ai_monitor.providers.os.replace") as os_replace,
+            patch("ai_monitor.providers.subprocess.Popen"),
+            patch("ai_monitor.providers.subprocess.run"),
+            patch("urllib.request.urlopen", side_effect=_raise_http_401),
+        ):
+            self._construct_and_fetch_all()
+        # Codex must never mint/persist tokens → no atomic auth.json rewrite.
+        os_replace.assert_not_called()
+        self.assertEqual(self._codex_auth.read_text(encoding="utf-8"), original_auth)
+        # Cursor's 401 path must NOT evict the cache in headless mode.
+        self.assertEqual(self._cursor_cache.read_text(encoding="utf-8"), original_cursor)
+        # No provider may create a fresh cache file from a read.
+        self.assertFalse(self._vibe_cache.exists())
+        self.assertFalse(self._claude_cache.exists())
+
+    def test_headless_off_opens_browser(self) -> None:
+        # The _open_url gate — not the readers — is what suppresses the browser
+        # open: with the readers stubbed identically, only the flag differs.
+        with (
+            patch("ai_monitor.providers._read_safari_cookies", return_value={}),
+            patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None),
+            patch("ai_monitor.providers.subprocess.Popen") as popen,
+        ):
+            providers.set_headless(False)
+            VibeProvider(str(self._root))
+            self.assertTrue(popen.called)
+            self.assertEqual(popen.call_args.args[0], ["open", "https://console.mistral.ai"])
+
+            popen.reset_mock()
+            providers.set_headless(True)
+            VibeProvider(str(self._root))
+            popen.assert_not_called()
+
+    def test_headless_read_safari_cookies_returns_empty(self) -> None:
+        providers.set_headless(True)
+        self.assertEqual(providers._read_safari_cookies("claude"), {})
+        self.assertIsNone(VibeProvider._extract_chrome_cookies())
 
 
 if __name__ == "__main__":

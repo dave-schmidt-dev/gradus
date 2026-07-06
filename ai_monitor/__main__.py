@@ -29,14 +29,23 @@ from .providers import (
     ProviderSnapshot,
     VibeProvider,
     fetch_provider_snapshot,
+    set_headless,
 )
-from .snapshot import STALE_THRESHOLD_SECONDS, _is_transient_probe_error
+from .snapshot import (
+    STALE_THRESHOLD_SECONDS,
+    _is_transient_probe_error,
+    build_snapshot_payload,
+    read_prior_snapshot,
+    write_snapshot,
+)
 from .ui import (
     THEME,
     build_dashboard,
     build_loading_screen,
     render_json,
 )
+
+log = logging.getLogger(__name__)
 
 AUTH_ACTIONS: dict[str, tuple[str, str]] = {
     "Claude": ("cli", "claude login"),
@@ -138,6 +147,15 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Comma-separated list of providers to enable (e.g. Claude,Codex,Antigravity).",
+    )
+    parser.add_argument(
+        "--write-snapshot",
+        action="store_true",
+        dest="write_snapshot",
+        help=(
+            "Write a headless capacity snapshot to .state/snapshot.json and exit "
+            "(no browser, no notifications)."
+        ),
     )
     return parser.parse_args()
 
@@ -372,8 +390,25 @@ def main() -> int:
     except (TypeError, ValueError):
         threshold = 20.0
     cwd = os.getcwd()
+    if getattr(args, "write_snapshot", False):
+        # Engage strictly read-only mode BEFORE constructing providers, so their
+        # constructors never spawn a browser, refresh a token, or write a cache
+        # (INV-2: the headless path has zero side effects).
+        set_headless(True)
     providers, cleanup = initialize_providers(cwd, enabled_providers)
     notified_providers: set[str] = set()
+
+    def _persist_snapshot(snaps: list[ProviderSnapshot], when: datetime) -> None:
+        """Persist a router-facing snapshot without ever crashing the dashboard.
+
+        Args:
+            snaps: The freshly collected provider snapshots.
+            when: The instant the snapshot was captured.
+        """
+        try:
+            write_snapshot(build_snapshot_payload(snaps, when, prior=read_prior_snapshot()))
+        except Exception:  # noqa: BLE001 - a write failure must never crash the dashboard
+            log.debug("snapshot persist failed", exc_info=True)
 
     def refresh(previous: list[ProviderSnapshot]) -> list[ProviderSnapshot]:
         fresh: list[ProviderSnapshot] = []
@@ -397,6 +432,20 @@ def main() -> int:
     console = Console(theme=THEME)
 
     try:
+        if getattr(args, "write_snapshot", False):
+            # Headless snapshot: read-only probe, persist, exit. No threshold
+            # checks (no notifications). Providers are already headless; the
+            # outer `finally` closes them.
+            snapshots = collect_snapshots(providers, args.debug)
+            ok = write_snapshot(
+                build_snapshot_payload(snapshots, datetime.now(), prior=read_prior_snapshot())
+            )
+            if ok:
+                log.info("wrote headless snapshot for %d providers", len(snapshots))
+                return 0
+            log.warning("failed to write headless snapshot")
+            return 1
+
         if args.json:
             updated_at = datetime.now()
             snapshots = collect_snapshots(providers, args.debug)
@@ -442,6 +491,7 @@ def main() -> int:
                         time.sleep(0.12)
                     current = future.result()
                     _check_thresholds(current, threshold, notified_providers)
+                    _persist_snapshot(current, datetime.now())
                 finally:
                     executor.shutdown(wait=False, cancel_futures=True)
 
@@ -520,6 +570,7 @@ def main() -> int:
                         if not quit_requested:
                             current = refresh_future.result()
                             _check_thresholds(current, threshold, notified_providers)
+                            _persist_snapshot(current, updated_at)
                     finally:
                         refresh_executor.shutdown(wait=False, cancel_futures=True)
 

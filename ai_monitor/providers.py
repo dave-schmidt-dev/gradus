@@ -21,6 +21,51 @@ from .parsing import (
 
 log = logging.getLogger(__name__)
 
+_HEADLESS = False
+
+
+def set_headless(value: bool) -> None:
+    """Enable or disable strictly read-only headless mode (INV-2).
+
+    In headless mode the providers never spawn a browser, never run a
+    Keychain/cookie subprocess, never refresh a token, and never evict or
+    write a credential cache. Missing, expired, or rejected credentials surface
+    as a truthful auth error instead of triggering any recovery side effect.
+
+    Args:
+        value: True to enable read-only headless mode, False to restore the
+            default interactive behavior.
+    """
+    global _HEADLESS
+    _HEADLESS = bool(value)
+
+
+def _is_headless() -> bool:
+    """Return True when read-only headless mode is active (INV-2)."""
+    return _HEADLESS
+
+
+def _open_url(url: str) -> None:
+    """Open a URL in the user's browser unless headless mode is active.
+
+    A no-op under headless mode (INV-2): a background refresher must never spawn
+    a browser. Any OSError from the ``open`` command is swallowed so a missing
+    launcher never breaks a probe.
+
+    Args:
+        url: The URL to hand to macOS's ``open`` command.
+    """
+    if _HEADLESS:
+        return
+    try:
+        subprocess.Popen(
+            ["open", url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+
 
 @dataclass(slots=True)
 class ProviderSnapshot:
@@ -95,6 +140,8 @@ def _debug_dump_path(name: str) -> Path:
 
 
 def _write_debug_dump(name: str, raw_text: str) -> None:
+    if _HEADLESS:
+        return
     _debug_dump_path(name).write_text(raw_text, encoding="utf-8")
 
 
@@ -124,6 +171,9 @@ def _read_safari_cookies(host_filter: str) -> dict[str, str]:
     Returns a dict of {cookie_name: cookie_value} for cookies whose URL
     contains host_filter (case-insensitive).
     """
+    if _HEADLESS:
+        return {}
+
     import struct
 
     cookie_file = (
@@ -232,14 +282,7 @@ class VibeProvider:
             self._save_to_cache()
         elif not self._browser_opened:
             # Open console.mistral.ai so the user can log in
-            try:
-                subprocess.Popen(
-                    ["open", "https://console.mistral.ai"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except OSError:
-                pass
+            _open_url("https://console.mistral.ai")
             self._browser_opened = True
 
     def _load_from_cache(self) -> bool:
@@ -269,6 +312,8 @@ class VibeProvider:
 
     def _save_to_cache(self) -> None:
         """Persist current cookies to local cache."""
+        if _HEADLESS:
+            return
         if not (self._ory_name and self._ory_value and self._csrf):
             return
         try:
@@ -285,6 +330,8 @@ class VibeProvider:
 
     def _clear_cache(self) -> None:
         """Remove the local cookie cache (call when cookies are rejected by the API)."""
+        if _HEADLESS:
+            return
         try:
             self._CACHE_PATH.unlink(missing_ok=True)
         except OSError as exc:
@@ -320,6 +367,9 @@ class VibeProvider:
     @staticmethod
     def _extract_chrome_cookies() -> dict[str, str] | None:
         """Try to extract Mistral cookies from Chrome's encrypted cookie store."""
+        if _HEADLESS:
+            return None
+
         import hashlib
         import sqlite3 as _sqlite3
 
@@ -464,10 +514,12 @@ class VibeProvider:
         if not self._has_cookies:
             self._load_cookies()
         if not self._has_cookies:
-            raise ProbeFailure(
-                "Waiting for Mistral login — console.mistral.ai opened in browser",
-                "",
+            message = (
+                "auth required: no cached credentials"
+                if _is_headless()
+                else "Waiting for Mistral login — console.mistral.ai opened in browser"
             )
+            raise ProbeFailure(message, "")
 
         cookie_header = f"{self._ory_name}={self._ory_value}; csrftoken={self._csrf}"
         req = urllib.request.Request(
@@ -590,14 +642,7 @@ class CursorProvider:
 
         # No token found — open browser so user can log in
         if not self._browser_opened:
-            try:
-                subprocess.Popen(
-                    ["open", "https://cursor.com/settings"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except OSError:
-                pass
+            _open_url("https://cursor.com/settings")
             self._browser_opened = True
 
     def _load_from_cache(self) -> bool:
@@ -621,6 +666,8 @@ class CursorProvider:
 
     def _save_to_cache(self) -> None:
         """Persist current tokens to local cache."""
+        if _HEADLESS:
+            return
         if not self._access_token:
             return
         try:
@@ -636,6 +683,8 @@ class CursorProvider:
 
     def _clear_cache(self) -> None:
         """Remove the local token cache (call when the cached token is rejected)."""
+        if _HEADLESS:
+            return
         try:
             self._CACHE_PATH.unlink(missing_ok=True)
         except OSError as exc:
@@ -686,10 +735,12 @@ class CursorProvider:
         if not self._access_token:
             self._load_token()
         if not self._access_token:
-            raise ProbeFailure(
-                "Waiting for Cursor login — cursor.com/settings opened in browser",
-                "",
+            message = (
+                "auth required: no cached credentials"
+                if _is_headless()
+                else "Waiting for Cursor login — cursor.com/settings opened in browser"
             )
+            raise ProbeFailure(message, "")
 
         usage_data: dict[str, Any] = {}
         plan_data: dict[str, Any] = {}
@@ -697,7 +748,7 @@ class CursorProvider:
         try:
             usage_data = self._api_post(_ur, _ue, self._USAGE_URL)
         except _ue.HTTPError as exc:
-            if exc.code == 401 and self._refresh_token:
+            if exc.code == 401 and self._refresh_token and not _is_headless():
                 self._do_token_refresh(_ur, _ue)
                 usage_data = self._api_post(_ur, _ue, self._USAGE_URL)
             elif exc.code == 401:
@@ -920,6 +971,9 @@ class CodexHttpProvider:
         endpoint reports the refresh_token itself is invalidated (user must log in
         interactively).
         """
+        if _HEADLESS:
+            # Read-only mode (INV-2): never mint or persist new tokens.
+            return False
         if not self._refresh_token:
             return False
         body = json.dumps(
@@ -1090,14 +1144,7 @@ class ClaudeHttpProvider:
         if self._session_key and self._org_id:
             self._save_to_cache()
         elif not self._browser_opened:
-            try:
-                subprocess.Popen(
-                    ["open", "https://claude.ai"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except OSError:
-                pass
+            _open_url("https://claude.ai")
             self._browser_opened = True
 
     def _load_from_cache(self) -> bool:
@@ -1123,6 +1170,8 @@ class ClaudeHttpProvider:
 
     def _save_to_cache(self) -> None:
         """Persist current cookies to local cache."""
+        if _HEADLESS:
+            return
         if not (self._session_key and self._org_id):
             return
         try:
@@ -1139,6 +1188,8 @@ class ClaudeHttpProvider:
 
     def _clear_cache(self) -> None:
         """Remove the local cookie cache (call when cookies are rejected by the API)."""
+        if _HEADLESS:
+            return
         try:
             self._CACHE_PATH.unlink(missing_ok=True)
         except OSError as exc:
@@ -1153,10 +1204,12 @@ class ClaudeHttpProvider:
         if not self._has_cookies:
             self._load_cookies()
         if not self._has_cookies:
-            raise ProbeFailure(
-                "Waiting for Claude login — claude.ai opened in browser",
-                "",
+            message = (
+                "auth required: no cached credentials"
+                if _is_headless()
+                else "Waiting for Claude login — claude.ai opened in browser"
             )
+            raise ProbeFailure(message, "")
 
         url = f"{self._BASE_URL}/api/organizations/{self._org_id}/usage"
         cookie_parts = [f"sessionKey={self._session_key}"]
@@ -1284,6 +1337,9 @@ class AntigravityProvider:
         Returns the inner ``token`` object ({access_token, refresh_token, expiry,
         token_type}); an empty dict if the item is missing or unreadable.
         """
+        if _HEADLESS:
+            # Read-only mode (INV-2): never run the Keychain subprocess.
+            raise FileNotFoundError("auth required: no cached credentials")
         try:
             result = subprocess.run(
                 [
