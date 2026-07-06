@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.panel import Panel
@@ -15,6 +15,8 @@ from rich.text import Text
 from rich.theme import Theme
 
 from .providers import ProviderSnapshot
+from .snapshot import pace_delta, reconcile
+from .snapshot import parse_reset_target as _parse_reset_target
 
 THEME = Theme(
     {
@@ -160,85 +162,6 @@ def _truncate(text: str, width: int) -> str:
     return text[: width - 1] + "…"
 
 
-def _parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None:
-    if not reset_text or reset_text == "n/a":
-        return None
-    normalized = re.sub(r"\s+", " ", reset_text).strip()
-    lower = normalized.lower()
-    target: datetime | None = None
-    target_year = now.year
-    fragments = normalized.split("(", 1)[0].replace("resets", "").replace("Resets", "").strip()
-    fragments = fragments.replace(",", "")
-    fragments = re.sub(r"(?i)(\d)(am|pm)\b", r"\1 \2", fragments)
-    fragments = re.sub(r"\s+", " ", fragments).strip()
-
-    relative = re.search(
-        r"(?i)\bin\s+(?:(?P<days>\d+)d\s*)?(?:(?P<hours>\d+)h\s*)?(?:(?P<minutes>\d+)m)?",
-        fragments,
-    )
-    if relative and any(relative.group(name) for name in ("days", "hours", "minutes")):
-        return now + timedelta(
-            days=int(relative.group("days") or 0),
-            hours=int(relative.group("hours") or 0),
-            minutes=int(relative.group("minutes") or 0),
-        )
-
-    if " on " in lower:
-        candidates = [fragments]
-        if fragments.lower().startswith("on "):
-            candidates.insert(0, fragments[3:].strip())
-        for candidate in candidates:
-            stamped = f"{candidate} {target_year}"
-            for fmt in (
-                "%H:%M on %d %b %Y",
-                "%I %p on %d %b %Y",
-                "%I:%M %p on %d %b %Y",
-                "%b %d %H:%M %Y",
-                "%b %d %I %p %Y",
-                "%b %d %I:%M %p %Y",
-            ):
-                try:
-                    parsed = datetime.strptime(stamped, fmt)
-                except ValueError:
-                    continue
-                target = parsed
-                if target < now:
-                    target = target.replace(year=target_year + 1)
-                break
-            if target is not None:
-                break
-    elif " at " in lower:
-        stamped = f"{fragments} {target_year}"
-        for fmt in (
-            "%b %d at %H:%M %Y",
-            "%b %d at %I %p %Y",
-            "%b %d at %I:%M %p %Y",
-            "%d %b at %H:%M %Y",
-            "%d %b at %I %p %Y",
-            "%d %b at %I:%M %p %Y",
-        ):
-            try:
-                parsed = datetime.strptime(stamped, fmt)
-            except ValueError:
-                continue
-            target = parsed
-            if target < now:
-                target = target.replace(year=target_year + 1)
-            break
-    elif lower.startswith("resets "):
-        for fmt in ("%H:%M", "%I %p", "%I:%M %p"):
-            try:
-                parsed = datetime.strptime(fragments, fmt)
-            except ValueError:
-                continue
-            target = now.replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
-            if target < now:
-                target = target + timedelta(days=1)
-            break
-
-    return target
-
-
 def _countdown_label(reset_text: str | None, now: datetime) -> str | None:
     target = _parse_reset_target(reset_text, now)
     if target is None:
@@ -298,13 +221,9 @@ def _pace_label(
     target = _parse_reset_target(reset_text, now)
     if target is None:
         return "n/a"
-    remaining_seconds = max(0.0, (target - now).total_seconds())
-    total_seconds = window_hours * 3600.0
-    if total_seconds <= 0:
+    delta = pace_delta(percent_left, target, window_hours * 3600.0, now)
+    if delta is None:
         return "n/a"
-    remaining_fraction = remaining_seconds / total_seconds
-    percent_fraction = percent_left / 100.0
-    delta = percent_fraction - remaining_fraction
     diff_points = round(abs(delta) * 100)
     if abs(delta) <= 0.05:
         return "on pace"
@@ -365,18 +284,16 @@ def _billing_cycle_pace_label(
         end = datetime.fromisoformat(end_iso)
     except ValueError:
         return "n/a"
+    start, end = reconcile(start, end)
     total_seconds = max(1.0, (end - start).total_seconds())
-    if start.tzinfo is None and now.tzinfo is not None:
-        now = now.replace(tzinfo=None)
-    elif start.tzinfo is not None and now.tzinfo is None:
-        now = now.replace(tzinfo=start.tzinfo)
-    remaining_seconds = max(0.0, (end - now).total_seconds())
-    expected_remaining = (remaining_seconds / total_seconds) * 100.0
-    delta = percent_left - expected_remaining
-    diff_points = round(abs(delta))
-    if abs(delta) <= 5.0:
+    delta = pace_delta(percent_left, end, total_seconds, now)
+    if delta is None:
+        return "n/a"
+    delta_points = delta * 100.0
+    diff_points = round(abs(delta_points))
+    if abs(delta_points) <= 5.0:
         return "on pace"
-    if delta > 0:
+    if delta_points > 0:
         return f"under +{diff_points}pt"
     return f"over -{diff_points}pt"
 

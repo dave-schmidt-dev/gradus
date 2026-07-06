@@ -30,6 +30,7 @@ from .providers import (
     VibeProvider,
     fetch_provider_snapshot,
 )
+from .snapshot import STALE_THRESHOLD_SECONDS, _is_transient_probe_error
 from .ui import (
     THEME,
     build_dashboard,
@@ -227,34 +228,6 @@ def collect_snapshots(providers: list[tuple[str, object]], debug: bool) -> list[
 
     snapshots.sort(key=lambda item: item.name)
     return snapshots
-
-
-STALE_THRESHOLD_SECONDS = 300  # 5 minutes — stop serving cached data after this
-
-
-def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
-    if snapshot.ok or not snapshot.error:
-        return False
-    message = snapshot.error.lower()
-    transient_markers = (
-        "rate limited",
-        "failed to load usage data",
-        "could not load usage data",
-        "empty claude output",
-        "missing current session",
-        "data not available yet",
-        "http 429",
-        "http 500",
-        "http 502",
-        "http 503",
-        "http 504",
-        "token expired",
-        "network error",
-        "timed out",
-        "invalid json",
-        "cursor api network error",
-    )
-    return any(marker in message for marker in transient_markers)
 
 
 def _merge_with_previous(

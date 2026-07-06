@@ -7,6 +7,7 @@ import json
 import tempfile
 import time
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -253,8 +254,13 @@ class CursorProviderTests(unittest.TestCase):
         self.assertEqual(status.remaining_cents, 1631)
         self.assertEqual(status.limit_cents, 2000)
         self.assertEqual(status.plan_name, "pro")
-        self.assertEqual(status.billing_cycle_start, "2026-04-12")
-        self.assertEqual(status.billing_cycle_end_iso, "2026-05-12")
+        self.assertEqual(status.billing_cycle_start, "2026-04-12T07:46:06-04:00")
+        self.assertEqual(status.billing_cycle_end_iso, "2026-05-12T07:46:06-04:00")
+        # Round-trip: both values must be tz-aware and subtraction must yield a timedelta
+        start_parsed = datetime.fromisoformat(status.billing_cycle_start)
+        end_parsed = datetime.fromisoformat(status.billing_cycle_end_iso)
+        delta = end_parsed - start_parsed
+        self.assertIsInstance(delta.total_seconds(), float)
 
     def test_cursor_falls_back_to_total_percent_used_when_cents_missing(self) -> None:
         provider = CursorProvider()

@@ -784,7 +784,7 @@ class CursorProvider:
             try:
                 ms = int(raw_start)
                 start_dt = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
-                billing_cycle_start = start_dt.date().isoformat()
+                billing_cycle_start = start_dt.astimezone().isoformat()
             except (TypeError, ValueError):
                 pass
 
@@ -796,7 +796,7 @@ class CursorProvider:
                 ms = int(raw_end)
                 target = datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
                 billing_cycle_end = f"Resets {target.astimezone().strftime('%b %d at %I:%M %p')}"
-                billing_cycle_end_iso = target.date().isoformat()
+                billing_cycle_end_iso = target.astimezone().isoformat()
             except (TypeError, ValueError):
                 pass
 

@@ -802,3 +802,98 @@ class AuthFixFooterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Characterization tests — pin exact string output BEFORE refactor
+# ---------------------------------------------------------------------------
+from ai_monitor.ui import _billing_cycle_pace_label, _pace_label  # noqa: E402
+
+
+class PaceLabelCharacterizationTests(unittest.TestCase):
+    """Pin the exact return values of _pace_label and _billing_cycle_pace_label.
+
+    These tests must stay green across any refactor that preserves existing
+    behavior.  Do NOT change the expected literals — if they fail after a
+    refactor, the refactor changed visible output.
+    """
+
+    def setUp(self) -> None:
+        self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    # ------------------------------------------------------------------
+    # _pace_label — 5-hour window, reset "Resets in 2h 30m"
+    # remaining_fraction = 2.5h / 5.0h = 0.50
+    # ------------------------------------------------------------------
+
+    def test_pace_label_na_when_percent_left_is_none(self) -> None:
+        result = _pace_label(None, "Resets in 2h 30m", self.now, 5.0)
+        self.assertEqual(result, "n/a")
+
+    def test_pace_label_na_when_reset_text_is_none(self) -> None:
+        result = _pace_label(50, None, self.now, 5.0)
+        self.assertEqual(result, "n/a")
+
+    def test_pace_label_on_pace_when_pct_matches_remaining_fraction(self) -> None:
+        # 50% left, 50% of window remaining → delta=0.0 → on pace
+        result = _pace_label(50, "Resets in 2h 30m", self.now, 5.0)
+        self.assertEqual(result, "on pace")
+
+    def test_pace_label_under_when_more_budget_than_time(self) -> None:
+        # 60% left, 50% of window remaining → delta=+0.10 → under +10pt
+        result = _pace_label(60, "Resets in 2h 30m", self.now, 5.0)
+        self.assertEqual(result, "under +10pt")
+
+    def test_pace_label_over_when_less_budget_than_time(self) -> None:
+        # 40% left, 50% of window remaining → delta=-0.10 → over -10pt
+        result = _pace_label(40, "Resets in 2h 30m", self.now, 5.0)
+        self.assertEqual(result, "over -10pt")
+
+    # ------------------------------------------------------------------
+    # _billing_cycle_pace_label — tz-aware UTC billing cycle
+    # 2026-03-01..2026-04-01, now=2026-03-14T08:22:30 → ~57% remaining
+    # ------------------------------------------------------------------
+
+    def test_billing_cycle_pace_label_on_pace_tzaware(self) -> None:
+        result = _billing_cycle_pace_label(
+            60,
+            "2026-03-01T00:00:00+00:00",
+            "2026-04-01T00:00:00+00:00",
+            self.now,
+        )
+        self.assertEqual(result, "on pace")
+
+    def test_billing_cycle_pace_label_under_tzaware(self) -> None:
+        result = _billing_cycle_pace_label(
+            70,
+            "2026-03-01T00:00:00+00:00",
+            "2026-04-01T00:00:00+00:00",
+            self.now,
+        )
+        self.assertEqual(result, "under +13pt")
+
+    def test_billing_cycle_pace_label_over_tzaware(self) -> None:
+        result = _billing_cycle_pace_label(
+            50,
+            "2026-03-01T00:00:00+00:00",
+            "2026-04-01T00:00:00+00:00",
+            self.now,
+        )
+        self.assertEqual(result, "over -7pt")
+
+    # ------------------------------------------------------------------
+    # _billing_cycle_pace_label — naive date-only billing cycle
+    # 2026-03-01..2026-03-20, now=2026-03-14T08:22:30 → ~29.7% remaining
+    # ------------------------------------------------------------------
+
+    def test_billing_cycle_pace_label_on_pace_naive(self) -> None:
+        result = _billing_cycle_pace_label(30, "2026-03-01", "2026-03-20", self.now)
+        self.assertEqual(result, "on pace")
+
+    def test_billing_cycle_pace_label_under_naive(self) -> None:
+        result = _billing_cycle_pace_label(35, "2026-03-01", "2026-03-20", self.now)
+        self.assertEqual(result, "under +5pt")
+
+    def test_billing_cycle_pace_label_over_naive(self) -> None:
+        result = _billing_cycle_pace_label(20, "2026-03-01", "2026-03-20", self.now)
+        self.assertEqual(result, "over -10pt")
