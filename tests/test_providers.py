@@ -14,18 +14,21 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ai_monitor import providers
+from ai_monitor.__main__ import _is_auth_error
 from ai_monitor.providers import (
     AntigravityProvider,
     ClaudeHttpProvider,
     CodexHttpProvider,
     CursorProvider,
     ProbeFailure,
+    ProviderSnapshot,
     VibeProvider,
     _format_reset_time,
     _http_json,
     _is_jwt_expired,
     _write_debug_dump,
 )
+from ai_monitor.snapshot import _is_transient_probe_error
 
 
 class FormatResetTimeTests(unittest.TestCase):
@@ -1055,6 +1058,87 @@ class CodexHttpProviderTests(unittest.TestCase):
 
         self.assertEqual(call_count, 3)
         self.assertIn("re-authenticate", str(ctx.exception).lower())
+
+    def test_codex_post_refresh_5xx_is_transient_not_auth(self) -> None:
+        # Regression: a successful on-disk refresh followed by a transient 5xx on the
+        # immediate retry must NOT be misclassified as an auth failure. Previously the
+        # retry shared a try/except with _refresh_tokens(), so the 5xx was caught by
+        # `except ProbeFailure as refresh_exc`, the reload fallback found the token
+        # unchanged (refresh already wrote+loaded it), and the code raised the
+        # "session expired" re-auth message instead of propagating the transient error.
+        auth_data = json.dumps(
+            {
+                "tokens": {
+                    "access_token": "test_access_token",
+                    "account_id": "test_account_id",
+                }
+            }
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH") as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = auth_data
+            provider = CodexHttpProvider()
+            with (
+                patch.object(CodexHttpProvider, "_refresh_tokens", return_value=True),
+                patch.object(
+                    CodexHttpProvider,
+                    "_request_usage",
+                    side_effect=[
+                        ProbeFailure("HTTP 401", '{"error":"unauthorized"}'),
+                        ProbeFailure("HTTP 503", "service unavailable"),
+                    ],
+                ),
+            ):
+                with self.assertRaises(ProbeFailure) as ctx:
+                    provider.fetch()
+
+        message = str(ctx.exception)
+        self.assertIn("HTTP 503", message)
+        self.assertNotIn("session expired", message)
+
+        # INV-1: the error string must never contain raw response bodies.
+        self.assertNotIn("service unavailable", message)
+
+        snapshot = ProviderSnapshot(name="Codex", ok=False, source="api", error=message)
+        self.assertTrue(_is_transient_probe_error(snapshot))
+        self.assertFalse(_is_auth_error(snapshot))
+
+    def test_codex_post_refresh_401_still_reauths(self) -> None:
+        # Non-regression: if the refresh succeeds but the fresh token is ALSO rejected
+        # with a 401 on the immediate retry, that is a genuine auth rejection and must
+        # still surface the "session expired" re-auth message.
+        auth_data = json.dumps(
+            {
+                "tokens": {
+                    "access_token": "test_access_token",
+                    "account_id": "test_account_id",
+                }
+            }
+        )
+        with patch.object(CodexHttpProvider, "_AUTH_PATH") as mock_path:
+            mock_path.exists.return_value = True
+            mock_path.read_text.return_value = auth_data
+            provider = CodexHttpProvider()
+            with (
+                patch.object(CodexHttpProvider, "_refresh_tokens", return_value=True),
+                patch.object(
+                    CodexHttpProvider,
+                    "_request_usage",
+                    side_effect=[
+                        ProbeFailure("HTTP 401", '{"error":"unauthorized"}'),
+                        ProbeFailure("HTTP 401", '{"error":"unauthorized"}'),
+                    ],
+                ),
+            ):
+                with self.assertRaises(ProbeFailure) as ctx:
+                    provider.fetch()
+
+        message = str(ctx.exception)
+        self.assertIn("session expired", message)
+
+        snapshot = ProviderSnapshot(name="Codex", ok=False, source="api", error=message)
+        self.assertTrue(_is_auth_error(snapshot))
+        self.assertFalse(_is_transient_probe_error(snapshot))
 
 
 class ClaudeHttpProviderTests(unittest.TestCase):

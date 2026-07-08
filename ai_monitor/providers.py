@@ -1073,20 +1073,31 @@ class CodexHttpProvider:
             if "HTTP 401" not in str(exc):
                 raise
             # Two recovery paths on 401:
-            #   1. The on-disk refresh_token still works → mint a new access_token
+            #   1. The on-disk refresh_token still works -> mint a new access_token
             #      ourselves (silent, the common case after server-side rotation).
-            #   2. The user already ran `codex login` since startup → reload creds
+            #   2. The user already ran `codex login` since startup -> reload creds
             #      from disk and retry once.
             # If both fail, the user has to re-authenticate interactively.
+            refreshed = False
             try:
-                if self._refresh_tokens():
-                    payload = self._request_usage()
-                else:
-                    raise exc
+                refreshed = self._refresh_tokens()
             except ProbeFailure as refresh_exc:
                 if "re-authenticate" in str(refresh_exc):
+                    raise  # refresh_token itself revoked -> interactive login
+                refreshed = False  # transient/other error -> fall through to reload path
+            if refreshed:
+                # Refresh succeeded; the creds are valid. A failure on THIS retry is
+                # not an auth problem: a fresh 401 means the new token was rejected
+                # (surface expired); anything else (5xx / network / shape) is
+                # transient, so propagate it raw to route to the "(offline)" path.
+                try:
+                    payload = self._request_usage()
+                except ProbeFailure as retry_exc:
+                    if "HTTP 401" in str(retry_exc):
+                        raise ProbeFailure(str(expired), str(retry_exc)) from retry_exc
                     raise
-                # Refresh hit a transient/other error — fall back to the reload path.
+            else:
+                # Reload path: did the user run `codex login` since startup?
                 old_token = self._access_token
                 try:
                     self._load_creds()
