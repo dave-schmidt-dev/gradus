@@ -10,6 +10,7 @@ from io import StringIO
 from rich.console import Console
 
 from ai_monitor.providers import ProviderSnapshot
+from ai_monitor.snapshot import SAFE_DATA_KEYS
 from ai_monitor.ui import (
     THEME,
     PaceLabel,
@@ -518,6 +519,38 @@ class RenderJsonTests(unittest.TestCase):
         self.assertEqual(codex["display"]["weekly_reset_display"], "Mar 17 21:00")
         self.assertEqual(claude["display"]["five_hour_reset_display"], "13:16")
         self.assertEqual(claude["display"]["weekly_reset_display"], "Mar 17 20:00")
+
+    def test_render_json_data_is_safe_allowlist(self) -> None:
+        # INV-1: render_json must project snap.data through the same
+        # SAFE_DATA_KEYS allowlist the persisted snapshot uses — no raw
+        # identity/credential/debug fields may leak onto the --json surface.
+        now = datetime(2026, 3, 14, 8, 22, 30)
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "account_email": "leak@example.com",
+                "raw_text": "SECRET-RAW-BODY",
+                "five_hour_percent_left": 42,
+            },
+            debug_detail="SECRET-DEBUG-DETAIL raw body tail",
+        )
+
+        raw_output = render_json([snap], now)
+        payload = json.loads(raw_output)
+
+        provider = next(p for p in payload["providers"] if p["name"] == "Antigravity")
+        self.assertTrue(set(provider["data"]).issubset(SAFE_DATA_KEYS))
+        self.assertNotIn("account_email", provider["data"])
+        self.assertNotIn("raw_text", provider["data"])
+        self.assertEqual(provider["data"]["five_hour_percent_left"], 42)
+
+        self.assertNotIn("SECRET-RAW-BODY", raw_output)
+        self.assertNotIn("SECRET-DEBUG-DETAIL", raw_output)
+
+        for entry in payload["providers"]:
+            self.assertNotIn("debug_detail", entry)
 
 
 class SharedLabelAlignmentTests(unittest.TestCase):

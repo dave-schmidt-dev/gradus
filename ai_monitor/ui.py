@@ -15,7 +15,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from .providers import ProviderSnapshot
-from .snapshot import pace_delta, reconcile
+from .snapshot import pace_delta, project_data, reconcile
 from .snapshot import parse_reset_target as _parse_reset_target
 
 THEME = Theme(
@@ -811,10 +811,9 @@ def render_json(snapshots: list[ProviderSnapshot], updated_at: datetime) -> str:
                 "name": snap.name,
                 "ok": snap.ok,
                 "source": snap.source,
-                "data": snap.data,
+                "data": project_data(snap),
                 "display": _provider_display_fields(snap, updated_at),
-                "error": snap.error,
-                "debug_detail": snap.debug_detail,
+                "error": snap.error[:200] if snap.error else snap.error,
             }
             for snap in snapshots
         ],
