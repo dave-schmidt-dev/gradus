@@ -145,6 +145,9 @@ def _write_private(path: Path, text: str, *, harden_parent: bool = True) -> None
     the 0600 file mode still protects the contents and os.replace onto the final
     name stays symlink-safe.
     """
+    if _is_headless():
+        # INV-2: read-only mode performs no credential/secret writes.
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     if harden_parent:
         os.chmod(path.parent, 0o700)
@@ -160,6 +163,48 @@ def _write_private(path: Path, text: str, *, harden_parent: bool = True) -> None
         except OSError:
             pass
         raise
+
+
+def _remove_private(path: Path) -> None:
+    """Delete a credential/cache file, or no-op under headless (INV-2).
+
+    The single sanctioned path for credential-cache eviction. In read-only
+    headless mode this is a no-op so a rejected-credential probe never evicts
+    the cache. An OSError is logged (a stuck cache file means the next 401 will
+    not recover) but never propagates.
+    """
+    if _is_headless():
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("Failed to delete credential cache at %s: %s", path, exc)
+
+
+def _harden_existing(path: Path) -> None:
+    """Best-effort chmod an existing credential file to 0600, or no-op under
+    headless (INV-2: no filesystem mutation on the read-only path).
+
+    Opportunistic tightening for a cache file just loaded from disk; a failure
+    is swallowed because _write_private already guarantees 0600 for files it
+    writes.
+    """
+    if _is_headless():
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _auth_required_message(interactive: str) -> str:
+    """Auth-error text for a missing-credential fetch.
+
+    Under headless (INV-2) return a generic, PII-free string; interactively
+    return the actionable sign-in nudge. Both contain an auth keyword so
+    _is_auth_error() routes the snapshot to the [n] fix-action CTA.
+    """
+    return "auth required: no cached credentials" if _is_headless() else interactive
 
 
 def _is_jwt_expired(token: str, leeway_seconds: int = 60) -> bool:
@@ -333,17 +378,11 @@ class VibeProvider:
         self._ory_name = ory_name
         self._ory_value = ory_value
         self._csrf = csrf
-        if not _HEADLESS:
-            try:
-                os.chmod(self._CACHE_PATH, 0o600)
-            except OSError:
-                pass
+        _harden_existing(self._CACHE_PATH)
         return True
 
     def _save_to_cache(self) -> None:
         """Persist current cookies to local cache."""
-        if _HEADLESS:
-            return
         if not (self._ory_name and self._ory_value and self._csrf):
             return
         try:
@@ -359,13 +398,7 @@ class VibeProvider:
 
     def _clear_cache(self) -> None:
         """Remove the local cookie cache (call when cookies are rejected by the API)."""
-        if _HEADLESS:
-            return
-        try:
-            self._CACHE_PATH.unlink(missing_ok=True)
-        except OSError as exc:
-            # Surfaced because a stuck cache file means the next 401 won't recover.
-            log.warning("Failed to delete cookie cache at %s: %s", self._CACHE_PATH, exc)
+        _remove_private(self._CACHE_PATH)
 
     @property
     def _has_cookies(self) -> bool:
@@ -533,12 +566,9 @@ class VibeProvider:
 
         self._acquire()
         if not self._has_cookies:
-            message = (
-                "auth required: no cached credentials"
-                if _is_headless()
-                else "Vibe session expired: sign in at console.mistral.ai"
+            raise ProbeFailure(
+                _auth_required_message("Vibe session expired: sign in at console.mistral.ai"), ""
             )
-            raise ProbeFailure(message, "")
 
         cookie_header = f"{self._ory_name}={self._ory_value}; csrftoken={self._csrf}"
         req = urllib.request.Request(
@@ -683,17 +713,11 @@ class CursorProvider:
         refresh = data.get("refresh_token")
         if isinstance(refresh, str) and refresh:
             self._refresh_token = refresh
-        if not _HEADLESS:
-            try:
-                os.chmod(self._CACHE_PATH, 0o600)
-            except OSError:
-                pass
+        _harden_existing(self._CACHE_PATH)
         return True
 
     def _save_to_cache(self) -> None:
         """Persist current tokens to local cache."""
-        if _HEADLESS:
-            return
         if not self._access_token:
             return
         try:
@@ -708,13 +732,7 @@ class CursorProvider:
 
     def _clear_cache(self) -> None:
         """Remove the local token cache (call when the cached token is rejected)."""
-        if _HEADLESS:
-            return
-        try:
-            self._CACHE_PATH.unlink(missing_ok=True)
-        except OSError as exc:
-            # Surfaced because a stuck cache file means the next 401 won't recover.
-            log.warning("Failed to delete cookie cache at %s: %s", self._CACHE_PATH, exc)
+        _remove_private(self._CACHE_PATH)
 
     def _extract_token_from_safari(self) -> str | None:
         """Extract access token from Safari's WorkosCursorSessionToken cookie."""
@@ -759,12 +777,10 @@ class CursorProvider:
 
         self._acquire()
         if not self._access_token:
-            message = (
-                "auth required: no cached credentials"
-                if _is_headless()
-                else "Cursor session expired: sign in at cursor.com/settings"
+            raise ProbeFailure(
+                _auth_required_message("Cursor session expired: sign in at cursor.com/settings"),
+                "",
             )
-            raise ProbeFailure(message, "")
 
         usage_data: dict[str, Any] = {}
         plan_data: dict[str, Any] = {}
@@ -772,7 +788,7 @@ class CursorProvider:
         try:
             usage_data = self._api_post(_ur, _ue, self._USAGE_URL)
         except _ue.HTTPError as exc:
-            if exc.code == 401 and self._refresh_token and not _is_headless():
+            if exc.code == 401 and self._can_refresh:
                 self._do_token_refresh(_ur, _ue)
                 usage_data = self._api_post(_ur, _ue, self._USAGE_URL)
             elif exc.code == 401:
@@ -916,6 +932,12 @@ class CursorProvider:
             return json.loads(body)
         except json.JSONDecodeError:
             return {}
+
+    @property
+    def _can_refresh(self) -> bool:
+        """Token-refresh capability gate: True only when a refresh token exists
+        AND we are not in read-only headless mode (INV-2: no token minting)."""
+        return bool(self._refresh_token) and not _is_headless()
 
     def _do_token_refresh(self, ur: Any, ue: Any) -> None:
         """Refresh the access token using the refresh token."""
@@ -1214,17 +1236,11 @@ class ClaudeHttpProvider:
         cf = data.get("cf_clearance")
         if isinstance(cf, str):
             self._cf_clearance = cf
-        if not _HEADLESS:
-            try:
-                os.chmod(self._CACHE_PATH, 0o600)
-            except OSError:
-                pass
+        _harden_existing(self._CACHE_PATH)
         return True
 
     def _save_to_cache(self) -> None:
         """Persist current cookies to local cache."""
-        if _HEADLESS:
-            return
         if not (self._session_key and self._org_id):
             return
         try:
@@ -1240,13 +1256,7 @@ class ClaudeHttpProvider:
 
     def _clear_cache(self) -> None:
         """Remove the local cookie cache (call when cookies are rejected by the API)."""
-        if _HEADLESS:
-            return
-        try:
-            self._CACHE_PATH.unlink(missing_ok=True)
-        except OSError as exc:
-            # Surfaced because a stuck cache file means the next 401 won't recover.
-            log.warning("Failed to delete cookie cache at %s: %s", self._CACHE_PATH, exc)
+        _remove_private(self._CACHE_PATH)
 
     @property
     def _has_cookies(self) -> bool:
@@ -1255,12 +1265,9 @@ class ClaudeHttpProvider:
     def fetch(self) -> ClaudeStatus:
         self._acquire()
         if not self._has_cookies:
-            message = (
-                "auth required: no cached credentials"
-                if _is_headless()
-                else "Claude session expired: sign in at claude.ai"
+            raise ProbeFailure(
+                _auth_required_message("Claude session expired: sign in at claude.ai"), ""
             )
-            raise ProbeFailure(message, "")
 
         url = f"{self._BASE_URL}/api/organizations/{self._org_id}/usage"
         cookie_parts = [f"sessionKey={self._session_key}"]
@@ -1406,6 +1413,11 @@ class AntigravityProvider:
         matches fetch()'s existing re-read-every-cycle behavior. Raises
         FileNotFoundError if no usable token is present, same as before.
         """
+        if _is_headless():
+            # INV-2: reading the Keychain is a subprocess; never spawn it on the
+            # read-only path. Surface the same auth error shape as a missing token.
+            self._token = {}
+            raise FileNotFoundError("auth required: no cached credentials")
         self._token = self._load_keychain_token()
         if not self._token.get("access_token"):
             raise FileNotFoundError("Antigravity token not found in Keychain: run `agy` to sign in")
@@ -1417,9 +1429,6 @@ class AntigravityProvider:
         Returns the inner ``token`` object ({access_token, refresh_token, expiry,
         token_type}); an empty dict if the item is missing or unreadable.
         """
-        if _HEADLESS:
-            # Read-only mode (INV-2): never run the Keychain subprocess.
-            raise FileNotFoundError("auth required: no cached credentials")
         try:
             result = subprocess.run(
                 [
