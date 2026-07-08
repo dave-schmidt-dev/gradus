@@ -27,6 +27,7 @@ from ai_monitor.providers import (
     _http_json,
     _is_jwt_expired,
     _write_debug_dump,
+    fetch_provider_snapshot,
 )
 from ai_monitor.snapshot import _is_transient_probe_error
 
@@ -344,6 +345,7 @@ class CursorTokenCacheTests(unittest.TestCase):
             patch("ai_monitor.providers.subprocess.Popen") as popen,
         ):
             provider = CursorProvider()
+            provider._acquire()
         self.assertEqual(provider._access_token, valid_jwt)
         self.assertEqual(provider._refresh_token, "rt")
         self.assertEqual(provider._token_source, "cache")
@@ -364,6 +366,7 @@ class CursorTokenCacheTests(unittest.TestCase):
             return_value={"WorkosCursorSessionToken": cookie_value},
         ):
             provider = CursorProvider()
+            provider._acquire()
         self.assertEqual(provider._access_token, fresh_jwt)
         self.assertEqual(provider._token_source, "safari")
 
@@ -375,7 +378,8 @@ class CursorTokenCacheTests(unittest.TestCase):
             "ai_monitor.providers._read_safari_cookies",
             return_value={"WorkosCursorSessionToken": cookie_value},
         ):
-            CursorProvider()
+            provider = CursorProvider()
+            provider._acquire()
         self.assertTrue(self._cache_path.exists())
         cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
         self.assertEqual(cached["access_token"], fresh_jwt)
@@ -420,6 +424,7 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             patch("ai_monitor.providers.subprocess.Popen") as popen,
         ):
             provider = ClaudeHttpProvider()
+            provider._acquire()
         self.assertEqual(provider._session_key, "sk")
         self.assertEqual(provider._cf_clearance, "cf")
         self.assertEqual(provider._org_id, "org")
@@ -431,7 +436,8 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             "ai_monitor.providers._read_safari_cookies",
             return_value={"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"},
         ):
-            ClaudeHttpProvider()
+            provider = ClaudeHttpProvider()
+            provider._acquire()
         self.assertTrue(self._cache_path.exists())
         cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
         self.assertEqual(cached["sessionKey"], "sk")
@@ -504,6 +510,7 @@ class VibeCookieCacheTests(unittest.TestCase):
             patch("ai_monitor.providers.subprocess.Popen") as popen,
         ):
             provider = VibeProvider(project_root=self._tmpdir.name)
+            provider._acquire()
         self.assertEqual(provider._ory_name, "ory_session_x")
         self.assertEqual(provider._ory_value, "v")
         self.assertEqual(provider._csrf, "c")
@@ -521,7 +528,8 @@ class VibeCookieCacheTests(unittest.TestCase):
                 "csrftoken": "c",
             },
         ):
-            VibeProvider(project_root=self._tmpdir.name)
+            provider = VibeProvider(project_root=self._tmpdir.name)
+            provider._acquire()
         self.assertTrue(self._cache_path.exists())
         cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
         self.assertEqual(cached["ory_session_name"], "ory_session_x")
@@ -581,6 +589,7 @@ class CacheResilienceTests(unittest.TestCase):
             return_value={"WorkosCursorSessionToken": cookie_value},
         ):
             provider = CursorProvider()
+            provider._acquire()
         self.assertEqual(provider._access_token, fresh_jwt)
         self.assertEqual(provider._token_source, "safari")
 
@@ -593,6 +602,7 @@ class CacheResilienceTests(unittest.TestCase):
             return_value={"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"},
         ):
             provider = ClaudeHttpProvider()
+            provider._acquire()
         self.assertEqual(provider._session_key, "sk")
         self.assertEqual(provider._org_id, "org")
 
@@ -610,6 +620,7 @@ class CacheResilienceTests(unittest.TestCase):
             },
         ):
             provider = VibeProvider(project_root=self._tmpdir.name)
+            provider._acquire()
         self.assertEqual(provider._ory_name, "ory_session_x")
 
     def test_cursor_save_cache_oserror_does_not_break_provider(self) -> None:
@@ -624,6 +635,7 @@ class CacheResilienceTests(unittest.TestCase):
             patch("pathlib.Path.mkdir", side_effect=OSError("no space")),
         ):
             provider = CursorProvider()
+            provider._acquire()
         self.assertEqual(provider._access_token, fresh_jwt)
 
     def test_cursor_refresh_writes_new_refresh_token_to_cache(self) -> None:
@@ -697,16 +709,22 @@ class CodexHttpProviderTests(unittest.TestCase):
     }
 
     def _make_provider(self) -> CodexHttpProvider:
+        # _AUTH_PATH must stay patched beyond this helper: _acquire() now runs
+        # lazily inside fetch() (not __init__), so the mock has to still be in
+        # effect when the caller later invokes provider.fetch(). Stop it via
+        # addCleanup rather than a `with` block that would exit on return.
         auth_data = {
             "tokens": {
                 "access_token": "test_access_token",
                 "account_id": "test_account_id",
             }
         }
-        with patch.object(CodexHttpProvider, "_AUTH_PATH") as mock_path:
-            mock_path.exists.return_value = True
-            mock_path.read_text.return_value = json.dumps(auth_data)
-            return CodexHttpProvider()
+        patcher = patch.object(CodexHttpProvider, "_AUTH_PATH")
+        mock_path = patcher.start()
+        self.addCleanup(patcher.stop)
+        mock_path.exists.return_value = True
+        mock_path.read_text.return_value = json.dumps(auth_data)
+        return CodexHttpProvider()
 
     def test_normal_response_field_mapping(self) -> None:
         provider = self._make_provider()
@@ -730,6 +748,7 @@ class CodexHttpProviderTests(unittest.TestCase):
         # reloaded it, so running `codex login` after a 401 left aimonitor stuck on the
         # stale token forever. The 401 path must re-read ~/.codex/auth.json from disk.
         provider = self._make_provider()
+        provider._acquire()
         self.assertEqual(provider._access_token, "test_access_token")
 
         refreshed_auth = json.dumps(
@@ -1165,13 +1184,19 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def _make_provider(self) -> ClaudeHttpProvider:
+        # _read_safari_cookies must stay patched beyond this helper: _acquire()
+        # now runs lazily inside fetch() (not __init__), so the mock has to still
+        # be in effect when the caller later invokes provider.fetch(). Stop it
+        # via addCleanup rather than a `with` block that would exit on return.
         cookies = {
             "sessionKey": "sk-ant-test",
             "cf_clearance": "cf_test",
             "lastActiveOrg": "org-123",
         }
-        with patch("ai_monitor.providers._read_safari_cookies", return_value=cookies):
-            return ClaudeHttpProvider()
+        patcher = patch("ai_monitor.providers._read_safari_cookies", return_value=cookies)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return ClaudeHttpProvider()
 
     def test_normal_response_field_mapping(self) -> None:
         provider = self._make_provider()
@@ -1526,10 +1551,13 @@ class AntigravityProviderTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 AntigravityProvider._load_keychain_token()
 
-    def test_init_raises_when_no_access_token(self) -> None:
+    def test_acquire_raises_when_no_access_token(self) -> None:
+        # Construction no longer raises (it does no credential I/O); the same
+        # FileNotFoundError now surfaces from _acquire(), called lazily from fetch().
+        provider = AntigravityProvider()
         with patch.object(AntigravityProvider, "_load_keychain_token", return_value={}):
             with self.assertRaises(FileNotFoundError):
-                AntigravityProvider()
+                provider._acquire()
 
     def test_missing_gemini_group_raises(self) -> None:
         provider = self._make_provider()
@@ -1664,25 +1692,106 @@ class HeadlessReadOnlyTests(unittest.TestCase):
     def test_headless_off_opens_browser(self) -> None:
         # The _open_url gate — not the readers — is what suppresses the browser
         # open: with the readers stubbed identically, only the flag differs.
+        # Construction no longer touches credentials, so the browser-open now
+        # only fires once _acquire() runs (called explicitly here, as fetch() would).
         with (
             patch("ai_monitor.providers._read_safari_cookies", return_value={}),
             patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None),
             patch("ai_monitor.providers.subprocess.Popen") as popen,
         ):
             providers.set_headless(False)
-            VibeProvider(str(self._root))
+            provider = VibeProvider(str(self._root))
+            provider._acquire()
             self.assertTrue(popen.called)
             self.assertEqual(popen.call_args.args[0], ["open", "https://console.mistral.ai"])
 
             popen.reset_mock()
             providers.set_headless(True)
-            VibeProvider(str(self._root))
+            provider = VibeProvider(str(self._root))
+            provider._acquire()
             popen.assert_not_called()
 
     def test_headless_read_safari_cookies_returns_empty(self) -> None:
         providers.set_headless(True)
         self.assertEqual(providers._read_safari_cookies("claude"), {})
         self.assertIsNone(VibeProvider._extract_chrome_cookies())
+
+
+class LazyAcquireContractTests(unittest.TestCase):
+    """Pins the refactored contract: __init__ only stores config (no credential
+    I/O, no browser), and credential acquisition happens lazily in _acquire(),
+    reached via fetch(). Missing credentials must still surface as a truthful
+    auth-routed snapshot, not a crash or a silent success.
+    """
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._root = Path(self._tmpdir.name)
+        self._vibe_cache = self._root / "vibe_cookies.json"
+        self._cursor_cache = self._root / "cursor_token.json"
+        self._claude_cache = self._root / "claude_cookies.json"
+        self._codex_auth = self._root / "auth.json"
+        self._patchers = [
+            patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
+            patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
+            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
+            patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
+        ]
+        for p in self._patchers:
+            p.start()
+
+    def tearDown(self) -> None:
+        for p in self._patchers:
+            p.stop()
+        self._tmpdir.cleanup()
+
+    def test_provider_construction_does_no_credential_io(self) -> None:
+        """__init__ must be pure config storage: no subprocess, no cookie read,
+        no cache write, and no raised exception — for all five providers.
+
+        This would fail against the pre-refactor contract, where CodexHttpProvider
+        and AntigravityProvider raised in __init__ when credentials were absent,
+        and where every provider's __init__ triggered a Safari/Chrome/Keychain read.
+        """
+        with (
+            patch("ai_monitor.providers.subprocess.run") as mock_run,
+            patch("ai_monitor.providers.subprocess.Popen") as mock_popen,
+            patch("ai_monitor.providers._read_safari_cookies", return_value={}) as mock_safari,
+            patch("ai_monitor.providers._write_private") as mock_write,
+        ):
+            try:
+                CodexHttpProvider()
+                ClaudeHttpProvider()
+                AntigravityProvider()
+                CursorProvider()
+                VibeProvider(str(self._root))
+            except Exception as exc:  # noqa: BLE001
+                self.fail(f"construction must never raise, got: {exc!r}")
+
+        mock_run.assert_not_called()
+        mock_popen.assert_not_called()
+        mock_safari.assert_not_called()
+        mock_write.assert_not_called()
+
+    def test_missing_creds_surface_as_auth_snapshot_via_fetch(self) -> None:
+        """With no credentials available anywhere, fetch_provider_snapshot() must
+        surface a not-ok snapshot whose error is recognized by the real
+        _is_auth_error() routing predicate — not a crash and not a silent success.
+
+        This would fail if construction still swallowed the missing-credential
+        case without ever reaching fetch(), or if the lazy _acquire() failure
+        path stopped producing a message containing an auth keyword.
+        """
+        with (
+            patch("ai_monitor.providers._read_safari_cookies", return_value={}),
+            patch("ai_monitor.providers.subprocess.Popen"),
+        ):
+            provider = ClaudeHttpProvider()
+            snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
+
+        self.assertFalse(snapshot.ok)
+        self.assertIsNotNone(snapshot.error)
+        self.assertTrue(_is_auth_error(snapshot))
 
 
 class TestCredentialCachePermissions(unittest.TestCase):

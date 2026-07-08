@@ -303,7 +303,15 @@ class VibeProvider:
         self._ory_value = ""
         self._csrf = ""
         self._browser_opened = False
-        self._load_cookies()
+
+    def _acquire(self) -> None:
+        """Ensure cookies are loaded, idempotently.
+
+        Re-attempts the load whenever cookies are still absent, so a user who
+        logs in mid-session is picked up on the next fetch.
+        """
+        if not self._has_cookies:
+            self._load_cookies()
 
     def _load_cookies(self) -> None:
         """Try all cookie sources. Opens browser on first failure."""
@@ -545,8 +553,7 @@ class VibeProvider:
         import urllib.error
         import urllib.request
 
-        if not self._has_cookies:
-            self._load_cookies()
+        self._acquire()
         if not self._has_cookies:
             message = (
                 "auth required: no cached credentials"
@@ -650,7 +657,15 @@ class CursorProvider:
         self._refresh_token: str | None = None
         self._browser_opened = False
         self._token_source: str | None = None
-        self._load_token()
+
+    def _acquire(self) -> None:
+        """Ensure a token is loaded, idempotently.
+
+        Re-attempts the load whenever no token is present, so a user who logs
+        in mid-session is picked up on the next fetch.
+        """
+        if not self._access_token:
+            self._load_token()
 
     def _load_token(self) -> None:
         """Try all token sources. Opens browser on first failure."""
@@ -770,8 +785,7 @@ class CursorProvider:
         import urllib.error as _ue
         import urllib.request as _ur
 
-        if not self._access_token:
-            self._load_token()
+        self._acquire()
         if not self._access_token:
             message = (
                 "auth required: no cached credentials"
@@ -974,6 +988,18 @@ class CodexHttpProvider:
     _CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
     def __init__(self) -> None:
+        self._access_token: str = ""
+        self._refresh_token: str = ""
+        self._account_id: str = ""
+
+    def _acquire(self) -> None:
+        """Ensure credentials are loaded, idempotently.
+
+        Raises FileNotFoundError if ``~/.codex/auth.json`` is absent — the same
+        error that used to be raised at construction time.
+        """
+        if self._access_token:
+            return
         if not self._AUTH_PATH.exists():
             raise FileNotFoundError(f"Codex auth not found: {self._AUTH_PATH}")
         self._load_creds()
@@ -984,9 +1010,9 @@ class CodexHttpProvider:
         except (OSError, json.JSONDecodeError) as exc:
             raise FileNotFoundError(f"Failed to read Codex auth: {exc}") from exc
         tokens = data.get("tokens") or {}
-        self._access_token: str = tokens.get("access_token", "")
-        self._refresh_token: str = tokens.get("refresh_token", "")
-        self._account_id: str = tokens.get("account_id", "")
+        self._access_token = tokens.get("access_token", "")
+        self._refresh_token = tokens.get("refresh_token", "")
+        self._account_id = tokens.get("account_id", "")
         if not self._access_token:
             raise FileNotFoundError("Codex auth.json missing tokens.access_token")
 
@@ -1066,6 +1092,7 @@ class CodexHttpProvider:
         return True
 
     def fetch(self) -> CodexStatus:
+        self._acquire()
         expired = ProbeFailure("Codex session expired: run `codex` to re-authenticate", "")
         try:
             payload = self._request_usage()
@@ -1177,7 +1204,15 @@ class ClaudeHttpProvider:
         self._cf_clearance: str = ""
         self._org_id: str = ""
         self._browser_opened = False
-        self._load_cookies()
+
+    def _acquire(self) -> None:
+        """Ensure cookies are loaded, idempotently.
+
+        Re-attempts the load whenever cookies are still absent, so a user who
+        logs in mid-session is picked up on the next fetch.
+        """
+        if not self._has_cookies:
+            self._load_cookies()
 
     def _load_cookies(self) -> None:
         if self._load_from_cache():
@@ -1250,8 +1285,7 @@ class ClaudeHttpProvider:
         return bool(self._session_key and self._org_id)
 
     def fetch(self) -> ClaudeStatus:
-        if not self._has_cookies:
-            self._load_cookies()
+        self._acquire()
         if not self._has_cookies:
             message = (
                 "auth required: no cached credentials"
@@ -1392,11 +1426,21 @@ class AntigravityProvider:
     _ACCOUNTS_PATH = Path.home() / ".gemini" / "google_accounts.json"
 
     def __init__(self) -> None:
+        self._token: dict[str, Any] = {}
+        # Monotonic timestamp of the last `agy models` refresh nudge (cooldown).
+        self._last_refresh_trigger = 0.0
+
+    def _acquire(self) -> None:
+        """Ensure a Keychain token is loaded.
+
+        Always re-reads the Keychain (rather than short-circuiting when a
+        token is already cached) so we pick up `agy`'s own refreshes — this
+        matches fetch()'s existing re-read-every-cycle behavior. Raises
+        FileNotFoundError if no usable token is present, same as before.
+        """
         self._token = self._load_keychain_token()
         if not self._token.get("access_token"):
             raise FileNotFoundError("Antigravity token not found in Keychain: run `agy` to sign in")
-        # Monotonic timestamp of the last `agy models` refresh nudge (cooldown).
-        self._last_refresh_trigger = 0.0
 
     @classmethod
     def _load_keychain_token(cls) -> dict[str, Any]:
@@ -1553,7 +1597,7 @@ class AntigravityProvider:
 
     def fetch(self) -> AntigravityStatus:
         # Re-read the Keychain each fetch so we pick up `agy`'s own refreshes.
-        self._token = self._load_keychain_token()
+        self._acquire()
         if self._token_expired(self._token) and not self._trigger_agy_self_refresh():
             raise ProbeFailure(
                 "Antigravity session expired: run `agy` to re-authenticate",
