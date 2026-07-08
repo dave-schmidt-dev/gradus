@@ -110,7 +110,7 @@ Reset displays are normalized before rendering:
 
 ## JSON Output
 
-`--json` preserves the raw provider payload under `data` and adds normalized reset display fields under `display`.
+`--json` prints a read-only snapshot and is **machine-safe** — like `--write-snapshot`, it engages the headless path (no browser launch, token refresh, cache writes, or threshold notifications), and a provider without cached credentials reports `auth required` rather than triggering interactive recovery. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`.
 
 Example:
 

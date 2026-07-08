@@ -21,7 +21,7 @@ from ai_monitor.__main__ import (
     _merge_with_previous,
     main,
 )
-from ai_monitor.providers import ProviderSnapshot
+from ai_monitor.providers import ProviderSnapshot, set_headless
 from ai_monitor.ui import THEME, build_dashboard
 
 
@@ -83,6 +83,71 @@ class MainOnceTests(unittest.TestCase):
 
 class MainJsonTests(unittest.TestCase):
     """Test --json mode: writes JSON to stdout, no Console or Live."""
+
+    def setUp(self) -> None:
+        # --json now engages the read-only headless path (Task 4.2). Reset the
+        # module global before and after each test so headless state never leaks
+        # between tests via ordering.
+        set_headless(False)
+        self.addCleanup(set_headless, False)
+
+    def test_json_engages_headless_no_side_effects(self) -> None:
+        """Task 4.2 / INV-2: ``--json`` is a read-only machine surface — it engages
+        headless before constructing providers, fires no threshold notification,
+        and launches no subprocess (browser / osascript / cookie extraction)."""
+        snapshots = [
+            ProviderSnapshot(
+                name="Codex", ok=True, source="api", data={"five_hour_percent_left": 50}
+            ),
+            ProviderSnapshot(
+                name="Claude",
+                ok=False,
+                source="api",
+                error="auth required: no cached credentials",
+            ),
+        ]
+        ns = argparse.Namespace(
+            json=True,
+            write_snapshot=False,
+            once=False,
+            debug=False,
+            providers=None,
+            interval=120,
+        )
+        set_headless_spy = MagicMock()
+        buf = StringIO()
+        with (
+            patch("ai_monitor.__main__.parse_args", return_value=ns),
+            patch("ai_monitor.__main__.set_headless", set_headless_spy),
+            patch(
+                "ai_monitor.__main__.initialize_providers",
+                return_value=([("Codex", object())], []),
+            ),
+            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
+            patch("ai_monitor.__main__._check_thresholds") as mock_check,
+            patch("ai_monitor.__main__._notify_threshold") as mock_notify,
+            patch("ai_monitor.__main__.subprocess.Popen") as mock_popen,
+            patch("ai_monitor.__main__.subprocess.run") as mock_run,
+            patch("ai_monitor.providers.subprocess.Popen") as mock_p_popen,
+            patch("ai_monitor.providers.subprocess.run") as mock_p_run,
+            patch("ai_monitor.__main__.sys.stdout", buf),
+        ):
+            rc = main()
+
+        self.assertEqual(rc, 0)
+        # Read-only mode engaged (before providers are constructed).
+        set_headless_spy.assert_called_once_with(True)
+        # No threshold notifications on the machine surface (matches --write-snapshot).
+        mock_check.assert_not_called()
+        mock_notify.assert_not_called()
+        # No subprocess of any kind, in either module.
+        mock_popen.assert_not_called()
+        mock_run.assert_not_called()
+        mock_p_popen.assert_not_called()
+        mock_p_run.assert_not_called()
+        # Still produced valid JSON for both providers.
+        payload = json.loads(buf.getvalue())
+        self.assertEqual(len(payload["providers"]), 2)
 
     def test_json_writes_valid_json_to_stdout(self) -> None:
         snapshots = [

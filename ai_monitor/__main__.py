@@ -137,7 +137,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--interval", type=int, default=120, help="Refresh interval in seconds.")
     parser.add_argument("--once", action="store_true", help="Fetch one snapshot and exit.")
     parser.add_argument(
-        "--json", action="store_true", help="Print JSON instead of the live dashboard."
+        "--json",
+        action="store_true",
+        help=(
+            "Print JSON instead of the live dashboard. Read-only/machine-safe: "
+            "no browser, token refresh, cache writes, or notifications; uncached "
+            "providers report 'auth required'."
+        ),
     )
     parser.add_argument(
         "--debug", action="store_true", help="Show full exception strings from probes."
@@ -390,10 +396,13 @@ def main() -> int:
     except (TypeError, ValueError):
         threshold = 20.0
     cwd = os.getcwd()
-    if getattr(args, "write_snapshot", False):
+    if getattr(args, "write_snapshot", False) or getattr(args, "json", False):
         # Engage strictly read-only mode BEFORE constructing providers, so their
         # constructors never spawn a browser, refresh a token, or write a cache
-        # (INV-2: the headless path has zero side effects).
+        # (INV-2: the headless path has zero side effects). --json is a machine
+        # surface (cron/scripts), so it earns the same read-only guarantee as
+        # --write-snapshot: an uncached provider reports "auth required" instead
+        # of triggering interactive recovery.
         set_headless(True)
     providers, cleanup = initialize_providers(cwd, enabled_providers)
     notified_providers: set[str] = set()
@@ -447,9 +456,10 @@ def main() -> int:
             return 1
 
         if args.json:
+            # Read-only/machine-safe (headless engaged above): no threshold
+            # notifications, matching --write-snapshot.
             updated_at = datetime.now()
             snapshots = collect_snapshots(providers, args.debug)
-            _check_thresholds(snapshots, threshold, notified_providers)
             sys.stdout.write(render_json(snapshots, updated_at) + "\n")
             sys.stdout.flush()
             return 0
