@@ -50,28 +50,6 @@ def _is_headless() -> bool:
     return _HEADLESS
 
 
-def _open_url(url: str) -> None:
-    """Open a URL in the user's browser unless headless mode is active.
-
-    A no-op under headless mode (INV-2): a background refresher must never spawn
-    a browser. Any OSError from the ``open`` command is swallowed so a missing
-    launcher never breaks a probe.
-
-    Args:
-        url: The URL to hand to macOS's ``open`` command.
-    """
-    if _HEADLESS:
-        return
-    try:
-        subprocess.Popen(
-            ["open", url],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        pass
-
-
 @dataclass(slots=True)
 class ProviderSnapshot:
     name: str
@@ -302,7 +280,6 @@ class VibeProvider:
         self._ory_name = ""
         self._ory_value = ""
         self._csrf = ""
-        self._browser_opened = False
 
     def _acquire(self) -> None:
         """Ensure cookies are loaded, idempotently.
@@ -314,7 +291,12 @@ class VibeProvider:
             self._load_cookies()
 
     def _load_cookies(self) -> None:
-        """Try all cookie sources. Opens browser on first failure."""
+        """Try all cookie sources; a pure read that never launches a browser.
+
+        When no credentials are available the fields stay empty and fetch()
+        surfaces an auth-CTA snapshot; the [n] fix-action opens the login page
+        on demand.
+        """
         if self._load_from_cache():
             return
         cookies = self._extract_safari_cookies() or self._extract_chrome_cookies()
@@ -327,10 +309,6 @@ class VibeProvider:
             self._ory_value = cookies["ory_session_value"]
             self._csrf = cookies["csrftoken"]
             self._save_to_cache()
-        elif not self._browser_opened:
-            # Open console.mistral.ai so the user can log in
-            _open_url("https://console.mistral.ai")
-            self._browser_opened = True
 
     def _load_from_cache(self) -> bool:
         """Load cookies from local cache. Returns True if a usable set was loaded."""
@@ -558,7 +536,7 @@ class VibeProvider:
             message = (
                 "auth required: no cached credentials"
                 if _is_headless()
-                else "Waiting for Mistral login — console.mistral.ai opened in browser"
+                else "Vibe session expired: sign in at console.mistral.ai"
             )
             raise ProbeFailure(message, "")
 
@@ -655,7 +633,6 @@ class CursorProvider:
     def __init__(self) -> None:
         self._access_token: str | None = None
         self._refresh_token: str | None = None
-        self._browser_opened = False
         self._token_source: str | None = None
 
     def _acquire(self) -> None:
@@ -668,7 +645,7 @@ class CursorProvider:
             self._load_token()
 
     def _load_token(self) -> None:
-        """Try all token sources. Opens browser on first failure."""
+        """Try all token sources; a pure read that never launches a browser."""
         # Try local cache first — survives Safari restarts and ITP cookie purges
         if self._load_from_cache():
             self._token_source = "cache"
@@ -688,11 +665,6 @@ class CursorProvider:
             self._token_source = "desktop_db"
             self._save_to_cache()
             return
-
-        # No token found — open browser so user can log in
-        if not self._browser_opened:
-            _open_url("https://cursor.com/settings")
-            self._browser_opened = True
 
     def _load_from_cache(self) -> bool:
         """Load tokens from local cache. Returns True if a usable token was loaded."""
@@ -790,7 +762,7 @@ class CursorProvider:
             message = (
                 "auth required: no cached credentials"
                 if _is_headless()
-                else "Waiting for Cursor login — cursor.com/settings opened in browser"
+                else "Cursor session expired: sign in at cursor.com/settings"
             )
             raise ProbeFailure(message, "")
 
@@ -1203,7 +1175,6 @@ class ClaudeHttpProvider:
         self._session_key: str = ""
         self._cf_clearance: str = ""
         self._org_id: str = ""
-        self._browser_opened = False
 
     def _acquire(self) -> None:
         """Ensure cookies are loaded, idempotently.
@@ -1223,9 +1194,6 @@ class ClaudeHttpProvider:
         self._org_id = cookies.get("lastActiveOrg", "")
         if self._session_key and self._org_id:
             self._save_to_cache()
-        elif not self._browser_opened:
-            _open_url("https://claude.ai")
-            self._browser_opened = True
 
     def _load_from_cache(self) -> bool:
         """Load cookies from local cache. Returns True if a usable set was loaded."""
@@ -1290,7 +1258,7 @@ class ClaudeHttpProvider:
             message = (
                 "auth required: no cached credentials"
                 if _is_headless()
-                else "Waiting for Claude login — claude.ai opened in browser"
+                else "Claude session expired: sign in at claude.ai"
             )
             raise ProbeFailure(message, "")
 

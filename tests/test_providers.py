@@ -1689,27 +1689,24 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         self.assertFalse(self._vibe_cache.exists())
         self.assertFalse(self._claude_cache.exists())
 
-    def test_headless_off_opens_browser(self) -> None:
-        # The _open_url gate — not the readers — is what suppresses the browser
-        # open: with the readers stubbed identically, only the flag differs.
-        # Construction no longer touches credentials, so the browser-open now
-        # only fires once _acquire() runs (called explicitly here, as fetch() would).
-        with (
-            patch("ai_monitor.providers._read_safari_cookies", return_value={}),
-            patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None),
-            patch("ai_monitor.providers.subprocess.Popen") as popen,
-        ):
+    def test_acquire_never_launches_browser(self) -> None:
+        # Regression guard for the removed auto-open: a credential-less probe is
+        # a pure read and must NEVER launch a browser, in either interactive or
+        # headless mode. The only browser-opening path is the [n] fix-action in
+        # the TUI, and only on an explicit keypress.
+        try:
+            for headless in (False, True):
+                with (
+                    patch("ai_monitor.providers._read_safari_cookies", return_value={}),
+                    patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None),
+                    patch("ai_monitor.providers.subprocess.Popen") as popen,
+                ):
+                    providers.set_headless(headless)
+                    provider = VibeProvider(str(self._root))
+                    provider._acquire()
+                    popen.assert_not_called()
+        finally:
             providers.set_headless(False)
-            provider = VibeProvider(str(self._root))
-            provider._acquire()
-            self.assertTrue(popen.called)
-            self.assertEqual(popen.call_args.args[0], ["open", "https://console.mistral.ai"])
-
-            popen.reset_mock()
-            providers.set_headless(True)
-            provider = VibeProvider(str(self._root))
-            provider._acquire()
-            popen.assert_not_called()
 
     def test_headless_read_safari_cookies_returns_empty(self) -> None:
         providers.set_headless(True)
