@@ -5,7 +5,7 @@
 > in this project's CLAUDE.md/README, not globally.
 
 ### INV-1 — The router-facing snapshot contains no credential material and no account PII, and lives in the credential-free .state/ dir
-area: ["ai_monitor/snapshot.py", "ai_monitor/parsing.py"]
+area: ["ai_monitor/snapshot.py", "ai_monitor/parsing.py", "ai_monitor/providers.py"]
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
 rationale: The snapshot.json is read by a separate repo (review-plugin router). It is written to
@@ -15,7 +15,11 @@ rationale: The snapshot.json is read by a separate repo (review-plugin router). 
   only — it must never carry cookies, tokens, sessionKey, ory_*, csrftoken, access_token, nor
   account_email/account_organization/login_method/account_tier/raw_text. A denylist would silently
   pass a newly-added Status field; the gate is a POSITIVE allowlist check. Prevents leaking auth or
-  personal identity into a cross-repo-readable file.
+  personal identity into a cross-repo-readable file. The `error` field is the one free-text channel
+  copied verbatim into the file: it is held to the plain provider message (the raw `--debug` payload
+  is diverted to a non-persisted `debug_detail`) and hard-capped at the persistence boundary, pinned
+  by the companion gate test_payload_error_carries_no_raw_payload. Hence area now includes providers.py,
+  where that error string is constructed.
 
 ### INV-2 — The headless (--write-snapshot / launchd) path is strictly read-only with zero side effects
 area: ["ai_monitor/providers.py", "ai_monitor/__main__.py"]
@@ -53,3 +57,16 @@ rationale: The router asserts schema_version. The file always carries schema_ver
   updated_at, and every provider entry (all 5 canonical names always present) has a windows[] of the
   documented shape. Breaking changes bump schema_version. Prevents silent schema drift that a
   version-asserting consumer cannot detect.
+
+### INV-6 — All persisted credential material is written mode 0600 inside a 0700 dir, via an atomic temp-file swap
+area: ["ai_monitor/providers.py"]
+gate_test: tests/test_providers.py::TestCredentialCachePermissions::test_credential_artifacts_are_written_private
+threshold: 3
+rationale: The provider credential caches (Vibe/Cursor/Claude cookies + tokens) and the Codex auth.json
+  hold live sessionKey/ory_*/csrftoken values and access/refresh tokens; the /tmp debug dump holds raw
+  vendor bodies. A bare Path.write_text inherits the process umask (0644 = world-readable), exposing
+  those secrets to every other local user/process — and, if Desktop&Documents iCloud sync is ever
+  enabled on this tree, replicating live credentials to Apple's cloud. A single choke-point,
+  `_write_private` (tempfile.mkstemp — born 0600, independent of umask — then chmod + os.replace),
+  is the SOLE sanctioned write path for all credential/secret writes, so the mode is never
+  world-readable even momentarily and the contract is enforceable at one site. Prevents F1.

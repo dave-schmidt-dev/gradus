@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import json
+import os
+import stat
 import tempfile
 import time
 import unittest
@@ -22,6 +24,7 @@ from ai_monitor.providers import (
     _format_reset_time,
     _http_json,
     _is_jwt_expired,
+    _write_debug_dump,
 )
 
 
@@ -1596,6 +1599,121 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         providers.set_headless(True)
         self.assertEqual(providers._read_safari_cookies("claude"), {})
         self.assertIsNone(VibeProvider._extract_chrome_cookies())
+
+
+class TestCredentialCachePermissions(unittest.TestCase):
+    """INV-6: every credential/secret write must land at mode 0600 inside a
+    0700 directory, via the shared ``_write_private`` helper. Guards against a
+    regression back to a bare ``Path.write_text``, which inherits the process
+    umask (0644 = world-readable). These assertions would FAIL against the
+    pre-fix code.
+    """
+
+    def setUp(self) -> None:
+        self._prior_headless = providers._is_headless()
+        providers.set_headless(False)
+
+    def tearDown(self) -> None:
+        providers.set_headless(self._prior_headless)
+
+    def _assert_private(self, path: Path) -> None:
+        self.assertTrue(path.exists(), f"{path} was not written")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(path.parent).st_mode), 0o700)
+
+    def test_credential_artifacts_are_written_private(self) -> None:
+        # Vibe cookie cache — bare instance (no __init__) so construction never
+        # touches Safari/Chrome/the browser; only the write path under test runs.
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "vibe" / "vibe_cookies.json"
+            with patch.object(VibeProvider, "_CACHE_PATH", cache_path):
+                provider = VibeProvider.__new__(VibeProvider)
+                provider._ory_name = "ory_session_x"
+                provider._ory_value = "v"
+                provider._csrf = "c"
+                provider._save_to_cache()
+            self._assert_private(cache_path)
+
+        # Cursor token cache
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "cursor" / "cursor_token.json"
+            with patch.object(CursorProvider, "_CACHE_PATH", cache_path):
+                provider = CursorProvider.__new__(CursorProvider)
+                provider._access_token = "at"
+                provider._refresh_token = "rt"
+                provider._save_to_cache()
+            self._assert_private(cache_path)
+
+        # Claude cookie cache
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "claude" / "claude_cookies.json"
+            with patch.object(ClaudeHttpProvider, "_CACHE_PATH", cache_path):
+                provider = ClaudeHttpProvider.__new__(ClaudeHttpProvider)
+                provider._session_key = "sk"
+                provider._cf_clearance = "cf"
+                provider._org_id = "org"
+                provider._save_to_cache()
+            self._assert_private(cache_path)
+
+    def test_debug_dump_is_private_without_hardening_shared_parent(self) -> None:
+        """The /tmp debug dump is written 0600 for privacy, but its parent (a
+        shared, root-owned 1777 dir in production) must NOT be chmod'd: as a
+        normal user that raises PermissionError and crashes --debug; as root it
+        would strip /tmp's sticky bit machine-wide. Regression for that bug —
+        against the pre-fix code (which chmod'd the parent to 0700) the final
+        assertion fails.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = Path(tmp) / "shared"  # stand-in for /tmp
+            shared.mkdir()
+            os.chmod(shared, 0o777)  # permissive, like /tmp
+            dump_path = shared / "ai_monitor_test_capture.txt"
+            with patch("ai_monitor.providers._debug_dump_path", return_value=dump_path):
+                _write_debug_dump("Test", "raw capture output")
+            # The dump file itself is private...
+            self.assertEqual(stat.S_IMODE(os.stat(dump_path).st_mode), 0o600)
+            # ...but the shared parent dir is left exactly as it was (never chmod'd).
+            self.assertEqual(stat.S_IMODE(os.stat(shared).st_mode), 0o777)
+
+    def test_load_from_cache_self_heals_permissions(self) -> None:
+        """A pre-existing 0644 cache file is tightened to 0600 on a successful
+        (non-headless) read — the opportunistic self-heal (1.3)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "cursor_token.json"
+            cache_path.write_text(
+                json.dumps({"access_token": _make_jwt(3600), "refresh_token": "rt"}),
+                encoding="utf-8",
+            )
+            os.chmod(cache_path, 0o644)
+            with patch.object(CursorProvider, "_CACHE_PATH", cache_path):
+                provider = CursorProvider.__new__(CursorProvider)
+                result = provider._load_from_cache()
+            self.assertTrue(result)
+            self.assertEqual(stat.S_IMODE(os.stat(cache_path).st_mode), 0o600)
+
+
+class TestChromeCookieDecrypt(unittest.TestCase):
+    """Pins the in-process AES-128-CBC Chrome v10 cookie decrypt (F3). The key
+    never reaches argv. Known-answer vector generated with the same scheme
+    (key + IV=16x0x20 + PKCS7 padding, v10 prefix)."""
+
+    # 16-byte AES-128 key; v10 blob encrypts "session-token-value-42".
+    KEY = bytes.fromhex("0123456789abcdef0123456789abcdef")
+    V10_BLOB = bytes.fromhex(
+        "7631303f968bc907d80a15a7607391fe1d3b246b64f1b60663a8dcd1cba54defc8e7a7"
+    )
+
+    def test_decrypt_chrome_cookie_known_vector(self) -> None:
+        self.assertEqual(
+            VibeProvider._decrypt_chrome_cookie(self.KEY, self.V10_BLOB),
+            "session-token-value-42",
+        )
+
+    def test_decrypt_chrome_cookie_bad_padding_returns_none(self) -> None:
+        # Wrong key -> PKCS#7 validation fails -> None (openssl's None-on-bad-padding).
+        self.assertIsNone(VibeProvider._decrypt_chrome_cookie(b"\x00" * 16, self.V10_BLOB))
+        # Garbage ciphertext -> None.
+        self.assertIsNone(VibeProvider._decrypt_chrome_cookie(self.KEY, b"v10" + b"\x00" * 16))
 
 
 if __name__ == "__main__":

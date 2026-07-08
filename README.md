@@ -39,6 +39,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Cursor: app or browser session authenticated
 - Mistral console session authenticated (Safari/Chrome cookie extraction supported)
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
+- `cryptography>=42` (installed automatically; used to decrypt Chrome `v10` cookies in-process so the AES key is never placed on a subprocess command line)
 - A terminal that supports ANSI color
 
 ## Run
@@ -61,7 +62,7 @@ python3 -m ai_monitor --write-snapshot
 ./monitor --once
 ```
 
-When `--debug` is enabled, raw captures are written to `/tmp/ai_monitor_*_capture.txt`.
+When `--debug` is enabled, raw captures are written to `/tmp/ai_monitor_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches). The raw payload is **not** written into the router-facing `.state/snapshot.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free), while the debug-augmented detail is surfaced separately as `debug_detail` in `--json` output for local scripting.
 
 Optional config file (`.ai_monitor.json` in your current working directory):
 
@@ -189,6 +190,7 @@ All 5 canonical providers are always present (Codex, Claude, Antigravity, Cursor
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
 - In live mode, press `q` to quit or `r` to trigger an immediate refresh.
 - Cursor and Vibe try Safari cookie extraction first; Vibe also supports Chrome cookie extraction. Cookies are cached locally at `.cache/<provider>_cookies.json` (gitignored) to survive Safari disk-sync lag and reduce spurious re-auth prompts; the cache is evicted on API 400/401/403 errors (Claude also returns 400 when a cached `lastActiveOrg` fails its UUID validator).
+- **Credential storage.** The `.cache/` credential files (provider cookies/tokens) and the Codex `~/.codex/auth.json` are written mode `0600` inside a `0700` directory via a single atomic private-write helper — a `tempfile.mkstemp` temp file (born `0600`, independent of umask) swapped in with `os.replace`, so the file is never world-readable, even momentarily. Pre-existing caches are also tightened to `0600` opportunistically on the next interactive (non-headless) read. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/ai_monitor/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
 - Providers below threshold show a `[!]` badge and trigger one-shot macOS notifications until they recover above threshold.
 - Vibe uses Mistral's `usage_percentage` field as percent used directly. If Mistral shows `1.08% used`, AI Monitor will render about `99%` remaining after rounding.
 - Cursor reads billing-cycle and usage data from the nested `planUsage` payload and treats `limit` / `remaining` as cents, so `2000` means `$20.00` and `1631` means `$16.31` remaining. The Cursor card intentionally shows that included API-spend bucket as `ap`, and the main `% remaining` uses that cents ratio when present and only falls back to `totalPercentUsed` if Cursor omits the spend fields.

@@ -814,6 +814,7 @@ def render_json(snapshots: list[ProviderSnapshot], updated_at: datetime) -> str:
                 "data": snap.data,
                 "display": _provider_display_fields(snap, updated_at),
                 "error": snap.error,
+                "debug_detail": snap.debug_detail,
             }
             for snap in snapshots
         ],

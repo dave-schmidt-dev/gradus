@@ -6,11 +6,15 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.padding import PKCS7
 
 from .parsing import (
     AntigravityStatus,
@@ -76,6 +80,7 @@ class ProviderSnapshot:
     data: dict[str, Any] | None = None
     error: str | None = None
     cached_since: datetime | None = None
+    debug_detail: str | None = None
 
 
 class ProbeFailure(RuntimeError):
@@ -143,7 +148,40 @@ def _debug_dump_path(name: str) -> Path:
 def _write_debug_dump(name: str, raw_text: str) -> None:
     if _HEADLESS:
         return
-    _debug_dump_path(name).write_text(raw_text, encoding="utf-8")
+    # The dump lives in /tmp — a shared, root-owned 1777 dir that must NOT be
+    # chmod'd (as a normal user that raises PermissionError and crashes --debug;
+    # as root it would strip /tmp's sticky bit machine-wide). The 0600 file mode
+    # still keeps the dump contents private, so harden the file but not the dir.
+    _write_private(_debug_dump_path(name), raw_text, harden_parent=False)
+
+
+def _write_private(path: Path, text: str, *, harden_parent: bool = True) -> None:
+    """Atomically write `text` to `path` at mode 0600 via tempfile.mkstemp
+    (born 0600, independent of umask) + os.replace, so the destination is never
+    world-readable even momentarily. Single sanctioned path for all
+    credential/secret writes (INV-6).
+
+    When `harden_parent` is True (default — for dedicated credential dirs like
+    .cache/ and ~/.codex/), the parent dir is also chmod'd 0700. Pass
+    harden_parent=False for a shared dir that must not be chmod'd (e.g. /tmp):
+    the 0600 file mode still protects the contents and os.replace onto the final
+    name stays symlink-safe.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if harden_parent:
+        os.chmod(path.parent, 0o700)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _is_jwt_expired(token: str, leeway_seconds: int = 60) -> bool:
@@ -309,6 +347,11 @@ class VibeProvider:
         self._ory_name = ory_name
         self._ory_value = ory_value
         self._csrf = csrf
+        if not _HEADLESS:
+            try:
+                os.chmod(self._CACHE_PATH, 0o600)
+            except OSError:
+                pass
         return True
 
     def _save_to_cache(self) -> None:
@@ -318,14 +361,13 @@ class VibeProvider:
         if not (self._ory_name and self._ory_value and self._csrf):
             return
         try:
-            self._CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "ory_session_name": self._ory_name,
                 "ory_session_value": self._ory_value,
                 "csrftoken": self._csrf,
                 "cached_at": datetime.now().isoformat(),
             }
-            self._CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+            _write_private(self._CACHE_PATH, json.dumps(payload))
         except OSError as exc:
             log.warning("Failed to write Vibe cookie cache: %s", exc)
 
@@ -474,7 +516,13 @@ class VibeProvider:
 
     @staticmethod
     def _decrypt_chrome_cookie(key: bytes, encrypted_value: bytes) -> str | None:
-        """Decrypt a Chrome v10-encrypted cookie value using openssl."""
+        """Decrypt a Chrome v10-encrypted cookie value in-process (AES-128-CBC).
+
+        Uses `cryptography` rather than shelling out to openssl, so the AES key is
+        never placed on any process's argv (visible via `ps`). Matches openssl's
+        failure semantics: a wrong key or corrupt ciphertext fails PKCS#7 padding
+        validation (the unpadder raises ValueError) and returns None.
+        """
         # v10 prefix = macOS AES-128-CBC encryption
         if len(encrypted_value) < 4 or encrypted_value[:3] != b"v10":
             # Unencrypted or unknown format
@@ -484,28 +532,13 @@ class VibeProvider:
                 return None
 
         ciphertext = encrypted_value[3:]
-        iv_hex = "20" * 16  # 16 space bytes as IV
-        key_hex = key.hex()
-
         try:
-            result = subprocess.run(
-                [
-                    "openssl",
-                    "enc",
-                    "-aes-128-cbc",
-                    "-d",
-                    "-K",
-                    key_hex,
-                    "-iv",
-                    iv_hex,
-                ],
-                input=ciphertext,
-                capture_output=True,
-                timeout=5,
-                check=True,
-            )
-            return result.stdout.decode("utf-8")
-        except (subprocess.SubprocessError, OSError, UnicodeDecodeError):
+            decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x20" * 16)).decryptor()
+            padded = decryptor.update(ciphertext) + decryptor.finalize()
+            unpadder = PKCS7(128).unpadder()  # 128-bit block; validates PKCS#7 padding
+            plain = unpadder.update(padded) + unpadder.finalize()
+            return plain.decode("utf-8")
+        except (ValueError, TypeError, UnicodeDecodeError):
             return None
 
     def fetch(self) -> VibeStatus:
@@ -663,6 +696,11 @@ class CursorProvider:
         refresh = data.get("refresh_token")
         if isinstance(refresh, str) and refresh:
             self._refresh_token = refresh
+        if not _HEADLESS:
+            try:
+                os.chmod(self._CACHE_PATH, 0o600)
+            except OSError:
+                pass
         return True
 
     def _save_to_cache(self) -> None:
@@ -672,13 +710,12 @@ class CursorProvider:
         if not self._access_token:
             return
         try:
-            self._CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "access_token": self._access_token,
                 "refresh_token": self._refresh_token,
                 "cached_at": datetime.now().isoformat(),
             }
-            self._CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+            _write_private(self._CACHE_PATH, json.dumps(payload))
         except OSError as exc:
             log.warning("Failed to write Cursor token cache: %s", exc)
 
@@ -1023,12 +1060,8 @@ class CodexHttpProvider:
             tokens["refresh_token"] = resp["refresh_token"]
         on_disk["tokens"] = tokens
         on_disk["last_refresh"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        # Atomic write: tempfile in the same dir, chmod 600 before rename so the new
-        # file is never world-readable even momentarily.
-        tmp = self._AUTH_PATH.with_suffix(self._AUTH_PATH.suffix + ".tmp")
-        tmp.write_text(json.dumps(on_disk, indent=2), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self._AUTH_PATH)
+        # Atomic 0600 write via the shared private-write helper (never world-readable).
+        _write_private(self._AUTH_PATH, json.dumps(on_disk, indent=2))
         self._load_creds()
         return True
 
@@ -1167,6 +1200,11 @@ class ClaudeHttpProvider:
         cf = data.get("cf_clearance")
         if isinstance(cf, str):
             self._cf_clearance = cf
+        if not _HEADLESS:
+            try:
+                os.chmod(self._CACHE_PATH, 0o600)
+            except OSError:
+                pass
         return True
 
     def _save_to_cache(self) -> None:
@@ -1176,14 +1214,13 @@ class ClaudeHttpProvider:
         if not (self._session_key and self._org_id):
             return
         try:
-            self._CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "sessionKey": self._session_key,
                 "cf_clearance": self._cf_clearance,
                 "lastActiveOrg": self._org_id,
                 "cached_at": datetime.now().isoformat(),
             }
-            self._CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
+            _write_private(self._CACHE_PATH, json.dumps(payload))
         except OSError as exc:
             log.warning("Failed to write Claude cookie cache: %s", exc)
 
@@ -1583,12 +1620,15 @@ def fetch_provider_snapshot(
     except ProbeFailure as exc:
         if debug:
             _write_debug_dump(name, exc.raw_text or "")
-        message = str(exc)
+        error = str(exc)
+        debug_detail = None
         if debug:
             tail = exc.raw_text[-1600:] if exc.raw_text else ""
             dump_hint = f"raw dump: {_debug_dump_path(name)}"
-            message = f"{message}\n\n{dump_hint}\n\n{tail}".strip()
-        return ProviderSnapshot(name=name, ok=False, source=source, error=message)
+            debug_detail = f"{error}\n\n{dump_hint}\n\n{tail}".strip()
+        return ProviderSnapshot(
+            name=name, ok=False, source=source, error=error, debug_detail=debug_detail
+        )
     except Exception as exc:  # noqa: BLE001
         return ProviderSnapshot(name=name, ok=False, source=source, error=str(exc))
     data = status.to_dict()

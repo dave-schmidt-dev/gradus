@@ -8,10 +8,11 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from ai_monitor import snapshot as snap
 from ai_monitor import ui
-from ai_monitor.providers import ProviderSnapshot
+from ai_monitor.providers import ProbeFailure, ProviderSnapshot, fetch_provider_snapshot
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
 
@@ -85,6 +86,29 @@ class TestAllowlist(unittest.TestCase):
         )
         projected = snap.project_data(cursor)
         self.assertEqual(projected, {"credit_percent_left": 55.0})
+
+    def test_payload_error_carries_no_raw_payload(self) -> None:
+        sentinel = "SENTINEL-a1b2c3-raw-body"
+
+        class _Boom:
+            def fetch(self):
+                raise ProbeFailure("Boom", raw_text=f"SECRET-BODY-{sentinel}")
+
+        # Patch the debug-dump writer so the test never writes the real /tmp dump.
+        with patch("ai_monitor.providers._write_debug_dump"):
+            s = fetch_provider_snapshot("Claude", _Boom(), debug=True)
+
+        # error is plain; the raw tail lives only in debug_detail (never persisted).
+        self.assertEqual(s.error, "Boom")
+        self.assertIsNotNone(s.debug_detail)
+        self.assertIn(sentinel, s.debug_detail)
+
+        payload = snap.build_snapshot_payload([s], NOW)
+        entry = next(p for p in payload["providers"] if p["name"] == "Claude")
+        self.assertEqual(entry["error"], "Boom")
+        self.assertNotIn("raw dump:", entry["error"])
+        # Strong, generic check: the raw body must not appear ANYWHERE in the file.
+        self.assertNotIn(sentinel, json.dumps(payload))
 
 
 class TestVibeNormalization(unittest.TestCase):

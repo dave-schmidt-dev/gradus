@@ -504,7 +504,11 @@ def build_snapshot_payload(
         entry: dict = {
             "name": name,
             "ok": False,
-            "error": snap.error,
+            # error is copied verbatim into the router-facing snapshot, so it must
+            # stay bounded and credential-free (INV-1). Cap defends every error path
+            # (debug-augmented, generic-exception, provider-authored). Provider error
+            # messages must never embed credentials/tokens.
+            "error": snap.error[:200] if snap.error else snap.error,
             "windows": [],
             "data": project_data(snap),
         }
