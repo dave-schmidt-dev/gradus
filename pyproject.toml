@@ -20,6 +20,7 @@ build-backend = "setuptools.build_meta"
 dev = [
     "pytest>=9.0.3",
     "ruff>=0.9",
+    "pre-commit>=4",
 ]
 
 [tool.pytest.ini_options]

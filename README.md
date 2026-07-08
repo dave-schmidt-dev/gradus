@@ -212,15 +212,37 @@ All 5 canonical providers are always present (Codex, Claude, Antigravity, Cursor
 
 ```bash
 # Run tests
-pytest
+uv run pytest
 
-# Lint
-ruff check ai_monitor/ tests/
+# Lint + format check
+uv run ruff check ai_monitor/ tests/
+uv run ruff format --check ai_monitor/ tests/
 ```
+
+### Git hooks (enforcement)
+
+This project has **no CI** — the local git hooks *are* the gate. They run through
+[`pre-commit`](https://pre-commit.com) using `repo: local` entries, so every hook
+shells out to the same `uv run` tools declared in `pyproject.toml` (no second,
+framework-managed copy that could drift out of version parity).
+
+One-time bootstrap after cloning:
+
+```bash
+uv run pre-commit install   # installs both pre-commit and pre-push hooks
+```
+
+- **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files.
+- **pre-push** (heavier): the full `pytest` suite (~0.2s), so nothing lands on the
+  remote without the gate tests passing.
+
+Config lives in `.pre-commit-config.yaml`. Run the checks manually with
+`uv run pre-commit run --all-files`.
 
 Project docs:
 
 - **README.md** — setup, usage, architecture overview
 - **HISTORY.md** — change log for every session (features, bugs, regressions)
 - **TASKS.md** — backlog and in-progress work
-- **pyproject.toml** — dependencies (`ruff`, `pytest`) and tool config
+- **pyproject.toml** — dependencies (`ruff`, `pytest`, `pre-commit`) and tool config
+- **.pre-commit-config.yaml** — local pre-commit/pre-push hook definitions
