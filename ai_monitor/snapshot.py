@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,12 +28,50 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
+SCHEMA_VERSION_V2 = 2
 
 # Contract-mandated, credential-free state directory (NOT `.cache/`).
 SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / ".state" / "snapshot.json"
+SNAPSHOT_V2_PATH = Path(__file__).resolve().parent.parent / ".state" / "snapshot-v2.json"
 
 # Stop serving cached data after this many seconds (moved from __main__.py).
 STALE_THRESHOLD_SECONDS = 300  # 5 minutes
+
+
+def percent_is_valid(percent_left: object) -> bool:
+    """Return whether a remaining percentage is finite and within 0-100."""
+    return (
+        isinstance(percent_left, (int, float))
+        and not isinstance(percent_left, bool)
+        and math.isfinite(percent_left)
+        and 0.0 <= percent_left <= 100.0
+    )
+
+
+def percent_is_depleted(percent_left: object) -> bool:
+    """Return whether a normalized remaining percentage is exactly zero."""
+    return percent_is_valid(percent_left) and float(percent_left) == 0.0
+
+
+def window_warns(window: Mapping[str, object]) -> bool:
+    """Return whether one normalized window warrants an alert.
+
+    A window warns only when its numeric remaining percentage is exactly zero,
+    or its finite canonical pace delta is strictly below -0.10. Invalid
+    percentage values, including booleans, are never warning candidates.
+    """
+    percent_left = window.get("percent_left")
+    if not percent_is_valid(percent_left):
+        return False
+    if percent_is_depleted(percent_left):
+        return True
+    pace = window.get("pace_delta")
+    return (
+        isinstance(pace, (int, float))
+        and not isinstance(pace, bool)
+        and math.isfinite(pace)
+        and pace < -0.10
+    )
 
 
 def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
@@ -126,8 +166,6 @@ def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None
                 except ValueError:
                     continue
                 target = parsed
-                if target < now:
-                    target = target.replace(year=target_year + 1)
                 break
             if target is not None:
                 break
@@ -146,8 +184,6 @@ def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None
             except ValueError:
                 continue
             target = parsed
-            if target < now:
-                target = target.replace(year=target_year + 1)
             break
     elif lower.startswith("resets "):
         for fmt in ("%H:%M", "%I %p", "%I:%M %p"):
@@ -314,11 +350,47 @@ WINDOW_SPECS: dict[str, tuple[WindowSpec, ...]] = {
 }
 
 
-def build_windows(snapshot: ProviderSnapshot, now: datetime) -> list[dict]:
+WARNING_WINDOW_SPECS = {
+    **WINDOW_SPECS,
+    # These pools are intentionally alert-only until snapshot schema v2. The
+    # v1 router payload remains billing_cycle-only for Cursor.
+    "Cursor": (
+        WindowSpec(
+            "ac",
+            "billing",
+            "auto_percent_used",
+            normalize="used",
+            start_key="billing_cycle_start",
+            end_key="billing_cycle_end_iso",
+        ),
+        WindowSpec(
+            "ap",
+            "billing",
+            "credit_percent_left",
+            normalize="remaining",
+            start_key="billing_cycle_start",
+            end_key="billing_cycle_end_iso",
+        ),
+    ),
+}
+
+# Schema v2 keeps every non-Cursor window byte-for-byte compatible with v1,
+# while publishing Cursor's two actual capacity pools independently.
+V2_WINDOW_SPECS = {
+    **WINDOW_SPECS,
+    "Cursor": WARNING_WINDOW_SPECS["Cursor"],
+}
+
+
+def _build_windows(
+    snapshot: ProviderSnapshot,
+    now: datetime,
+    specs_by_provider: Mapping[str, tuple[WindowSpec, ...]],
+) -> list[dict]:
     """Normalize a provider snapshot into router-facing window dicts (Gap-3).
 
-    The whole body is wrapped in ``try/except`` so a single provider's bad data
-    can never crash the payload; on any error an empty list is returned.
+    Each window is isolated so malformed metadata in one pool cannot suppress
+    its siblings.
 
     Args:
         snapshot: The provider snapshot to normalize.
@@ -328,18 +400,25 @@ def build_windows(snapshot: ProviderSnapshot, now: datetime) -> list[dict]:
         A list of ``{"id", "percent_left", "reset_iso", "window_hours",
         "pace_delta"}`` dicts, or ``[]`` when the snapshot is unusable.
     """
-    try:
-        if not snapshot.ok or not snapshot.data:
-            return []
-        specs = WINDOW_SPECS.get(snapshot.name)
-        if not specs:
-            return []
-        data = snapshot.data
-        windows: list[dict] = []
-        for spec in specs:
+    if not snapshot.ok or not isinstance(snapshot.data, Mapping):
+        return []
+    specs = specs_by_provider.get(snapshot.name)
+    if not specs:
+        return []
+    data = snapshot.data
+    windows: list[dict] = []
+    for spec in specs:
+        # A malformed sibling must never hide an otherwise valid/depleted
+        # capacity pool. Each spec is therefore isolated deliberately.
+        try:
             if spec.kind == "session":
                 raw = data.get(spec.percent_key)
-                pct = float(raw) if isinstance(raw, (int, float)) else None
+                pct = float(raw) if percent_is_valid(raw) else None
+                if pct is None:
+                    # Window absent (e.g. Codex 5h after OpenAI's 2026-07 removal).
+                    # Emitting a null-percent window would violate the router
+                    # contract (percent_left is always numeric); omit it instead.
+                    continue
                 reset_raw = data.get(spec.reset_key) if spec.reset_key else None
                 target = parse_reset_target(str(reset_raw) if reset_raw is not None else None, now)
                 reset_iso = local_iso(target) if target else None
@@ -357,22 +436,36 @@ def build_windows(snapshot: ProviderSnapshot, now: datetime) -> list[dict]:
             else:  # billing
                 raw = data.get(spec.percent_key)
                 if spec.normalize == "used":
-                    # INV-3: the SINGLE place Vibe usage is inverted to remaining.
-                    pct = max(0.0, 100.0 - float(raw)) if isinstance(raw, (int, float)) else None
+                    # INV-3: the single normalization point for billing usage
+                    # reported as used (Vibe and Cursor Auto + Composer).
+                    pct = 100.0 - float(raw) if percent_is_valid(raw) else None
                 else:
-                    pct = float(raw) if isinstance(raw, (int, float)) else None
+                    pct = float(raw) if percent_is_valid(raw) else None
+                if pct is None:
+                    # Billing windows also require a numeric remaining percent.
+                    # A missing source value must omit the window, never emit
+                    # ``percent_left: null`` in the v1 router payload.
+                    continue
                 start_raw = data.get(spec.start_key) if spec.start_key else None
                 end_raw = data.get(spec.end_key) if spec.end_key else None
                 start_iso = start_raw if isinstance(start_raw, str) else None
                 end_iso = end_raw if isinstance(end_raw, str) else None
                 if start_iso and end_iso:
-                    start = datetime.fromisoformat(start_iso)  # may raise -> []
-                    end = datetime.fromisoformat(end_iso)  # may raise -> []
-                    start, end = reconcile(start, end)
-                    total_seconds = (end - start).total_seconds()
-                    window_hours = max(1.0, total_seconds) / 3600.0
-                    reset_iso = end_iso
-                    delta = pace_delta(pct, end, total_seconds, now)
+                    try:
+                        start = datetime.fromisoformat(start_iso)
+                        end = datetime.fromisoformat(end_iso)
+                    except ValueError:
+                        # Capacity remains usable even when Cursor's billing
+                        # boundaries are malformed; omit only pace metadata.
+                        window_hours = None
+                        reset_iso = None
+                        delta = None
+                    else:
+                        start, end = reconcile(start, end)
+                        total_seconds = (end - start).total_seconds()
+                        window_hours = max(1.0, total_seconds) / 3600.0
+                        reset_iso = end_iso
+                        delta = pace_delta(pct, end, total_seconds, now)
                 else:
                     window_hours = None
                     reset_iso = end_iso if end_iso else None
@@ -386,9 +479,46 @@ def build_windows(snapshot: ProviderSnapshot, now: datetime) -> list[dict]:
                         "pace_delta": delta,
                     }
                 )
-        return windows
-    except Exception:  # noqa: BLE001 - deliberate: one bad provider must not crash
-        return []
+        except Exception:  # noqa: BLE001 - one provider field must not hide siblings
+            log.debug(
+                "failed to normalize %s window %s", snapshot.name, spec.window_id, exc_info=True
+            )
+    return windows
+
+
+def build_windows(snapshot: ProviderSnapshot, now: datetime) -> list[dict]:
+    """Normalize a snapshot into the stable router v1 window records."""
+    return _build_windows(snapshot, now, WINDOW_SPECS)
+
+
+def normalized_warning_windows(snapshot: ProviderSnapshot, now: datetime) -> list[dict]:
+    """Normalize windows for in-process UI and alert evaluation.
+
+    Unlike :func:`build_windows`, Cursor receives independent ``ac`` and
+    ``ap`` records here. This is deliberately not persisted until schema v2.
+    """
+    return _build_windows(snapshot, now, WARNING_WINDOW_SPECS)
+
+
+def build_v2_windows(snapshot: ProviderSnapshot, now: datetime) -> list[dict]:
+    """Normalize a snapshot into schema-v2 router window records."""
+    return _build_windows(snapshot, now, V2_WINDOW_SPECS)
+
+
+def warning_window_ids(snapshot: ProviderSnapshot, now: datetime) -> tuple[str, ...]:
+    """Return the warning window IDs for one provider snapshot."""
+    return tuple(
+        str(window["id"])
+        for window in normalized_warning_windows(snapshot, now)
+        if window_warns(window)
+    )
+
+
+def warning_membership(
+    snapshots: list[ProviderSnapshot], now: datetime
+) -> dict[str, tuple[str, ...]]:
+    """Return warning window membership keyed by provider name."""
+    return {snapshot.name: warning_window_ids(snapshot, now) for snapshot in snapshots}
 
 
 # INV-1 allowlist: only these usage/reset fields ever leave the process. Any
@@ -411,10 +541,6 @@ SAFE_DATA_KEYS = frozenset(
         "start_date",
         "end_date",
         "credit_percent_left",
-        "auto_percent_used",
-        "api_percent_used",
-        "remaining_cents",
-        "limit_cents",
         "billing_cycle_start",
         "billing_cycle_end",
         "billing_cycle_end_iso",
@@ -431,19 +557,71 @@ def project_data(snapshot: ProviderSnapshot) -> dict:
     Returns:
         A new dict containing only keys present in :data:`SAFE_DATA_KEYS`.
     """
-    return {k: v for k, v in (snapshot.data or {}).items() if k in SAFE_DATA_KEYS}
+    data = snapshot.data if isinstance(snapshot.data, Mapping) else {}
+    return {
+        key: value
+        for key, raw_value in data.items()
+        if key in SAFE_DATA_KEYS and (value := _json_safe_value(raw_value)) is not _UNSAFE_JSON
+    }
+
+
+_UNSAFE_JSON = object()
+
+
+def _json_safe_value(value: object) -> object:
+    """Return a strictly JSON-safe value or a sentinel for unsafe input."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else _UNSAFE_JSON
+    if isinstance(value, list):
+        values = [_json_safe_value(item) for item in value]
+        return values if _UNSAFE_JSON not in values else _UNSAFE_JSON
+    if isinstance(value, Mapping) and all(isinstance(key, str) for key in value):
+        result = {key: _json_safe_value(item) for key, item in value.items()}
+        return result if _UNSAFE_JSON not in result.values() else _UNSAFE_JSON
+    return _UNSAFE_JSON
 
 
 CANONICAL_PROVIDERS = ("Codex", "Claude", "Antigravity", "Cursor", "Vibe")
 
 
-def build_snapshot_payload(
+def _is_valid_prior_entry(name: str, entry: object, *, cursor_window_ids: frozenset[str]) -> bool:
+    """Return whether a retained prior entry satisfies its schema contract."""
+    if not isinstance(entry, dict) or entry.get("name") != name or entry.get("ok") is not True:
+        return False
+    data = entry.get("data")
+    windows = entry.get("windows")
+    if (
+        not isinstance(data, dict)
+        or not set(data).issubset(SAFE_DATA_KEYS)
+        or any(_json_safe_value(value) is _UNSAFE_JSON for value in data.values())
+    ):
+        return False
+    if not isinstance(windows, list):
+        return False
+    required_keys = {"id", "percent_left", "reset_iso", "window_hours", "pace_delta"}
+    for window in windows:
+        if not isinstance(window, dict) or set(window) != required_keys:
+            return False
+        percent_left = window["percent_left"]
+        if not percent_is_valid(percent_left):
+            return False
+        if name == "Cursor":
+            if window["id"] not in cursor_window_ids:
+                return False
+    return True
+
+
+def _build_snapshot_payload(
     snapshots: list[ProviderSnapshot],
     updated_at: datetime,
     *,
     prior: dict | None = None,
+    schema_version: int,
+    specs_by_provider: Mapping[str, tuple[WindowSpec, ...]],
 ) -> dict:
-    """Build the full router-facing snapshot payload for all providers.
+    """Build one versioned router-facing snapshot payload.
 
     Providers always appear in :data:`CANONICAL_PROVIDERS` order. Missing
     providers are emitted as disabled entries. For failed-but-transient probes
@@ -464,7 +642,7 @@ def build_snapshot_payload(
 
     prior_by_name: dict[str, dict] = {}
     prior_updated: datetime | None = None
-    if prior:
+    if prior and prior.get("schema_version") == schema_version:
         try:
             prior_by_name = {p["name"]: p for p in prior.get("providers", [])}
         except Exception:  # noqa: BLE001 - malformed prior is best-effort
@@ -494,7 +672,7 @@ def build_snapshot_payload(
                     "name": name,
                     "ok": True,
                     "error": None,
-                    "windows": build_windows(snap, updated_at),
+                    "windows": _build_windows(snap, updated_at, specs_by_provider),
                     "data": project_data(snap),
                 }
             )
@@ -516,7 +694,13 @@ def build_snapshot_payload(
             prior_entry = prior_by_name.get(name)
             if (
                 prior_entry
-                and prior_entry.get("ok")
+                and _is_valid_prior_entry(
+                    name,
+                    prior_entry,
+                    cursor_window_ids=frozenset(
+                        spec.window_id for spec in specs_by_provider.get("Cursor", ())
+                    ),
+                )
                 and prior_updated is not None
                 and 0
                 <= (updated_at_aware - prior_updated).total_seconds()
@@ -526,10 +710,36 @@ def build_snapshot_payload(
         providers.append(entry)
 
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_version,
         "updated_at": updated_at_iso,
         "providers": providers,
     }
+
+
+def build_snapshot_payload(
+    snapshots: list[ProviderSnapshot], updated_at: datetime, *, prior: dict | None = None
+) -> dict:
+    """Build the stable schema-v1 router snapshot payload."""
+    return _build_snapshot_payload(
+        snapshots,
+        updated_at,
+        prior=prior,
+        schema_version=SCHEMA_VERSION,
+        specs_by_provider=WINDOW_SPECS,
+    )
+
+
+def build_snapshot_v2_payload(
+    snapshots: list[ProviderSnapshot], updated_at: datetime, *, prior: dict | None = None
+) -> dict:
+    """Build the parallel schema-v2 router snapshot payload."""
+    return _build_snapshot_payload(
+        snapshots,
+        updated_at,
+        prior=prior,
+        schema_version=SCHEMA_VERSION_V2,
+        specs_by_provider=V2_WINDOW_SPECS,
+    )
 
 
 def write_snapshot(payload: dict, path: Path = SNAPSHOT_PATH) -> bool:
@@ -552,7 +762,7 @@ def write_snapshot(payload: dict, path: Path = SNAPSHOT_PATH) -> bool:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="snapshot.", suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+            json.dump(payload, f, indent=2, allow_nan=False)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)

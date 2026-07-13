@@ -971,6 +971,59 @@ class CursorProvider:
             log.warning("Cursor token refresh failed: %s", exc)
 
 
+# OpenAI reports each Codex rate-limit window's span in `limit_window_seconds`
+# (5-hour window = 18000, weekly = 604800). We slot windows by that declared
+# length rather than by position, so the card self-corrects across OpenAI's
+# rate-limit changes: as of 2026-07 OpenAI dropped the 5-hour window — the API's
+# primary_window now carries the weekly limit and secondary_window is null — and
+# if a sub-day window returns later it re-slots into the 5h row with no code
+# change. A span of a day or more is the weekly window; anything shorter is the
+# 5-hour session window.
+_CODEX_WEEKLY_MIN_SECONDS = 86_400
+
+
+def _codex_percent_left(window: dict[str, Any] | None) -> int | None:
+    """Convert a Codex window's ``used_percent`` to remaining capacity (0-100)."""
+    if not isinstance(window, dict):
+        return None
+    used_pct = window.get("used_percent")
+    if used_pct is None:
+        return None
+    try:
+        return round(100 - float(used_pct))
+    except (TypeError, ValueError):
+        return None
+
+
+def _classify_codex_windows(
+    windows: list[Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Slot Codex rate-limit windows into ``(five_hour, weekly)`` by declared span.
+
+    Each window's length comes from ``limit_window_seconds``; a span of a day or
+    more is the weekly window, anything shorter is the 5-hour session window.
+    Windows lacking the field fall back to positional order (index 0 -> 5h, else
+    weekly), preserving pre-2026-07 behavior. The first window to claim a slot
+    keeps it; a duplicate is dropped rather than overwriting.
+    """
+    five_hour: dict[str, Any] | None = None
+    weekly: dict[str, Any] | None = None
+    for index, window in enumerate(windows):
+        if not isinstance(window, dict):
+            continue
+        span = window.get("limit_window_seconds")
+        if isinstance(span, (int, float)):
+            is_weekly = span >= _CODEX_WEEKLY_MIN_SECONDS
+        else:
+            is_weekly = index != 0
+        if is_weekly:
+            if weekly is None:
+                weekly = window
+        elif five_hour is None:
+            five_hour = window
+    return five_hour, weekly
+
+
 class CodexHttpProvider:
     """Fetch Codex usage via OpenAI API using cached credentials."""
 
@@ -1141,26 +1194,21 @@ class CodexHttpProvider:
         weekly_reset: str | None = None
         credits: float | None = None
 
-        # Actual API structure: rate_limit.{primary,secondary}_window.{used_percent,reset_at}
+        # API structure: rate_limit.{primary,secondary}_window.{used_percent,reset_at}.
+        # Each window carries its own limit_window_seconds; slot by that declared
+        # span (not position) so the 5h window's removal/return is handled
+        # automatically (see _classify_codex_windows).
         rate_limit = payload.get("rate_limit") or {}
-        primary = rate_limit.get("primary_window") or {}
-        secondary = rate_limit.get("secondary_window") or {}
+        five_hour_win, weekly_win = _classify_codex_windows(
+            [rate_limit.get("primary_window"), rate_limit.get("secondary_window")]
+        )
 
-        used_pct = primary.get("used_percent")
-        if used_pct is not None:
-            try:
-                five_hour_percent_left = round(100 - float(used_pct))
-            except (TypeError, ValueError):
-                pass
-        five_hour_reset = _format_reset_time(primary.get("reset_at"))
-
-        used_pct = secondary.get("used_percent")
-        if used_pct is not None:
-            try:
-                weekly_percent_left = round(100 - float(used_pct))
-            except (TypeError, ValueError):
-                pass
-        weekly_reset = _format_reset_time(secondary.get("reset_at"))
+        five_hour_percent_left = _codex_percent_left(five_hour_win)
+        five_hour_reset = (
+            _format_reset_time(five_hour_win.get("reset_at")) if five_hour_win else None
+        )
+        weekly_percent_left = _codex_percent_left(weekly_win)
+        weekly_reset = _format_reset_time(weekly_win.get("reset_at")) if weekly_win else None
 
         # Credits: credits.balance (may be null)
         credits_obj = payload.get("credits") or {}

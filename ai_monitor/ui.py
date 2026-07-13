@@ -15,7 +15,15 @@ from rich.text import Text
 from rich.theme import Theme
 
 from .providers import ProviderSnapshot
-from .snapshot import pace_delta, project_data, reconcile
+from .snapshot import (
+    normalized_warning_windows,
+    pace_delta,
+    percent_is_depleted,
+    percent_is_valid,
+    project_data,
+    reconcile,
+    warning_window_ids,
+)
 from .snapshot import parse_reset_target as _parse_reset_target
 
 THEME = Theme(
@@ -58,6 +66,11 @@ class WindowRenderSpec:
     percent_key: str
     reset_key: str
     window_hours: float | None
+    # When True, the row is hidden entirely if the provider reports no data for
+    # it (percent is None) — as opposed to rendering "n/a". Used for the Codex 5h
+    # window, which OpenAI removed in 2026-07 but may restore; the row reappears
+    # automatically once the API reports the window again.
+    omit_when_empty: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +93,7 @@ PROVIDER_RENDER_SPECS = {
                 "five_hour_percent_left",
                 "five_hour_reset",
                 5.0,
+                omit_when_empty=True,
             ),
             WindowRenderSpec(
                 "weekly",
@@ -239,35 +253,23 @@ def _format_percent_value(percent: float | None) -> str:
 
 
 def _is_empty_window(percent: float | None) -> bool:
-    """Return True if a usage window rounds to 0% remaining."""
-    return percent is not None and round(percent) <= 0
+    """Return True only for an exactly depleted remaining percentage."""
+    return percent_is_depleted(percent)
 
 
-def _provider_is_empty(snapshot: ProviderSnapshot) -> bool:
+def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
     """Return True when the provider should switch to the depleted/empty view."""
     if not snapshot.ok or not snapshot.data:
         return False
-    data = snapshot.data
     name = snapshot.name.removesuffix(" [HTTP]")
-    if name == "Codex":
-        return _is_empty_window(data.get("five_hour_percent_left")) or _is_empty_window(
-            data.get("weekly_percent_left")
-        )
-    if name == "Claude":
-        return _is_empty_window(data.get("session_percent_left")) or _is_empty_window(
-            data.get("weekly_percent_left")
-        )
-    if name == "Cursor":
-        return _is_empty_window(data.get("credit_percent_left"))
-    if name == "Vibe":
-        usage = data.get("usage_percent")
-        pct_left = max(0.0, 100.0 - float(usage)) if isinstance(usage, (int, float)) else None
-        return _is_empty_window(pct_left)
-    if name == "Antigravity":
-        return _is_empty_window(data.get("five_hour_percent_left")) and _is_empty_window(
-            data.get("weekly_percent_left")
-        )
-    return False
+    windows = normalized_warning_windows(snapshot, now)
+    depleted = {
+        str(window["id"]) for window in windows if percent_is_depleted(window["percent_left"])
+    }
+    available = {str(window["id"]) for window in windows}
+    if name in {"Antigravity", "Cursor"}:
+        return bool(available) and depleted == available
+    return bool(depleted)
 
 
 def _billing_cycle_pace_label(
@@ -343,7 +345,7 @@ ACCENT_STYLES: dict[str, str] = {
 # Display-only title overrides, keyed by canonical provider name. Empty now that
 # the Antigravity card is a first-class provider (no longer a relabeled Gemini
 # probe); kept as the extension point for any future rename that must not disturb
-# a provider's config/dispatch/threshold key.
+# a provider's config/dispatch/warning key.
 DISPLAY_TITLES: dict[str, str] = {}
 
 
@@ -421,30 +423,15 @@ def build_provider_panel(
     snapshot: ProviderSnapshot,
     now: datetime,
     *,
-    threshold: float = 20.0,
     auth_fix_key: str | None = None,
 ) -> Panel:
     """Build a Rich Panel for a single provider snapshot."""
     base_name = snapshot.name.removesuffix(" [HTTP]")
     accent = ACCENT_STYLES.get(base_name, "text.cyan")
-    below_threshold = False
-    if snapshot.ok and snapshot.data:
-        for key in (
-            "credit_percent_left",
-            "premium_percent_left",
-            "session_percent_left",
-            "five_hour_percent_left",
-        ):
-            value = snapshot.data.get(key)
-            if isinstance(value, (int, float)) and float(value) < threshold:
-                below_threshold = True
-                break
-        usage = snapshot.data.get("usage_percent")
-        if isinstance(usage, (int, float)) and (100.0 - float(usage)) < threshold:
-            below_threshold = True
+    warning_ids = warning_window_ids(snapshot, now) if snapshot.ok else ()
     display_name = DISPLAY_TITLES.get(base_name, snapshot.name)
     title_text = f"[bold {accent}]{display_name}[/]"
-    if below_threshold:
+    if warning_ids:
         title_text += " [bold text.red][!][/]"
 
     # Surface cached/offline status in the panel title
@@ -494,13 +481,13 @@ def build_provider_panel(
     # All panels use the same 5-column layout so bars align across the grid:
     # label | % | bar | reset | pace
     body = Table.grid(padding=(0, 1))
-    body.add_column(min_width=2, max_width=2)
+    body.add_column(min_width=2, max_width=3)
     body.add_column(min_width=4, max_width=4)
     body.add_column(min_width=4, ratio=1)
     body.add_column(min_width=12, max_width=12)
     body.add_column(min_width=12, max_width=12)
 
-    if _provider_is_empty(snapshot):
+    if _provider_is_empty(snapshot, now):
         _add_empty_view(body, snapshot, now)
     elif base_name == "Cursor":
         _add_cursor_rows(body, snapshot.data, now)
@@ -543,6 +530,8 @@ def _add_usage_rows(
     """Add one row per window: label | % | bar | reset | pace."""
     for window in windows:
         percent = data.get(window.percent_key)
+        if window.omit_when_empty and percent is None:
+            continue
         reset = data.get(window.reset_key)
         reset_str = None if reset is None else str(reset)
         style = _style_for_percent(percent)
@@ -590,6 +579,8 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
 
         for window in spec.windows:
             percent = data.get(window.percent_key)
+            if window.omit_when_empty and percent is None:
+                continue
             if _is_empty_window(percent):
                 raw = data.get(window.reset_key)
                 _row(window.session_label, None if raw is None else str(raw))
@@ -599,40 +590,47 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
                 _row(window.session_label, blocking_reset)
     elif name == "Cursor":
         reset_value = data.get("billing_cycle_end")
-        _row("ap", str(reset_value) if isinstance(reset_value, str) else None)
+        reset_str = str(reset_value) if isinstance(reset_value, str) else None
+        for window in normalized_warning_windows(snapshot, now):
+            _row(str(window["id"]), reset_str)
     elif name == "Vibe":
         reset_value = data.get("reset_at")
         _row("mo", str(reset_value) if isinstance(reset_value, str) else None)
 
 
 def _add_cursor_rows(table: Table, data: dict[str, object], now: datetime) -> None:
-    """Add Cursor credit usage rows."""
-    percent_left = data.get("credit_percent_left")
-    if isinstance(percent_left, (int, float)):
-        percent_left = float(percent_left)
-    else:
-        percent_left = None
-
+    """Add Cursor Auto + Composer and API remaining-capacity rows."""
     reset_value = data.get("billing_cycle_end")
-
-    style = _style_for_percent(percent_left)
-    value_text = _format_percent_value(percent_left)
     reset_display = _format_reset_display(None if reset_value is None else str(reset_value), now)
     start_iso = data.get("billing_cycle_start")
     end_iso = data.get("billing_cycle_end_iso")
-    pace_text = _billing_cycle_pace_label(
-        percent_left,
-        str(start_iso) if isinstance(start_iso, str) else None,
-        str(end_iso) if isinstance(end_iso, str) else None,
-        now,
-    )
-    table.add_row(
-        Text("ap", style="text.muted"),
-        Text(value_text, style=style),
-        PercentageBar(percent_left, style),
-        Text(reset_display, style="text.cyan"),
-        PaceLabel(pace_text),
-    )
+    start = str(start_iso) if isinstance(start_iso, str) else None
+    end = str(end_iso) if isinstance(end_iso, str) else None
+
+    def _remaining(key: str, *, used: bool = False) -> float | None:
+        value = data.get(key)
+        if not percent_is_valid(value):
+            return None
+        percent = float(value)
+        return 100.0 - percent if used else percent
+
+    # Cursor reports Auto + Composer as percent *used*, while the cents-derived
+    # included API balance is already remaining. Convert only the former.
+    # ``api_percent_used`` remains raw JSON metadata, not a documented pool.
+    for label, key, is_used in (
+        ("ac", "auto_percent_used", True),
+        ("ap", "credit_percent_left", False),
+    ):
+        percent_left = _remaining(key, used=is_used)
+        style = _style_for_percent(percent_left)
+        pace_text = _billing_cycle_pace_label(percent_left, start, end, now)
+        table.add_row(
+            Text(label, style="text.muted"),
+            Text(_format_percent_value(percent_left), style=style),
+            PercentageBar(percent_left, style),
+            Text(reset_display, style="text.cyan"),
+            PaceLabel(pace_text),
+        )
 
 
 def _add_vibe_rows(table: Table, data: dict[str, object], now: datetime) -> None:
@@ -699,7 +697,6 @@ def build_dashboard(
     *,
     updating: bool = False,
     update_elapsed: float = 0.0,
-    threshold: float = 20.0,
     fix_actions: dict[str, tuple[str, str, str]] | None = None,
 ) -> Group:
     """Build the full dashboard as a Rich Group."""
@@ -729,7 +726,6 @@ def build_dashboard(
         build_provider_panel(
             snap,
             now,
-            threshold=threshold,
             auth_fix_key=fix_key_by_name.get(snap.name),
         )
         for snap in ordered

@@ -6,6 +6,7 @@ import argparse
 import json
 import subprocess
 import unittest
+from datetime import datetime
 from io import StringIO
 from unittest.mock import MagicMock, patch
 
@@ -15,14 +16,99 @@ from ai_monitor.__main__ import (
     AUTH_ACTIONS,
     STALE_THRESHOLD_SECONDS,
     _build_fix_actions,
+    _check_warnings,
     _is_auth_error,
     _is_transient_probe_error,
     _launch_fix,
     _merge_with_previous,
+    _notify_warning,
     main,
 )
 from ai_monitor.providers import ProviderSnapshot, set_headless
 from ai_monitor.ui import THEME, build_dashboard
+
+NOW = datetime(2026, 3, 14, 8, 22, 30)
+
+
+class CursorWarningTests(unittest.TestCase):
+    """Cursor's normalized Auto + Composer and API pools warn independently."""
+
+    def _cursor(
+        self, auto_percent_used: float | None, api_percent_left: float | None
+    ) -> ProviderSnapshot:
+        data: dict[str, float] = {}
+        if auto_percent_used is not None:
+            data["auto_percent_used"] = auto_percent_used
+        if api_percent_left is not None:
+            data["credit_percent_left"] = api_percent_left
+        return ProviderSnapshot(name="Cursor", ok=True, source="api", data=data)
+
+    def test_independent_cursor_pool_warning_names_window(self) -> None:
+        notified: set[str] = set()
+        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+            _check_warnings([self._cursor(100, 82)], notified, NOW)
+
+        notify.assert_called_once_with("Cursor", ("ac",))
+        self.assertEqual(notified, {"Cursor"})
+
+    def test_notification_is_one_shot_and_recovery_resets_latch(self) -> None:
+        notified: set[str] = set()
+        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+            _check_warnings([self._cursor(100, 82)], notified, NOW)
+            _check_warnings([self._cursor(100, 82)], notified, NOW)
+            _check_warnings([self._cursor(95, 82)], notified, NOW)
+            _check_warnings([self._cursor(100, 82)], notified, NOW)
+
+        self.assertEqual(notify.call_count, 2)
+        self.assertEqual(notify.call_args_list[0].args, ("Cursor", ("ac",)))
+        self.assertEqual(notify.call_args_list[1].args, ("Cursor", ("ac",)))
+        self.assertEqual(notified, {"Cursor"})
+
+
+class WarningNotificationTests(unittest.TestCase):
+    def test_notification_text_lists_normalized_warning_windows(self) -> None:
+        with patch("ai_monitor.__main__.subprocess.run") as run:
+            run.return_value.returncode = 0
+            self.assertTrue(_notify_warning("Cursor", ("ac", "ap")))
+
+        command = run.call_args.args[0]
+        self.assertEqual(command[:2], ["osascript", "-e"])
+        self.assertIn("Warning window(s): ac, ap", command[2])
+        self.assertIn('subtitle "Cursor"', command[2])
+
+    def test_failed_notification_is_retried(self) -> None:
+        notified: set[str] = set()
+        cursor = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={"auto_percent_used": 100, "credit_percent_left": 82},
+        )
+        with patch("ai_monitor.__main__._notify_warning", side_effect=(False, True)) as notify:
+            _check_warnings([cursor], notified, NOW)
+            _check_warnings([cursor], notified, NOW)
+
+        self.assertEqual(notify.call_count, 2)
+        self.assertEqual(notified, {"Cursor"})
+
+
+class CodexWarningTests(unittest.TestCase):
+    """Codex warns from its normalized weekly window when depleted."""
+
+    def test_zero_weekly_notifies_when_five_hour_absent(self) -> None:
+        # five_hour is None (window removed); weekly is the only remaining signal.
+        codex = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={"five_hour_percent_left": None, "weekly_percent_left": 0},
+        )
+        notified: set[str] = set()
+        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+            _check_warnings([codex], notified, NOW)
+
+        notify.assert_called_once_with("Codex", ("weekly",))
+        self.assertEqual(notified, {"Codex"})
 
 
 class MainOnceTests(unittest.TestCase):
@@ -93,7 +179,7 @@ class MainJsonTests(unittest.TestCase):
 
     def test_json_engages_headless_no_side_effects(self) -> None:
         """Task 4.2 / INV-2: ``--json`` is a read-only machine surface — it engages
-        headless before constructing providers, fires no threshold notification,
+        headless before constructing providers, fires no warning notification,
         and launches no subprocess (browser / osascript / cookie extraction)."""
         snapshots = [
             ProviderSnapshot(
@@ -124,8 +210,8 @@ class MainJsonTests(unittest.TestCase):
                 return_value=([("Codex", object())], []),
             ),
             patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__._check_thresholds") as mock_check,
-            patch("ai_monitor.__main__._notify_threshold") as mock_notify,
+            patch("ai_monitor.__main__._check_warnings") as mock_check,
+            patch("ai_monitor.__main__._notify_warning") as mock_notify,
             patch("ai_monitor.__main__.subprocess.Popen") as mock_popen,
             patch("ai_monitor.__main__.subprocess.run") as mock_run,
             patch("ai_monitor.providers.subprocess.Popen") as mock_p_popen,
@@ -137,7 +223,7 @@ class MainJsonTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         # Read-only mode engaged (before providers are constructed).
         set_headless_spy.assert_called_once_with(True)
-        # No threshold notifications on the machine surface (matches --write-snapshot).
+        # No warning notifications on the machine surface (matches --write-snapshot).
         mock_check.assert_not_called()
         mock_notify.assert_not_called()
         # No subprocess of any kind, in either module.
@@ -609,7 +695,7 @@ class WriteSnapshotTests(unittest.TestCase):
     """Test the headless ``--write-snapshot`` command (Task 2.2, INV-2 gate).
 
     The headless path must be strictly read-only: it engages ``set_headless``
-    before constructing providers, fires no threshold notifications, launches no
+    before constructing providers, fires no warning notifications, launches no
     subprocess (browser / osascript / cookie extraction), and returns 0 as long
     as the snapshot file is written — even when every provider probe failed.
     """
@@ -639,24 +725,26 @@ class WriteSnapshotTests(unittest.TestCase):
         snapshots: list[ProviderSnapshot],
         *,
         providers: str | None = None,
-        write_ok: bool = True,
+        write_ok: bool | list[bool] = True,
     ):
         """Drive ``main()`` down the ``--write-snapshot`` branch under full spying.
 
         Args:
             snapshots: What ``collect_snapshots`` should return.
             providers: Optional ``--providers`` filter value.
-            write_ok: What the patched ``write_snapshot`` returns.
+            write_ok: What the patched ``write_snapshot`` returns per call.
 
         Returns:
             A ``SimpleNamespace`` of the return code, captured payload, and mocks.
         """
         from types import SimpleNamespace
 
-        captured: dict[str, object] = {}
+        captured: list[tuple[object, tuple[object, ...]]] = []
 
         def fake_write(payload, *args, **kwargs):
-            captured["payload"] = payload
+            captured.append((payload, args))
+            if isinstance(write_ok, list):
+                return write_ok[len(captured) - 1]
             return write_ok
 
         ns = argparse.Namespace(
@@ -676,8 +764,8 @@ class WriteSnapshotTests(unittest.TestCase):
             ),
             patch("ai_monitor.__main__.set_headless", set_headless_spy),
             patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__._check_thresholds") as mock_check,
-            patch("ai_monitor.__main__._notify_threshold") as mock_notify,
+            patch("ai_monitor.__main__._check_warnings") as mock_check,
+            patch("ai_monitor.__main__._notify_warning") as mock_notify,
             patch("ai_monitor.__main__.read_prior_snapshot", return_value=None),
             patch("ai_monitor.__main__.write_snapshot", side_effect=fake_write) as mock_write,
             patch("ai_monitor.__main__.subprocess.Popen") as mock_popen,
@@ -689,7 +777,8 @@ class WriteSnapshotTests(unittest.TestCase):
 
         return SimpleNamespace(
             rc=rc,
-            payload=captured.get("payload"),
+            payloads=[item[0] for item in captured],
+            write_args=[item[1] for item in captured],
             set_headless=set_headless_spy,
             check=mock_check,
             notify=mock_notify,
@@ -706,7 +795,7 @@ class WriteSnapshotTests(unittest.TestCase):
 
         # Read-only mode was engaged before providers were constructed.
         res.set_headless.assert_called_once_with(True)
-        # No notifications: neither the threshold check nor the notifier ran.
+        # No notifications: neither the warning check nor the notifier ran.
         res.check.assert_not_called()
         res.notify.assert_not_called()
         # No subprocess of any kind (browser, osascript, cookie extraction).
@@ -716,9 +805,9 @@ class WriteSnapshotTests(unittest.TestCase):
         res.p_run.assert_not_called()
         # Snapshot was written and the process exited 0.
         self.assertEqual(res.rc, 0)
-        res.write.assert_called_once()
-        self.assertIn("schema_version", res.payload)
-        self.assertEqual(len(res.payload["providers"]), 5)
+        self.assertEqual(res.write.call_count, 2)
+        self.assertEqual([payload["schema_version"] for payload in res.payloads], [1, 2])
+        self.assertEqual(len(res.payloads[0]["providers"]), 5)
 
     def test_write_snapshot_exit_zero_when_all_providers_failed(self) -> None:
         """Every probe ok:false but the file was written ⇒ exit 0."""
@@ -728,12 +817,18 @@ class WriteSnapshotTests(unittest.TestCase):
         ]
         res = self._drive(snapshots, write_ok=True)
         self.assertEqual(res.rc, 0)
-        self.assertTrue(all(not p["ok"] for p in res.payload["providers"]))
+        self.assertTrue(all(not p["ok"] for p in res.payloads[0]["providers"]))
 
     def test_write_snapshot_exit_one_on_write_failure(self) -> None:
         """``write_snapshot`` returned False ⇒ exit 1."""
         res = self._drive(self._snapshots(), write_ok=False)
         self.assertEqual(res.rc, 1)
+
+    def test_write_snapshot_attempts_v2_after_v1_failure(self) -> None:
+        """The independent v2 write still runs after a failed v1 write."""
+        res = self._drive(self._snapshots(), write_ok=[False, True])
+        self.assertEqual(res.rc, 1)
+        self.assertEqual([payload["schema_version"] for payload in res.payloads], [1, 2])
 
     def test_write_snapshot_emits_all_five_providers_when_filtered(self) -> None:
         """A ``--providers`` filter still yields all five canonical entries."""
@@ -747,9 +842,9 @@ class WriteSnapshotTests(unittest.TestCase):
         ]
         res = self._drive(codex_only, providers="Codex")
         self.assertEqual(res.rc, 0)
-        names = {p["name"] for p in res.payload["providers"]}
+        names = {p["name"] for p in res.payloads[0]["providers"]}
         self.assertEqual(names, {"Codex", "Claude", "Antigravity", "Cursor", "Vibe"})
-        by_name = {p["name"]: p for p in res.payload["providers"]}
+        by_name = {p["name"]: p for p in res.payloads[0]["providers"]}
         self.assertTrue(by_name["Codex"]["ok"])
         for other in ("Claude", "Antigravity", "Cursor", "Vibe"):
             self.assertFalse(by_name[other]["ok"])
@@ -759,14 +854,16 @@ class WriteSnapshotTests(unittest.TestCase):
         from datetime import datetime
 
         res = self._drive(self._snapshots())
-        payload = res.payload
-        self.assertEqual(payload["schema_version"], 1)
-        updated = datetime.fromisoformat(payload["updated_at"])
-        self.assertIsNotNone(updated.tzinfo)
-        self.assertEqual(len(payload["providers"]), 5)
-        for provider in payload["providers"]:
-            for key in ("name", "ok", "error", "windows", "data"):
-                self.assertIn(key, provider)
+        self.assertEqual([payload["schema_version"] for payload in res.payloads], [1, 2])
+        self.assertEqual(len(res.write_args[0]), 0)
+        self.assertEqual(len(res.write_args[1]), 1)
+        for payload in res.payloads:
+            updated = datetime.fromisoformat(payload["updated_at"])
+            self.assertIsNotNone(updated.tzinfo)
+            self.assertEqual(len(payload["providers"]), 5)
+            for provider in payload["providers"]:
+                for key in ("name", "ok", "error", "windows", "data"):
+                    self.assertIn(key, provider)
 
 
 if __name__ == "__main__":

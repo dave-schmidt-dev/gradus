@@ -87,6 +87,21 @@ class TestAllowlist(unittest.TestCase):
         projected = snap.project_data(cursor)
         self.assertEqual(projected, {"credit_percent_left": 55.0})
 
+    def test_cursor_raw_pool_fields_are_not_allowlisted(self) -> None:
+        """The v1 router projection excludes raw Auto/Composer/API pool fields."""
+        cursor = _ps(
+            "Cursor",
+            True,
+            data={
+                "credit_percent_left": 55.0,
+                "auto_percent_used": 20.0,
+                "api_percent_used": 30.0,
+                "remaining_cents": 500,
+                "limit_cents": 1_000,
+            },
+        )
+        self.assertEqual(snap.project_data(cursor), {"credit_percent_left": 55.0})
+
     def test_payload_error_carries_no_raw_payload(self) -> None:
         sentinel = "SENTINEL-a1b2c3-raw-body"
 
@@ -157,6 +172,38 @@ class TestPaceDelta(unittest.TestCase):
         self.assertIsNone(snap.pace_delta(50.0, NOW, -10.0, NOW))
 
 
+class TestWarningPredicate(unittest.TestCase):
+    """Warnings are derived only from normalized remaining and pace fields."""
+
+    def test_pace_warning_boundary_and_invalid_values(self) -> None:
+        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": -0.10}))
+        self.assertTrue(snap.window_warns({"percent_left": 1.0, "pace_delta": -0.1001}))
+        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": math.nan}))
+        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": -math.inf}))
+        self.assertFalse(snap.window_warns({"percent_left": True, "pace_delta": -0.2}))
+        self.assertFalse(snap.window_warns({"percent_left": "0", "pace_delta": -0.2}))
+        for percent_left in (math.nan, math.inf, -math.inf, -1.0, 100.1):
+            with self.subTest(percent_left=percent_left):
+                self.assertFalse(
+                    snap.window_warns({"percent_left": percent_left, "pace_delta": -0.2})
+                )
+
+    def test_zero_warns_with_unknown_pace_and_one_percent_near_reset_does_not(self) -> None:
+        self.assertTrue(snap.window_warns({"percent_left": 0.0, "pace_delta": None}))
+        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": None}))
+
+    def test_cursor_warning_windows_are_v2_capable_but_not_v1_persisted(self) -> None:
+        cursor = _ps(
+            "Cursor",
+            True,
+            data={"auto_percent_used": 100, "credit_percent_left": 0},
+        )
+        self.assertEqual(snap.warning_window_ids(cursor, NOW), ("ac", "ap"))
+        self.assertEqual(
+            [window["id"] for window in snap.build_windows(cursor, NOW)], ["billing_cycle"]
+        )
+
+
 class TestReconcile(unittest.TestCase):
     def test_reconcile_reset_vs_now(self) -> None:
         """reconcile aligns the second arg's tz-awareness to the first."""
@@ -190,24 +237,37 @@ class TestReconcile(unittest.TestCase):
 
 class TestBuildWindows(unittest.TestCase):
     def test_cursor_full_precision_mixed_tz(self) -> None:
-        """Cursor: naive full-precision start + tz-aware full-precision end."""
+        """Cursor v1 has one billing cycle from remaining credit percentage."""
         cursor = _ps(
             "Cursor",
             True,
             data={
                 "credit_percent_left": 60.0,
+                "auto_percent_used": 10.0,
+                "api_percent_used": 25.0,
                 "billing_cycle_start": "2026-03-01T00:00:00",
                 "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
             },
         )
         windows = snap.build_windows(cursor, NOW)
         self.assertEqual(len(windows), 1)
-        win = windows[0]
-        self.assertEqual(win["id"], "billing_cycle")
-        self.assertEqual(win["percent_left"], 60.0)
-        self.assertIsInstance(win["window_hours"], float)
-        self.assertGreater(win["window_hours"], 0.0)
-        self.assertIsInstance(win["pace_delta"], float)
+        (window,) = windows
+        self.assertEqual(window["id"], "billing_cycle")
+        self.assertEqual(window["percent_left"], 60.0)
+        self.assertIsInstance(window["window_hours"], float)
+        self.assertGreater(window["window_hours"], 0.0)
+        self.assertIsInstance(window["pace_delta"], float)
+
+    def test_cursor_omits_missing_or_invalid_credit_percentage(self) -> None:
+        """Cursor v1 never emits a billing window with null percent_left."""
+        for value in (None, "60", True, False, math.nan, math.inf, -1.0, 100.1, object()):
+            with self.subTest(value=repr(value)):
+                cursor = _ps("Cursor", True, data={"credit_percent_left": value})
+                self.assertEqual(snap.build_windows(cursor, NOW), [])
+
+    def test_session_windows_omit_boolean_percentages(self) -> None:
+        codex = _ps("Codex", True, data={"five_hour_percent_left": True})
+        self.assertEqual(snap.build_windows(codex, NOW), [])
 
     def test_vibe_tz_aware_window(self) -> None:
         """Vibe: tz-aware UTC start/end yield numeric window_hours + pace."""
@@ -227,8 +287,8 @@ class TestBuildWindows(unittest.TestCase):
         self.assertIsInstance(win["window_hours"], float)
         self.assertIsInstance(win["pace_delta"], float)
 
-    def test_malformed_boundary_returns_empty(self) -> None:
-        """A malformed billing boundary makes build_windows return [] (no crash)."""
+    def test_malformed_boundary_keeps_capacity_without_pace_metadata(self) -> None:
+        """Malformed billing dates omit only pacing metadata, not capacity."""
         cursor = _ps(
             "Cursor",
             True,
@@ -238,7 +298,34 @@ class TestBuildWindows(unittest.TestCase):
                 "billing_cycle_end_iso": "not-a-date",
             },
         )
-        self.assertEqual(snap.build_windows(cursor, NOW), [])
+        self.assertEqual(
+            snap.build_windows(cursor, NOW),
+            [
+                {
+                    "id": "billing_cycle",
+                    "percent_left": 50.0,
+                    "reset_iso": None,
+                    "window_hours": None,
+                    "pace_delta": None,
+                }
+            ],
+        )
+
+    def test_malformed_cursor_dates_do_not_suppress_depleted_sibling_warning_pools(self) -> None:
+        cursor = _ps(
+            "Cursor",
+            True,
+            data={
+                "auto_percent_used": 100,
+                "credit_percent_left": 0,
+                "billing_cycle_start": "not-a-date",
+                "billing_cycle_end_iso": "also-not-a-date",
+            },
+        )
+        windows = snap.normalized_warning_windows(cursor, NOW)
+        self.assertEqual([window["id"] for window in windows], ["ac", "ap"])
+        self.assertTrue(all(window["pace_delta"] is None for window in windows))
+        self.assertEqual(snap.warning_window_ids(cursor, NOW), ("ac", "ap"))
 
     def test_build_windows_reset_iso_parse_and_null(self) -> None:
         """Session reset parses to ISO; unparseable human reset -> None."""
@@ -259,10 +346,39 @@ class TestBuildWindows(unittest.TestCase):
         self.assertIsNotNone(parsed.tzinfo)
         self.assertIsNone(windows["weekly"]["reset_iso"])
 
+    def test_stale_explicit_reset_does_not_roll_into_the_next_year(self) -> None:
+        reset = "Resets Mar 14 at 8:00 AM"
+        target = snap.parse_reset_target(reset, NOW)
+        self.assertEqual(target, datetime(2026, 3, 14, 8, 0))
+        delta = snap.pace_delta(5.0, target, 5 * 3600.0, NOW)
+        self.assertIsNotNone(delta)
+        self.assertFalse(snap.window_warns({"percent_left": 5.0, "pace_delta": delta}))
+
     def test_build_windows_empty_when_not_ok(self) -> None:
         """A not-ok or unknown snapshot yields no windows."""
         self.assertEqual(snap.build_windows(_ps("Codex", False), NOW), [])
         self.assertEqual(snap.build_windows(_ps("Unknown", True, data={"x": 1}), NOW), [])
+
+    def test_build_windows_omits_absent_session_window(self) -> None:
+        """A session window with no percent (Codex 5h after 2026-07) is omitted.
+
+        Emitting a null-percent window would violate the router contract that
+        every window's percent_left is numeric; the weekly window still emits.
+        """
+        codex = _ps(
+            "Codex",
+            True,
+            data={
+                "five_hour_percent_left": None,
+                "weekly_percent_left": 95,
+                "five_hour_reset": None,
+                "weekly_reset": "in 5d",
+            },
+        )
+        windows = snap.build_windows(codex, NOW)
+        ids = [w["id"] for w in windows]
+        self.assertEqual(ids, ["weekly"])
+        self.assertEqual(windows[0]["percent_left"], 95.0)
 
 
 class TestPayloadSchema(unittest.TestCase):
@@ -284,6 +400,8 @@ class TestPayloadSchema(unittest.TestCase):
                 True,
                 data={
                     "credit_percent_left": 45.0,
+                    "auto_percent_used": 20.0,
+                    "api_percent_used": 30.0,
                     "billing_cycle_start": "2026-03-01T00:00:00",
                     "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
                 },
@@ -298,6 +416,14 @@ class TestPayloadSchema(unittest.TestCase):
         names = [p["name"] for p in payload["providers"]]
         self.assertEqual(tuple(names), snap.CANONICAL_PROVIDERS)
         self.assertEqual(len(payload["providers"]), 5)
+
+        cursor = next(entry for entry in payload["providers"] if entry["name"] == "Cursor")
+        self.assertNotIn("auto_percent_used", cursor["data"])
+        self.assertNotIn("api_percent_used", cursor["data"])
+        self.assertEqual(
+            {window["id"]: window["percent_left"] for window in cursor["windows"]},
+            {"billing_cycle": 45.0},
+        )
 
         for entry in payload["providers"]:
             for key in ("name", "ok", "error", "windows", "data"):
@@ -334,6 +460,37 @@ class TestPayloadSchema(unittest.TestCase):
         self.assertIsNotNone(t2.tzinfo)
         self.assertLess(t1, t2)
 
+    def test_v2_cursor_windows_are_independent_and_numeric(self) -> None:
+        """V2 publishes only available Cursor pools; v1 remains unchanged."""
+        cursor = _ps(
+            "Cursor",
+            True,
+            data={
+                "auto_percent_used": 20,
+                "credit_percent_left": None,
+                "billing_cycle_start": "2026-03-01T00:00:00",
+                "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
+            },
+        )
+        v1 = snap.build_snapshot_payload([cursor], NOW)
+        v2 = snap.build_snapshot_v2_payload([cursor], NOW)
+        self.assertEqual(v1["schema_version"], 1)
+        self.assertEqual(v2["schema_version"], 2)
+        v1_cursor = next(entry for entry in v1["providers"] if entry["name"] == "Cursor")
+        v2_cursor = next(entry for entry in v2["providers"] if entry["name"] == "Cursor")
+        self.assertEqual(v1_cursor["windows"], [])
+        self.assertEqual(
+            [(window["id"], window["percent_left"]) for window in v2_cursor["windows"]],
+            [("ac", 80.0)],
+        )
+
+    def test_v2_non_cursor_windows_match_v1(self) -> None:
+        """The parallel schema changes only Cursor's window projection."""
+        codex = _ps("Codex", True, data={"five_hour_percent_left": 75})
+        v1 = snap.build_snapshot_payload([codex], NOW)
+        v2 = snap.build_snapshot_v2_payload([codex], NOW)
+        self.assertEqual(v1["providers"][0], v2["providers"][0])
+
 
 class TestTransientMerge(unittest.TestCase):
     def _healthy_prior(self, at: datetime) -> dict:
@@ -359,6 +516,47 @@ class TestTransientMerge(unittest.TestCase):
         self.assertTrue(codex["ok"])
         self.assertTrue(codex["windows"])
 
+    def test_transient_cursor_rejects_legacy_malformed_prior(self) -> None:
+        """Cursor must not retain pre-v1-shape windows or raw pool metadata."""
+        prior = {
+            "schema_version": 1,
+            "updated_at": snap.local_iso(NOW - timedelta(seconds=100)),
+            "providers": [
+                {
+                    "name": "Cursor",
+                    "ok": True,
+                    "error": None,
+                    "windows": [
+                        {
+                            "id": "ac",
+                            "percent_left": None,
+                            "reset_iso": None,
+                            "window_hours": None,
+                            "pace_delta": None,
+                        },
+                        {
+                            "id": "ap",
+                            "percent_left": "45",
+                            "reset_iso": None,
+                            "window_hours": None,
+                            "pace_delta": None,
+                        },
+                    ],
+                    "data": {
+                        "credit_percent_left": 45.0,
+                        "auto_percent_used": 20.0,
+                        "api_percent_used": 30.0,
+                    },
+                }
+            ],
+        }
+        failing = _ps("Cursor", False, error="network error")
+        payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+        cursor = next(p for p in payload["providers"] if p["name"] == "Cursor")
+        self.assertFalse(cursor["ok"])
+        self.assertEqual(cursor["windows"], [])
+        self.assertEqual(cursor["data"], {})
+
     def test_transient_drops_stale_prior(self) -> None:
         """A transient failure past 300s does NOT retain the prior entry."""
         prior = self._healthy_prior(NOW - timedelta(seconds=400))
@@ -376,6 +574,27 @@ class TestTransientMerge(unittest.TestCase):
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
         self.assertFalse(codex["ok"])
 
+    def test_transient_priors_are_schema_specific(self) -> None:
+        """A v1 prior cannot seed v2 (and vice versa)."""
+        prior_v1 = self._healthy_prior(NOW - timedelta(seconds=100))
+        failing = _ps("Codex", False, error="rate limited")
+        v2 = snap.build_snapshot_v2_payload([failing], NOW, prior=prior_v1)
+        codex = next(entry for entry in v2["providers"] if entry["name"] == "Codex")
+        self.assertFalse(codex["ok"])
+
+    def test_transient_rejects_nonfinite_prior_data_and_persists(self) -> None:
+        """A corrupt recent prior cannot make strict JSON persistence fail."""
+        prior = self._healthy_prior(NOW - timedelta(seconds=100))
+        codex = next(entry for entry in prior["providers"] if entry["name"] == "Codex")
+        codex["data"]["five_hour_percent_left"] = float("nan")
+        payload = snap.build_snapshot_payload(
+            [_ps("Codex", False, error="rate limited")], NOW, prior=prior
+        )
+        current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+        self.assertFalse(current["ok"])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertTrue(snap.write_snapshot(payload, Path(tmpdir) / "snapshot.json"))
+
 
 class TestPathContract(unittest.TestCase):
     def test_snapshot_path_is_state_dir(self) -> None:
@@ -383,6 +602,9 @@ class TestPathContract(unittest.TestCase):
         text = str(snap.SNAPSHOT_PATH)
         self.assertTrue(text.endswith("/.state/snapshot.json"))
         self.assertNotIn("/.cache/", text)
+
+    def test_v2_snapshot_path_is_a_sibling_state_file(self) -> None:
+        self.assertTrue(str(snap.SNAPSHOT_V2_PATH).endswith("/.state/snapshot-v2.json"))
 
 
 class TestConsistencyGuard(unittest.TestCase):
@@ -398,12 +620,18 @@ class TestConsistencyGuard(unittest.TestCase):
                 self.assertEqual(spec_win.reset_key, render_win.reset_key)
                 self.assertEqual(spec_win.window_hours, render_win.window_hours)
 
-        # Cursor / Vibe are absent from PROVIDER_RENDER_SPECS: pin the literal
-        # keys read in ui._add_cursor_rows / ui._add_vibe_rows.
-        (cursor_win,) = snap.WINDOW_SPECS["Cursor"]
-        self.assertEqual(cursor_win.percent_key, "credit_percent_left")
-        self.assertEqual(cursor_win.start_key, "billing_cycle_start")
-        self.assertEqual(cursor_win.end_key, "billing_cycle_end_iso")
+        # Cursor / Vibe are absent from PROVIDER_RENDER_SPECS. Cursor's
+        # router contract remains independent from the TUI's two-pool rows.
+        cursor_windows = snap.WINDOW_SPECS["Cursor"]
+        self.assertEqual(
+            [(window.window_id, window.percent_key, window.normalize) for window in cursor_windows],
+            [
+                ("billing_cycle", "credit_percent_left", "remaining"),
+            ],
+        )
+        for cursor_win in cursor_windows:
+            self.assertEqual(cursor_win.start_key, "billing_cycle_start")
+            self.assertEqual(cursor_win.end_key, "billing_cycle_end_iso")
 
         (vibe_win,) = snap.WINDOW_SPECS["Vibe"]
         self.assertEqual(vibe_win.percent_key, "usage_percent")
@@ -430,6 +658,22 @@ class TestAtomicWrite(unittest.TestCase):
         """read_prior_snapshot returns None for a missing file."""
         tmpdir = tempfile.mkdtemp()
         self.assertIsNone(snap.read_prior_snapshot(Path(tmpdir) / "nope.json"))
+
+    def test_strict_json_rejects_nonfinite_values(self) -> None:
+        """The persistence boundary never writes JSON NaN tokens."""
+        tmpdir = tempfile.mkdtemp()
+        path = Path(tmpdir) / "snapshot.json"
+        self.assertFalse(snap.write_snapshot({"bad": float("nan")}, path))
+        self.assertFalse(path.exists())
+
+    def test_project_data_drops_nonfinite_allowlisted_values(self) -> None:
+        """Bad source metadata cannot poison an otherwise valid payload."""
+        provider = _ps(
+            "Cursor",
+            True,
+            data={"credit_percent_left": float("nan"), "billing_cycle_end": "2026-04-01"},
+        )
+        self.assertEqual(snap.project_data(provider), {"billing_cycle_end": "2026-04-01"})
 
 
 if __name__ == "__main__":  # pragma: no cover

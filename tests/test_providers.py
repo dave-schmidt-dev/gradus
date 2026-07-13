@@ -23,6 +23,8 @@ from ai_monitor.providers import (
     ProbeFailure,
     ProviderSnapshot,
     VibeProvider,
+    _classify_codex_windows,
+    _codex_percent_left,
     _format_reset_time,
     _http_json,
     _is_jwt_expired,
@@ -692,6 +694,44 @@ class CacheResilienceTests(unittest.TestCase):
         self.assertEqual(cached["refresh_token"], "new_rt")
 
 
+class CodexWindowClassificationTests(unittest.TestCase):
+    """Codex windows are slotted by declared span, not position (2026-07 change)."""
+
+    FIVE_HOUR = {"used_percent": 10, "reset_at": 1, "limit_window_seconds": 18000}
+    WEEKLY = {"used_percent": 20, "reset_at": 2, "limit_window_seconds": 604800}
+
+    def test_weekly_only_leaves_five_hour_empty(self) -> None:
+        # The current live shape: OpenAI removed the 5h window, so primary_window
+        # carries the weekly limit and secondary_window is null.
+        five_hour, weekly = _classify_codex_windows([self.WEEKLY, None])
+        self.assertIsNone(five_hour)
+        self.assertIs(weekly, self.WEEKLY)
+
+    def test_both_windows_slot_by_span_regardless_of_order(self) -> None:
+        # Normal order.
+        fh, wk = _classify_codex_windows([self.FIVE_HOUR, self.WEEKLY])
+        self.assertIs(fh, self.FIVE_HOUR)
+        self.assertIs(wk, self.WEEKLY)
+        # Reversed order still slots correctly — position is not trusted.
+        fh, wk = _classify_codex_windows([self.WEEKLY, self.FIVE_HOUR])
+        self.assertIs(fh, self.FIVE_HOUR)
+        self.assertIs(wk, self.WEEKLY)
+
+    def test_positional_fallback_when_span_missing(self) -> None:
+        # Pre-2026-07 payloads had no limit_window_seconds: first -> 5h, second -> weekly.
+        primary = {"used_percent": 10, "reset_at": 1}
+        secondary = {"used_percent": 20, "reset_at": 2}
+        fh, wk = _classify_codex_windows([primary, secondary])
+        self.assertIs(fh, primary)
+        self.assertIs(wk, secondary)
+
+    def test_percent_left_is_remaining_and_handles_missing(self) -> None:
+        self.assertEqual(_codex_percent_left({"used_percent": 5}), 95)
+        self.assertIsNone(_codex_percent_left(None))
+        self.assertIsNone(_codex_percent_left({}))
+        self.assertIsNone(_codex_percent_left({"used_percent": None}))
+
+
 class CodexHttpProviderTests(unittest.TestCase):
     # Real API uses rate_limit.{primary,secondary}_window.used_percent (epoch reset_at)
     NORMAL_RESPONSE = {
@@ -734,6 +774,53 @@ class CodexHttpProviderTests(unittest.TestCase):
         self.assertEqual(status.five_hour_percent_left, 80)
         self.assertEqual(status.weekly_percent_left, 80)
         self.assertAlmostEqual(status.credits, 12.5)
+        self.assertIsNotNone(status.five_hour_reset)
+        self.assertIsNotNone(status.weekly_reset)
+
+    def test_five_hour_removal_maps_weekly_only(self) -> None:
+        # Live shape after OpenAI dropped the 5h window: primary_window is the
+        # weekly limit (limit_window_seconds=604800) and secondary_window is null.
+        provider = self._make_provider()
+        response = {
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 5,
+                    "reset_at": 1784488271,
+                    "limit_window_seconds": 604800,
+                },
+                "secondary_window": None,
+            },
+            "credits": {"balance": None},
+        }
+        with patch("ai_monitor.providers._http_json", return_value=response):
+            status = provider.fetch()
+        # Weekly is populated correctly; the 5h slot stays empty (not mislabeled).
+        self.assertEqual(status.weekly_percent_left, 95)
+        self.assertIsNotNone(status.weekly_reset)
+        self.assertIsNone(status.five_hour_percent_left)
+        self.assertIsNone(status.five_hour_reset)
+
+    def test_five_hour_restored_slots_both_windows(self) -> None:
+        # If OpenAI restores the 5h window, both windows populate — no code change.
+        provider = self._make_provider()
+        response = {
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 30,
+                    "reset_at": 1784488271,
+                    "limit_window_seconds": 18000,
+                },
+                "secondary_window": {
+                    "used_percent": 40,
+                    "reset_at": 1784900000,
+                    "limit_window_seconds": 604800,
+                },
+            },
+        }
+        with patch("ai_monitor.providers._http_json", return_value=response):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 70)
+        self.assertEqual(status.weekly_percent_left, 60)
         self.assertIsNotNone(status.five_hour_reset)
         self.assertIsNotNone(status.weekly_reset)
 

@@ -32,10 +32,13 @@ from .providers import (
     set_headless,
 )
 from .snapshot import (
+    SNAPSHOT_V2_PATH,
     STALE_THRESHOLD_SECONDS,
     _is_transient_probe_error,
     build_snapshot_payload,
+    build_snapshot_v2_payload,
     read_prior_snapshot,
+    warning_membership,
     write_snapshot,
 )
 from .ui import (
@@ -280,57 +283,42 @@ def _merge_with_previous(
     return merged
 
 
-def _extract_percent_left(snap: ProviderSnapshot) -> float | None:
-    """Extract the primary percent-left value from any provider snapshot."""
-    if not snap.data:
-        return None
-    for key in (
-        "credit_percent_left",
-        "premium_percent_left",
-        "session_percent_left",
-        "five_hour_percent_left",
-    ):
-        value = snap.data.get(key)
-        if isinstance(value, (int, float)):
-            return float(value)
-    usage = snap.data.get("usage_percent")
-    if isinstance(usage, (int, float)):
-        return max(0.0, 100.0 - float(usage))
-    return None
+def _notify_warning(provider_name: str, window_ids: tuple[str, ...]) -> bool:
+    """Send a macOS notification naming every warning window.
 
-
-def _notify_threshold(provider_name: str, percent_left: float, threshold: float) -> None:
-    """Send a macOS notification when a provider is below threshold."""
+    Returns:
+        True only when ``osascript`` accepts the notification.
+    """
     try:
-        subprocess.run(
+        result = subprocess.run(
             [
                 "osascript",
                 "-e",
-                f'display notification "{provider_name} at {percent_left:.0f}% remaining" '
-                f'with title "AI Monitor" subtitle "Below {threshold:.0f}% threshold"',
+                f'display notification "Warning window(s): {", ".join(window_ids)}" '
+                f'with title "AI Monitor" subtitle "{provider_name}"',
             ],
             capture_output=True,
             timeout=5,
             check=False,
         )
+        return result.returncode == 0
     except (OSError, subprocess.SubprocessError):
-        pass
+        return False
 
 
-def _check_thresholds(
+def _check_warnings(
     snapshots: list[ProviderSnapshot],
-    threshold: float,
     notified_providers: set[str],
+    now: datetime,
 ) -> None:
+    """Notify once per provider while any normalized window warns."""
+    membership = warning_membership(snapshots, now)
     for snap in snapshots:
-        if not snap.ok or not snap.data:
-            notified_providers.discard(snap.name)
-            continue
-        pct = _extract_percent_left(snap)
-        if pct is not None and pct < threshold:
+        window_ids = membership[snap.name]
+        if window_ids:
             if snap.name not in notified_providers:
-                _notify_threshold(snap.name, pct, threshold)
-                notified_providers.add(snap.name)
+                if _notify_warning(snap.name, window_ids):
+                    notified_providers.add(snap.name)
         else:
             notified_providers.discard(snap.name)
 
@@ -391,10 +379,6 @@ def main() -> int:
             args.interval = int(config["interval"])
         except (TypeError, ValueError):
             pass
-    try:
-        threshold = float(config.get("threshold", 20))
-    except (TypeError, ValueError):
-        threshold = 20.0
     cwd = os.getcwd()
     if getattr(args, "write_snapshot", False) or getattr(args, "json", False):
         # Engage strictly read-only mode BEFORE constructing providers, so their
@@ -414,10 +398,28 @@ def main() -> int:
             snaps: The freshly collected provider snapshots.
             when: The instant the snapshot was captured.
         """
+        v1_ok, v2_ok = _write_snapshot_versions(snaps, when)
+        if not (v1_ok and v2_ok):
+            log.warning("snapshot persist partially failed: v1=%s v2=%s", v1_ok, v2_ok)
+
+    def _write_snapshot_versions(
+        snaps: list[ProviderSnapshot], when: datetime
+    ) -> tuple[bool, bool]:
+        """Write v1 then v2 independently, retaining schema-specific priors."""
         try:
-            write_snapshot(build_snapshot_payload(snaps, when, prior=read_prior_snapshot()))
-        except Exception:  # noqa: BLE001 - a write failure must never crash the dashboard
-            log.debug("snapshot persist failed", exc_info=True)
+            v1_ok = write_snapshot(build_snapshot_payload(snaps, when, prior=read_prior_snapshot()))
+        except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
+            log.warning("failed to write schema-v1 snapshot", exc_info=True)
+            v1_ok = False
+        try:
+            v2_ok = write_snapshot(
+                build_snapshot_v2_payload(snaps, when, prior=read_prior_snapshot(SNAPSHOT_V2_PATH)),
+                SNAPSHOT_V2_PATH,
+            )
+        except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
+            log.warning("failed to write schema-v2 snapshot", exc_info=True)
+            v2_ok = False
+        return v1_ok, v2_ok
 
     def refresh(previous: list[ProviderSnapshot]) -> list[ProviderSnapshot]:
         fresh: list[ProviderSnapshot] = []
@@ -442,21 +444,19 @@ def main() -> int:
 
     try:
         if getattr(args, "write_snapshot", False):
-            # Headless snapshot: read-only probe, persist, exit. No threshold
+            # Headless snapshot: read-only probe, persist, exit. No warning
             # checks (no notifications). Providers are already headless; the
             # outer `finally` closes them.
             snapshots = collect_snapshots(providers, args.debug)
-            ok = write_snapshot(
-                build_snapshot_payload(snapshots, datetime.now(), prior=read_prior_snapshot())
-            )
-            if ok:
-                log.info("wrote headless snapshot for %d providers", len(snapshots))
+            v1_ok, v2_ok = _write_snapshot_versions(snapshots, datetime.now())
+            if v1_ok and v2_ok:
+                log.info("wrote headless snapshots for %d providers", len(snapshots))
                 return 0
-            log.warning("failed to write headless snapshot")
+            log.warning("headless snapshot write partially failed: v1=%s v2=%s", v1_ok, v2_ok)
             return 1
 
         if args.json:
-            # Read-only/machine-safe (headless engaged above): no threshold
+            # Read-only/machine-safe (headless engaged above): no warning
             # notifications, matching --write-snapshot.
             updated_at = datetime.now()
             snapshots = collect_snapshots(providers, args.debug)
@@ -467,14 +467,10 @@ def main() -> int:
         # --once: block on initial fetch, print dashboard, exit (no alt-screen)
         if args.once:
             snapshots = collect_snapshots(providers, args.debug)
-            _check_thresholds(snapshots, threshold, notified_providers)
             updated_at = datetime.now()
+            _check_warnings(snapshots, notified_providers, updated_at)
             fix_actions = _build_fix_actions(snapshots)
-            console.print(
-                build_dashboard(
-                    snapshots, updated_at, 0, threshold=threshold, fix_actions=fix_actions
-                )
-            )
+            console.print(build_dashboard(snapshots, updated_at, 0, fix_actions=fix_actions))
             return 0
 
         # Live interactive mode
@@ -500,7 +496,7 @@ def main() -> int:
                         live.refresh()
                         time.sleep(0.12)
                     current = future.result()
-                    _check_thresholds(current, threshold, notified_providers)
+                    _check_warnings(current, notified_providers, datetime.now())
                     _persist_snapshot(current, datetime.now())
                 finally:
                     executor.shutdown(wait=False, cancel_futures=True)
@@ -521,7 +517,6 @@ def main() -> int:
                                 current,
                                 updated_at,
                                 remaining,
-                                threshold=threshold,
                                 fix_actions=fix_actions,
                             )
                         )
@@ -563,7 +558,6 @@ def main() -> int:
                                     0,
                                     updating=True,
                                     update_elapsed=time.monotonic() - refresh_started,
-                                    threshold=threshold,
                                     fix_actions=fix_actions,
                                 )
                             )
@@ -579,7 +573,7 @@ def main() -> int:
                                 time.sleep(0.12)
                         if not quit_requested:
                             current = refresh_future.result()
-                            _check_thresholds(current, threshold, notified_providers)
+                            _check_warnings(current, notified_providers, datetime.now())
                             _persist_snapshot(current, updated_at)
                     finally:
                         refresh_executor.shutdown(wait=False, cancel_futures=True)

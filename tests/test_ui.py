@@ -156,6 +156,23 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("68%", output)
         self.assertIn("91%", output)
 
+    def test_codex_panel_omits_absent_five_hour_row(self) -> None:
+        # After OpenAI removed the 5h window the provider reports it as None; the
+        # card must drop the 5h row entirely rather than render "5h  n/a".
+        data = {
+            "five_hour_percent_left": None,
+            "five_hour_reset": None,
+            "weekly_percent_left": 91,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("Codex", output)
+        self.assertIn("1w", output)
+        self.assertIn("91%", output)
+        self.assertNotIn("5h", output)
+        self.assertNotIn("n/a", output)
+
     def test_claude_panel_contains_labels(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=True, source="cli", data=self.claude_data)
         output = _capture(build_provider_panel(snap, self.now), width=44)
@@ -185,23 +202,70 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("error", output)
         self.assertIn("connection timeout", output)
 
-    def test_cursor_panel_shows_credit_metrics(self) -> None:
+    def test_cursor_panel_shows_auto_composer_and_api_remaining_metrics(self) -> None:
         snap = ProviderSnapshot(
             name="Cursor",
             ok=True,
             source="api",
             data={
                 "credit_percent_left": 82.5,
+                "auto_percent_used": 6.6,
+                "api_percent_used": 1.5,
                 "plan_name": "pro",
                 "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=44)
         self.assertIn("Cursor", output)
+        self.assertIn("ac", output)
         self.assertIn("ap", output)
         self.assertIn("82%", output)
+        self.assertIn("93%", output)
+        self.assertNotIn("98%", output)
         self.assertNotIn("pl", output)
         self.assertNotIn("pro", output)
+
+    def test_cursor_badge_marks_independent_warning_pool(self) -> None:
+        one_warning = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={"auto_percent_used": 100, "credit_percent_left": 82},
+        )
+        no_warning = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={"auto_percent_used": 99.7, "credit_percent_left": 82},
+        )
+
+        warning_output = _capture(build_provider_panel(one_warning, self.now), width=44)
+        no_warning_output = _capture(build_provider_panel(no_warning, self.now), width=44)
+
+        self.assertIn("[!]", warning_output)
+        self.assertNotIn("[!]", no_warning_output)
+
+    def test_cursor_badge_allows_api_pool_to_warn_independently(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={"credit_percent_left": 0},
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("[!]", output)
+
+    def test_cursor_boolean_pool_values_render_as_absent(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={"auto_percent_used": True, "credit_percent_left": False},
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertNotIn("[!]", output)
+        self.assertNotIn("0%", output)
+        self.assertEqual(output.count("n/a"), 4)
 
     def test_vibe_panel_shows_monthly_usage(self) -> None:
         snap = ProviderSnapshot(
@@ -258,6 +322,25 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("1w", output)
         self.assertNotIn("▓", output)
         self.assertNotIn("88%", output)
+
+    def test_empty_view_codex_weekly_zero_without_five_hour(self) -> None:
+        # Weekly depleted and the 5h window removed: the depleted view shows only
+        # the 1w row — no phantom "5h until …" row for a window that's gone.
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": None,
+                "five_hour_reset": None,
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("until", output)
+        self.assertIn("1w", output)
+        self.assertNotIn("5h", output)
 
     def test_empty_view_antigravity_requires_both_zero(self) -> None:
         # 5h=0 but weekly has usage → normal view
@@ -338,17 +421,69 @@ class ProviderPanelTests(unittest.TestCase):
             ok=True,
             source="api",
             data={
+                "auto_percent_used": 100,
                 "credit_percent_left": 0,
                 "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
                 "plan_name": "pro",
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("ac", output)
         self.assertIn("ap", output)
         self.assertIn("until", output)
+        self.assertEqual(output.count("until"), 2)
         self.assertNotIn("▓", output)
         self.assertNotIn("pl", output)
         self.assertNotIn("pro", output)
+
+    def test_empty_view_cursor_api_pool_zero(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "auto_percent_used": 10,
+                "credit_percent_left": 0,
+                "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("ac", output)
+        self.assertIn("ap", output)
+        self.assertNotIn("until", output)
+        self.assertIn("90%", output)
+
+    def test_empty_view_cursor_omits_absent_pool(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "credit_percent_left": 0,
+                "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("ap", output)
+        self.assertNotIn("ac", output)
+        self.assertEqual(output.count("until"), 1)
+
+    def test_cursor_auto_composer_zero_keeps_api_pool_available(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "auto_percent_used": 100,
+                "credit_percent_left": 82,
+                "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("ac", output)
+        self.assertIn("ap", output)
+        self.assertNotIn("until", output)
+        self.assertIn("82%", output)
 
     def test_empty_view_vibe(self) -> None:
         snap = ProviderSnapshot(
@@ -551,6 +686,28 @@ class RenderJsonTests(unittest.TestCase):
 
         for entry in payload["providers"]:
             self.assertNotIn("debug_detail", entry)
+
+    def test_render_json_excludes_cursor_raw_pool_fields(self) -> None:
+        now = datetime(2026, 3, 14, 8, 22, 30)
+        cursor = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "credit_percent_left": 82.5,
+                "auto_percent_used": 6.6,
+                "api_percent_used": 1.5,
+                "session_token": "must-not-leak",
+            },
+        )
+
+        payload = json.loads(render_json([cursor], now))
+        data = payload["providers"][0]["data"]
+
+        self.assertEqual(data["credit_percent_left"], 82.5)
+        self.assertNotIn("auto_percent_used", data)
+        self.assertNotIn("api_percent_used", data)
+        self.assertNotIn("session_token", data)
 
 
 class SharedLabelAlignmentTests(unittest.TestCase):

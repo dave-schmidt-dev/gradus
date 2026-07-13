@@ -8,8 +8,8 @@
 area: ["ai_monitor/snapshot.py", "ai_monitor/parsing.py", "ai_monitor/providers.py"]
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
-rationale: The snapshot.json is read by a separate repo (review-plugin router). It is written to
-  ~/Documents/Projects/ai_monitor/.state/snapshot.json — Deliberately NOT under .cache/ (which holds
+rationale: The snapshot files are read by a separate repo (review-plugin router). They are written to
+  ~/Documents/Projects/ai_monitor/.state/snapshot.json and snapshot-v2.json — Deliberately NOT under .cache/ (which holds
   auth cookies/tokens); review-plugin's INV-5 forbids the router from reading credential paths, so the
   snapshot must live in a credential-free dir. `data` is a whitelist projection of usage/reset fields
   only — it must never carry cookies, tokens, sessionKey, ory_*, csrftoken, access_token, nor
@@ -36,9 +36,9 @@ rationale: A router checkpoint / background refresher must never spawn a browser
 area: ["ai_monitor/snapshot.py"]
 gate_test: tests/test_snapshot.py::test_vibe_percent_left_is_remaining
 threshold: 3
-rationale: Vibe's API reports usage_percent (used), converted to 100 − x at one place. A sign flip or
-  double-normalization would make the router route toward the MOST depleted provider — the exact
-  opposite of correct. Every window's percent_left is remaining capacity.
+rationale: Vibe's usage_percent and Cursor Auto + Composer's auto_percent_used are converted from used
+to 100 − x at one place. A sign flip or double-normalization would make the router route toward the MOST
+depleted provider — the exact opposite of correct. Every window's percent_left is remaining capacity.
 
 ### INV-4 — pace_delta sign and unit are canonical
 area: ["ai_monitor/snapshot.py", "ai_monitor/ui.py"]
@@ -53,10 +53,15 @@ rationale: pace_delta = (percent_left/100) − (time_remaining/window_total): a 
 area: ["ai_monitor/snapshot.py"]
 gate_test: tests/test_snapshot.py::test_payload_matches_contract_schema
 threshold: 3
-rationale: The router asserts schema_version. The file always carries schema_version + a tz-aware
+rationale: The router asserts schema_version. Both versioned files always carry schema_version + a tz-aware
   updated_at, and every provider entry (all 5 canonical names always present) has a windows[] of the
-  documented shape. Breaking changes bump schema_version. Prevents silent schema drift that a
-  version-asserting consumer cannot detect.
+  documented shape. Breaking changes bump schema_version. The snapshot is consumed by
+  hermes-publisher's AiMonitorCollector as well as review-plugin; consumers reject unsupported
+  schema_version, so incompatible changes to the top-level payload, provider-entry fields, or
+  windows[] require a schema bump and coordinated compatibility updates in both consumer projects. Schema v1
+  remains at snapshot.json; schema v2 lives at snapshot-v2.json and Cursor's ac/ap windows are numeric or omitted.
+  Each file has a path- and schema-specific transient prior. Prevents silent schema drift that a version-asserting
+  consumer cannot detect.
 
 ### INV-6 — All persisted credential material is written mode 0600 inside a 0700 dir, via an atomic temp-file swap
 area: ["ai_monitor/providers.py"]
