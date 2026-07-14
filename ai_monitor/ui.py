@@ -9,6 +9,7 @@ from datetime import datetime
 
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.panel import Panel
+from rich.segment import Segment
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
@@ -451,6 +452,142 @@ class PaceLabel:
         yield Text(text, style=self.style)
 
 
+class ResponsiveProviderBody:
+    """Provider rows with a shared, percentage-first allocation per card.
+
+    The percentage cell is always four characters wide, which accommodates the
+    widest rendered integer value (``100%``). Bars take every remaining column
+    after the normal text cells have their preferred widths, then disappear
+    entirely before Rich is asked to crop the reset or pace text.
+    """
+
+    _LABEL_WIDTH = 4
+    _PERCENT_WIDTH = 4
+    _RESET_WIDTH = 12
+    _PACE_WIDTH = 12
+    _GUTTER_WIDTH = 1
+
+    def __init__(self) -> None:
+        self.rows: list[
+            tuple[RenderableType, RenderableType, RenderableType, RenderableType, RenderableType]
+        ] = []
+
+    def add_row(
+        self,
+        label: RenderableType,
+        percent: RenderableType,
+        bar: RenderableType,
+        reset: RenderableType,
+        pace: RenderableType,
+    ) -> None:
+        """Store a row until Rich supplies the card's available width."""
+        self.rows.append((label, percent, bar, reset, pace))
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        # Four gutters are needed when a bar is visible. Once it has no room,
+        # omit its column and recover one gutter for the text cells.
+        preferred_text_width = (
+            self._LABEL_WIDTH + self._PERCENT_WIDTH + self._RESET_WIDTH + self._PACE_WIDTH
+        )
+        bar_width = max(0, options.max_width - preferred_text_width - 4 * self._GUTTER_WIDTH)
+        include_bar = bar_width > 0
+
+        table = Table.grid(padding=(0, self._GUTTER_WIDTH), expand=False)
+        if include_bar:
+            table.add_column(width=self._LABEL_WIDTH, no_wrap=True, overflow="ellipsis")
+            table.add_column(width=self._PERCENT_WIDTH, no_wrap=True, overflow="ellipsis")
+            table.add_column(width=bar_width, no_wrap=True, overflow="crop")
+            table.add_column(width=self._RESET_WIDTH, no_wrap=True, overflow="ellipsis")
+            table.add_column(width=self._PACE_WIDTH, no_wrap=True, overflow="ellipsis")
+            for row in self.rows:
+                table.add_row(*row)
+        else:
+            # A zero-width Rich column cannot render reliably. Removing it is
+            # equivalent visually and lets the remaining cells use its gutter.
+            text_width = max(0, options.max_width - 3 * self._GUTTER_WIDTH)
+            label_width = min(self._LABEL_WIDTH, max(2, text_width - self._PERCENT_WIDTH))
+            remaining = max(0, text_width - label_width - self._PERCENT_WIDTH)
+            reset_width = min(self._RESET_WIDTH, (remaining + 1) // 2)
+            pace_width = min(self._PACE_WIDTH, remaining - reset_width)
+            table.add_column(width=label_width, no_wrap=True, overflow="ellipsis")
+            table.add_column(width=self._PERCENT_WIDTH, no_wrap=True, overflow="ellipsis")
+            table.add_column(width=reset_width, no_wrap=True, overflow="ellipsis")
+            table.add_column(width=pace_width, no_wrap=True, overflow="ellipsis")
+            for label, percent, _bar, reset, pace in self.rows:
+                table.add_row(label, percent, reset, pace)
+
+        yield table
+
+
+class DepletedProviderBody:
+    """Depleted rows without an unused usage-bar column.
+
+    A depleted card communicates one thing per row: ``0% until <reset>``.
+    Unlike normal usage rows, it gives the reset text every column left after
+    the label and percentage, so a discarded bar never crowds that message at
+    narrow card widths.
+    """
+
+    _LABEL_WIDTH = 4
+    _PERCENT_WIDTH = 4
+    _GUTTER_WIDTH = 1
+
+    def __init__(self) -> None:
+        self.rows: list[tuple[RenderableType, RenderableType, RenderableType]] = []
+
+    def add_row(
+        self,
+        label: RenderableType,
+        percent: RenderableType,
+        reset: RenderableType,
+        *_unused: RenderableType,
+    ) -> None:
+        """Store a depleted row; compatibility cells are intentionally ignored."""
+        self.rows.append((label, percent, reset))
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        reset_width = max(
+            0,
+            options.max_width - self._LABEL_WIDTH - self._PERCENT_WIDTH - 2 * self._GUTTER_WIDTH,
+        )
+        table = Table.grid(padding=(0, self._GUTTER_WIDTH), expand=False)
+        table.add_column(width=self._LABEL_WIDTH, no_wrap=True, overflow="ellipsis")
+        table.add_column(width=self._PERCENT_WIDTH, no_wrap=True, overflow="ellipsis")
+        table.add_column(width=reset_width, no_wrap=True, overflow="ellipsis")
+        for row in self.rows:
+            table.add_row(*row)
+        yield table
+
+
+class GenericProviderBody:
+    """Compact key/value rows for providers without usage windows."""
+
+    _LABEL_WIDTH = 12
+    _GUTTER_WIDTH = 1
+
+    def __init__(self) -> None:
+        self.rows: list[tuple[RenderableType, RenderableType]] = []
+
+    def add_row(
+        self,
+        label: RenderableType,
+        value: RenderableType,
+        *_unused: RenderableType,
+    ) -> None:
+        """Store a key/value row; generic cards intentionally have no bar cells."""
+        self.rows.append((label, value))
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        label_width = min(self._LABEL_WIDTH, max(0, options.max_width - self._GUTTER_WIDTH - 1))
+        value_width = max(0, options.max_width - label_width - self._GUTTER_WIDTH)
+        table = Table.grid(padding=(0, self._GUTTER_WIDTH), expand=False)
+        table.add_column(width=label_width, no_wrap=True, overflow="ellipsis")
+        table.add_column(width=value_width, no_wrap=True, overflow="ellipsis")
+        for row in self.rows:
+            table.add_row(*row)
+        yield table
+
+
 # ---------------------------------------------------------------------------
 # Panel builders
 # ---------------------------------------------------------------------------
@@ -515,27 +652,24 @@ def build_provider_panel(
 
     spec = PROVIDER_RENDER_SPECS.get(base_name)
 
-    # All panels use the same 5-column layout so bars align across the grid:
-    # label | % | bar | reset | pace
-    body = Table.grid(padding=(0, 1))
-    body.add_column(min_width=2, max_width=4)
-    body.add_column(min_width=4, max_width=4)
-    body.add_column(min_width=4, ratio=1)
-    body.add_column(min_width=12, max_width=12)
-    body.add_column(min_width=12, max_width=12)
-
     if _provider_is_empty(snapshot, now):
+        body = DepletedProviderBody()
         _add_empty_view(body, snapshot, now)
-    elif base_name == "Cursor":
-        _add_cursor_rows(body, snapshot.data, now)
-    elif base_name == "Vibe":
-        _add_vibe_rows(body, snapshot.data, now)
-    elif base_name == "Antigravity":
-        _add_antigravity_rows(body, snapshot.data, now, spec.windows)
-    elif spec:
-        _add_usage_rows(body, snapshot.data, now, spec.windows)
-    else:
+    elif spec is None and base_name not in {"Cursor", "Vibe"}:
+        # Generic status cards have no usage bar. Their two-column layout is
+        # intentionally separate from the normal usage-row allocator.
+        body = GenericProviderBody()
         _add_generic_rows(body, snapshot.data, snapshot.source)
+    else:
+        body = ResponsiveProviderBody()
+        if base_name == "Cursor":
+            _add_cursor_rows(body, snapshot.data, now)
+        elif base_name == "Vibe":
+            _add_vibe_rows(body, snapshot.data, now)
+        elif base_name == "Antigravity":
+            _add_antigravity_rows(body, snapshot.data, now, spec.windows)
+        elif spec:
+            _add_usage_rows(body, snapshot.data, now, spec.windows)
 
     panel_kwargs: dict[str, object] = {
         "title": title_text,
@@ -767,6 +901,54 @@ def _add_generic_rows(table: Table, data: dict[str, object], source: str) -> Non
 # ---------------------------------------------------------------------------
 
 
+class PackedProviderCards:
+    """Pack fixed-width provider cards into the shorter of two vertical stacks."""
+
+    _TWO_COLUMN_MIN_WIDTH = 92
+    _GUTTER_WIDTH = 1
+
+    def __init__(self, panels: list[Panel]) -> None:
+        self.panels = panels
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        """Render cards at a fixed width so stack heights are comparable."""
+        if options.max_width < self._TWO_COLUMN_MIN_WIDTH:
+            # Yield each card directly: unlike a two-column line, there is no
+            # vacant cell to render in the one-column fallback.
+            yield from self.panels
+            return
+
+        card_width = (options.max_width - self._GUTTER_WIDTH) // 2
+        trailing_width = options.max_width - (2 * card_width + self._GUTTER_WIDTH)
+        card_options = options.update_width(card_width)
+        left_stack: list[list[Segment]] = []
+        right_stack: list[list[Segment]] = []
+        left_height = 0
+        right_height = 0
+
+        for panel in self.panels:
+            # Measuring and rendering use the same fixed options. This keeps
+            # wrapping-dependent panel heights faithful to the final layout.
+            lines = console.render_lines(panel, card_options, pad=True)
+            if left_height <= right_height:
+                left_stack.extend(lines)
+                left_height += len(lines)
+            else:
+                right_stack.extend(lines)
+                right_height += len(lines)
+
+        blank_line: list[Segment] = []
+        for line_number in range(max(left_height, right_height)):
+            left_line = left_stack[line_number] if line_number < left_height else blank_line
+            right_line = right_stack[line_number] if line_number < right_height else blank_line
+            yield from Segment.adjust_line_length(left_line, card_width)
+            yield Segment(" " * self._GUTTER_WIDTH)
+            yield from Segment.adjust_line_length(right_line, card_width)
+            if trailing_width:
+                yield Segment(" " * trailing_width)
+            yield Segment.line()
+
+
 def build_dashboard(
     snapshots: list[ProviderSnapshot],
     updated_at: datetime,
@@ -808,17 +990,9 @@ def build_dashboard(
         for snap in ordered
     ]
 
-    # Layout: 2-column grid if multiple panels
+    # Layout: cards pack into the shorter stack at safe two-column widths.
     if len(panels) > 1:
-        grid = Table.grid(padding=(0, 1))
-        grid.add_column(ratio=1)
-        grid.add_column(ratio=1)
-        for i in range(0, len(panels), 2):
-            if i + 1 < len(panels):
-                grid.add_row(panels[i], panels[i + 1])
-            else:
-                grid.add_row(panels[i], Text(""))
-        body: RenderableType = grid
+        body: RenderableType = PackedProviderCards(panels)
     elif panels:
         body = panels[0]
     else:

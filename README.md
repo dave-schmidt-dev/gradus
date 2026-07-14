@@ -82,9 +82,16 @@ Optional config file (`.ai_monitor.json` in your current working directory):
 
 ## Output
 
-All provider cards use a unified 5-column row layout: `label | % | bar | reset | pace`.
-When a provider's usable capacity hits 0%, all rows switch to a depleted view showing
-`0%  until <reset_time>` with no bar or pace.
+Normal usage rows use a responsive, percentage-first layout: `label | % | bar | reset | pace`.
+The bar consumes the flexible space and can shrink to zero before any percentage is
+cropped, so integer values such as `0%`, `87%`, and `100%` remain readable at narrow
+card widths. Depleted rows use a separate `0% until <reset_time>` layout with no bar;
+generic status cards and error/auth cards likewise remain readable as key/value or
+message layouts rather than being forced through usage-bar columns.
+
+At safe widths, dashboard cards are packed into two independently measured vertical
+stacks with a one-cell horizontal gutter and no empty vertical-row gutter. Below 92
+columns the dashboard falls back to one column.
 
 Codex and Claude cards show:
 

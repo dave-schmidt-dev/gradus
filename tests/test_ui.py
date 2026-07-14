@@ -156,6 +156,129 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("68%", output)
         self.assertIn("91%", output)
 
+    def test_normal_rows_preserve_full_percentages_across_card_widths(self) -> None:
+        # The Antigravity panel stays in normal mode because the non-zero C+G
+        # window remains usable. That gives one card all three integer widths:
+        # 0%, 87%, and 100%.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets 9:22 AM",
+                "weekly_percent_left": 100,
+                "weekly_reset": "Resets Mar 21 at 8:22 AM",
+                "third_party_five_hour_percent_left": 87,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+            },
+        )
+        for width in (44, 40, 30):
+            with self.subTest(width=width):
+                output = _capture(build_provider_panel(snap, self.now), width=width)
+                self.assertIn("0%", output)
+                self.assertIn("87%", output)
+                self.assertIn("100%", output)
+
+    def test_normal_row_bar_shrinks_to_zero_before_percentage_is_clipped(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets 9:22 AM",
+                "weekly_percent_left": 100,
+                "weekly_reset": "Resets Mar 21 at 8:22 AM",
+                "third_party_five_hour_percent_left": 87,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+            },
+        )
+        wide = _capture(build_provider_panel(snap, self.now), width=44)
+        zero_bar = _capture(build_provider_panel(snap, self.now), width=40)
+
+        self.assertIn("▓", wide)
+        self.assertNotIn("▓", zero_bar)
+        self.assertNotIn("░", zero_bar)
+        self.assertIn("0%", zero_bar)
+        self.assertIn("87%", zero_bar)
+        self.assertIn("100%", zero_bar)
+
+    def test_normal_row_bars_share_card_level_start_and_end_columns(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 50,
+                "five_hour_reset": "Resets 9:22 AM",
+                "weekly_percent_left": 75,
+                "weekly_reset": "Resets Mar 21 at 8:22 AM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        usage_lines = [line for line in output.splitlines() if "5h" in line or "1w" in line]
+        self.assertEqual(len(usage_lines), 2)
+
+        # Filled blocks begin at the bar's common left edge; reset text starts
+        # immediately after its common right edge.
+        self.assertEqual(usage_lines[0].index("▓"), usage_lines[1].index("▓"))
+        self.assertEqual(usage_lines[0].index("09:22"), usage_lines[1].index("Mar 21"))
+
+    def test_depleted_rows_keep_reset_text_at_normal_bar_boundary(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets 9:22 AM",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+
+        # Width 40 is where normal cards have already given their bar no
+        # budget. Depleted rows instead reserve that space for "until <reset>".
+        output = _capture(build_provider_panel(snap, self.now), width=40)
+
+        self.assertIn("5h   0%   until 09:22", output)
+        self.assertIn("1w   0%   until Mar 17 21:00", output)
+        self.assertNotIn("▓", output)
+
+    def test_generic_card_preserves_key_value_layout_without_usage_bar(self) -> None:
+        snap = ProviderSnapshot(
+            name="Custom",
+            ok=True,
+            source="script",
+            data={"account": "team", "remaining": "unknown"},
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=40)
+
+        self.assertIn("status", output)
+        self.assertIn("source", output)
+        self.assertIn("script", output)
+        self.assertIn("team", output)
+        self.assertIn("unknown", output)
+        self.assertNotIn("▓", output)
+
+    def test_error_card_remains_a_message_without_usage_bar(self) -> None:
+        snap = ProviderSnapshot(name="Claude", ok=False, source="cli", error="connection timeout")
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+
+        self.assertIn("error:", output)
+        self.assertIn("connection timeout", output)
+        self.assertNotIn("▓", output)
+
+    def test_auth_card_remains_a_message_without_usage_bar(self) -> None:
+        snap = ProviderSnapshot(name="Claude", ok=False, source="cli", error="login required")
+        output = _capture(build_provider_panel(snap, self.now, auth_fix_key="2"), width=44)
+
+        self.assertIn("auth error", output)
+        self.assertIn("[2]", output)
+        self.assertIn("to fix", output)
+        self.assertNotIn("▓", output)
+
     def test_codex_panel_omits_absent_five_hour_row(self) -> None:
         # After OpenAI removed the 5h window the provider reports it as None; the
         # card must drop the 5h row entirely rather than render "5h  n/a".
@@ -722,6 +845,94 @@ class DashboardTests(unittest.TestCase):
             any("Codex" in line and "Claude" in line for line in lines),
             "Expected Codex and Claude on the same line in 2-column grid",
         )
+        first_panel_line = next(line for line in lines if line.startswith("╭"))
+        self.assertEqual(len(first_panel_line), 92)
+
+    def test_packed_cards_place_next_provider_below_shorter_stack(self) -> None:
+        short_codex = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 91, "weekly_reset": "Resets Mar 17 at 9 PM"},
+        )
+        antigravity = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 75,
+                "five_hour_reset": "Resets 1:16 PM",
+                "weekly_percent_left": 60,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+
+        output = _capture(
+            build_dashboard([short_codex, self.claude_snap, antigravity], self.now, 30),
+            width=92,
+        )
+        lines = output.splitlines()
+        codex_title = next(index for index, line in enumerate(lines) if "Codex" in line)
+        antigravity_title = next(index for index, line in enumerate(lines) if "Antigravity" in line)
+
+        # Codex is one row shorter than Claude, so Antigravity starts directly
+        # below Codex while Claude is still finishing in the opposite stack.
+        self.assertEqual(antigravity_title, codex_title + 3)
+        self.assertTrue(lines[antigravity_title - 1].startswith("╰"))
+        self.assertTrue(lines[antigravity_title].startswith("╭"))
+
+    def test_five_provider_packing_keeps_every_card_and_no_vertical_gutter(self) -> None:
+        antigravity = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 75,
+                "five_hour_reset": "Resets 1:16 PM",
+                "weekly_percent_left": 60,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+                "third_party_five_hour_percent_left": 50,
+                "third_party_five_hour_reset": "Resets 1:16 PM",
+            },
+        )
+        cursor = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "auto_percent_used": 20,
+                "credit_percent_left": 60,
+                "billing_cycle_end": "Resets Mar 30 at 9 PM",
+            },
+        )
+        vibe = ProviderSnapshot(
+            name="Vibe",
+            ok=True,
+            source="api",
+            data={"usage_percent": 10, "reset_at": "Resets Mar 30 at 9 PM"},
+        )
+
+        output = _capture(
+            build_dashboard(
+                [self.codex_snap, self.claude_snap, antigravity, cursor, vibe], self.now, 30
+            ),
+            width=92,
+        )
+        lines = output.splitlines()
+        for name in ("Codex", "Claude", "Antigravity", "Cursor", "Vibe"):
+            self.assertEqual(output.count(name), 1)
+
+        first_panel_line = next(index for index, line in enumerate(lines) if line.startswith("╭"))
+        last_panel_line = max(index for index, line in enumerate(lines) if line.startswith("╰"))
+        self.assertTrue(all(line.strip() for line in lines[first_panel_line : last_panel_line + 1]))
+
+    def test_dashboard_falls_back_to_one_column_below_safe_threshold(self) -> None:
+        output = _capture(
+            build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=91
+        )
+        self.assertFalse(any("Codex" in line and "Claude" in line for line in output.splitlines()))
+        self.assertEqual(output.count("Codex"), 1)
+        self.assertEqual(output.count("Claude"), 1)
 
     def test_single_panel_at_narrow_width(self) -> None:
         dashboard = build_dashboard([self.codex_snap], self.now, 30)
