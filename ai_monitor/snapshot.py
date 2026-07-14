@@ -372,6 +372,25 @@ WARNING_WINDOW_SPECS = {
             end_key="billing_cycle_end_iso",
         ),
     ),
+    # C+G quota buckets are interactive alert state only. Router v1/v2
+    # snapshots intentionally continue to expose Antigravity's Gemini pools.
+    "Antigravity": (
+        *WINDOW_SPECS["Antigravity"],
+        WindowSpec(
+            "cg5",
+            "session",
+            "third_party_five_hour_percent_left",
+            reset_key="third_party_five_hour_reset",
+            window_hours=5.0,
+        ),
+        WindowSpec(
+            "cg1w",
+            "session",
+            "third_party_weekly_percent_left",
+            reset_key="third_party_weekly_reset",
+            window_hours=168.0,
+        ),
+    ),
 }
 
 # Schema v2 keeps every non-Cursor window byte-for-byte compatible with v1,
@@ -495,7 +514,8 @@ def normalized_warning_windows(snapshot: ProviderSnapshot, now: datetime) -> lis
     """Normalize windows for in-process UI and alert evaluation.
 
     Unlike :func:`build_windows`, Cursor receives independent ``ac`` and
-    ``ap`` records here. This is deliberately not persisted until schema v2.
+    ``ap`` records, and Antigravity includes C+G ``cg5`` and ``cg1w`` records.
+    This interactive state is deliberately not persisted.
     """
     return _build_windows(snapshot, now, WARNING_WINDOW_SPECS)
 
@@ -586,10 +606,25 @@ def _json_safe_value(value: object) -> object:
 CANONICAL_PROVIDERS = ("Codex", "Claude", "Antigravity", "Cursor", "Vibe")
 
 
-def _is_valid_prior_entry(name: str, entry: object, *, cursor_window_ids: frozenset[str]) -> bool:
-    """Return whether a retained prior entry satisfies its schema contract."""
-    if not isinstance(entry, dict) or entry.get("name") != name or entry.get("ok") is not True:
-        return False
+def _sanitize_prior_entry(
+    name: str, entry: object, *, allowed_window_ids: frozenset[str]
+) -> dict | None:
+    """Return a fresh, schema-valid retained entry or ``None``.
+
+    Prior snapshots cross a persistence trust boundary. Retained entries must
+    have exactly the canonical provider shape and are rebuilt rather than
+    reused so unrecognized metadata and mutable caller-owned values cannot
+    cross into the new snapshot.
+    """
+    required_entry_keys = {"name", "ok", "error", "windows", "data"}
+    if (
+        not isinstance(entry, dict)
+        or set(entry) != required_entry_keys
+        or entry["name"] != name
+        or entry["ok"] is not True
+        or entry["error"] is not None
+    ):
+        return None
     data = entry.get("data")
     windows = entry.get("windows")
     if (
@@ -597,20 +632,70 @@ def _is_valid_prior_entry(name: str, entry: object, *, cursor_window_ids: frozen
         or not set(data).issubset(SAFE_DATA_KEYS)
         or any(_json_safe_value(value) is _UNSAFE_JSON for value in data.values())
     ):
-        return False
+        return None
     if not isinstance(windows, list):
-        return False
+        return None
     required_keys = {"id", "percent_left", "reset_iso", "window_hours", "pace_delta"}
+    sanitized_windows: list[dict] = []
     for window in windows:
         if not isinstance(window, dict) or set(window) != required_keys:
-            return False
+            return None
+        window_id = window["id"]
         percent_left = window["percent_left"]
-        if not percent_is_valid(percent_left):
-            return False
-        if name == "Cursor":
-            if window["id"] not in cursor_window_ids:
-                return False
-    return True
+        reset_iso = window["reset_iso"]
+        window_hours = window["window_hours"]
+        pace = window["pace_delta"]
+        if (
+            not isinstance(window_id, str)
+            or window_id not in allowed_window_ids
+            or not percent_is_valid(percent_left)
+            or (reset_iso is not None and not isinstance(reset_iso, str))
+            or (
+                window_hours is not None
+                and (
+                    not isinstance(window_hours, (int, float))
+                    or isinstance(window_hours, bool)
+                    or not math.isfinite(window_hours)
+                    or window_hours <= 0
+                )
+            )
+            or (
+                pace is not None
+                and (
+                    not isinstance(pace, (int, float))
+                    or isinstance(pace, bool)
+                    or not math.isfinite(pace)
+                )
+            )
+        ):
+            return None
+        sanitized_windows.append(
+            {
+                "id": window_id,
+                "percent_left": percent_left,
+                "reset_iso": reset_iso,
+                "window_hours": window_hours,
+                "pace_delta": pace,
+            }
+        )
+    return {
+        "name": name,
+        "ok": True,
+        "error": None,
+        "windows": sanitized_windows,
+        "data": {key: _json_safe_value(value) for key, value in data.items()},
+    }
+
+
+def _parse_aware_iso_timestamp(value: object) -> datetime | None:
+    """Return an aware ISO-8601 timestamp, or ``None`` for invalid input."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed if parsed.tzinfo is not None and parsed.utcoffset() is not None else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _build_snapshot_payload(
@@ -642,15 +727,12 @@ def _build_snapshot_payload(
 
     prior_by_name: dict[str, dict] = {}
     prior_updated: datetime | None = None
-    if prior and prior.get("schema_version") == schema_version:
+    if isinstance(prior, Mapping) and prior.get("schema_version") == schema_version:
         try:
             prior_by_name = {p["name"]: p for p in prior.get("providers", [])}
         except Exception:  # noqa: BLE001 - malformed prior is best-effort
             prior_by_name = {}
-        try:
-            prior_updated = datetime.fromisoformat(prior["updated_at"])
-        except Exception:  # noqa: BLE001 - malformed prior is best-effort
-            prior_updated = None
+        prior_updated = _parse_aware_iso_timestamp(prior.get("updated_at"))
 
     providers: list[dict] = []
     for name in CANONICAL_PROVIDERS:
@@ -692,21 +774,21 @@ def _build_snapshot_payload(
         }
         if _is_transient_probe_error(snap):
             prior_entry = prior_by_name.get(name)
+            retained_entry = _sanitize_prior_entry(
+                name,
+                prior_entry,
+                allowed_window_ids=frozenset(
+                    spec.window_id for spec in specs_by_provider.get(name, ())
+                ),
+            )
             if (
-                prior_entry
-                and _is_valid_prior_entry(
-                    name,
-                    prior_entry,
-                    cursor_window_ids=frozenset(
-                        spec.window_id for spec in specs_by_provider.get("Cursor", ())
-                    ),
-                )
+                retained_entry is not None
                 and prior_updated is not None
                 and 0
                 <= (updated_at_aware - prior_updated).total_seconds()
                 < STALE_THRESHOLD_SECONDS
             ):
-                entry = prior_entry
+                entry = retained_entry
         providers.append(entry)
 
     return {

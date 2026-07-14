@@ -195,6 +195,130 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("86%", output)
         self.assertIn("96%", output)
 
+    def test_antigravity_active_cg_windows_render_with_reset_and_pace(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                **self.antigravity_data,
+                "third_party_five_hour_percent_left": 55,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+                "third_party_weekly_percent_left": 72,
+                "third_party_weekly_reset": "Resets Mar 21 at 8:22 AM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=80)
+        self.assertIn("cg5", output)
+        self.assertIn("cg1w", output)
+        self.assertIn("55%", output)
+        self.assertIn("72%", output)
+        self.assertIn("09:22", output)
+        self.assertIn("Mar 21 08:22", output)
+        self.assertTrue(any(token in output for token in ("↑", "↓", "=")))
+
+    def test_antigravity_hides_idle_cg_windows_at_exactly_hundred(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                **self.antigravity_data,
+                "third_party_five_hour_percent_left": 100.0,
+                "third_party_weekly_percent_left": 100,
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertNotIn("cg5", output)
+        self.assertNotIn("cg1w", output)
+
+    def test_antigravity_cg_raw_99_point_9_is_not_treated_as_idle(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                **self.antigravity_data,
+                "third_party_five_hour_percent_left": 99.9,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+                "third_party_weekly_percent_left": 100.0,
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("cg5", output)
+        self.assertIn("100%", output)
+        self.assertNotIn("cg1w", output)
+
+    def test_antigravity_omits_missing_or_malformed_cg_windows_independently(self) -> None:
+        for invalid_value in (None, "unknown"):
+            with self.subTest(invalid_value=invalid_value):
+                data = {
+                    **self.antigravity_data,
+                    "third_party_weekly_percent_left": 64,
+                    "third_party_weekly_reset": "Resets Mar 21 at 8:22 AM",
+                }
+                if invalid_value is not None:
+                    data["third_party_five_hour_percent_left"] = invalid_value
+                snap = ProviderSnapshot(name="Antigravity", ok=True, source="cli", data=data)
+                output = _capture(build_provider_panel(snap, self.now), width=44)
+                self.assertNotIn("cg5", output)
+                self.assertIn("cg1w", output)
+                self.assertIn("64%", output)
+
+    def test_antigravity_depleted_gemini_does_not_hide_usable_cg_rows(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets 9:22 AM",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 21 at 8:22 AM",
+                "third_party_five_hour_percent_left": 42,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("cg5", output)
+        self.assertIn("42%", output)
+        self.assertIn("▓", output)
+        self.assertNotIn("until", output)
+
+    def test_antigravity_cg_rows_remain_readable_at_44_columns(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                **self.antigravity_data,
+                "third_party_five_hour_percent_left": 55,
+                "third_party_weekly_percent_left": 72,
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("cg5", output)
+        self.assertIn("cg1w", output)
+        self.assertTrue(all(len(line) <= 44 for line in output.splitlines()))
+
+    def test_antigravity_cg_warning_adds_badge_without_changing_gemini_rows(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                **self.antigravity_data,
+                "third_party_five_hour_percent_left": 0,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("[!]", output)
+        self.assertIn("5h", output)
+        self.assertIn("1w", output)
+        self.assertIn("86%", output)
+        self.assertIn("96%", output)
+
     def test_error_panel_shows_error_message(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=False, source="cli", error="connection timeout")
         output = _capture(build_provider_panel(snap, self.now), width=44)
@@ -375,6 +499,28 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("until", output)
         self.assertIn("5h", output)
         self.assertIn("1w", output)
+        self.assertNotIn("▓", output)
+
+    def test_empty_view_antigravity_includes_depleted_cg_rows(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 15 at 06:45",
+                "third_party_five_hour_percent_left": 0,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 0,
+                "third_party_weekly_reset": "Resets Mar 15 at 06:45",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("cg5", output)
+        self.assertIn("cg1w", output)
+        self.assertIn("until", output)
         self.assertNotIn("▓", output)
 
     def test_empty_view_claude_weekly_zero(self) -> None:

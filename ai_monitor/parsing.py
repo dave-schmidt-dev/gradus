@@ -38,17 +38,21 @@ class ClaudeStatus:
 
 @dataclass(slots=True)
 class AntigravityStatus:
-    """Antigravity (`agy`) grouped quota for the Gemini model group.
+    """Antigravity (`agy`) grouped quota for Gemini and third-party models.
 
     `agy` meters usage per group (Gemini models; Claude+GPT models), each with a
-    5-hour and a weekly window. This tracks the Gemini group — the pool the user
-    actually consumes — mirroring the 5h/weekly shape of CodexStatus.
+    5-hour and a weekly window. The Gemini and third-party values are kept
+    independent so a malformed group cannot hide the other group's quota.
     """
 
     five_hour_percent_left: int | None
     weekly_percent_left: int | None
     five_hour_reset: str | None
     weekly_reset: str | None
+    third_party_five_hour_percent_left: float | None
+    third_party_weekly_percent_left: float | None
+    third_party_five_hour_reset: str | None
+    third_party_weekly_reset: str | None
     account_email: str | None
     account_tier: str | None
     raw_text: str

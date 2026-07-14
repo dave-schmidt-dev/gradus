@@ -1343,8 +1343,18 @@ class AntigravityProviderTests(unittest.TestCase):
             {
                 "displayName": "Claude and GPT models",
                 "buckets": [
-                    {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 1},
-                    {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 1},
+                    {
+                        "bucketId": "3p-weekly",
+                        "window": "weekly",
+                        "resetTime": "2026-07-12T20:52:22Z",
+                        "remainingFraction": 0.734,
+                    },
+                    {
+                        "bucketId": "3p-5h",
+                        "window": "5h",
+                        "resetTime": "2026-07-06T09:31:46Z",
+                        "remainingFraction": 0.421,
+                    },
                 ],
             },
         ],
@@ -1392,6 +1402,229 @@ class AntigravityProviderTests(unittest.TestCase):
         ):
             status = provider.fetch()
         self.assertEqual(status.weekly_percent_left, 96)
+
+    def test_parses_third_party_group_5h_and_weekly(self) -> None:
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=self.SUMMARY_RESPONSE),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.third_party_five_hour_percent_left, 42.1)
+        self.assertEqual(status.third_party_weekly_percent_left, 73.4)
+        self.assertIsNotNone(status.third_party_five_hour_reset)
+        self.assertIsNotNone(status.third_party_weekly_reset)
+
+    def test_invalid_third_party_buckets_do_not_hide_gemini_values(self) -> None:
+        responses = {
+            "missing": {"groups": [self.SUMMARY_RESPONSE["groups"][0]]},
+            "invalid": {
+                "groups": [
+                    self.SUMMARY_RESPONSE["groups"][0],
+                    {"displayName": "renamed group must not matter", "buckets": "not a list"},
+                ]
+            },
+            "malformed": {
+                "groups": [
+                    self.SUMMARY_RESPONSE["groups"][0],
+                    {
+                        "displayName": "renamed group must not matter",
+                        "buckets": [
+                            {
+                                "bucketId": "3p-5h",
+                                "window": "5h",
+                                "remainingFraction": "nan",
+                            },
+                            {
+                                "bucketId": "3p-weekly",
+                                "window": "weekly",
+                                "remainingFraction": {},
+                            },
+                            "not a bucket",
+                        ],
+                    },
+                ]
+            },
+        }
+        for response in responses.values():
+            with self.subTest(response=response):
+                provider = self._make_provider()
+                with (
+                    patch.object(
+                        AntigravityProvider, "_load_keychain_token", return_value=self._token()
+                    ),
+                    patch("ai_monitor.providers._http_json", return_value=response),
+                ):
+                    status = provider.fetch()
+                self.assertEqual(status.five_hour_percent_left, 86)
+                self.assertEqual(status.weekly_percent_left, 96)
+                self.assertIsNone(status.third_party_five_hour_percent_left)
+                self.assertIsNone(status.third_party_weekly_percent_left)
+                self.assertIsNone(status.third_party_five_hour_reset)
+                self.assertIsNone(status.third_party_weekly_reset)
+
+    def test_malformed_third_party_reset_does_not_hide_gemini_values(self) -> None:
+        response = {
+            "groups": [
+                self.SUMMARY_RESPONSE["groups"][0],
+                {
+                    "buckets": [
+                        {
+                            "bucketId": "3p-5h",
+                            "window": "5h",
+                            "resetTime": {"unexpected": "object"},
+                            "remainingFraction": 0.421,
+                        },
+                        self.SUMMARY_RESPONSE["groups"][1]["buckets"][0],
+                    ]
+                },
+            ]
+        }
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=response),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 86)
+        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertEqual(status.third_party_five_hour_percent_left, 42.1)
+        self.assertIsNone(status.third_party_five_hour_reset)
+        self.assertEqual(status.third_party_weekly_percent_left, 73.4)
+        self.assertIsNotNone(status.third_party_weekly_reset)
+
+    def test_bucket_prefix_filters_each_selected_window(self) -> None:
+        response = {
+            "groups": [
+                {
+                    "buckets": [
+                        self.SUMMARY_RESPONSE["groups"][0]["buckets"][1],
+                        self.SUMMARY_RESPONSE["groups"][1]["buckets"][0],
+                    ]
+                },
+                {
+                    "buckets": [
+                        self.SUMMARY_RESPONSE["groups"][1]["buckets"][0],
+                        self.SUMMARY_RESPONSE["groups"][0]["buckets"][1],
+                    ]
+                },
+            ]
+        }
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=response),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 86)
+        self.assertIsNone(status.weekly_percent_left)
+        self.assertIsNone(status.third_party_five_hour_percent_left)
+        self.assertEqual(status.third_party_weekly_percent_left, 73.4)
+
+    def test_third_party_fraction_preserves_precision(self) -> None:
+        response = {
+            "groups": [
+                self.SUMMARY_RESPONSE["groups"][0],
+                {
+                    "buckets": [
+                        {
+                            "bucketId": "3p-5h",
+                            "window": "5h",
+                            "remainingFraction": 0.999,
+                        },
+                        {
+                            "bucketId": "3p-weekly",
+                            "window": "weekly",
+                            "remainingFraction": 1,
+                        },
+                    ]
+                },
+            ]
+        }
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=response),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 86)
+        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertEqual(status.third_party_five_hour_percent_left, 99.9)
+        self.assertEqual(status.third_party_weekly_percent_left, 100.0)
+
+    def test_third_party_fraction_preserves_exact_boundaries(self) -> None:
+        response = {
+            "groups": [
+                self.SUMMARY_RESPONSE["groups"][0],
+                {
+                    "buckets": [
+                        {
+                            "bucketId": "3p-5h",
+                            "window": "5h",
+                            "remainingFraction": 0,
+                        },
+                        {
+                            "bucketId": "3p-weekly",
+                            "window": "weekly",
+                            "remainingFraction": 1,
+                        },
+                    ]
+                },
+            ]
+        }
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=response),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.third_party_five_hour_percent_left, 0.0)
+        self.assertEqual(status.third_party_weekly_percent_left, 100.0)
+
+    def test_out_of_range_third_party_fractions_do_not_hide_gemini_values(self) -> None:
+        response = {
+            "groups": [
+                self.SUMMARY_RESPONSE["groups"][0],
+                {
+                    "buckets": [
+                        {
+                            "bucketId": "3p-5h",
+                            "window": "5h",
+                            "remainingFraction": -0.01,
+                        },
+                        {
+                            "bucketId": "3p-weekly",
+                            "window": "weekly",
+                            "remainingFraction": 1.01,
+                        },
+                    ]
+                },
+            ]
+        }
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("ai_monitor.providers._http_json", return_value=response),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 86)
+        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertIsNone(status.third_party_five_hour_percent_left)
+        self.assertIsNone(status.third_party_weekly_percent_left)
+
+    def test_third_party_fraction_rejects_booleans_and_non_finite_values(self) -> None:
+        for fraction in (True, False, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(fraction=fraction):
+                self.assertIsNone(
+                    AntigravityProvider._third_party_percent_from_fraction(
+                        {"remainingFraction": fraction}
+                    )
+                )
+
+    def test_gemini_fraction_parsing_keeps_prior_non_finite_behavior(self) -> None:
+        bucket = {"remainingFraction": "nan"}
+        with self.assertRaises(ValueError):
+            AntigravityProvider._percent_from_fraction(bucket)
 
     # ---- self-heal: nudge `agy` to refresh its OWN token via `agy models` ----
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import tempfile
@@ -202,6 +203,68 @@ class TestWarningPredicate(unittest.TestCase):
         self.assertEqual(
             [window["id"] for window in snap.build_windows(cursor, NOW)], ["billing_cycle"]
         )
+
+    def test_antigravity_cg_warning_windows_are_interactive_only(self) -> None:
+        """C+G quota alerts never enter v1/v2 router projections (INV-1, INV-5)."""
+        antigravity = _ps(
+            "Antigravity",
+            True,
+            data={
+                "five_hour_percent_left": 80,
+                "weekly_percent_left": 70,
+                "third_party_five_hour_percent_left": 0,
+                "third_party_weekly_percent_left": 5,
+                "third_party_five_hour_reset": "in 3h",
+                "third_party_weekly_reset": "in 6d",
+            },
+        )
+
+        warning_windows = {
+            window["id"]: window for window in snap.normalized_warning_windows(antigravity, NOW)
+        }
+        self.assertEqual(set(warning_windows), {"five_hour", "weekly", "cg5", "cg1w"})
+        self.assertEqual(warning_windows["cg5"]["percent_left"], 0.0)
+        self.assertEqual(warning_windows["cg5"]["window_hours"], 5.0)
+        self.assertEqual(warning_windows["cg1w"]["percent_left"], 5.0)
+        self.assertEqual(warning_windows["cg1w"]["window_hours"], 168.0)
+        self.assertLess(warning_windows["cg1w"]["pace_delta"], -0.10)
+        self.assertEqual(snap.warning_window_ids(antigravity, NOW), ("cg5", "cg1w"))
+        self.assertEqual(
+            snap.warning_membership([antigravity], NOW), {"Antigravity": ("cg5", "cg1w")}
+        )
+
+        expected_router_ids = ["five_hour", "weekly"]
+        self.assertEqual(
+            [window["id"] for window in snap.build_windows(antigravity, NOW)], expected_router_ids
+        )
+        self.assertEqual(
+            [window["id"] for window in snap.build_v2_windows(antigravity, NOW)],
+            expected_router_ids,
+        )
+        self.assertFalse(
+            {
+                "third_party_five_hour_percent_left",
+                "third_party_weekly_percent_left",
+                "third_party_five_hour_reset",
+                "third_party_weekly_reset",
+            }
+            & set(snap.SAFE_DATA_KEYS)
+        )
+        self.assertEqual(
+            snap.project_data(antigravity),
+            {"five_hour_percent_left": 80, "weekly_percent_left": 70},
+        )
+        for payload in (
+            snap.build_snapshot_payload([antigravity], NOW),
+            snap.build_snapshot_v2_payload([antigravity], NOW),
+        ):
+            entry = next(
+                provider for provider in payload["providers"] if provider["name"] == "Antigravity"
+            )
+            self.assertEqual([window["id"] for window in entry["windows"]], expected_router_ids)
+            self.assertEqual(
+                entry["data"], {"five_hour_percent_left": 80, "weekly_percent_left": 70}
+            )
 
 
 class TestReconcile(unittest.TestCase):
@@ -513,8 +576,53 @@ class TestTransientMerge(unittest.TestCase):
         failing = _ps("Codex", False, error="rate limited")
         payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
+        prior_codex = next(p for p in prior["providers"] if p["name"] == "Codex")
         self.assertTrue(codex["ok"])
         self.assertTrue(codex["windows"])
+        self.assertEqual(codex, prior_codex)
+        self.assertIsNot(codex, prior_codex)
+        codex["data"]["five_hour_percent_left"] = 1
+        self.assertEqual(prior_codex["data"]["five_hour_percent_left"], 88)
+
+    def test_transient_rejects_prior_with_extra_or_error_metadata(self) -> None:
+        """A retained prior cannot carry unrecognized metadata or an error."""
+        invalid_fields = (
+            ("debug_detail", "diagnostic detail"),
+            ("access_token", "redacted"),
+            ("error", "prior failure"),
+        )
+        failing = _ps("Codex", False, error="rate limited")
+        for field, value in invalid_fields:
+            with self.subTest(field=field):
+                prior = self._healthy_prior(NOW - timedelta(seconds=100))
+                codex = next(entry for entry in prior["providers"] if entry["name"] == "Codex")
+                codex[field] = value
+
+                payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+                self.assertFalse(current["ok"])
+                self.assertEqual(current["error"], "rate limited")
+                self.assertEqual(current["windows"], [])
+
+    def test_transient_rejects_nonmapping_or_invalid_prior_timestamp(self) -> None:
+        """Malformed prior metadata neither raises nor seeds cached data."""
+        failing = _ps("Codex", False, error="rate limited")
+        invalid_priors: list[object] = (["not a payload"], "not a payload")
+        for prior in invalid_priors:
+            with self.subTest(prior=repr(prior)):
+                payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+                self.assertFalse(current["ok"])
+                self.assertEqual(current["windows"], [])
+
+        for timestamp in ((NOW - timedelta(seconds=100)).isoformat(), "not an ISO timestamp"):
+            with self.subTest(timestamp=timestamp):
+                prior = self._healthy_prior(NOW - timedelta(seconds=100))
+                prior["updated_at"] = timestamp
+                payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+                self.assertFalse(current["ok"])
+                self.assertEqual(current["windows"], [])
 
     def test_transient_cursor_rejects_legacy_malformed_prior(self) -> None:
         """Cursor must not retain pre-v1-shape windows or raw pool metadata."""
@@ -557,6 +665,58 @@ class TestTransientMerge(unittest.TestCase):
         self.assertEqual(cursor["windows"], [])
         self.assertEqual(cursor["data"], {})
 
+    def test_transient_antigravity_rejects_cg_prior_windows(self) -> None:
+        """Router snapshots never retain C+G windows from a transient prior."""
+        antigravity = _ps(
+            "Antigravity",
+            True,
+            data={
+                "five_hour_percent_left": 88,
+                "weekly_percent_left": 66,
+                "five_hour_reset": "in 4h",
+                "weekly_reset": "in 6d",
+            },
+        )
+        failing = _ps("Antigravity", False, error="network error")
+        builders = (
+            (snap.build_snapshot_payload, "cg5"),
+            (snap.build_snapshot_v2_payload, "cg1w"),
+        )
+        for build, forbidden_window_id in builders:
+            with self.subTest(schema=build.__name__, window_id=forbidden_window_id):
+                prior = build([antigravity], NOW - timedelta(seconds=100))
+                retained = build([failing], NOW, prior=prior)
+                retained_antigravity = next(
+                    entry for entry in retained["providers"] if entry["name"] == "Antigravity"
+                )
+                self.assertTrue(retained_antigravity["ok"])
+                self.assertEqual(
+                    [window["id"] for window in retained_antigravity["windows"]],
+                    ["five_hour", "weekly"],
+                )
+
+                malicious_prior = copy.deepcopy(prior)
+                malicious_entry = next(
+                    entry
+                    for entry in malicious_prior["providers"]
+                    if entry["name"] == "Antigravity"
+                )
+                malicious_entry["windows"].append(
+                    {
+                        "id": forbidden_window_id,
+                        "percent_left": 50.0,
+                        "reset_iso": None,
+                        "window_hours": 5.0,
+                        "pace_delta": None,
+                    }
+                )
+                payload = build([failing], NOW, prior=malicious_prior)
+                current_antigravity = next(
+                    entry for entry in payload["providers"] if entry["name"] == "Antigravity"
+                )
+                self.assertFalse(current_antigravity["ok"])
+                self.assertEqual(current_antigravity["windows"], [])
+
     def test_transient_drops_stale_prior(self) -> None:
         """A transient failure past 300s does NOT retain the prior entry."""
         prior = self._healthy_prior(NOW - timedelta(seconds=400))
@@ -594,6 +754,46 @@ class TestTransientMerge(unittest.TestCase):
         self.assertFalse(current["ok"])
         with tempfile.TemporaryDirectory() as tmpdir:
             self.assertTrue(snap.write_snapshot(payload, Path(tmpdir) / "snapshot.json"))
+
+    def test_transient_rejects_prior_with_unhashable_window_id(self) -> None:
+        """An unhashable prior ID is rejected instead of raising during membership."""
+        prior = self._healthy_prior(NOW - timedelta(seconds=100))
+        codex = next(entry for entry in prior["providers"] if entry["name"] == "Codex")
+        codex["windows"][0]["id"] = ["five_hour"]
+
+        payload = snap.build_snapshot_payload(
+            [_ps("Codex", False, error="rate limited")], NOW, prior=prior
+        )
+        current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+        self.assertFalse(current["ok"])
+        self.assertEqual(current["windows"], [])
+
+    def test_transient_rejects_corrupt_window_metadata(self) -> None:
+        """Corrupt retained metadata never survives a transient provider failure."""
+        corrupt_values = (
+            ("reset_iso", []),
+            ("reset_iso", {"not": "a string"}),
+            ("window_hours", math.nan),
+            ("window_hours", math.inf),
+            ("window_hours", True),
+            ("window_hours", 0.0),
+            ("pace_delta", math.nan),
+            ("pace_delta", -math.inf),
+            ("pace_delta", False),
+            ("pace_delta", [0.1]),
+        )
+        for field, value in corrupt_values:
+            with self.subTest(field=field, value=repr(value)):
+                prior = self._healthy_prior(NOW - timedelta(seconds=100))
+                codex = next(entry for entry in prior["providers"] if entry["name"] == "Codex")
+                codex["windows"][0][field] = value
+
+                payload = snap.build_snapshot_payload(
+                    [_ps("Codex", False, error="rate limited")], NOW, prior=prior
+                )
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+                self.assertFalse(current["ok"])
+                self.assertEqual(current["windows"], [])
 
 
 class TestPathContract(unittest.TestCase):

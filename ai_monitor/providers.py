@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import subprocess
 import tempfile
@@ -1600,16 +1601,70 @@ class AntigravityProvider:
         return max(0, min(100, int(round(value * 100))))
 
     @staticmethod
-    def _find_gemini_group(groups: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """Return the Gemini-models quota group (5h + weekly windows)."""
+    def _third_party_percent_from_fraction(bucket: dict[str, Any] | None) -> float | None:
+        """Return a bounded C+G remaining percentage without rounding it."""
+        if not bucket:
+            return None
+        fraction = bucket.get("remainingFraction")
+        if isinstance(fraction, bool) or fraction is None:
+            return None
+        try:
+            value = float(fraction)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value) or not 0 <= value <= 1:
+            return None
+        return value * 100
+
+    @staticmethod
+    def _find_group_by_bucket_prefix(
+        groups: list[dict[str, Any]], bucket_prefix: str
+    ) -> dict[str, Any] | None:
+        """Return the group identified by one of its stable bucket ID prefixes."""
         for group in groups:
-            name = str(group.get("displayName", "")).lower()
-            buckets = group.get("buckets") or []
-            if name.startswith("gemini") or any(
-                str(b.get("bucketId", "")).startswith("gemini") for b in buckets
+            if not isinstance(group, dict):
+                continue
+            buckets = group.get("buckets")
+            if not isinstance(buckets, list):
+                continue
+            if any(
+                isinstance(bucket, dict)
+                and str(bucket.get("bucketId", "")).startswith(bucket_prefix)
+                for bucket in buckets
             ):
                 return group
         return None
+
+    @staticmethod
+    def _buckets_by_window(
+        group: dict[str, Any] | None, bucket_prefix: str
+    ) -> dict[str, dict[str, Any]]:
+        """Return prefix-matching quota buckets keyed by their window name."""
+        if not group:
+            return {}
+        buckets = group.get("buckets")
+        if not isinstance(buckets, list):
+            return {}
+        return {
+            bucket["window"]: bucket
+            for bucket in buckets
+            if (
+                isinstance(bucket, dict)
+                and isinstance(bucket.get("window"), str)
+                and isinstance(bucket.get("bucketId"), str)
+                and bucket["bucketId"].startswith(bucket_prefix)
+            )
+        }
+
+    @staticmethod
+    def _third_party_reset_time(bucket: dict[str, Any] | None) -> str | None:
+        """Format a C+G reset without letting malformed data affect Gemini."""
+        if not bucket:
+            return None
+        try:
+            return _format_reset_time(bucket.get("resetTime"))
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
 
     @classmethod
     def _read_account_email(cls) -> str | None:
@@ -1668,19 +1723,32 @@ class AntigravityProvider:
         if not groups:
             raise ProbeFailure("Antigravity quota response has no groups", raw_text[:500])
 
-        gemini_group = self._find_gemini_group(groups)
+        gemini_group = self._find_group_by_bucket_prefix(groups, "gemini-")
         if gemini_group is None:
             raise ProbeFailure("Antigravity quota: no Gemini group found", raw_text[:500])
 
-        buckets = {b.get("window"): b for b in (gemini_group.get("buckets") or [])}
-        five_hour = buckets.get("5h")
-        weekly = buckets.get("weekly")
+        gemini_buckets = self._buckets_by_window(gemini_group, "gemini-")
+        five_hour = gemini_buckets.get("5h")
+        weekly = gemini_buckets.get("weekly")
+        third_party_buckets = self._buckets_by_window(
+            self._find_group_by_bucket_prefix(groups, "3p-"), "3p-"
+        )
+        third_party_five_hour = third_party_buckets.get("5h")
+        third_party_weekly = third_party_buckets.get("weekly")
 
         return AntigravityStatus(
             five_hour_percent_left=self._percent_from_fraction(five_hour),
             weekly_percent_left=self._percent_from_fraction(weekly),
             five_hour_reset=_format_reset_time(five_hour.get("resetTime")) if five_hour else None,
             weekly_reset=_format_reset_time(weekly.get("resetTime")) if weekly else None,
+            third_party_five_hour_percent_left=self._third_party_percent_from_fraction(
+                third_party_five_hour
+            ),
+            third_party_weekly_percent_left=self._third_party_percent_from_fraction(
+                third_party_weekly
+            ),
+            third_party_five_hour_reset=self._third_party_reset_time(third_party_five_hour),
+            third_party_weekly_reset=self._third_party_reset_time(third_party_weekly),
             account_email=self._read_account_email(),
             account_tier=None,
             raw_text=raw_text,

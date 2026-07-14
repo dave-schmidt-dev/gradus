@@ -111,6 +111,46 @@ class CodexWarningTests(unittest.TestCase):
         self.assertEqual(notified, {"Codex"})
 
 
+class AntigravityWarningTests(unittest.TestCase):
+    """Antigravity C+G pools participate in warning notifications only."""
+
+    def _antigravity(self, cg5: float, cg1w: float) -> ProviderSnapshot:
+        return ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 86,
+                "weekly_percent_left": 96,
+                "third_party_five_hour_percent_left": cg5,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+                "third_party_weekly_percent_left": cg1w,
+                "third_party_weekly_reset": "Resets Mar 21 at 8:22 AM",
+            },
+        )
+
+    def test_depleted_cg_windows_notify_with_deterministic_ids(self) -> None:
+        notified: set[str] = set()
+        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+            _check_warnings([self._antigravity(0, 0)], notified, NOW)
+
+        notify.assert_called_once_with("Antigravity", ("cg5", "cg1w"))
+        self.assertEqual(notified, {"Antigravity"})
+
+    def test_cg_recovery_clears_latch_and_later_regression_warns_again(self) -> None:
+        notified: set[str] = set()
+        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+            _check_warnings([self._antigravity(0, 0)], notified, NOW)
+            _check_warnings([self._antigravity(0, 0)], notified, NOW)
+            _check_warnings([self._antigravity(100, 100)], notified, NOW)
+            self.assertEqual(notified, set())
+            _check_warnings([self._antigravity(0, 0)], notified, NOW)
+
+        self.assertEqual(notify.call_count, 2)
+        self.assertEqual(notify.call_args_list[0].args, ("Antigravity", ("cg5", "cg1w")))
+        self.assertEqual(notify.call_args_list[1].args, ("Antigravity", ("cg5", "cg1w")))
+
+
 class MainOnceTests(unittest.TestCase):
     """Test --once mode: no Live context, prints dashboard via Console.print."""
 

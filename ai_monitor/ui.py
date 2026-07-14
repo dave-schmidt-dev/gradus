@@ -157,6 +157,30 @@ PROVIDER_RENDER_SPECS = {
 }
 
 
+ANTIGRAVITY_CG_WINDOWS = (
+    WindowRenderSpec(
+        "cg_five_hour",
+        "cg5",
+        "cg5 ↻",
+        None,
+        "third_party_five_hour_percent_left",
+        "third_party_five_hour_reset",
+        5.0,
+        omit_when_empty=True,
+    ),
+    WindowRenderSpec(
+        "cg_weekly",
+        "cg1w",
+        "cg1w ↻",
+        None,
+        "third_party_weekly_percent_left",
+        "third_party_weekly_reset",
+        24.0 * 7.0,
+        omit_when_empty=True,
+    ),
+)
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers (business logic, kept from original)
 # ---------------------------------------------------------------------------
@@ -262,12 +286,25 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
     if not snapshot.ok or not snapshot.data:
         return False
     name = snapshot.name.removesuffix(" [HTTP]")
+    if name == "Antigravity":
+        # Gemini and C+G quotas are independently usable. Keep the normal
+        # panel whenever either group has capacity, even when the other is
+        # depleted. This is intentionally based on the raw numeric values so
+        # the UI does not depend on router/snapshot window publication.
+        percent_keys = tuple(
+            window.percent_key
+            for window in (*PROVIDER_RENDER_SPECS[name].windows, *ANTIGRAVITY_CG_WINDOWS)
+        )
+        values = [snapshot.data.get(key) for key in percent_keys]
+        available = [value for value in values if percent_is_valid(value)]
+        return bool(available) and all(percent_is_depleted(value) for value in available)
+
     windows = normalized_warning_windows(snapshot, now)
     depleted = {
         str(window["id"]) for window in windows if percent_is_depleted(window["percent_left"])
     }
     available = {str(window["id"]) for window in windows}
-    if name in {"Antigravity", "Cursor"}:
+    if name == "Cursor":
         return bool(available) and depleted == available
     return bool(depleted)
 
@@ -481,7 +518,7 @@ def build_provider_panel(
     # All panels use the same 5-column layout so bars align across the grid:
     # label | % | bar | reset | pace
     body = Table.grid(padding=(0, 1))
-    body.add_column(min_width=2, max_width=3)
+    body.add_column(min_width=2, max_width=4)
     body.add_column(min_width=4, max_width=4)
     body.add_column(min_width=4, ratio=1)
     body.add_column(min_width=12, max_width=12)
@@ -493,6 +530,8 @@ def build_provider_panel(
         _add_cursor_rows(body, snapshot.data, now)
     elif base_name == "Vibe":
         _add_vibe_rows(body, snapshot.data, now)
+    elif base_name == "Antigravity":
+        _add_antigravity_rows(body, snapshot.data, now, spec.windows)
     elif spec:
         _add_usage_rows(body, snapshot.data, now, spec.windows)
     else:
@@ -546,6 +585,35 @@ def _add_usage_rows(
         )
 
 
+def _antigravity_cg_data(data: dict[str, object]) -> dict[str, object]:
+    """Return the C+G windows that should be visible in the Antigravity panel.
+
+    An entirely full C+G group is intentionally idle and stays out of the
+    compact panel. The decision uses the unrounded, validated source values:
+    99.9 must render even though its display text is ``100%``.
+    """
+    visible: dict[str, object] = {}
+    for window in ANTIGRAVITY_CG_WINDOWS:
+        percent = data.get(window.percent_key)
+        if percent_is_valid(percent) and float(percent) < 100.0:
+            visible[window.percent_key] = percent
+            reset = data.get(window.reset_key)
+            if reset is not None:
+                visible[window.reset_key] = reset
+    return visible
+
+
+def _add_antigravity_rows(
+    table: Table,
+    data: dict[str, object],
+    now: datetime,
+    gemini_windows: tuple[WindowRenderSpec, ...],
+) -> None:
+    """Add baseline Gemini rows followed by active C+G quota rows."""
+    _add_usage_rows(table, data, now, gemini_windows)
+    _add_usage_rows(table, _antigravity_cg_data(data), now, ANTIGRAVITY_CG_WINDOWS)
+
+
 def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> None:
     """All rows show depleted format — provider has no usable capacity.
 
@@ -569,17 +637,26 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
 
     spec = PROVIDER_RENDER_SPECS.get(name)
     if spec:
+        windows = spec.windows
+        if name == "Antigravity":
+            # C+G rows use the same depleted presentation when every usable
+            # quota is exhausted, while malformed/absent C+G values remain
+            # omitted rather than producing phantom rows.
+            windows = (*windows, *ANTIGRAVITY_CG_WINDOWS)
+
         # Find the reset of the first depleted window — that's what blocks usage.
         blocking_reset: str | None = None
-        for window in spec.windows:
+        for window in windows:
             if _is_empty_window(data.get(window.percent_key)):
                 raw = data.get(window.reset_key)
                 blocking_reset = None if raw is None else str(raw)
                 break
 
-        for window in spec.windows:
+        for window in windows:
             percent = data.get(window.percent_key)
             if window.omit_when_empty and percent is None:
+                continue
+            if name == "Antigravity" and not percent_is_valid(percent):
                 continue
             if _is_empty_window(percent):
                 raw = data.get(window.reset_key)

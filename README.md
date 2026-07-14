@@ -17,7 +17,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors Vibe usage via the Mistral billing API
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position — so when OpenAI removed the Codex 5-hour limit (2026-07) the card automatically shows just the 1-week window, and the 5-hour row reappears on its own if OpenAI restores it (no code change)
-- Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel)
+- Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus conditional Claude+GPT (`cg5`, `cg1w`) group activation when at least one valid C+G remaining percentage is below 100%. Rows render independently: each valid C+G row below 100% appears; exact-100%, missing, or malformed sibling rows are omitted.
 - Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
 - Shows Vibe monthly remaining (`month rem`), reset, and billing-cycle pace
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
@@ -98,6 +98,8 @@ Antigravity card shows (Gemini model group — the pool `agy` consumes):
 - `5h`: remaining quota for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining quota for the current 1-week window, weekly reset time, pace indicator
 
+When the Claude+GPT group has at least one valid remaining percentage below 100%, the group activates. Rows render independently: each valid C+G percentage below 100% produces its `cg5` (5-hour) or `cg1w` (1-week) row; exact-100%, missing, or malformed sibling rows are omitted. If both valid C+G percentages are exactly 100%, that idle group is omitted. C+G rows participate in the same `[!]` badge and one-shot notification warning membership as other rendered windows.
+
 Cursor / Vibe cards show:
 
 - `mo`: monthly remaining percentage, billing-cycle reset, pace indicator
@@ -112,7 +114,7 @@ Reset displays are normalized before rendering:
 
 ## JSON Output
 
-`--json` prints a read-only snapshot and is **machine-safe** — like `--write-snapshot`, it engages the headless path (no browser launch, token refresh, cache writes, or warning notifications), and a provider without cached credentials reports `auth required` rather than triggering interactive recovery. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`.
+`--json` prints a read-only snapshot and is **machine-safe** — like `--write-snapshot`, it engages the headless path (no browser launch, token refresh, cache writes, or warning notifications), and a provider without cached credentials reports `auth required` rather than triggering interactive recovery. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`. Antigravity's Claude+GPT fields and windows are deliberately excluded from `--json`; Gemini output remains unchanged.
 
 Example:
 
@@ -186,7 +188,7 @@ All 5 canonical providers are always present (Codex, Claude, Antigravity, Cursor
 
 In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sourced from its numeric `credit_percent_left` remaining percentage. Schema v2 preserves every non-Cursor window and instead publishes Cursor's independent numeric `ac` (Auto + Composer) and `ap` (included API) windows, omitting either unavailable pool. Consumers may roll back by selecting the v1 path/version; retain v1 until all consumers have migrated.
 
-`.state/snapshot.json` is consumed by hermes-publisher's AiMonitorCollector as well as review-plugin; consumers reject unsupported schema_version; incompatible changes to top-level payload, provider-entry fields, or windows[] require schema bump and coordinated compatibility updates in both consumer projects. `--json` remains schema-agnostic local/debug output and does not select or persist either router schema.
+`.state/snapshot.json` is consumed by hermes-publisher's AiMonitorCollector as well as review-plugin; consumers reject unsupported schema_version; incompatible changes to top-level payload, provider-entry fields, or windows[] require schema bump and coordinated compatibility updates in both consumer projects. Antigravity's Claude+GPT fields and windows are deliberately excluded from router snapshot v1/v2 schemas, so the Gemini snapshot contract remains unchanged. `--json` remains schema-agnostic local/debug output and does not select or persist either router schema.
 
 ## Notes
 
@@ -197,7 +199,7 @@ In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sou
 - In live mode, press `q` to quit or `r` to trigger an immediate refresh.
 - Cursor and Vibe try Safari cookie extraction first; Vibe also supports Chrome cookie extraction. Cookies are cached locally at `.cache/<provider>_cookies.json` (gitignored) to survive Safari disk-sync lag and reduce spurious re-auth prompts; the cache is evicted on API 400/401/403 errors (Claude also returns 400 when a cached `lastActiveOrg` fails its UUID validator).
 - **Credential storage.** The `.cache/` credential files (provider cookies/tokens) and the Codex `~/.codex/auth.json` are written mode `0600` inside a `0700` directory via a single atomic private-write helper — a `tempfile.mkstemp` temp file (born `0600`, independent of umask) swapped in with `os.replace`, so the file is never world-readable, even momentarily. Pre-existing caches are also tightened to `0600` opportunistically on the next interactive (non-headless) read. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/ai_monitor/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
-- A normalized window warns when it is exactly depleted or its finite pace delta is below `-0.10`; `[!]` badges and one-shot macOS notifications use the same provider-level warning membership. Notifications name the warning window IDs. Cursor's `ac` and `ap` pools are evaluated independently in-process and in schema v2, while v1 continues to publish only its `billing_cycle` window.
+- A normalized window warns when it is exactly depleted or its finite pace delta is below `-0.10`; `[!]` badges and one-shot macOS notifications use the same provider-level warning membership. Notifications name the warning window IDs. Antigravity's conditional C+G rows (`cg5`, `cg1w`) participate in this membership. Cursor's `ac` and `ap` pools are evaluated independently in-process and in schema v2, while v1 continues to publish only its `billing_cycle` window.
 - Vibe uses Mistral's `usage_percentage` field as percent used directly. If Mistral shows `1.08% used`, AI Monitor will render about `99%` remaining after rounding.
 - Cursor reads billing-cycle and usage data from the nested `planUsage` payload. The card shows Cursor's two individual-plan pools: `ac` is the shared Auto + Composer pool, converted from `autoPercentUsed` (percent used) to remaining capacity; `ap` is the included API-spend balance, calculated from Cursor's `remaining / limit` cents values. The undocumented `apiPercentUsed` field is not emitted in the v1 router snapshot and is not displayed as a capacity window.
 
@@ -211,7 +213,6 @@ In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sou
 ## Known Issues
 
 - **Claude `/usage` may return "only available for subscription plans"** even on valid Team or Pro seats. This is a server-side issue where the Anthropic usage API returns empty limit buckets (`five_hour`, `seven_day`, `seven_day_sonnet` are all null). The PTY probe itself works correctly. When the API starts returning data again, the Claude card will populate automatically.
-- The Antigravity card tracks only the Gemini model group (the pool `agy` actually consumes). The Claude+GPT group `agy` also reports is intentionally not shown — it sits idle at 100% for this account and would just add noise.
 - The Antigravity token is minted under `agy`'s own OAuth client, so this path is coupled to `agy`'s internal API. If a future `agy` release changes the Keychain layout or the `retrieveUserQuotaSummary` contract, the card will show an error until the provider is updated.
 
 ## Development
