@@ -466,9 +466,11 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("Cursor", output)
         self.assertIn("ac", output)
         self.assertIn("ap", output)
-        self.assertIn("82%", output)
         self.assertIn("93%", output)
-        self.assertNotIn("98%", output)
+        # api_percent_used 1.5% used -> 98.5% remaining (banker's rounding -> 98%).
+        self.assertIn("98%", output)
+        # The dollar-spend meter (credit_percent_left=82.5) must no longer render.
+        self.assertNotIn("82%", output)
         self.assertNotIn("pl", output)
         self.assertNotIn("pro", output)
 
@@ -477,13 +479,13 @@ class ProviderPanelTests(unittest.TestCase):
             name="Cursor",
             ok=True,
             source="api",
-            data={"auto_percent_used": 100, "credit_percent_left": 82},
+            data={"auto_percent_used": 100, "api_percent_used": 18},
         )
         no_warning = ProviderSnapshot(
             name="Cursor",
             ok=True,
             source="api",
-            data={"auto_percent_used": 99.7, "credit_percent_left": 82},
+            data={"auto_percent_used": 99.7, "api_percent_used": 18},
         )
 
         warning_output = _capture(build_provider_panel(one_warning, self.now), width=44)
@@ -497,7 +499,7 @@ class ProviderPanelTests(unittest.TestCase):
             name="Cursor",
             ok=True,
             source="api",
-            data={"credit_percent_left": 0},
+            data={"api_percent_used": 100},
         )
         output = _capture(build_provider_panel(snap, self.now), width=44)
         self.assertIn("[!]", output)
@@ -507,7 +509,7 @@ class ProviderPanelTests(unittest.TestCase):
             name="Cursor",
             ok=True,
             source="api",
-            data={"auto_percent_used": True, "credit_percent_left": False},
+            data={"auto_percent_used": True, "api_percent_used": False},
         )
         output = _capture(build_provider_panel(snap, self.now), width=44)
         self.assertNotIn("[!]", output)
@@ -691,7 +693,7 @@ class ProviderPanelTests(unittest.TestCase):
             source="api",
             data={
                 "auto_percent_used": 100,
-                "credit_percent_left": 0,
+                "api_percent_used": 100,
                 "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
                 "plan_name": "pro",
             },
@@ -712,7 +714,7 @@ class ProviderPanelTests(unittest.TestCase):
             source="api",
             data={
                 "auto_percent_used": 10,
-                "credit_percent_left": 0,
+                "api_percent_used": 100,
                 "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
             },
         )
@@ -728,7 +730,7 @@ class ProviderPanelTests(unittest.TestCase):
             ok=True,
             source="api",
             data={
-                "credit_percent_left": 0,
+                "api_percent_used": 100,
                 "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
             },
         )
@@ -744,7 +746,7 @@ class ProviderPanelTests(unittest.TestCase):
             source="api",
             data={
                 "auto_percent_used": 100,
-                "credit_percent_left": 82,
+                "api_percent_used": 18,
                 "billing_cycle_end": "Resets Apr 30 at 8:00 PM",
             },
         )
@@ -901,7 +903,7 @@ class DashboardTests(unittest.TestCase):
             source="api",
             data={
                 "auto_percent_used": 20,
-                "credit_percent_left": 60,
+                "api_percent_used": 40,
                 "billing_cycle_end": "Resets Mar 30 at 9 PM",
             },
         )
@@ -1044,7 +1046,8 @@ class RenderJsonTests(unittest.TestCase):
         for entry in payload["providers"]:
             self.assertNotIn("debug_detail", entry)
 
-    def test_render_json_excludes_cursor_raw_pool_fields(self) -> None:
+    def test_render_json_excludes_cursor_dollar_meter_field(self) -> None:
+        """--json keeps Cursor's two real usage pools; drops the dollar meter."""
         now = datetime(2026, 3, 14, 8, 22, 30)
         cursor = ProviderSnapshot(
             name="Cursor",
@@ -1061,9 +1064,9 @@ class RenderJsonTests(unittest.TestCase):
         payload = json.loads(render_json([cursor], now))
         data = payload["providers"][0]["data"]
 
-        self.assertEqual(data["credit_percent_left"], 82.5)
-        self.assertNotIn("auto_percent_used", data)
-        self.assertNotIn("api_percent_used", data)
+        self.assertNotIn("credit_percent_left", data)
+        self.assertEqual(data["auto_percent_used"], 6.6)
+        self.assertEqual(data["api_percent_used"], 1.5)
         self.assertNotIn("session_token", data)
 
 

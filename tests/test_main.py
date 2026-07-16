@@ -40,7 +40,10 @@ class CursorWarningTests(unittest.TestCase):
         if auto_percent_used is not None:
             data["auto_percent_used"] = auto_percent_used
         if api_percent_left is not None:
-            data["credit_percent_left"] = api_percent_left
+            # api_percent_used is percent USED; convert from the helper's
+            # percent-left parameter so callers can keep reasoning in
+            # remaining-capacity terms.
+            data["api_percent_used"] = 100.0 - api_percent_left
         return ProviderSnapshot(name="Cursor", ok=True, source="api", data=data)
 
     def test_independent_cursor_pool_warning_names_window(self) -> None:
@@ -82,7 +85,7 @@ class WarningNotificationTests(unittest.TestCase):
             name="Cursor",
             ok=True,
             source="api",
-            data={"auto_percent_used": 100, "credit_percent_left": 82},
+            data={"auto_percent_used": 100, "api_percent_used": 18},
         )
         with patch("ai_monitor.__main__._notify_warning", side_effect=(False, True)) as notify:
             _check_warnings([cursor], notified, NOW)

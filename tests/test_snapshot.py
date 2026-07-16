@@ -79,17 +79,25 @@ class TestAllowlist(unittest.TestCase):
             "Cursor",
             True,
             data={
-                "credit_percent_left": 55.0,
+                "auto_percent_used": 20.0,
+                "api_percent_used": 30.0,
                 "plan_name": "Pro",
                 "session_token": "tok_abc",
                 "cookie": "sid=xyz",
             },
         )
         projected = snap.project_data(cursor)
-        self.assertEqual(projected, {"credit_percent_left": 55.0})
+        self.assertEqual(projected, {"auto_percent_used": 20.0, "api_percent_used": 30.0})
 
-    def test_cursor_raw_pool_fields_are_not_allowlisted(self) -> None:
-        """The v1 router projection excludes raw Auto/Composer/API pool fields."""
+    def test_cursor_dollar_meter_field_is_not_allowlisted(self) -> None:
+        """The router projection excludes the dollar-spend meter; per-pool fields are kept.
+
+        ``credit_percent_left`` is a $ spend meter, not a usage pool, so it is
+        no longer surfaced in the projected/persisted ``data`` block (it
+        remains internal provider metadata). ``auto_percent_used`` and
+        ``api_percent_used`` are Cursor's two real per-pool percent-used
+        fields and ARE allowlisted.
+        """
         cursor = _ps(
             "Cursor",
             True,
@@ -101,7 +109,9 @@ class TestAllowlist(unittest.TestCase):
                 "limit_cents": 1_000,
             },
         )
-        self.assertEqual(snap.project_data(cursor), {"credit_percent_left": 55.0})
+        self.assertEqual(
+            snap.project_data(cursor), {"auto_percent_used": 20.0, "api_percent_used": 30.0}
+        )
 
     def test_payload_error_carries_no_raw_payload(self) -> None:
         sentinel = "SENTINEL-a1b2c3-raw-body"
@@ -197,7 +207,7 @@ class TestWarningPredicate(unittest.TestCase):
         cursor = _ps(
             "Cursor",
             True,
-            data={"auto_percent_used": 100, "credit_percent_left": 0},
+            data={"auto_percent_used": 100, "credit_percent_left": 0, "api_percent_used": 100},
         )
         self.assertEqual(snap.warning_window_ids(cursor, NOW), ("ac", "ap"))
         self.assertEqual(
@@ -380,7 +390,7 @@ class TestBuildWindows(unittest.TestCase):
             True,
             data={
                 "auto_percent_used": 100,
-                "credit_percent_left": 0,
+                "api_percent_used": 100,
                 "billing_cycle_start": "not-a-date",
                 "billing_cycle_end_iso": "also-not-a-date",
             },
@@ -481,8 +491,9 @@ class TestPayloadSchema(unittest.TestCase):
         self.assertEqual(len(payload["providers"]), 5)
 
         cursor = next(entry for entry in payload["providers"] if entry["name"] == "Cursor")
-        self.assertNotIn("auto_percent_used", cursor["data"])
-        self.assertNotIn("api_percent_used", cursor["data"])
+        self.assertIn("auto_percent_used", cursor["data"])
+        self.assertIn("api_percent_used", cursor["data"])
+        self.assertNotIn("credit_percent_left", cursor["data"])
         self.assertEqual(
             {window["id"]: window["percent_left"] for window in cursor["windows"]},
             {"billing_cycle": 45.0},
@@ -530,7 +541,7 @@ class TestPayloadSchema(unittest.TestCase):
             True,
             data={
                 "auto_percent_used": 20,
-                "credit_percent_left": None,
+                "api_percent_used": None,
                 "billing_cycle_start": "2026-03-01T00:00:00",
                 "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
             },
@@ -660,6 +671,44 @@ class TestTransientMerge(unittest.TestCase):
         }
         failing = _ps("Cursor", False, error="network error")
         payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+        cursor = next(p for p in payload["providers"] if p["name"] == "Cursor")
+        self.assertFalse(cursor["ok"])
+        self.assertEqual(cursor["windows"], [])
+        self.assertEqual(cursor["data"], {})
+
+    def test_transient_v2_cursor_rejects_pre_fix_dollar_meter_prior(self) -> None:
+        """A v2 prior written before the 2026-07-16 ap-source fix must not crash.
+
+        Before the fix, ``ap``'s persisted ``data`` was keyed by
+        ``credit_percent_left`` (the dollar meter, now removed from
+        SAFE_DATA_KEYS). On-disk history from before the fix can therefore
+        contain that stale key under the still-current ``ap`` window ID.
+        Retention must reject it via the SAFE_DATA_KEYS check (not crash),
+        and the provider must cleanly fall back to an empty entry.
+        """
+        prior = {
+            "schema_version": 2,
+            "updated_at": snap.local_iso(NOW - timedelta(seconds=100)),
+            "providers": [
+                {
+                    "name": "Cursor",
+                    "ok": True,
+                    "error": None,
+                    "windows": [
+                        {
+                            "id": "ap",
+                            "percent_left": 82.0,
+                            "reset_iso": None,
+                            "window_hours": None,
+                            "pace_delta": None,
+                        },
+                    ],
+                    "data": {"credit_percent_left": 82.0},
+                }
+            ],
+        }
+        failing = _ps("Cursor", False, error="network error")
+        payload = snap.build_snapshot_v2_payload([failing], NOW, prior=prior)
         cursor = next(p for p in payload["providers"] if p["name"] == "Cursor")
         self.assertFalse(cursor["ok"])
         self.assertEqual(cursor["windows"], [])
@@ -871,7 +920,7 @@ class TestAtomicWrite(unittest.TestCase):
         provider = _ps(
             "Cursor",
             True,
-            data={"credit_percent_left": float("nan"), "billing_cycle_end": "2026-04-01"},
+            data={"auto_percent_used": float("nan"), "billing_cycle_end": "2026-04-01"},
         )
         self.assertEqual(snap.project_data(provider), {"billing_cycle_end": "2026-04-01"})
 

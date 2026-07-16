@@ -825,12 +825,21 @@ def _add_cursor_rows(table: Table, data: dict[str, object], now: datetime) -> No
         percent = float(value)
         return 100.0 - percent if used else percent
 
-    # Cursor reports Auto + Composer as percent *used*, while the cents-derived
-    # included API balance is already remaining. Convert only the former.
-    # ``api_percent_used`` remains raw JSON metadata, not a documented pool.
+    # Both rows are Cursor's two real usage pools, each reported as percent
+    # *used* and converted here to percent remaining: ``ac`` from
+    # ``auto_percent_used`` (first-party Auto + Composer) and ``ap`` from
+    # ``api_percent_used`` (the API/third-party pool). The dollar-denominated
+    # spend meter (``credit_percent_left``, from Cursor's remaining/limit
+    # cents) is intentionally NOT shown here — it's a $ budget, not a usage
+    # pool, and displaying it under "ap" previously conflated the two.
+    # ``credit_percent_left`` is still computed by the provider as internal
+    # metadata; it is simply no longer surfaced in this row loop. Row IDs
+    # stay ``ac``/``ap`` rather than ``fp``/``api`` — see the comment on
+    # WARNING_WINDOW_SPECS["Cursor"] in snapshot.py for why (INV-5 schema
+    # stability).
     for label, key, is_used in (
         ("ac", "auto_percent_used", True),
-        ("ap", "credit_percent_left", False),
+        ("ap", "api_percent_used", True),
     ):
         percent_left = _remaining(key, used=is_used)
         style = _style_for_percent(percent_left)

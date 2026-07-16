@@ -354,6 +354,18 @@ WARNING_WINDOW_SPECS = {
     **WINDOW_SPECS,
     # These pools are intentionally alert-only until snapshot schema v2. The
     # v1 router payload remains billing_cycle-only for Cursor.
+    #
+    # ``ap`` is sourced from ``api_percent_used`` (Cursor's real API/
+    # third-party pool percent-used) rather than ``credit_percent_left``
+    # (a dollar-spend meter, not a usage pool — conflating the two produced
+    # a misleading "ap" row). Window IDs are kept as ``ac``/``ap`` rather
+    # than renamed: these WindowSpecs are reused verbatim as
+    # V2_WINDOW_SPECS["Cursor"] below, so the IDs double as the persisted
+    # schema-v2 window IDs INV-5 documents as part of the versioned
+    # contract consumed by hermes-publisher and review-plugin. Renaming
+    # them would be an incompatible windows[] change requiring a schema
+    # bump plus coordinated updates in both consumer repos (out of scope
+    # here) — see HISTORY.md 2026-07-16 for the full note.
     "Cursor": (
         WindowSpec(
             "ac",
@@ -366,8 +378,8 @@ WARNING_WINDOW_SPECS = {
         WindowSpec(
             "ap",
             "billing",
-            "credit_percent_left",
-            normalize="remaining",
+            "api_percent_used",
+            normalize="used",
             start_key="billing_cycle_start",
             end_key="billing_cycle_end_iso",
         ),
@@ -560,7 +572,8 @@ SAFE_DATA_KEYS = frozenset(
         "payg_enabled",
         "start_date",
         "end_date",
-        "credit_percent_left",
+        "auto_percent_used",
+        "api_percent_used",
         "billing_cycle_start",
         "billing_cycle_end",
         "billing_cycle_end_iso",
