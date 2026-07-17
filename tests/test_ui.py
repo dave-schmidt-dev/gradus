@@ -934,28 +934,55 @@ class DashboardTests(unittest.TestCase):
         output = _capture(
             build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=78
         )
-        self.assertFalse(any("Codex" in line and "Claude" in line for line in output.splitlines()))
+        lines = output.splitlines()
+        self.assertFalse(any("Codex" in line and "Claude" in line for line in lines))
         self.assertEqual(output.count("Codex"), 1)
         self.assertEqual(output.count("Claude"), 1)
+        # A single-column card fills the whole width — its border spans all 78
+        # columns. This guards against a "cards not side by side" false pass
+        # where the panels merely rendered narrow and staggered.
+        border = next(line for line in lines if line.startswith("╭"))
+        self.assertEqual(len(border), 78)
 
     def test_dashboard_stays_two_column_with_bars_collapsed_when_narrow(self) -> None:
         # The whole point of the low two-column floor: a narrowing terminal
         # shrinks the usage bars to nothing while keeping two columns, rather
-        # than stacking early and re-widening every card. At width 80 the cards
-        # sit side by side yet carry no bar glyphs — just reset + pace text.
+        # than stacking early and re-widening every card. Across the no-bar band
+        # — the exact threshold (79) through the last bar-less width (82) — the
+        # cards sit side by side yet carry no bar glyphs, just reset + pace text.
+        for width in (79, 80, 82):
+            with self.subTest(width=width):
+                output = _capture(
+                    build_dashboard([self.codex_snap, self.claude_snap], self.now, 30),
+                    width=width,
+                )
+                lines = output.splitlines()
+                self.assertTrue(
+                    any("Codex" in line and "Claude" in line for line in lines),
+                    f"Expected two columns at width {width}",
+                )
+                self.assertNotIn("▓", output)
+                self.assertNotIn("░", output)
+                # Nothing is cropped to make room: no ellipsis anywhere, and both
+                # cards keep their full reset time and pace figure.
+                self.assertNotIn("…", output)
+                self.assertIn("Mar 17 21:00", output)  # Codex weekly reset
+                self.assertIn("↑41pt", output)  # Codex weekly pace
+                self.assertIn("Mar 17 20:00", output)  # Claude weekly reset
+                self.assertIn("↓25pt", output)  # Claude 5h pace
+
+    def test_dashboard_two_column_keeps_bars_above_collapse_band(self) -> None:
+        # Bracket the other side of the transition: at a comfortably wide
+        # two-column width the usage bars are still present, so the collapse is
+        # width-driven rather than always-off.
         output = _capture(
-            build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=80
+            build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=92
         )
-        lines = output.splitlines()
         self.assertTrue(
-            any("Codex" in line and "Claude" in line for line in lines),
-            "Expected two columns at width 80",
+            any("Codex" in line and "Claude" in line for line in output.splitlines()),
+            "Expected two columns at width 92",
         )
-        self.assertNotIn("▓", output)
-        self.assertNotIn("░", output)
-        # The reset time and pace figure both survive the bar's removal.
-        self.assertIn("Mar 17 21:00", output)
-        self.assertIn("↑41pt", output)
+        self.assertIn("▓", output)
 
     def test_single_panel_at_narrow_width(self) -> None:
         dashboard = build_dashboard([self.codex_snap], self.now, 30)
