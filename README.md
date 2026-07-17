@@ -90,8 +90,11 @@ generic status cards and error/auth cards likewise remain readable as key/value 
 message layouts rather than being forced through usage-bar columns.
 
 At safe widths, dashboard cards are packed into two independently measured vertical
-stacks with a one-cell horizontal gutter and no empty vertical-row gutter. Below 92
-columns the dashboard falls back to one column.
+stacks with a one-cell horizontal gutter and no empty vertical-row gutter. The
+two-column layout holds down to 79 columns — the width at which two bar-less cards
+still fit a full `reset` and `pace` cell — so a narrowing terminal shrinks the usage
+bars to nothing and stays compact instead of stacking early and re-widening the bars.
+Below 79 columns the dashboard falls back to one column.
 
 Codex and Claude cards show:
 

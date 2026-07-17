@@ -913,7 +913,15 @@ def _add_generic_rows(table: Table, data: dict[str, object], source: str) -> Non
 class PackedProviderCards:
     """Pack fixed-width provider cards into the shorter of two vertical stacks."""
 
-    _TWO_COLUMN_MIN_WIDTH = 92
+    # Keep two columns until they can no longer show a full text-only row, so a
+    # narrowing terminal shrinks each card's usage bar to nothing (see
+    # ResponsiveProviderBody) *before* the layout gives up and stacks the cards
+    # into one wide column. Dropping to one column early would re-widen every
+    # card and balloon the bars back — stretching the dashboard taller instead
+    # of more compact. The floor is the width where two bar-less cards still fit:
+    # a card needs LABEL(4)+PERCENT(4)+RESET(12)+PACE(12) + 3 gutters + 2 border
+    # + 2 padding = 39 cols, so two of them plus the 1-col grid gutter = 79.
+    _TWO_COLUMN_MIN_WIDTH = 79
     _GUTTER_WIDTH = 1
 
     def __init__(self, panels: list[Panel]) -> None:

@@ -929,12 +929,33 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(all(line.strip() for line in lines[first_panel_line : last_panel_line + 1]))
 
     def test_dashboard_falls_back_to_one_column_below_safe_threshold(self) -> None:
+        # Below 79 two cards can no longer show a full reset+pace row side by
+        # side, so the grid stacks into one column.
         output = _capture(
-            build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=91
+            build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=78
         )
         self.assertFalse(any("Codex" in line and "Claude" in line for line in output.splitlines()))
         self.assertEqual(output.count("Codex"), 1)
         self.assertEqual(output.count("Claude"), 1)
+
+    def test_dashboard_stays_two_column_with_bars_collapsed_when_narrow(self) -> None:
+        # The whole point of the low two-column floor: a narrowing terminal
+        # shrinks the usage bars to nothing while keeping two columns, rather
+        # than stacking early and re-widening every card. At width 80 the cards
+        # sit side by side yet carry no bar glyphs — just reset + pace text.
+        output = _capture(
+            build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=80
+        )
+        lines = output.splitlines()
+        self.assertTrue(
+            any("Codex" in line and "Claude" in line for line in lines),
+            "Expected two columns at width 80",
+        )
+        self.assertNotIn("▓", output)
+        self.assertNotIn("░", output)
+        # The reset time and pace figure both survive the bar's removal.
+        self.assertIn("Mar 17 21:00", output)
+        self.assertIn("↑41pt", output)
 
     def test_single_panel_at_narrow_width(self) -> None:
         dashboard = build_dashboard([self.codex_snap], self.now, 30)
