@@ -347,6 +347,15 @@ WINDOW_SPECS: dict[str, tuple[WindowSpec, ...]] = {
             end_key="end_date",
         ),
     ),
+    "Copilot": (
+        WindowSpec(
+            "premium",
+            "billing",
+            "premium_percent_left",
+            normalize="remaining",
+            reset_key="premium_reset",
+        ),
+    ),
 }
 
 

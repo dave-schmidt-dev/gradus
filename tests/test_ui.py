@@ -146,6 +146,10 @@ class ProviderPanelTests(unittest.TestCase):
             "weekly_percent_left": 96,
             "weekly_reset": "resets in 5d 18h",
         }
+        self.copilot_data = {
+            "premium_percent_left": 97.6,
+            "premium_reset": "Resets Apr 01 12:00 AM",
+        }
 
     def test_codex_panel_contains_labels_and_values(self) -> None:
         snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=self.codex_data)
@@ -155,6 +159,13 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("1w", output)
         self.assertIn("68%", output)
         self.assertIn("91%", output)
+
+    def test_copilot_panel_shows_monthly_metrics(self) -> None:
+        snap = ProviderSnapshot(name="Copilot", ok=True, source="cli", data=self.copilot_data)
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("Copilot", output)
+        self.assertIn("mo", output)
+        self.assertIn("98%", output)
 
     def test_normal_rows_preserve_full_percentages_across_card_widths(self) -> None:
         # The Antigravity panel stays in normal mode because the non-zero C+G
@@ -686,6 +697,20 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertNotIn("▓", output)
         self.assertNotIn("91%", output)
 
+    def test_empty_view_copilot(self) -> None:
+        snap = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="cli",
+            data={
+                "premium_percent_left": 0,
+                "premium_reset": "Resets Apr 01 at 12:00 AM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("until", output)
+        self.assertNotIn("▓", output)
+
     def test_empty_view_cursor(self) -> None:
         snap = ProviderSnapshot(
             name="Cursor",
@@ -1170,6 +1195,7 @@ class NoANSIRegressionTests(unittest.TestCase):
             ("Codex", {"five_hour_percent_left": 50, "weekly_percent_left": 80}),
             ("Claude", {"session_percent_left": 30, "weekly_percent_left": 90}),
             ("Antigravity", {"five_hour_percent_left": 75, "weekly_percent_left": 60}),
+            ("Copilot", {"premium_percent_left": 95.0}),
         ):
             with self.subTest(provider=name):
                 snap = ProviderSnapshot(name=name, ok=True, source="cli", data=data)

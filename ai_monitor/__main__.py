@@ -25,6 +25,7 @@ from .providers import (
     AntigravityProvider,
     ClaudeHttpProvider,
     CodexHttpProvider,
+    CopilotHttpProvider,
     CursorProvider,
     ProviderSnapshot,
     VibeProvider,
@@ -63,6 +64,7 @@ AUTH_ACTIONS: dict[str, tuple[str, str]] = {
         "codex login",
     ),
     "Antigravity": ("cli", "agy"),
+    "Copilot": ("cli", "gh auth login"),
     "Cursor": ("browser", "https://cursor.sh"),
     "Vibe": ("browser", "https://console.mistral.ai"),
 }
@@ -135,7 +137,7 @@ def _launch_fix(kind: str, target: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Monitor Codex, Claude, Antigravity, Cursor, and Vibe usage in real time."
+        description="Monitor Codex, Claude, Antigravity, Copilot, Cursor, and Vibe usage in real time."
     )
     parser.add_argument("--interval", type=int, default=120, help="Refresh interval in seconds.")
     parser.add_argument("--once", action="store_true", help="Fetch one snapshot and exit.")
@@ -210,6 +212,14 @@ def initialize_providers(
             cleanup.append(antigravity)
         except Exception as exc:  # noqa: BLE001
             providers.append(("Antigravity", exc))
+
+    if enabled is None or "Copilot" in enabled:
+        try:
+            copilot = CopilotHttpProvider()
+            providers.append(("Copilot", copilot))
+            cleanup.append(copilot)
+        except Exception as exc:  # noqa: BLE001
+            providers.append(("Copilot", exc))
 
     if enabled is None or "Cursor" in enabled:
         try:
@@ -488,7 +498,7 @@ def main() -> int:
                     while not future.done():
                         live.update(
                             build_loading_screen(
-                                "Getting initial usage from Claude, Codex, Antigravity, Cursor, and Vibe…",
+                                "Getting initial usage from Claude, Codex, Antigravity, Copilot, Cursor, and Vibe…",
                                 datetime.now(),
                                 time.monotonic() - started,
                             )

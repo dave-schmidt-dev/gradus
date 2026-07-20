@@ -62,6 +62,18 @@ class AntigravityStatus:
 
 
 @dataclass(slots=True)
+class CopilotStatus:
+    premium_requests: int | None
+    sample_duration_seconds: int | None
+    premium_percent_left: float | None
+    premium_reset: str | None
+    raw_text: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class VibeStatus:
     usage_percent: float | None
     reset_at: str | None

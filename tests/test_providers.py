@@ -19,6 +19,7 @@ from ai_monitor.providers import (
     AntigravityProvider,
     ClaudeHttpProvider,
     CodexHttpProvider,
+    CopilotHttpProvider,
     CursorProvider,
     ProbeFailure,
     ProviderSnapshot,
@@ -32,6 +33,14 @@ from ai_monitor.providers import (
     fetch_provider_snapshot,
 )
 from ai_monitor.snapshot import _is_transient_probe_error
+
+
+class ProviderHelperTests(unittest.TestCase):
+    def test_copilot_monthly_reset_label_uses_local_time(self) -> None:
+        label = CopilotHttpProvider._monthly_reset_label()
+        self.assertTrue(label.startswith("Resets "))
+        self.assertNotIn("UTC", label)
+        self.assertIn(" at ", label)
 
 
 class FormatResetTimeTests(unittest.TestCase):
@@ -109,6 +118,72 @@ class HttpJsonHelperTests(unittest.TestCase):
         with patch("urllib.request.urlopen", return_value=mock_resp):
             with self.assertRaises(ProbeFailure):
                 _http_json("https://example.com/api")
+
+
+class CopilotHttpProviderTests(unittest.TestCase):
+    # Real API uses percent_remaining + remaining directly; quota_reset_date_utc top-level
+    PAID_RESPONSE = {
+        "quota_snapshots": {
+            "premium_interactions": {
+                "percent_remaining": 95.0,
+                "remaining": 285,
+                "unlimited": False,
+            }
+        },
+        "quota_reset_date_utc": "2026-05-01T00:00:00.000Z",
+    }
+    FREE_RESPONSE = {
+        "quota_snapshots": {
+            "premium_interactions": {
+                "percent_remaining": 10.0,
+                "remaining": 5,
+                "unlimited": False,
+            }
+        },
+        "quota_reset_date_utc": "2026-05-01T00:00:00.000Z",
+    }
+
+    def _make_provider(self) -> CopilotHttpProvider:
+        with patch("shutil.which", return_value="/usr/bin/gh"):
+            return CopilotHttpProvider()
+
+    def test_paid_tier_field_mapping(self) -> None:
+        provider = self._make_provider()
+        with (
+            patch("ai_monitor.providers._http_json", return_value=self.PAID_RESPONSE),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+            status = provider.fetch()
+        self.assertIsNotNone(status.premium_percent_left)
+        assert status.premium_percent_left is not None
+        self.assertAlmostEqual(status.premium_percent_left, 95.0, places=1)
+        self.assertEqual(status.premium_requests, 285)
+        self.assertIsNotNone(status.premium_reset)
+
+    def test_free_tier_field_mapping(self) -> None:
+        provider = self._make_provider()
+        with (
+            patch("ai_monitor.providers._http_json", return_value=self.FREE_RESPONSE),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+            status = provider.fetch()
+        self.assertIsNotNone(status.premium_percent_left)
+        assert status.premium_percent_left is not None
+        self.assertAlmostEqual(status.premium_percent_left, 10.0, places=1)
+        self.assertEqual(status.premium_requests, 5)
+
+    def test_401_raises_probe_failure(self) -> None:
+        provider = self._make_provider()
+        with (
+            patch("ai_monitor.providers._http_json", side_effect=ProbeFailure("HTTP 401", "")),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("gh auth login", str(ctx.exception))
 
 
 class VibeProviderTests(unittest.TestCase):

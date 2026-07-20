@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
 from rich.panel import Panel
@@ -51,7 +51,8 @@ THEME = Theme(
         "bar.red": "color(203)",
         "accent.codex": "color(111)",
         "accent.claude": "color(219)",
-        "accent.antigravity": "color(80)",
+        "accent.gemini": "color(80)",
+        "accent.copilot": "color(117)",
         "accent.cursor": "color(214)",
         "accent.vibe": "color(208)",
     }
@@ -152,6 +153,21 @@ PROVIDER_RENDER_SPECS = {
                 "weekly_percent_left",
                 "weekly_reset",
                 24.0 * 7.0,
+            ),
+        ),
+    ),
+    "Copilot": ProviderRenderSpec(
+        title="Copilot",
+        subtitle="Copilot usage",
+        windows=(
+            WindowRenderSpec(
+                "premium",
+                "rem",
+                "mo ↻",
+                None,
+                "premium_percent_left",
+                "premium_reset",
+                None,
             ),
         ),
     ),
@@ -310,6 +326,13 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
     return bool(depleted)
 
 
+def _copilot_monthly_reset_target(now: datetime) -> datetime:
+    utc_now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    year = utc_now.year + (1 if utc_now.month == 12 else 0)
+    month = 1 if utc_now.month == 12 else utc_now.month + 1
+    return datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
+
+
 def _billing_cycle_pace_label(
     percent_left: float | None,
     start_iso: str | None,
@@ -375,7 +398,8 @@ def _style_for_percent(percent: float | None) -> str:
 ACCENT_STYLES: dict[str, str] = {
     "Codex": "accent.codex",
     "Claude": "accent.claude",
-    "Antigravity": "accent.antigravity",
+    "Gemini": "accent.gemini",
+    "Copilot": "accent.copilot",
     "Cursor": "accent.cursor",
     "Vibe": "accent.vibe",
 }
@@ -655,6 +679,9 @@ def build_provider_panel(
     if _provider_is_empty(snapshot, now):
         body = DepletedProviderBody()
         _add_empty_view(body, snapshot, now)
+    elif base_name == "Copilot":
+        body = ResponsiveProviderBody()
+        _add_copilot_rows(body, snapshot.data, now)
     elif spec is None and base_name not in {"Cursor", "Vibe"}:
         # Generic status cards have no usage bar. Their two-column layout is
         # intentionally separate from the normal usage-row allocator.
@@ -799,6 +826,11 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
                 # Window has remaining capacity but provider is blocked;
                 # show the blocking reset so the user knows when they can work again.
                 _row(window.session_label, blocking_reset)
+    elif name == "Copilot":
+        reset_value = data.get("premium_reset") or (
+            f"Resets {_copilot_monthly_reset_target(now).astimezone().strftime('%b %d at %H:%M')}"
+        )
+        _row("mo", str(reset_value))
     elif name == "Cursor":
         reset_value = data.get("billing_cycle_end")
         reset_str = str(reset_value) if isinstance(reset_value, str) else None
@@ -807,6 +839,31 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
     elif name == "Vibe":
         reset_value = data.get("reset_at")
         _row("mo", str(reset_value) if isinstance(reset_value, str) else None)
+
+
+def _add_copilot_rows(table: Table, data: dict[str, object], now: datetime) -> None:
+    """Add Copilot-specific monthly metric rows."""
+    remaining = data.get("premium_percent_left")
+    percent_left = float(remaining) if isinstance(remaining, (int, float)) else None
+    reset_value = (
+        data.get("premium_reset")
+        or f"Resets {_copilot_monthly_reset_target(now).astimezone().strftime('%b %d at %H:%M')}"
+    )
+    utc_now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    start = utc_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = _copilot_monthly_reset_target(utc_now)
+    pace_text = _billing_cycle_pace_label(percent_left, start.isoformat(), end.isoformat(), utc_now)
+
+    style = _style_for_percent(percent_left)
+    value_text = _format_percent_value(percent_left)
+    reset_display = _format_reset_display(None if reset_value is None else str(reset_value), now)
+    table.add_row(
+        Text("mo", style="text.muted"),
+        Text(value_text, style=style),
+        PercentageBar(percent_left, style),
+        Text(reset_display, style="text.cyan"),
+        PaceLabel(pace_text),
+    )
 
 
 def _add_cursor_rows(table: Table, data: dict[str, object], now: datetime) -> None:

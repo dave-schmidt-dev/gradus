@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -21,6 +22,7 @@ from .parsing import (
     AntigravityStatus,
     ClaudeStatus,
     CodexStatus,
+    CopilotStatus,
     CursorStatus,
     VibeStatus,
 )
@@ -1023,6 +1025,102 @@ def _classify_codex_windows(
         elif five_hour is None:
             five_hour = window
     return five_hour, weekly
+
+
+class CopilotHttpProvider:
+    """Fetch Copilot premium-request usage via GitHub REST API."""
+
+    _API_URL = "https://api.github.com/copilot_internal/user"
+
+    def __init__(self) -> None:
+        if not shutil.which("gh"):
+            raise FileNotFoundError("gh not found on PATH")
+
+    def _get_token(self) -> str:
+        try:
+            result = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            token = result.stdout.strip()
+            if not token:
+                raise ProbeFailure("gh auth token returned empty output", "")
+            return token
+        except subprocess.CalledProcessError as exc:
+            raise ProbeFailure(
+                "gh auth login required: run `gh auth login`",
+                str(exc),
+            ) from exc
+
+    @staticmethod
+    def _monthly_reset_label() -> str:
+        now = datetime.now(timezone.utc)
+        year = now.year + (1 if now.month == 12 else 0)
+        month = 1 if now.month == 12 else now.month + 1
+        reset = datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
+        return f"Resets {reset.astimezone().strftime('%b %d at %I:%M %p')}"
+
+    def fetch(self) -> CopilotStatus:
+        token = self._get_token()
+        try:
+            payload = _http_json(
+                self._API_URL,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+            )
+        except ProbeFailure as exc:
+            if "HTTP 401" in str(exc):
+                raise ProbeFailure("Copilot auth failed: run `gh auth login`", str(exc)) from exc
+            raise
+
+        raw_text = json.dumps(payload, indent=2, sort_keys=True)
+
+        # Paid tier: quota_snapshots.premium_interactions
+        premium_percent_left: float | None = None
+        premium_requests: int | None = None
+        premium_reset: str | None = None
+
+        quota_snapshots = payload.get("quota_snapshots") or {}
+        premium = quota_snapshots.get("premium_interactions") or {}
+        if premium:
+            if premium.get("unlimited", False):
+                premium_percent_left = 100.0
+            else:
+                pct_remaining = premium.get("percent_remaining")
+                if pct_remaining is not None:
+                    try:
+                        premium_percent_left = round(float(pct_remaining), 2)
+                    except (TypeError, ValueError):
+                        pass
+                remaining = premium.get("remaining")
+                if remaining is not None:
+                    try:
+                        premium_requests = int(remaining)
+                    except (TypeError, ValueError):
+                        pass
+
+        # Reset: quota_reset_date_utc is a top-level ISO string
+        reset_at = payload.get("quota_reset_date_utc") or payload.get("quota_reset_date")
+        premium_reset = _format_reset_time(reset_at) if reset_at else None
+
+        if premium_reset is None:
+            premium_reset = self._monthly_reset_label()
+
+        return CopilotStatus(
+            premium_percent_left=premium_percent_left,
+            premium_requests=premium_requests,
+            sample_duration_seconds=None,
+            premium_reset=premium_reset,
+            raw_text=raw_text,
+        )
+
+    def close(self) -> None:
+        pass
 
 
 class CodexHttpProvider:
