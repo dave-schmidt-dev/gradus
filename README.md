@@ -1,4 +1,4 @@
-# ai_monitor
+# gradus
 
 Real-time terminal monitor for local `codex`, `claude`, `agy`, `copilot`, `cursor`, and `vibe` usage.
 
@@ -25,7 +25,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
 - Retains cached usage data during transient network errors with an `(offline Xm)` title indicator; shows a `stale` panel after 5 minutes of continuous failure
 - Supports live keyboard shortcuts (`q` quit, `r` refresh now)
-- Supports `.ai_monitor.json` for provider selection and interval configuration
+- Supports `.gradus.json` (legacy `.ai_monitor.json` also read as a fallback) for provider selection and interval configuration
 - Sends one-shot macOS pace/depletion notifications and marks warning providers with a `[!]` badge
 - Renders depleted providers as centered 1-line micro-cards paired side-by-side (ratio Cursor:Copilot:Vibe = 2:1:1) at the bottom of the dashboard to conserve vertical space
 - Uses a shared provider card renderer so reset labels and pacing rows stay aligned across providers
@@ -49,26 +49,26 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 ## Run
 
 ```bash
-python3 -m ai_monitor
+python3 -m gradus
 ./monitor
 ```
 
 Useful options:
 
 ```bash
-python3 -m ai_monitor --once
-python3 -m ai_monitor --interval 30
-python3 -m ai_monitor --interval 60
-python3 -m ai_monitor --json
-python3 -m ai_monitor --debug
-python3 -m ai_monitor --providers Claude,Codex,Copilot,Antigravity
-python3 -m ai_monitor --write-snapshot
+python3 -m gradus --once
+python3 -m gradus --interval 30
+python3 -m gradus --interval 60
+python3 -m gradus --json
+python3 -m gradus --debug
+python3 -m gradus --providers Claude,Codex,Copilot,Antigravity
+python3 -m gradus --write-snapshot
 ./monitor --once
 ```
 
-When `--debug` is enabled, raw captures are written to `/tmp/ai_monitor_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches). The raw payload is **not** written into the router-facing `.state/snapshot.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free), while the debug-augmented detail is surfaced separately as `debug_detail` in `--json` output for local scripting.
+When `--debug` is enabled, raw captures are written to `/tmp/gradus_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches). The raw payload is **not** written into the router-facing `.state/snapshot.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free), while the debug-augmented detail is surfaced separately as `debug_detail` in `--json` output for local scripting.
 
-Optional config file (`.ai_monitor.json` in your current working directory):
+Optional config file (`.gradus.json` in your current working directory; legacy `.ai_monitor.json` also read as a fallback):
 
 ```json
 {
@@ -158,7 +158,7 @@ Example:
 
 A sibling process or router can read `.state/snapshot.json` (schema v1) or `.state/snapshot-v2.json` (schema v2) instantly — no probing, no browser, no credential I/O. Both files are credential-free and gitignored (deliberately not `.cache/`, which holds auth cookies/tokens that a consuming router must never read).
 
-Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m ai_monitor --write-snapshot` as a one-shot headless run.
+Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m gradus --write-snapshot` as a one-shot headless run.
 
 **Read-only guarantee.** The `--write-snapshot` path never opens a browser, spawns a subprocess, refreshes a token, evicts a cookie cache, or sends notifications. Providers with missing or expired credentials surface as `ok: false`. It writes v1 first and v2 second; each file is independently atomic, so a partial failure is logged and exits 1 while the successful sibling remains current.
 
@@ -166,11 +166,11 @@ Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m a
 
 **launchd refresher (manual install).** A ~120 s background job keeps the snapshot current without the TUI running.
 
-- Wrapper: `~/.launchd/scripts/ai_monitor_snapshot.sh`
-- Plist: `~/Library/LaunchAgents/local.ai-monitor-snapshot.plist` (StartInterval 120, RunAtLoad, Background)
-- Logs: `~/Library/Logs/homelab/ai-monitor-snapshot/`
-- Install: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.ai-monitor-snapshot.plist`
-- Uninstall: `launchctl bootout gui/$(id -u)/local.ai-monitor-snapshot`
+- Wrapper: `~/.launchd/scripts/gradus_snapshot.sh`
+- Plist: `~/Library/LaunchAgents/local.gradus-snapshot.plist` (StartInterval 120, RunAtLoad, Background)
+- Logs: `~/Library/Logs/homelab/gradus-snapshot/`
+- Install: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.gradus-snapshot.plist`
+- Uninstall: `launchctl bootout gui/$(id -u)/local.gradus-snapshot`
 
 **Schema** (`schema_version: 1`):
 
@@ -202,7 +202,7 @@ All 6 canonical providers are always present (Codex, Claude, Antigravity, Copilo
 
 In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sourced from its numeric `credit_percent_left` remaining percentage. Schema v2 preserves every non-Cursor window and instead publishes Cursor's independent numeric `ac` (Auto + Composer, from `autoPercentUsed`) and `ap` (API pool, from `apiPercentUsed`) windows, omitting either unavailable pool. Consumers may roll back by selecting the v1 path/version; retain v1 until all consumers have migrated.
 
-`.state/snapshot.json` is consumed by hermes-publisher's AiMonitorCollector as well as review-plugin; consumers reject unsupported schema_version; incompatible changes to top-level payload, provider-entry fields, or windows[] require schema bump and coordinated compatibility updates in both consumer projects. Antigravity's Claude+GPT fields and windows are deliberately excluded from router snapshot v1/v2 schemas, so the Gemini snapshot contract remains unchanged. `--json` remains schema-agnostic local/debug output and does not select or persist either router schema.
+`.state/snapshot.json` is consumed by hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported schema_version; incompatible changes to top-level payload, provider-entry fields, or windows[] require schema bump and coordinated compatibility updates in both consumer projects. Antigravity's Claude+GPT fields and windows are deliberately excluded from router snapshot v1/v2 schemas, so the Gemini snapshot contract remains unchanged. `--json` remains schema-agnostic local/debug output and does not select or persist either router schema.
 
 ## Notes
 
@@ -212,9 +212,9 @@ In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sou
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
 - In live mode, press `q` to quit or `r` to trigger an immediate refresh.
 - Cursor and Vibe try Safari cookie extraction first; Vibe also supports Chrome cookie extraction. Cookies are cached locally at `.cache/<provider>_cookies.json` (gitignored) to survive Safari disk-sync lag and reduce spurious re-auth prompts; the cache is evicted on API 400/401/403 errors (Claude also returns 400 when a cached `lastActiveOrg` fails its UUID validator).
-- **Credential storage.** The `.cache/` credential files (provider cookies/tokens) and the Codex `~/.codex/auth.json` are written mode `0600` inside a `0700` directory via a single atomic private-write helper — a `tempfile.mkstemp` temp file (born `0600`, independent of umask) swapped in with `os.replace`, so the file is never world-readable, even momentarily. Pre-existing caches are also tightened to `0600` opportunistically on the next interactive (non-headless) read. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/ai_monitor/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
+- **Credential storage.** The `.cache/` credential files (provider cookies/tokens) and the Codex `~/.codex/auth.json` are written mode `0600` inside a `0700` directory via a single atomic private-write helper — a `tempfile.mkstemp` temp file (born `0600`, independent of umask) swapped in with `os.replace`, so the file is never world-readable, even momentarily. Pre-existing caches are also tightened to `0600` opportunistically on the next interactive (non-headless) read. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/gradus/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
 - A normalized window warns when it is exactly depleted or its finite pace delta is below `-0.10`; `[!]` badges and one-shot macOS notifications use the same provider-level warning membership. Notifications name the warning window IDs. Antigravity's conditional C+G rows (`cg5`, `cg1w`) participate in this membership. Cursor's `ac` and `ap` pools are evaluated independently in-process and in schema v2, while v1 continues to publish only its `billing_cycle` window.
-- Vibe uses Mistral's `usage_percentage` field as percent used directly. If Mistral shows `1.08% used`, AI Monitor will render about `99%` remaining after rounding.
+- Vibe uses Mistral's `usage_percentage` field as percent used directly. If Mistral shows `1.08% used`, Gradus will render about `99%` remaining after rounding.
 - Cursor reads billing-cycle and usage data from the nested `planUsage` payload. `planUsage` carries three numbers but Cursor only has two real usage pools: `autoPercentUsed` (first-party Auto + Composer) and `apiPercentUsed` (API/third-party pool) are both percent-USED for their own pool; `remaining`/`limit` cents are a dollar-denominated spend meter, not a third pool. The card shows Cursor's two real usage pools: `ac` is the Auto + Composer pool, converted from `autoPercentUsed` (percent used) to remaining capacity; `ap` is the API pool, converted from `apiPercentUsed` (percent used) to remaining capacity the same way. The cents-derived dollar meter (`credit_percent_left`) is computed by the provider and retained as internal metadata, but is no longer displayed, alert-evaluated, or persisted/projected — it doesn't belong under "ap" or any capacity window. Neither `--json` nor the v1/v2 router snapshots emit `credit_percent_left` any longer; the v1 `billing_cycle` window remains sourced from it internally (unchanged), but it no longer appears in the projected `data` block.
 
 ## Limitations
@@ -236,8 +236,8 @@ In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sou
 uv run pytest
 
 # Lint + format check
-uv run ruff check ai_monitor/ tests/
-uv run ruff format --check ai_monitor/ tests/
+uv run ruff check gradus/ tests/
+uv run ruff format --check gradus/ tests/
 ```
 
 ### Git hooks (enforcement)

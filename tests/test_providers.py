@@ -396,7 +396,7 @@ class JwtExpiryTests(unittest.TestCase):
 
 
 class CursorTokenCacheTests(unittest.TestCase):
-    """Regression: aimonitor must keep working when Safari has lost the cookie."""
+    """Regression: gradus must keep working when Safari has lost the cookie."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -907,7 +907,7 @@ class CodexHttpProviderTests(unittest.TestCase):
 
     def test_401_reloads_auth_json_and_retries(self) -> None:
         # Regression: previously the provider cached _access_token at __init__ and never
-        # reloaded it, so running `codex login` after a 401 left aimonitor stuck on the
+        # reloaded it, so running `codex login` after a 401 left gradus stuck on the
         # stale token forever. The 401 path must re-read ~/.codex/auth.json from disk.
         provider = self._make_provider()
         provider._acquire()
@@ -2250,7 +2250,7 @@ class TestCredentialCachePermissions(unittest.TestCase):
             shared = Path(tmp) / "shared"  # stand-in for /tmp
             shared.mkdir()
             os.chmod(shared, 0o777)  # permissive, like /tmp
-            dump_path = shared / "ai_monitor_test_capture.txt"
+            dump_path = shared / "gradus_test_capture.txt"
             with patch("gradus.providers._debug_dump_path", return_value=dump_path):
                 _write_debug_dump("Test", "raw capture output")
             # The dump file itself is private...

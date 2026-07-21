@@ -1,7 +1,7 @@
 """Router-facing capacity snapshot: normalization and atomic persistence.
 
 This module is deliberately side-effect free apart from :func:`write_snapshot`.
-It must NOT import :mod:`ai_monitor.providers` or :mod:`ai_monitor.ui` at
+It must NOT import :mod:`gradus.providers` or :mod:`gradus.ui` at
 runtime to avoid the import cycle ``providers <- snapshot <- ui``. The only
 provider type referenced is :class:`ProviderSnapshot`, imported under
 ``TYPE_CHECKING`` for annotations; all runtime access is duck-typed
@@ -114,7 +114,7 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
 def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None:
     """Parse a human reset string into a concrete future ``datetime``.
 
-    Faithful copy of ``ai_monitor.ui._parse_reset_target``. Handles relative
+    Faithful copy of ``gradus.ui._parse_reset_target``. Handles relative
     forms (``in 3h``), ``... on <date>``, ``... at <time>``, and bare
     ``resets <time>`` forms, rolling past instants forward as appropriate.
 

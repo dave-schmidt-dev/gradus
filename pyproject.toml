@@ -11,7 +11,7 @@ gradus = "gradus.__main__:main"
 monitor = "gradus.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["gradus*", "ai_monitor*"]
+include = ["gradus*"]
 
 [build-system]
 requires = ["setuptools>=68"]

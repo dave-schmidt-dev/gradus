@@ -350,7 +350,7 @@ def _cbreak_mode():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-_LOG_PATH = Path("/tmp/ai_monitor.log")
+_LOG_PATH = Path("/tmp/gradus.log")
 
 
 def _setup_logging(debug: bool) -> None:

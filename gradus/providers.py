@@ -123,7 +123,7 @@ def _format_reset_time(value: str | int | float | None) -> str | None:
 
 def _debug_dump_path(name: str) -> Path:
     safe_name = name.lower().replace(" ", "_")
-    return Path("/tmp") / f"ai_monitor_{safe_name}_capture.txt"
+    return Path("/tmp") / f"gradus_{safe_name}_capture.txt"
 
 
 def _write_debug_dump(name: str, raw_text: str) -> None:
@@ -1544,7 +1544,7 @@ class AntigravityProvider:
     _REFRESH_COOLDOWN_SECONDS = 300
     # cloudcode-pa rejects the default `Python-urllib/x.y` User-Agent as abuse
     # (403 PERMISSION_DENIED); any real UA is accepted. Identify honestly.
-    _USER_AGENT = "ai-monitor (antigravity quota probe)"
+    _USER_AGENT = "gradus (antigravity quota probe)"
     _ACCOUNTS_PATH = Path.home() / ".gemini" / "google_accounts.json"
 
     def __init__(self) -> None:

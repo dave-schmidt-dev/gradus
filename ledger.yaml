@@ -1,4 +1,4 @@
-# ai_monitor ledger — minimal machine state. NO `freeze` field (computed on read).
+# gradus ledger — minimal machine state. NO `freeze` field (computed on read).
 invariants:
   INV-1: {gate_test_status: covered}    # covered | missing
   INV-2: {gate_test_status: covered}

@@ -1,4 +1,4 @@
-# Invariants — ai_monitor
+# Invariants — gradus
 
 > System contract. The harvest tool reads `area:` globs to map HISTORY bug entries
 > to invariants. Per-project convention (commit prefix, invariant refs) is declared
@@ -9,7 +9,7 @@ area: ["gradus/snapshot.py", "gradus/parsing.py", "gradus/providers.py", "ai_mon
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
 rationale: The snapshot files are read by a separate repo (review-plugin router). They are written to
-  ~/Documents/Projects/ai_monitor/.state/snapshot.json and snapshot-v2.json — Deliberately NOT under .cache/ (which holds
+  ~/Documents/Projects/gradus/.state/snapshot.json and snapshot-v2.json — Deliberately NOT under .cache/ (which holds
   auth cookies/tokens); review-plugin's INV-5 forbids the router from reading credential paths, so the
   snapshot must live in a credential-free dir. `data` is a whitelist projection of usage/reset fields
   only — it must never carry cookies, tokens, sessionKey, ory_*, csrftoken, access_token, nor
@@ -56,7 +56,7 @@ threshold: 3
 rationale: The router asserts schema_version. Both versioned files always carry schema_version + a tz-aware
   updated_at, and every provider entry (all 5 canonical names always present) has a windows[] of the
   documented shape. Breaking changes bump schema_version. The snapshot is consumed by
-  hermes-publisher's AiMonitorCollector as well as review-plugin; consumers reject unsupported
+  hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported
   schema_version, so incompatible changes to the top-level payload, provider-entry fields, or
   windows[] require a schema bump and coordinated compatibility updates in both consumer projects. Schema v1
   remains at snapshot.json; schema v2 lives at snapshot-v2.json and Cursor's ac/ap windows are numeric or omitted.
