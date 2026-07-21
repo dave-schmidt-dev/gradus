@@ -1,5 +1,5 @@
 [project]
-name = "ai-monitor"
+name = "gradus"
 version = "0.1.0"
 description = "Terminal monitor for Codex and Claude usage."
 readme = "README.md"
@@ -7,10 +7,11 @@ requires-python = ">=3.10"
 dependencies = ["rich>=15.0", "cryptography>=42"]
 
 [project.scripts]
-monitor = "ai_monitor.__main__:main"
+gradus = "gradus.__main__:main"
+monitor = "gradus.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["ai_monitor*"]
+include = ["gradus*", "ai_monitor*"]
 
 [build-system]
 requires = ["setuptools>=68"]

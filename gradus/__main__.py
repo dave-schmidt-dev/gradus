@@ -172,8 +172,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def _load_config() -> dict[str, object]:
-    """Load .ai_monitor.json from CWD if it exists."""
-    config_path = Path(os.getcwd()) / ".ai_monitor.json"
+    """Load .gradus.json or .ai_monitor.json from CWD if it exists."""
+    config_path = Path(os.getcwd()) / ".gradus.json"
+    if not config_path.exists():
+        config_path = Path(os.getcwd()) / ".ai_monitor.json"
     if not config_path.exists():
         return {}
     try:
@@ -305,7 +307,7 @@ def _notify_warning(provider_name: str, window_ids: tuple[str, ...]) -> bool:
                 "osascript",
                 "-e",
                 f'display notification "Warning window(s): {", ".join(window_ids)}" '
-                f'with title "AI Monitor" subtitle "{provider_name}"',
+                f'with title "Gradus" subtitle "{provider_name}"',
             ],
             capture_output=True,
             timeout=5,

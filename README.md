@@ -1,6 +1,6 @@
 # ai_monitor
 
-Real-time terminal monitor for local `codex`, `claude`, `agy`, `cursor`, and `vibe` usage.
+Real-time terminal monitor for local `codex`, `claude`, `agy`, `copilot`, `cursor`, and `vibe` usage.
 
 Probes provider APIs directly using locally authenticated credentials — no PTY, no CLI scraping. Each provider uses its own HTTP or internal API path, so probes are fast and reliable.
 
@@ -13,18 +13,21 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors Codex usage via the OpenAI usage API
 - Monitors Claude usage via the Anthropic account API
 - Monitors Antigravity (`agy`) usage via the Cloud Code `retrieveUserQuotaSummary` API — the same grouped quota `agy`'s own Models & Quota panel shows. Authenticates read-only with `agy`'s OAuth token from the macOS Keychain (service `gemini`, account `antigravity`); the monitor never refreshes or rewrites that token, so it can't disturb `agy`'s own auth.
+- Monitors Copilot usage via the GitHub REST API (using `gh` CLI credentials)
 - Monitors Cursor credit usage via the Cursor Dashboard API
 - Monitors Vibe usage via the Mistral billing API
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position — so when OpenAI removed the Codex 5-hour limit (2026-07) the card automatically shows just the 1-week window, and the 5-hour row reappears on its own if OpenAI restores it (no code change)
 - Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus conditional Claude+GPT (`cg5`, `cg1w`) group activation when at least one valid C+G remaining percentage is below 100%. Rows render independently: each valid C+G row below 100% appears; exact-100%, missing, or malformed sibling rows are omitted.
+- Shows Copilot monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
-- Shows Vibe monthly remaining (`month rem`), reset, and billing-cycle pace
+- Shows Vibe monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
 - Retains cached usage data during transient network errors with an `(offline Xm)` title indicator; shows a `stale` panel after 5 minutes of continuous failure
 - Supports live keyboard shortcuts (`q` quit, `r` refresh now)
 - Supports `.ai_monitor.json` for provider selection and interval configuration
 - Sends one-shot macOS pace/depletion notifications and marks warning providers with a `[!]` badge
+- Renders depleted providers as centered 1-line micro-cards paired side-by-side (ratio Cursor:Copilot:Vibe = 2:1:1) at the bottom of the dashboard to conserve vertical space
 - Uses a shared provider card renderer so reset labels and pacing rows stay aligned across providers
 - Canonicalizes reset displays to one local format across provider-specific strings
 - Renders a compact grid dashboard optimized for terminal use
@@ -36,6 +39,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow.
 - Claude: `~/.claude/` credentials present (created by `claude login`)
 - Antigravity (`agy`): signed in via `agy` (stores its OAuth token in the macOS Keychain). The monitor reads it read-only; the first read may prompt for Keychain access — choose "Always Allow" so background refreshes stay silent. The token expires ~hourly and only `agy` refreshes it, so when the token lapses the monitor **nudges `agy` to refresh its own token** by running `agy models` (a non-interactive, quota-free authenticated command) and re-reads the Keychain — the card self-heals without manual action. If that nudge can't recover (e.g. `agy` isn't installed on `PATH`, or `agy`'s own refresh token is dead), the card falls back to an auth error; run `agy` to re-authenticate. The nudge runs only in the interactive TUI, never on the read-only `--write-snapshot`/headless path (INV-2).
+- Copilot: `gh` CLI authenticated (`gh auth login` or OAuth token present)
 - Cursor: app or browser session authenticated
 - Mistral console session authenticated (Safari/Chrome cookie extraction supported)
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
@@ -57,7 +61,7 @@ python3 -m ai_monitor --interval 30
 python3 -m ai_monitor --interval 60
 python3 -m ai_monitor --json
 python3 -m ai_monitor --debug
-python3 -m ai_monitor --providers Claude,Codex,Antigravity
+python3 -m ai_monitor --providers Claude,Codex,Copilot,Antigravity
 python3 -m ai_monitor --write-snapshot
 ./monitor --once
 ```
@@ -68,7 +72,7 @@ Optional config file (`.ai_monitor.json` in your current working directory):
 
 ```json
 {
-  "providers": ["Claude", "Codex", "Cursor", "Antigravity", "Vibe"],
+  "providers": ["Claude", "Codex", "Copilot", "Cursor", "Antigravity", "Vibe"],
   "interval": 120
 }
 ```
@@ -110,7 +114,7 @@ Antigravity card shows (Gemini model group — the pool `agy` consumes):
 
 When the Claude+GPT group has at least one valid remaining percentage below 100%, the group activates. Rows render independently: each valid C+G percentage below 100% produces its `cg5` (5-hour) or `cg1w` (1-week) row; exact-100%, missing, or malformed sibling rows are omitted. If both valid C+G percentages are exactly 100%, that idle group is omitted. C+G rows participate in the same `[!]` badge and one-shot notification warning membership as other rendered windows.
 
-Cursor / Vibe cards show:
+Copilot / Cursor / Vibe cards show:
 
 - `mo`: monthly remaining percentage, billing-cycle reset, pace indicator
 - `ac`: Cursor Auto + Composer remaining percentage, derived from `autoPercentUsed`
@@ -194,7 +198,7 @@ Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m a
 }
 ```
 
-All 5 canonical providers are always present (Codex, Claude, Antigravity, Cursor, Vibe); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
+All 6 canonical providers are always present (Codex, Claude, Antigravity, Copilot, Cursor, Vibe); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
 
 In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sourced from its numeric `credit_percent_left` remaining percentage. Schema v2 preserves every non-Cursor window and instead publishes Cursor's independent numeric `ac` (Auto + Composer, from `autoPercentUsed`) and `ap` (API pool, from `apiPercentUsed`) windows, omitting either unavailable pool. Consumers may roll back by selecting the v1 path/version; retain v1 until all consumers have migrated.
 
@@ -215,7 +219,7 @@ In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sou
 
 ## Limitations
 
-- This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `cursor`, and `vibe`.
+- This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `copilot`, `cursor`, and `vibe`.
 - If any vendor changes its TUI wording or layout, the parser may need to be updated.
 - Reset windows are only shown when the CLI output exposes them.
 - Terminal rendering can vary across fonts and terminal emulators.

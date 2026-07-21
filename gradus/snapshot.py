@@ -49,8 +49,8 @@ def percent_is_valid(percent_left: object) -> bool:
 
 
 def percent_is_depleted(percent_left: object) -> bool:
-    """Return whether a normalized remaining percentage is exactly zero."""
-    return percent_is_valid(percent_left) and float(percent_left) == 0.0
+    """Return whether a normalized remaining percentage is zero or rounds to zero."""
+    return percent_is_valid(percent_left) and round(float(percent_left)) <= 0
 
 
 def window_warns(window: Mapping[str, object]) -> bool:
@@ -442,7 +442,12 @@ def _build_windows(
     """
     if not snapshot.ok or not isinstance(snapshot.data, Mapping):
         return []
-    specs = specs_by_provider.get(snapshot.name)
+    provider_name = (
+        snapshot.name.removesuffix(" [HTTP]")
+        if hasattr(snapshot.name, "removesuffix")
+        else snapshot.name
+    )
+    specs = specs_by_provider.get(provider_name)
     if not specs:
         return []
     data = snapshot.data
@@ -506,6 +511,25 @@ def _build_windows(
                         window_hours = max(1.0, total_seconds) / 3600.0
                         reset_iso = end_iso
                         delta = pace_delta(pct, end, total_seconds, now)
+                elif spec.reset_key and data.get(spec.reset_key):
+                    reset_raw = str(data[spec.reset_key])
+                    target = parse_reset_target(reset_raw, now)
+                    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                    if target:
+                        start, target = reconcile(start, target)
+                        if target > start:
+                            total_seconds = (target - start).total_seconds()
+                            window_hours = total_seconds / 3600.0
+                            reset_iso = local_iso(target)
+                            delta = pace_delta(pct, target, total_seconds, now)
+                        else:
+                            window_hours = None
+                            reset_iso = local_iso(target)
+                            delta = None
+                    else:
+                        window_hours = None
+                        reset_iso = None
+                        delta = None
                 else:
                     window_hours = None
                     reset_iso = end_iso if end_iso else None
@@ -745,7 +769,10 @@ def _build_snapshot_payload(
     """
     updated_at_iso = local_iso(updated_at)
     updated_at_aware = updated_at if updated_at.tzinfo else updated_at.astimezone()
-    by_name = {s.name: s for s in snapshots}
+    by_name = {
+        (s.name.removesuffix(" [HTTP]") if hasattr(s.name, "removesuffix") else s.name): s
+        for s in snapshots
+    }
 
     prior_by_name: dict[str, dict] = {}
     prior_updated: datetime | None = None

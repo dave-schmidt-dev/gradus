@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import tempfile
 import unittest
 from datetime import datetime
 from io import StringIO
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from rich.console import Console
 
-from ai_monitor.__main__ import (
+from gradus.__main__ import (
     AUTH_ACTIONS,
     STALE_THRESHOLD_SECONDS,
     _build_fix_actions,
@@ -20,12 +22,13 @@ from ai_monitor.__main__ import (
     _is_auth_error,
     _is_transient_probe_error,
     _launch_fix,
+    _load_config,
     _merge_with_previous,
     _notify_warning,
     main,
 )
-from ai_monitor.providers import ProviderSnapshot, set_headless
-from ai_monitor.ui import THEME, build_dashboard
+from gradus.providers import ProviderSnapshot, set_headless
+from gradus.ui import THEME, build_dashboard
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
 
@@ -48,7 +51,7 @@ class CursorWarningTests(unittest.TestCase):
 
     def test_independent_cursor_pool_warning_names_window(self) -> None:
         notified: set[str] = set()
-        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+        with patch("gradus.__main__._notify_warning", return_value=True) as notify:
             _check_warnings([self._cursor(100, 82)], notified, NOW)
 
         notify.assert_called_once_with("Cursor", ("ac",))
@@ -56,7 +59,7 @@ class CursorWarningTests(unittest.TestCase):
 
     def test_notification_is_one_shot_and_recovery_resets_latch(self) -> None:
         notified: set[str] = set()
-        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+        with patch("gradus.__main__._notify_warning", return_value=True) as notify:
             _check_warnings([self._cursor(100, 82)], notified, NOW)
             _check_warnings([self._cursor(100, 82)], notified, NOW)
             _check_warnings([self._cursor(95, 82)], notified, NOW)
@@ -70,13 +73,14 @@ class CursorWarningTests(unittest.TestCase):
 
 class WarningNotificationTests(unittest.TestCase):
     def test_notification_text_lists_normalized_warning_windows(self) -> None:
-        with patch("ai_monitor.__main__.subprocess.run") as run:
+        with patch("gradus.__main__.subprocess.run") as run:
             run.return_value.returncode = 0
             self.assertTrue(_notify_warning("Cursor", ("ac", "ap")))
 
         command = run.call_args.args[0]
         self.assertEqual(command[:2], ["osascript", "-e"])
         self.assertIn("Warning window(s): ac, ap", command[2])
+        self.assertIn('title "Gradus"', command[2])
         self.assertIn('subtitle "Cursor"', command[2])
 
     def test_failed_notification_is_retried(self) -> None:
@@ -87,12 +91,38 @@ class WarningNotificationTests(unittest.TestCase):
             source="api",
             data={"auto_percent_used": 100, "api_percent_used": 18},
         )
-        with patch("ai_monitor.__main__._notify_warning", side_effect=(False, True)) as notify:
+        with patch("gradus.__main__._notify_warning", side_effect=(False, True)) as notify:
             _check_warnings([cursor], notified, NOW)
             _check_warnings([cursor], notified, NOW)
 
         self.assertEqual(notify.call_count, 2)
         self.assertEqual(notified, {"Cursor"})
+
+
+class LoadConfigTests(unittest.TestCase):
+    def test_load_config_prefers_gradus_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gradus_path = Path(tmpdir) / ".gradus.json"
+            legacy_path = Path(tmpdir) / ".ai_monitor.json"
+            gradus_path.write_text('{"interval": 30}', encoding="utf-8")
+            legacy_path.write_text('{"interval": 60}', encoding="utf-8")
+            with patch("os.getcwd", return_value=tmpdir):
+                config = _load_config()
+                self.assertEqual(config, {"interval": 30})
+
+    def test_load_config_falls_back_to_ai_monitor_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            legacy_path = Path(tmpdir) / ".ai_monitor.json"
+            legacy_path.write_text('{"interval": 60}', encoding="utf-8")
+            with patch("os.getcwd", return_value=tmpdir):
+                config = _load_config()
+                self.assertEqual(config, {"interval": 60})
+
+    def test_load_config_missing_file_returns_empty_dict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("os.getcwd", return_value=tmpdir):
+                config = _load_config()
+                self.assertEqual(config, {})
 
 
 class CodexWarningTests(unittest.TestCase):
@@ -107,7 +137,7 @@ class CodexWarningTests(unittest.TestCase):
             data={"five_hour_percent_left": None, "weekly_percent_left": 0},
         )
         notified: set[str] = set()
-        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+        with patch("gradus.__main__._notify_warning", return_value=True) as notify:
             _check_warnings([codex], notified, NOW)
 
         notify.assert_called_once_with("Codex", ("weekly",))
@@ -134,7 +164,7 @@ class AntigravityWarningTests(unittest.TestCase):
 
     def test_depleted_cg_windows_notify_with_deterministic_ids(self) -> None:
         notified: set[str] = set()
-        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+        with patch("gradus.__main__._notify_warning", return_value=True) as notify:
             _check_warnings([self._antigravity(0, 0)], notified, NOW)
 
         notify.assert_called_once_with("Antigravity", ("cg5", "cg1w"))
@@ -142,7 +172,7 @@ class AntigravityWarningTests(unittest.TestCase):
 
     def test_cg_recovery_clears_latch_and_later_regression_warns_again(self) -> None:
         notified: set[str] = set()
-        with patch("ai_monitor.__main__._notify_warning", return_value=True) as notify:
+        with patch("gradus.__main__._notify_warning", return_value=True) as notify:
             _check_warnings([self._antigravity(0, 0)], notified, NOW)
             _check_warnings([self._antigravity(0, 0)], notified, NOW)
             _check_warnings([self._antigravity(100, 100)], notified, NOW)
@@ -169,12 +199,12 @@ class MainOnceTests(unittest.TestCase):
 
         with (
             patch(
-                "ai_monitor.__main__.parse_args",
+                "gradus.__main__.parse_args",
                 return_value=argparse.Namespace(json=False, once=True, debug=False, interval=120),
             ),
-            patch("ai_monitor.__main__.initialize_providers", return_value=([], [])),
-            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__.Console") as MockConsole,
+            patch("gradus.__main__.initialize_providers", return_value=([], [])),
+            patch("gradus.__main__.collect_snapshots", return_value=snapshots),
+            patch("gradus.__main__.Console") as MockConsole,
         ):
             mock_console = MagicMock()
             MockConsole.return_value = mock_console
@@ -196,13 +226,13 @@ class MainOnceTests(unittest.TestCase):
 
         with (
             patch(
-                "ai_monitor.__main__.parse_args",
+                "gradus.__main__.parse_args",
                 return_value=argparse.Namespace(json=False, once=True, debug=False, interval=120),
             ),
-            patch("ai_monitor.__main__.initialize_providers", return_value=([], [])),
-            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__.Console") as MockConsole,
-            patch("ai_monitor.__main__.Live") as MockLive,
+            patch("gradus.__main__.initialize_providers", return_value=([], [])),
+            patch("gradus.__main__.collect_snapshots", return_value=snapshots),
+            patch("gradus.__main__.Console") as MockConsole,
+            patch("gradus.__main__.Live") as MockLive,
         ):
             MockConsole.return_value = MagicMock()
             main()
@@ -246,20 +276,20 @@ class MainJsonTests(unittest.TestCase):
         set_headless_spy = MagicMock()
         buf = StringIO()
         with (
-            patch("ai_monitor.__main__.parse_args", return_value=ns),
-            patch("ai_monitor.__main__.set_headless", set_headless_spy),
+            patch("gradus.__main__.parse_args", return_value=ns),
+            patch("gradus.__main__.set_headless", set_headless_spy),
             patch(
-                "ai_monitor.__main__.initialize_providers",
+                "gradus.__main__.initialize_providers",
                 return_value=([("Codex", object())], []),
             ),
-            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__._check_warnings") as mock_check,
-            patch("ai_monitor.__main__._notify_warning") as mock_notify,
-            patch("ai_monitor.__main__.subprocess.Popen") as mock_popen,
-            patch("ai_monitor.__main__.subprocess.run") as mock_run,
-            patch("ai_monitor.providers.subprocess.Popen") as mock_p_popen,
-            patch("ai_monitor.providers.subprocess.run") as mock_p_run,
-            patch("ai_monitor.__main__.sys.stdout", buf),
+            patch("gradus.__main__.collect_snapshots", return_value=snapshots),
+            patch("gradus.__main__._check_warnings") as mock_check,
+            patch("gradus.__main__._notify_warning") as mock_notify,
+            patch("gradus.__main__.subprocess.Popen") as mock_popen,
+            patch("gradus.__main__.subprocess.run") as mock_run,
+            patch("gradus.providers.subprocess.Popen") as mock_p_popen,
+            patch("gradus.providers.subprocess.run") as mock_p_run,
+            patch("gradus.__main__.sys.stdout", buf),
         ):
             rc = main()
 
@@ -302,12 +332,12 @@ class MainJsonTests(unittest.TestCase):
         buf = StringIO()
         with (
             patch(
-                "ai_monitor.__main__.parse_args",
+                "gradus.__main__.parse_args",
                 return_value=argparse.Namespace(json=True, once=False, debug=False, interval=120),
             ),
-            patch("ai_monitor.__main__.initialize_providers", return_value=([], [])),
-            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__.sys.stdout", buf),
+            patch("gradus.__main__.initialize_providers", return_value=([], [])),
+            patch("gradus.__main__.collect_snapshots", return_value=snapshots),
+            patch("gradus.__main__.sys.stdout", buf),
         ):
             rc = main()
 
@@ -340,12 +370,12 @@ class MainJsonTests(unittest.TestCase):
         buf = StringIO()
         with (
             patch(
-                "ai_monitor.__main__.parse_args",
+                "gradus.__main__.parse_args",
                 return_value=argparse.Namespace(json=True, once=False, debug=False, interval=120),
             ),
-            patch("ai_monitor.__main__.initialize_providers", return_value=([], [])),
-            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__.sys.stdout", buf),
+            patch("gradus.__main__.initialize_providers", return_value=([], [])),
+            patch("gradus.__main__.collect_snapshots", return_value=snapshots),
+            patch("gradus.__main__.sys.stdout", buf),
         ):
             main()
 
@@ -485,7 +515,7 @@ class ProductionAuthMessageRoutingTests(unittest.TestCase):
     # dashboard quietly skipped the [N] fix action for these providers.
 
     def test_claude_session_expired_routes_to_cta(self) -> None:
-        # ai_monitor/providers.py:1182
+        # gradus/providers.py:1182
         snap = ProviderSnapshot(
             name="Claude",
             ok=False,
@@ -495,7 +525,7 @@ class ProductionAuthMessageRoutingTests(unittest.TestCase):
         self.assertTrue(_is_auth_error(snap))
 
     def test_cursor_session_expired_routes_to_cta(self) -> None:
-        # ai_monitor/providers.py:702
+        # gradus/providers.py:702
         snap = ProviderSnapshot(
             name="Cursor",
             ok=False,
@@ -505,7 +535,7 @@ class ProductionAuthMessageRoutingTests(unittest.TestCase):
         self.assertTrue(_is_auth_error(snap))
 
     def test_vibe_session_expired_routes_to_cta(self) -> None:
-        # ai_monitor/providers.py:484 — provider name "Vibe" per AUTH_ACTIONS
+        # gradus/providers.py:484 — provider name "Vibe" per AUTH_ACTIONS
         snap = ProviderSnapshot(
             name="Vibe",
             ok=False,
@@ -582,7 +612,7 @@ class BuildFixActionsTests(unittest.TestCase):
 
 class LaunchFixTests(unittest.TestCase):
     def test_cli_launches_osascript_with_activate(self) -> None:
-        with patch("ai_monitor.__main__.subprocess.Popen") as mock_popen:
+        with patch("gradus.__main__.subprocess.Popen") as mock_popen:
             _launch_fix("cli", "gh auth login")
         mock_popen.assert_called_once()
         args = mock_popen.call_args[0][0]
@@ -596,7 +626,7 @@ class LaunchFixTests(unittest.TestCase):
         self.assertEqual(kwargs.get("stderr"), subprocess.DEVNULL)
 
     def test_browser_launches_open(self) -> None:
-        with patch("ai_monitor.__main__.subprocess.Popen") as mock_popen:
+        with patch("gradus.__main__.subprocess.Popen") as mock_popen:
             _launch_fix("browser", "https://cursor.sh")
         mock_popen.assert_called_once()
         args = mock_popen.call_args[0][0]
@@ -605,7 +635,7 @@ class LaunchFixTests(unittest.TestCase):
         self.assertEqual(kwargs.get("stdout"), subprocess.DEVNULL)
 
     def test_unknown_kind_is_noop(self) -> None:
-        with patch("ai_monitor.__main__.subprocess.Popen") as mock_popen:
+        with patch("gradus.__main__.subprocess.Popen") as mock_popen:
             _launch_fix("unknown", "something")
         mock_popen.assert_not_called()
 
@@ -800,21 +830,21 @@ class WriteSnapshotTests(unittest.TestCase):
         )
         set_headless_spy = MagicMock()
         with (
-            patch("ai_monitor.__main__.parse_args", return_value=ns),
+            patch("gradus.__main__.parse_args", return_value=ns),
             patch(
-                "ai_monitor.__main__.initialize_providers",
+                "gradus.__main__.initialize_providers",
                 return_value=([("Codex", object())], []),
             ),
-            patch("ai_monitor.__main__.set_headless", set_headless_spy),
-            patch("ai_monitor.__main__.collect_snapshots", return_value=snapshots),
-            patch("ai_monitor.__main__._check_warnings") as mock_check,
-            patch("ai_monitor.__main__._notify_warning") as mock_notify,
-            patch("ai_monitor.__main__.read_prior_snapshot", return_value=None),
-            patch("ai_monitor.__main__.write_snapshot", side_effect=fake_write) as mock_write,
-            patch("ai_monitor.__main__.subprocess.Popen") as mock_popen,
-            patch("ai_monitor.__main__.subprocess.run") as mock_run,
-            patch("ai_monitor.providers.subprocess.Popen") as mock_p_popen,
-            patch("ai_monitor.providers.subprocess.run") as mock_p_run,
+            patch("gradus.__main__.set_headless", set_headless_spy),
+            patch("gradus.__main__.collect_snapshots", return_value=snapshots),
+            patch("gradus.__main__._check_warnings") as mock_check,
+            patch("gradus.__main__._notify_warning") as mock_notify,
+            patch("gradus.__main__.read_prior_snapshot", return_value=None),
+            patch("gradus.__main__.write_snapshot", side_effect=fake_write) as mock_write,
+            patch("gradus.__main__.subprocess.Popen") as mock_popen,
+            patch("gradus.__main__.subprocess.run") as mock_run,
+            patch("gradus.providers.subprocess.Popen") as mock_p_popen,
+            patch("gradus.providers.subprocess.run") as mock_p_run,
         ):
             rc = main()
 

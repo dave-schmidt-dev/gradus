@@ -1,4 +1,4 @@
-"""Unit tests for ai_monitor.snapshot (router-facing capacity snapshot)."""
+"""Unit tests for gradus.snapshot (router-facing capacity snapshot)."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from ai_monitor import snapshot as snap
-from ai_monitor import ui
-from ai_monitor.providers import ProbeFailure, ProviderSnapshot, fetch_provider_snapshot
+from gradus import snapshot as snap
+from gradus import ui
+from gradus.providers import ProbeFailure, ProviderSnapshot, fetch_provider_snapshot
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
 
@@ -121,7 +121,7 @@ class TestAllowlist(unittest.TestCase):
                 raise ProbeFailure("Boom", raw_text=f"SECRET-BODY-{sentinel}")
 
         # Patch the debug-dump writer so the test never writes the real /tmp dump.
-        with patch("ai_monitor.providers._write_debug_dump"):
+        with patch("gradus.providers._write_debug_dump"):
             s = fetch_provider_snapshot("Claude", _Boom(), debug=True)
 
         # error is plain; the raw tail lives only in debug_detail (never persisted).
@@ -923,6 +923,45 @@ class TestAtomicWrite(unittest.TestCase):
             data={"auto_percent_used": float("nan"), "billing_cycle_end": "2026-04-01"},
         )
         self.assertEqual(snap.project_data(provider), {"billing_cycle_end": "2026-04-01"})
+
+
+class TestCopilotParity(unittest.TestCase):
+    def test_copilot_window_building_with_reset_key(self) -> None:
+        """Copilot billing window populates reset_iso, window_hours, and pace_delta from premium_reset."""
+        snap_copilot = _ps(
+            "Copilot [HTTP]",
+            True,
+            data={
+                "premium_percent_left": 10.0,
+                "premium_reset": "Resets Aug 01 at 00:00",
+            },
+        )
+        windows = snap.build_windows(snap_copilot, NOW)
+        self.assertEqual(len(windows), 1)
+        win = windows[0]
+        self.assertEqual(win["id"], "premium")
+        self.assertEqual(win["percent_left"], 10.0)
+        self.assertIsNotNone(win["reset_iso"])
+        self.assertIsNotNone(win["window_hours"])
+        self.assertIsNotNone(win["pace_delta"])
+        self.assertLess(win["pace_delta"], -0.10)
+
+    def test_percent_is_depleted_rounds_fractional_zero(self) -> None:
+        """Fractional remaining percentage < 0.5% (which renders as 0%) is treated as depleted."""
+        self.assertTrue(snap.percent_is_depleted(0.0))
+        self.assertTrue(snap.percent_is_depleted(0.4))
+        self.assertTrue(snap.percent_is_depleted(0.001))
+
+    def test_snapshot_payload_normalizes_http_suffix(self) -> None:
+        """build_snapshot_payload matches snapshots carrying the [HTTP] suffix."""
+        http_snap = _ps(
+            "Claude [HTTP]", True, data={"session_percent_left": 80, "weekly_percent_left": 60}
+        )
+        payload = snap.build_snapshot_payload([http_snap], NOW)
+        claude_entry = next(p for p in payload["providers"] if p["name"] == "Claude")
+        self.assertTrue(claude_entry["ok"])
+        self.assertNotEqual(claude_entry.get("error"), "provider not enabled")
+        self.assertEqual(claude_entry["data"]["session_percent_left"], 80)
 
 
 if __name__ == "__main__":  # pragma: no cover

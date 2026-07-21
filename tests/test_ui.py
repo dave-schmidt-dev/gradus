@@ -9,17 +9,20 @@ from io import StringIO
 
 from rich.console import Console
 
-from ai_monitor.providers import ProviderSnapshot
-from ai_monitor.snapshot import SAFE_DATA_KEYS
-from ai_monitor.ui import (
+from gradus.providers import ProviderSnapshot
+from gradus.snapshot import SAFE_DATA_KEYS
+from gradus.ui import (
     THEME,
+    DynamicMicroDepletedPair,
     PaceLabel,
     PercentageBar,
     _compact_pace,
+    _extract_depleted_reset_str,
     _format_reset_display,
     _style_for_percent,
     build_dashboard,
     build_loading_screen,
+    build_micro_depleted_panel,
     build_provider_panel,
     render_json,
 )
@@ -496,7 +499,7 @@ class ProviderPanelTests(unittest.TestCase):
             name="Cursor",
             ok=True,
             source="api",
-            data={"auto_percent_used": 99.7, "api_percent_used": 18},
+            data={"auto_percent_used": 80, "api_percent_used": 18},
         )
 
         warning_output = _capture(build_provider_panel(one_warning, self.now), width=44)
@@ -708,7 +711,27 @@ class ProviderPanelTests(unittest.TestCase):
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("[!]", output)
+        self.assertIn("mo", output)
         self.assertIn("until", output)
+        self.assertNotIn("░", output)
+        self.assertNotIn("▓", output)
+
+    def test_empty_view_copilot_fractional_rounds_to_zero(self) -> None:
+        snap = ProviderSnapshot(
+            name="Copilot [HTTP]",
+            ok=True,
+            source="http",
+            data={
+                "premium_percent_left": 0.4,
+                "premium_reset": "Resets Apr 01 at 12:00 AM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("[!]", output)
+        self.assertIn("mo", output)
+        self.assertIn("until", output)
+        self.assertNotIn("░", output)
         self.assertNotIn("▓", output)
 
     def test_empty_view_cursor(self) -> None:
@@ -850,7 +873,7 @@ class DashboardTests(unittest.TestCase):
     def test_dashboard_shows_header_and_footer(self) -> None:
         dashboard = build_dashboard([self.codex_snap], self.now, 30)
         output = _capture(dashboard, width=80)
-        self.assertIn("AI Usage Monitor", output)
+        self.assertIn("Gradus", output)
         self.assertIn("↻ 30s", output)
         self.assertIn("[q]", output)
 
@@ -1431,7 +1454,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # Characterization tests — pin exact string output BEFORE refactor
 # ---------------------------------------------------------------------------
-from ai_monitor.ui import _billing_cycle_pace_label, _pace_label  # noqa: E402
+from gradus.ui import _billing_cycle_pace_label, _pace_label  # noqa: E402
 
 
 class PaceLabelCharacterizationTests(unittest.TestCase):
@@ -1505,6 +1528,28 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(result, "over -7pt")
 
+    def test_dashboard_sorts_exhausted_providers_to_bottom(self) -> None:
+        """Exhausted providers are sorted after active providers in the dashboard list."""
+        copilot_depleted = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Apr 01"},
+        )
+        codex_active = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={"five_hour_percent_left": 80, "weekly_percent_left": 90},
+        )
+        group = build_dashboard([copilot_depleted, codex_active], self.now, 120)
+        output = _capture(group, width=90)
+        codex_idx = output.find("Codex")
+        copilot_idx = output.find("Copilot")
+        self.assertNotEqual(codex_idx, -1)
+        self.assertNotEqual(copilot_idx, -1)
+        self.assertLess(codex_idx, copilot_idx)
+
     # ------------------------------------------------------------------
     # _billing_cycle_pace_label — naive date-only billing cycle
     # 2026-03-01..2026-03-20, now=2026-03-14T08:22:30 → ~29.7% remaining
@@ -1521,3 +1566,98 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
     def test_billing_cycle_pace_label_over_naive(self) -> None:
         result = _billing_cycle_pace_label(20, "2026-03-01", "2026-03-20", self.now)
         self.assertEqual(result, "over -10pt")
+
+
+class ExtractDepletedResetStrTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    def test_extract_reset_str_known_provider_window_depleted(self) -> None:
+        snap = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "2026-03-20T12:00:00Z"},
+        )
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "2026-03-20T12:00:00Z")
+
+    def test_extract_reset_str_antigravity_cg_window_depleted(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "third_party_five_hour_percent_left": 0.0,
+                "third_party_five_hour_reset": "2026-03-21T15:00:00Z",
+            },
+        )
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "2026-03-21T15:00:00Z")
+
+    def test_extract_reset_str_fallback_keys(self) -> None:
+        snap = ProviderSnapshot(
+            name="CustomProvider",
+            ok=True,
+            source="api",
+            data={"billing_cycle_end": "2026-04-01"},
+        )
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "2026-04-01")
+
+    def test_extract_reset_str_returns_none_when_no_reset_found(self) -> None:
+        snap = ProviderSnapshot(
+            name="CustomProvider",
+            ok=True,
+            source="api",
+            data={},
+        )
+        self.assertIsNone(_extract_depleted_reset_str(snap, self.now))
+
+
+class MicroDepletedPanelTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    def test_build_micro_depleted_panel_strips_http_suffix(self) -> None:
+        snap = ProviderSnapshot(
+            name="Copilot [HTTP]",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Apr 01"},
+        )
+        panel = build_micro_depleted_panel(snap, self.now, width=25)
+        self.assertEqual(panel.width, 25)
+        output = _capture(panel, width=25)
+        self.assertIn("Copilot", output)
+        self.assertNotIn("Copilot [HTTP]", output)
+        self.assertIn("[!]", output)
+        self.assertIn("0% until Apr 01", output)
+
+    def test_build_micro_depleted_panel_handles_missing_reset(self) -> None:
+        snap = ProviderSnapshot(name="Claude", ok=True, source="http", data={})
+        panel = build_micro_depleted_panel(snap, self.now)
+        output = _capture(panel)
+        self.assertIn("0% until n/a", output)
+
+
+class DynamicMicroDepletedPairTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    def test_dynamic_micro_depleted_pair_renders_side_by_side(self) -> None:
+        snap1 = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Apr 01"},
+        )
+        snap2 = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="http",
+            data={"five_hour_percent_left": 0.0, "five_hour_reset_at": "in 3h37m30s"},
+        )
+        pair = DynamicMicroDepletedPair(snap1, snap2, self.now)
+        output = _capture(pair, width=50)
+        self.assertIn("Copilot", output)
+        self.assertIn("Cursor", output)
+        self.assertIn("0% until Apr 01", output)
+        self.assertIn("0% until 11:59", output)

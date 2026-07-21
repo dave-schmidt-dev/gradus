@@ -1,0 +1,743 @@
+commit e2a649c70253ee9db9868f5126562c0eeec10b07
+Author: David Schmidt <dave@zdelta.dev>
+Date:   Wed Jun 24 22:30:07 2026 -0400
+
+    Remove Copilot provider and relabel Google card to Antigravity
+    
+    Copilot is no longer useful, so drop it entirely: the CopilotStatus
+    dataclass, CopilotHttpProvider, all Copilot UI render specs/rows/
+    empty-view/reset helpers, the auth action, provider registration, and
+    every Copilot test.
+    
+    The Google card now renders as "Antigravity" instead of
+    "Gemini · Antigravity" since the Gemini CLI is being dropped in favor of
+    agy. Display-only change: the canonical provider key stays "Gemini"
+    (config, --providers, dispatch, thresholds) and the probe is unchanged --
+    it still reads ~/.gemini/oauth_creds.json and the shared cloudcode-pa
+    request-quota pool that agy draws from. The re-auth action changed from
+    `gemini` to `agy`.
+    
+    152 tests pass, ruff clean.
+
+diff --git a/HISTORY.md b/HISTORY.md
+index 4630e90..e64bae2 100644
+--- a/HISTORY.md
++++ b/HISTORY.md
+@@ -1,5 +1,10 @@
+ # History
+ 
++## 2026-06-24
++
++- **Removed the GitHub Copilot provider entirely (no longer useful).** Deleted `CopilotStatus`, `CopilotHttpProvider`, the Copilot render spec/rows/empty-view/monthly-reset helper, the auth action, provider registration, and all Copilot tests. | files: ai_monitor/parsing.py, ai_monitor/providers.py, ai_monitor/ui.py, ai_monitor/__main__.py, tests/test_main.py, tests/test_providers.py, tests/test_ui.py
++- **Relabeled the Google card "Gemini · Antigravity" → "Antigravity" (user dropped the Gemini CLI for `agy`).** Display-only title change via `DISPLAY_TITLES`; canonical provider key stays `"Gemini"`; probe unchanged (shared `~/.gemini/oauth_creds.json` token + cloudcode-pa quota pool that `agy` draws from). Re-auth action changed `gemini` → `agy`. | files: ai_monitor/ui.py, ai_monitor/__main__.py, tests/test_ui.py, tests/test_main.py
++
+ ## 2026-06-15
+ 
+ - **[bug] Codex card flipped back to `auth error — press [1] to fix` two days after the 06-13 re-auth.** Pressed `[1]` did not silently resolve it: the underlying `~/.codex/auth.json` access_token was server-side revoked (`x-openai-ide-error-code: token_invalidated` from `chatgpt.com/backend-api/wham/usage`) even though the JWT `exp` was 8 days in the future. The Codex CLI itself recovers from this state by silently exchanging its `refresh_token` for a new access_token at `https://auth.openai.com/oauth/token`; aimonitor's provider had no refresh path and just kept replaying the dead token every cycle. In this specific incident the `refresh_token` was *also* revoked (`refresh_token_invalidated`, "Your session has ended. Please log in again."), so only an interactive `codex login` could recover today — but every prior 401 that the provider surfaced may have been one a silent refresh could have fixed. | files: ai_monitor/providers.py
+diff --git a/README.md b/README.md
+index 661114e..d8b4f71 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,6 @@
+ # ai_monitor
+ 
+-Real-time terminal monitor for local `codex`, `claude`, `gemini`, `copilot`, `cursor`, and `vibe` usage.
++Real-time terminal monitor for local `codex`, `claude`, `agy`, `cursor`, and `vibe` usage.
+ 
+ Probes provider APIs directly using locally authenticated credentials — no PTY, no CLI scraping. Each provider uses its own HTTP or internal API path, so probes are fast and reliable.
+ 
+@@ -12,14 +12,12 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
+ 
+ - Monitors Codex usage via the OpenAI usage API
+ - Monitors Claude usage via the Anthropic account API
+-- Monitors Gemini usage via the Cloud Code internal quota API (OAuth); the same card also covers Google Antigravity (`agy`), which shares the Gemini request-quota pool. (Antigravity's premium-model credits — Opus, gpt-oss — are metered separately over a Codeium gRPC path with no probeable REST endpoint; see HISTORY.md 2026-05-23.)
+-- Monitors Copilot premium-request usage via the GitHub Copilot internal API
++- Monitors Antigravity (`agy`) usage via the Cloud Code internal quota API (OAuth), using the shared `~/.gemini/oauth_creds.json` token and the same per-model request-quota pool. (Antigravity's premium-model credits — Opus, gpt-oss — are metered separately over a Codeium gRPC path with no probeable REST endpoint; see HISTORY.md 2026-05-23.)
+ - Monitors Cursor credit usage via the Cursor Dashboard API
+ - Monitors Vibe usage via the Mistral billing API
+ - Refreshes every 120 seconds by default
+ - Shows Codex and Claude 5-hour and 1-week session usage, reset times, and pace indicators
+-- Shows Gemini Flash and Pro pool remaining percentages with reset countdowns
+-- Shows Copilot monthly premium remaining (`month rem`) with a color progress bar, monthly reset (`month reset`), and monthly pace (`month pace`) in the same card style
++- Shows Antigravity Flash and Pro pool remaining percentages with reset countdowns
+ - Shows Cursor included API-spend remaining, reset, and billing-cycle pace
+ - Shows Vibe monthly remaining (`month rem`), reset, and billing-cycle pace
+ - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
+@@ -37,8 +35,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
+ - Python 3.10+
+ - Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow.
+ - Claude: `~/.claude/` credentials present (created by `claude login`)
+-- Gemini: `~/.gemini/oauth_creds.json` present (created by `gemini` sign-in)
+-- Copilot: `gh` CLI on `PATH` and authenticated (`gh auth login`)
++- Antigravity (`agy`): `~/.gemini/oauth_creds.json` present (created by `agy` sign-in)
+ - Cursor: app or browser session authenticated
+ - Mistral console session authenticated (Safari/Chrome cookie extraction supported)
+ - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
+@@ -69,7 +66,7 @@ Optional config file (`.ai_monitor.json` in your current working directory):
+ 
+ ```json
+ {
+-  "providers": ["Claude", "Codex", "Copilot", "Cursor", "Gemini", "Vibe"],
++  "providers": ["Claude", "Codex", "Cursor", "Gemini", "Vibe"],
+   "interval": 120,
+   "threshold": 20
+ }
+@@ -93,12 +90,12 @@ Codex and Claude cards show:
+ - `5h`: remaining usage for the current 5-hour window, reset time, pace indicator
+ - `1w`: remaining usage for the current 1-week window, weekly reset time, pace indicator
+ 
+-Gemini card shows:
++Antigravity card shows:
+ 
+ - `fl`: Flash pool remaining, reset countdown
+ - `pr`: Pro pool remaining, reset countdown
+ 
+-Copilot / Cursor / Vibe cards show:
++Cursor / Vibe cards show:
+ 
+ - `mo`: monthly remaining percentage, billing-cycle reset, pace indicator
+ - `ap`: Cursor included API-spend remaining percentage, billing-cycle reset, pace indicator
+@@ -139,8 +136,7 @@ Example:
+ 
+ ## Notes
+ 
+-- Gemini probing calls `loadCodeAssist` before `retrieveUserQuota` to register the session; auth failures surface as a clear re-authenticate message.
+-- Copilot probing calls the `gh auth token` helper to retrieve a live GitHub token without storing it locally.
++- Gemini/Antigravity probing calls `loadCodeAssist` before `retrieveUserQuota` to register the session; auth failures surface as a clear re-authenticate message.
+ - Claude probing reads `~/.claude/` OAuth credentials directly; run `claude login` to refresh if probes fail.
+ - During each timed refresh, the header switches from `refresh XXs` to a single in-place `updating …` state until all providers complete, then resumes the countdown.
+ - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
+@@ -152,17 +148,16 @@ Example:
+ 
+ ## Limitations
+ 
+-- This depends on current local CLI/API behavior across `codex`, `claude`, `gemini`, `copilot`, `cursor`, and `vibe`.
++- This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `cursor`, and `vibe`.
+ - If any vendor changes its TUI wording or layout, the parser may need to be updated.
+ - Reset windows are only shown when the CLI output exposes them.
+ - Terminal rendering can vary across fonts and terminal emulators.
+-- Copilot currently relies on the status-line remaining percentage signal; if Copilot CLI omits it, `month rem` and `month pace` can still show `n/a`.
+ 
+ ## Known Issues
+ 
+ - **Claude `/usage` may return "only available for subscription plans"** even on valid Team or Pro seats. This is a server-side issue where the Anthropic usage API returns empty limit buckets (`five_hour`, `seven_day`, `seven_day_sonnet` are all null). The PTY probe itself works correctly. When the API starts returning data again, the Claude card will populate automatically.
+-- Gemini prefers a direct internal quota probe and only falls back to PTY `/stats` scraping if that path is unavailable.
+-- If Gemini falls back to PTY probing and shows a **waiting for authentication** screen, `ai_monitor` now reports that directly. Run `gemini` once and complete sign-in, then rerun the monitor.
++- The Antigravity card prefers a direct internal quota probe and only falls back to PTY `/stats` scraping if that path is unavailable.
++- If the Antigravity card falls back to PTY probing and shows a **waiting for authentication** screen, `ai_monitor` now reports that directly. Run `agy` once and complete sign-in, then rerun the monitor.
+ 
+ ## Development
+ 
+diff --git a/ai_monitor/__main__.py b/ai_monitor/__main__.py
+index f22a341..0a9f0ec 100644
+--- a/ai_monitor/__main__.py
++++ b/ai_monitor/__main__.py
+@@ -24,7 +24,6 @@ from rich.live import Live
+ from .providers import (
+     ClaudeHttpProvider,
+     CodexHttpProvider,
+-    CopilotHttpProvider,
+     CursorProvider,
+     GeminiHttpProvider,
+     ProviderSnapshot,
+@@ -50,8 +49,7 @@ AUTH_ACTIONS: dict[str, tuple[str, str]] = {
+         "read -p '[Enter] runs codex login (overwrites token), [Ctrl-C] aborts: ' _; "
+         "codex login",
+     ),
+-    "Gemini": ("cli", "gemini"),
+-    "Copilot": ("cli", "gh auth login"),
++    "Gemini": ("cli", "agy"),
+     "Cursor": ("browser", "https://cursor.sh"),
+     "Vibe": ("browser", "https://console.mistral.ai"),
+ }
+@@ -124,7 +122,7 @@ def _launch_fix(kind: str, target: str) -> None:
+ 
+ def parse_args() -> argparse.Namespace:
+     parser = argparse.ArgumentParser(
+-        description="Monitor Codex, Claude, Gemini, and Copilot usage in real time."
++        description="Monitor Codex, Claude, Antigravity, Cursor, and Vibe usage in real time."
+     )
+     parser.add_argument("--interval", type=int, default=120, help="Refresh interval in seconds.")
+     parser.add_argument("--once", action="store_true", help="Fetch one snapshot and exit.")
+@@ -185,14 +183,6 @@ def initialize_providers(
+         except Exception as exc:  # noqa: BLE001
+             providers.append(("Gemini", exc))
+ 
+-    if enabled is None or "Copilot" in enabled:
+-        try:
+-            copilot = CopilotHttpProvider()
+-            providers.append(("Copilot", copilot))
+-            cleanup.append(copilot)
+-        except Exception as exc:  # noqa: BLE001
+-            providers.append(("Copilot", exc))
+-
+     if enabled is None or "Cursor" in enabled:
+         try:
+             cursor = CursorProvider()
+@@ -252,7 +242,6 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
+         "could not load usage data",
+         "empty claude output",
+         "empty gemini output",
+-        "empty copilot output",
+         "missing current session",
+         "data not available yet",
+         "http 429",
+@@ -473,7 +462,7 @@ def main() -> int:
+                     while not future.done():
+                         live.update(
+                             build_loading_screen(
+-                                "Getting initial usage from Claude, Codex, Copilot, Cursor, Gemini, and Vibe…",
++                                "Getting initial usage from Claude, Codex, Antigravity, Cursor, and Vibe…",
+                                 datetime.now(),
+                                 time.monotonic() - started,
+                             )
+diff --git a/ai_monitor/parsing.py b/ai_monitor/parsing.py
+index 80d5358..6775cd5 100644
+--- a/ai_monitor/parsing.py
++++ b/ai_monitor/parsing.py
+@@ -1,4 +1,4 @@
+-"""Status dataclasses for Codex, Claude, Gemini, Copilot, Cursor, and Vibe providers."""
++"""Status dataclasses for Codex, Claude, Gemini, Cursor, and Vibe providers."""
+ 
+ from __future__ import annotations
+ 
+@@ -50,18 +50,6 @@ class GeminiStatus:
+         return asdict(self)
+ 
+ 
+-@dataclass(slots=True)
+-class CopilotStatus:
+-    premium_requests: int | None
+-    sample_duration_seconds: int | None
+-    premium_percent_left: float | None
+-    premium_reset: str | None
+-    raw_text: str
+-
+-    def to_dict(self) -> dict[str, Any]:
+-        return asdict(self)
+-
+-
+ @dataclass(slots=True)
+ class VibeStatus:
+     usage_percent: float | None
+diff --git a/ai_monitor/providers.py b/ai_monitor/providers.py
+index 0ac6877..4b6d65e 100644
+--- a/ai_monitor/providers.py
++++ b/ai_monitor/providers.py
+@@ -1,4 +1,4 @@
+-"""Provider probes for Codex, Claude, Gemini, Copilot, and Cursor usage."""
++"""Provider probes for Codex, Claude, Gemini, and Cursor usage."""
+ 
+ from __future__ import annotations
+ 
+@@ -15,7 +15,6 @@ from typing import Any
+ from .parsing import (
+     ClaudeStatus,
+     CodexStatus,
+-    CopilotStatus,
+     CursorStatus,
+     GeminiStatus,
+     VibeStatus,
+@@ -876,102 +875,6 @@ class CursorProvider:
+             log.warning("Cursor token refresh failed: %s", exc)
+ 
+ 
+-class CopilotHttpProvider:
+-    """Fetch Copilot premium-request usage via GitHub REST API."""
+-
+-    _API_URL = "https://api.github.com/copilot_internal/user"
+-
+-    def __init__(self) -> None:
+-        if not shutil.which("gh"):
+-            raise FileNotFoundError("gh not found on PATH")
+-
+-    def _get_token(self) -> str:
+-        try:
+-            result = subprocess.run(
+-                ["gh", "auth", "token"],
+-                capture_output=True,
+-                text=True,
+-                timeout=10,
+-                check=True,
+-            )
+-            token = result.stdout.strip()
+-            if not token:
+-                raise ProbeFailure("gh auth token returned empty output", "")
+-            return token
+-        except subprocess.CalledProcessError as exc:
+-            raise ProbeFailure(
+-                "gh auth login required: run `gh auth login`",
+-                str(exc),
+-            ) from exc
+-
+-    @staticmethod
+-    def _monthly_reset_label() -> str:
+-        now = datetime.now(timezone.utc)
+-        year = now.year + (1 if now.month == 12 else 0)
+-        month = 1 if now.month == 12 else now.month + 1
+-        reset = datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
+-        return f"Resets {reset.astimezone().strftime('%b %d at %I:%M %p')}"
+-
+-    def fetch(self) -> CopilotStatus:
+-        token = self._get_token()
+-        try:
+-            payload = _http_json(
+-                self._API_URL,
+-                headers={
+-                    "Authorization": f"Bearer {token}",
+-                    "Accept": "application/json",
+-                },
+-            )
+-        except ProbeFailure as exc:
+-            if "HTTP 401" in str(exc):
+-                raise ProbeFailure("Copilot auth failed: run `gh auth login`", str(exc)) from exc
+-            raise
+-
+-        raw_text = json.dumps(payload, indent=2, sort_keys=True)
+-
+-        # Paid tier: quota_snapshots.premium_interactions
+-        premium_percent_left: float | None = None
+-        premium_requests: int | None = None
+-        premium_reset: str | None = None
+-
+-        quota_snapshots = payload.get("quota_snapshots") or {}
+-        premium = quota_snapshots.get("premium_interactions") or {}
+-        if premium:
+-            if premium.get("unlimited", False):
+-                premium_percent_left = 100.0
+-            else:
+-                pct_remaining = premium.get("percent_remaining")
+-                if pct_remaining is not None:
+-                    try:
+-                        premium_percent_left = round(float(pct_remaining), 2)
+-                    except (TypeError, ValueError):
+-                        pass
+-                remaining = premium.get("remaining")
+-                if remaining is not None:
+-                    try:
+-                        premium_requests = int(remaining)
+-                    except (TypeError, ValueError):
+-                        pass
+-
+-        # Reset: quota_reset_date_utc is a top-level ISO string
+-        reset_at = payload.get("quota_reset_date_utc") or payload.get("quota_reset_date")
+-        premium_reset = _format_reset_time(reset_at) if reset_at else None
+-
+-        if premium_reset is None:
+-            premium_reset = self._monthly_reset_label()
+-
+-        return CopilotStatus(
+-            premium_percent_left=premium_percent_left,
+-            premium_requests=premium_requests,
+-            sample_duration_seconds=None,
+-            premium_reset=premium_reset,
+-            raw_text=raw_text,
+-        )
+-
+-    def close(self) -> None:
+-        pass
+-
+-
+ class CodexHttpProvider:
+     """Fetch Codex usage via OpenAI API using cached credentials."""
+ 
+diff --git a/ai_monitor/ui.py b/ai_monitor/ui.py
+index 3a643bf..0274f21 100644
+--- a/ai_monitor/ui.py
++++ b/ai_monitor/ui.py
+@@ -5,7 +5,7 @@ from __future__ import annotations
+ import json
+ import re
+ from dataclasses import dataclass
+-from datetime import datetime, timedelta, timezone
++from datetime import datetime, timedelta
+ 
+ from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderResult
+ from rich.panel import Panel
+@@ -41,7 +41,6 @@ THEME = Theme(
+         "accent.codex": "color(111)",
+         "accent.claude": "color(219)",
+         "accent.gemini": "color(80)",
+-        "accent.copilot": "color(117)",
+         "accent.cursor": "color(214)",
+         "accent.vibe": "color(208)",
+     }
+@@ -139,21 +138,6 @@ PROVIDER_RENDER_SPECS = {
+             ),
+         ),
+     ),
+-    "Copilot": ProviderRenderSpec(
+-        title="Copilot",
+-        subtitle="Copilot usage",
+-        windows=(
+-            WindowRenderSpec(
+-                "premium",
+-                "rem",
+-                "mo ↻",
+-                None,
+-                "premium_percent_left",
+-                "premium_reset",
+-                None,
+-            ),
+-        ),
+-    ),
+ }
+ 
+ 
+@@ -354,8 +338,6 @@ def _provider_is_empty(snapshot: ProviderSnapshot) -> bool:
+         return _is_empty_window(data.get("session_percent_left")) or _is_empty_window(
+             data.get("weekly_percent_left")
+         )
+-    if name == "Copilot":
+-        return _is_empty_window(data.get("premium_percent_left"))
+     if name == "Cursor":
+         return _is_empty_window(data.get("credit_percent_left"))
+     if name == "Vibe":
+@@ -369,13 +351,6 @@ def _provider_is_empty(snapshot: ProviderSnapshot) -> bool:
+     return False
+ 
+ 
+-def _copilot_monthly_reset_target(now: datetime) -> datetime:
+-    utc_now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+-    year = utc_now.year + (1 if utc_now.month == 12 else 0)
+-    month = 1 if utc_now.month == 12 else utc_now.month + 1
+-    return datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
+-
+-
+ def _billing_cycle_pace_label(
+     percent_left: float | None,
+     start_iso: str | None,
+@@ -444,20 +419,19 @@ ACCENT_STYLES: dict[str, str] = {
+     "Codex": "accent.codex",
+     "Claude": "accent.claude",
+     "Gemini": "accent.gemini",
+-    "Copilot": "accent.copilot",
+     "Cursor": "accent.cursor",
+     "Vibe": "accent.vibe",
+ }
+ 
+ # Display-only title overrides. The provider key (used for config, dispatch, and
+-# thresholds) stays canonical; only the rendered panel title changes. The Gemini
+-# card also covers Antigravity (`agy`): both authenticate with the shared
+-# ~/.gemini/oauth_creds.json token and draw from the same per-model Gemini
+-# request quota on cloudcode-pa. (Antigravity's premium-model credits — Opus,
+-# gpt-oss — are metered separately via a Codeium gRPC path that has no probeable
+-# REST endpoint; see HISTORY.md 2026-05-23.)
++# thresholds) stays canonical; only the rendered panel title changes. The "Gemini"
++# key now renders as "Antigravity": the card tracks Antigravity (`agy`) usage,
++# which draws from the same per-model request quota on cloudcode-pa that the probe
++# reads via the shared ~/.gemini/oauth_creds.json token. (Antigravity's
++# premium-model credits — Opus, gpt-oss — are metered separately via a Codeium
++# gRPC path that has no probeable REST endpoint; see HISTORY.md 2026-05-23.)
+ DISPLAY_TITLES: dict[str, str] = {
+-    "Gemini": "Gemini · Antigravity",
++    "Gemini": "Antigravity",
+ }
+ 
+ 
+@@ -617,8 +591,6 @@ def build_provider_panel(
+ 
+     if _provider_is_empty(snapshot):
+         _add_empty_view(body, snapshot, now)
+-    elif base_name == "Copilot":
+-        _add_copilot_rows(body, snapshot.data, now)
+     elif base_name == "Cursor":
+         _add_cursor_rows(body, snapshot.data, now)
+     elif base_name == "Vibe":
+@@ -714,11 +686,6 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) ->
+                 # Window has remaining capacity but provider is blocked;
+                 # show the blocking reset so the user knows when they can work again.
+                 _row(window.session_label, blocking_reset)
+-    elif name == "Copilot":
+-        reset_value = data.get("premium_reset") or (
+-            f"Resets {_copilot_monthly_reset_target(now).astimezone().strftime('%b %d at %H:%M')}"
+-        )
+-        _row("mo", str(reset_value))
+     elif name == "Cursor":
+         reset_value = data.get("billing_cycle_end")
+         _row("ap", str(reset_value) if isinstance(reset_value, str) else None)
+@@ -727,31 +694,6 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) ->
+         _row("mo", str(reset_value) if isinstance(reset_value, str) else None)
+ 
+ 
+-def _add_copilot_rows(table: Table, data: dict[str, object], now: datetime) -> None:
+-    """Add Copilot-specific monthly metric rows."""
+-    remaining = data.get("premium_percent_left")
+-    percent_left = float(remaining) if isinstance(remaining, (int, float)) else None
+-    reset_value = (
+-        data.get("premium_reset")
+-        or f"Resets {_copilot_monthly_reset_target(now).astimezone().strftime('%b %d at %H:%M')}"
+-    )
+-    utc_now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+-    start = utc_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+-    end = _copilot_monthly_reset_target(utc_now)
+-    pace_text = _billing_cycle_pace_label(percent_left, start.isoformat(), end.isoformat(), utc_now)
+-
+-    style = _style_for_percent(percent_left)
+-    value_text = _format_percent_value(percent_left)
+-    reset_display = _format_reset_display(None if reset_value is None else str(reset_value), now)
+-    table.add_row(
+-        Text("mo", style="text.muted"),
+-        Text(value_text, style=style),
+-        PercentageBar(percent_left, style),
+-        Text(reset_display, style="text.cyan"),
+-        PaceLabel(pace_text),
+-    )
+-
+-
+ def _add_cursor_rows(table: Table, data: dict[str, object], now: datetime) -> None:
+     """Add Cursor credit usage rows."""
+     percent_left = data.get("credit_percent_left")
+diff --git a/tasks.md b/tasks.md
+index 89c9f99..d7f6e42 100644
+--- a/tasks.md
++++ b/tasks.md
+@@ -37,10 +37,6 @@
+ - [x] Fix Cursor/Claude/Vibe spurious re-auth prompts by caching browser cookies locally to survive Safari disk-sync lag.
+ - [ ] Add `--web` mode to serve the dashboard as a local HTML page.
+ - [ ] Add system tray / menu bar integration.
+-- [ ] Add `--web` mode to serve the dashboard as a local HTML page.
+-- [ ] Add system tray / menu bar integration.
+-- [ ] **Gemini CLI deprecation (deadline 2026-06-18).** On 2026-06-18 Google AI Pro/Ultra/free OAuth tier stop being served by `gemini` CLI in favor of Antigravity CLI. Action: before 2026-06-18, verify `GeminiHttpProvider` still returns live data using the existing `~/.gemini/oauth_creds.json` token — the underlying `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` backend is shared with Antigravity and should keep working. **Done when:** ai_monitor's Gemini card still renders Flash/Pro percentages on 2026-06-19. Status: pending verification.
+-- [x] **Surface Antigravity (`agy`) usage.** Resolved 2026-05-23: `agy`'s Gemini-model usage shares the exact pool the Gemini card already tracks (same `~/.gemini/oauth_creds.json` token, same `:retrieveUserQuota` buckets on prod and `daily-` hosts). Relabeled the Gemini card to `Gemini · Antigravity` (display-only) instead of adding a duplicate card. See HISTORY.md 2026-05-23.
+ - [ ] **(Parked) Antigravity premium-model credits (Opus, gpt-oss).** Not probeable via REST: metered as Codeium-style AI credits over the local language-server gRPC path, authenticated by `agy`'s Keychain credential — no JSON endpoint replicable with the existing provider pattern. **Revisit only if** Google exposes a REST credits endpoint, or it becomes worth a separate gRPC spike (needs `exa.*` protos + Keychain token extraction). Status: parked.
+ - [ ] **Codex 401 recovery: misleading "session expired" on a post-refresh 5xx.** When `_refresh_tokens()` succeeds but the immediate retry `_request_usage()` hits a transient 5xx, `fetch()` (`ai_monitor/providers.py:1096-1106`) drops into the reload fallback, finds the on-disk token unchanged (refresh already wrote it), and surfaces `Codex session expired: run codex to re-authenticate` — misleading, since the creds are valid and the server merely errored. **Low impact:** no data loss, no extra HTTP call (the unchanged-token guard at :1105 short-circuits before the retry). **Fix:** skip the reload fallback when refresh already succeeded, and distinguish a 5xx from an auth failure. Found during the 2026-06-24 ship review.
+ - [ ] **Hermes budget-snapshot publisher → use the multi-endpoint SSH-alias fallback pattern when built.** When the planned `budget-snapshot.json` publisher is built, do NOT hardcode a single SSH alias or host. Reuse the LAN-first / tailnet-fallback pattern from the `hermes-publisher` project (v0.3.0): try the LAN alias first, fall back to the tailnet alias, per-endpoint connect timeout, iterate-and-fallback in the ship path, and raise the LAST exception on total failure so callers' `except` clauses still work. **Why this matters:** a single-alias config silently lost several days of envelope flow when the tailnet GUI wasn't running after a reboot — see the `hermes-publisher` postmortem in that project's local docs. **Done when:** the budget-snapshot push succeeds via LAN with the tailnet down, AND via tailnet when off-LAN, AND logs record which endpoint won.
+diff --git a/tests/test_main.py b/tests/test_main.py
+index 4dfd9ce..09fdce5 100644
+--- a/tests/test_main.py
++++ b/tests/test_main.py
+@@ -249,8 +249,8 @@ class IsAuthErrorTests(unittest.TestCase):
+         snap = ProviderSnapshot(name="Claude", ok=False, source="api", error=None)
+         self.assertFalse(_is_auth_error(snap))
+ 
+-    def test_all_six_providers_in_auth_actions(self) -> None:
+-        expected = {"Claude", "Codex", "Gemini", "Copilot", "Cursor", "Vibe"}
++    def test_all_five_providers_in_auth_actions(self) -> None:
++        expected = {"Claude", "Codex", "Gemini", "Cursor", "Vibe"}
+         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
+ 
+     def test_codex_action_guards_against_blind_clobber(self) -> None:
+@@ -327,7 +327,7 @@ class BuildFixActionsTests(unittest.TestCase):
+             ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
+         ]
+         actions = _build_fix_actions(snaps)
+-        self.assertEqual(actions, {"1": ("Gemini", "cli", "gemini")})
++        self.assertEqual(actions, {"1": ("Gemini", "cli", "agy")})
+ 
+     def test_multiple_auth_errors_alphabetical(self) -> None:
+         snaps = [
+@@ -339,7 +339,7 @@ class BuildFixActionsTests(unittest.TestCase):
+         ]
+         actions = _build_fix_actions(snaps)
+         self.assertEqual(actions["1"], ("Claude", "cli", "claude login"))
+-        self.assertEqual(actions["2"], ("Gemini", "cli", "gemini"))
++        self.assertEqual(actions["2"], ("Gemini", "cli", "agy"))
+         self.assertEqual(len(actions), 2)
+ 
+     def test_no_auth_errors_returns_empty(self) -> None:
+@@ -359,7 +359,7 @@ class BuildFixActionsTests(unittest.TestCase):
+         ]
+         actions = _build_fix_actions(snaps)
+         self.assertEqual(len(actions), 1)
+-        self.assertEqual(actions["1"], ("Gemini", "cli", "gemini"))
++        self.assertEqual(actions["1"], ("Gemini", "cli", "agy"))
+ 
+     def test_browser_action_type(self) -> None:
+         snaps = [
+diff --git a/tests/test_providers.py b/tests/test_providers.py
+index 52d6ffc..e98f741 100644
+--- a/tests/test_providers.py
++++ b/tests/test_providers.py
+@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
+ from ai_monitor.providers import (
+     ClaudeHttpProvider,
+     CodexHttpProvider,
+-    CopilotHttpProvider,
+     CursorProvider,
+     GeminiHttpProvider,
+     ProbeFailure,
+@@ -25,14 +24,6 @@ from ai_monitor.providers import (
+ )
+ 
+ 
+-class ProviderHelperTests(unittest.TestCase):
+-    def test_copilot_monthly_reset_label_uses_local_time(self) -> None:
+-        label = CopilotHttpProvider._monthly_reset_label()
+-        self.assertTrue(label.startswith("Resets "))
+-        self.assertNotIn("UTC", label)
+-        self.assertIn(" at ", label)
+-
+-
+ class FormatResetTimeTests(unittest.TestCase):
+     def test_iso_string_with_z(self) -> None:
+         result = _format_reset_time("2026-05-01T12:00:00Z")
+@@ -110,72 +101,6 @@ class HttpJsonHelperTests(unittest.TestCase):
+                 _http_json("https://example.com/api")
+ 
+ 
+-class CopilotHttpProviderTests(unittest.TestCase):
+-    # Real API uses percent_remaining + remaining directly; quota_reset_date_utc top-level
+-    PAID_RESPONSE = {
+-        "quota_snapshots": {
+-            "premium_interactions": {
+-                "percent_remaining": 95.0,
+-                "remaining": 285,
+-                "unlimited": False,
+-            }
+-        },
+-        "quota_reset_date_utc": "2026-05-01T00:00:00.000Z",
+-    }
+-    FREE_RESPONSE = {
+-        "quota_snapshots": {
+-            "premium_interactions": {
+-                "percent_remaining": 10.0,
+-                "remaining": 5,
+-                "unlimited": False,
+-            }
+-        },
+-        "quota_reset_date_utc": "2026-05-01T00:00:00.000Z",
+-    }
+-
+-    def _make_provider(self) -> CopilotHttpProvider:
+-        with patch("shutil.which", return_value="/usr/bin/gh"):
+-            return CopilotHttpProvider()
+-
+-    def test_paid_tier_field_mapping(self) -> None:
+-        provider = self._make_provider()
+-        with (
+-            patch("ai_monitor.providers._http_json", return_value=self.PAID_RESPONSE),
+-            patch("subprocess.run") as mock_run,
+-        ):
+-            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+-            status = provider.fetch()
+-        self.assertIsNotNone(status.premium_percent_left)
+-        assert status.premium_percent_left is not None
+-        self.assertAlmostEqual(status.premium_percent_left, 95.0, places=1)
+-        self.assertEqual(status.premium_requests, 285)
+-        self.assertIsNotNone(status.premium_reset)
+-
+-    def test_free_tier_field_mapping(self) -> None:
+-        provider = self._make_provider()
+-        with (
+-            patch("ai_monitor.providers._http_json", return_value=self.FREE_RESPONSE),
+-            patch("subprocess.run") as mock_run,
+-        ):
+-            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+-            status = provider.fetch()
+-        self.assertIsNotNone(status.premium_percent_left)
+-        assert status.premium_percent_left is not None
+-        self.assertAlmostEqual(status.premium_percent_left, 10.0, places=1)
+-        self.assertEqual(status.premium_requests, 5)
+-
+-    def test_401_raises_probe_failure(self) -> None:
+-        provider = self._make_provider()
+-        with (
+-            patch("ai_monitor.providers._http_json", side_effect=ProbeFailure("HTTP 401", "")),
+-            patch("subprocess.run") as mock_run,
+-        ):
+-            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+-            with self.assertRaises(ProbeFailure) as ctx:
+-                provider.fetch()
+-        self.assertIn("gh auth login", str(ctx.exception))
+-
+-
+ class VibeProviderTests(unittest.TestCase):
+     RESPONSE = {
+         "usage_percentage": 1.0841208999999998,
+diff --git a/tests/test_ui.py b/tests/test_ui.py
+index a8502ce..6865dc3 100644
+--- a/tests/test_ui.py
++++ b/tests/test_ui.py
+@@ -145,10 +145,6 @@ class ProviderPanelTests(unittest.TestCase):
+             "pro_percent_left": 83,
+             "pro_reset": "resets in 22h 23m",
+         }
+-        self.copilot_data = {
+-            "premium_percent_left": 97.6,
+-            "premium_reset": "Resets Apr 01 12:00 AM",
+-        }
+ 
+     def test_codex_panel_contains_labels_and_values(self) -> None:
+         snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=self.codex_data)
+@@ -168,21 +164,15 @@ class ProviderPanelTests(unittest.TestCase):
+         self.assertIn("73%", output)
+ 
+     def test_gemini_panel_shows_flash_and_pro(self) -> None:
++        # Canonical provider key stays "Gemini"; the panel now renders as
++        # "Antigravity" (agy), which draws from the same Gemini request-quota pool.
+         snap = ProviderSnapshot(name="Gemini", ok=True, source="cli", data=self.gemini_data)
+         output = _capture(build_provider_panel(snap, self.now), width=44)
+-        self.assertIn("Gemini", output)
+-        # Card covers Antigravity (agy), which shares the Gemini quota pool.
+         self.assertIn("Antigravity", output)
++        self.assertNotIn("Gemini", output)
+         self.assertIn("fl", output)
+         self.assertIn("pr", output)
+ 
+-    def test_copilot_panel_shows_monthly_metrics(self) -> None:
+-        snap = ProviderSnapshot(name="Copilot", ok=True, source="cli", data=self.copilot_data)
+-        output = _capture(build_provider_panel(snap, self.now), width=44)
+-        self.assertIn("Copilot", output)
+-        self.assertIn("mo", output)
+-        self.assertIn("98%", output)
+-
+     def test_error_panel_shows_error_message(self) -> None:
+         snap = ProviderSnapshot(name="Claude", ok=False, source="cli", error="connection timeout")
+         output = _capture(build_provider_panel(snap, self.now), width=44)
+@@ -337,20 +327,6 @@ class ProviderPanelTests(unittest.TestCase):
+         self.assertNotIn("▓", output)
+         self.assertNotIn("91%", output)
+ 
+-    def test_empty_view_copilot(self) -> None:
+-        snap = ProviderSnapshot(
+-            name="Copilot",
+-            ok=True,
+-            source="cli",
+-            data={
+-                "premium_percent_left": 0,
+-                "premium_reset": "Resets Apr 01 at 12:00 AM",
+-            },
+-        )
+-        output = _capture(build_provider_panel(snap, self.now), width=70)
+-        self.assertIn("until", output)
+-        self.assertNotIn("▓", output)
+-
+     def test_empty_view_cursor(self) -> None:
+         snap = ProviderSnapshot(
+             name="Cursor",
+@@ -592,7 +568,6 @@ class NoANSIRegressionTests(unittest.TestCase):
+             ("Codex", {"five_hour_percent_left": 50, "weekly_percent_left": 80}),
+             ("Claude", {"session_percent_left": 30, "weekly_percent_left": 90}),
+             ("Gemini", {"flash_percent_left": 75, "pro_percent_left": 60}),
+-            ("Copilot", {"premium_percent_left": 95.0}),
+         ):
+             with self.subTest(provider=name):
+                 snap = ProviderSnapshot(name=name, ok=True, source="cli", data=data)
+@@ -761,7 +736,7 @@ class AuthFixFooterTests(unittest.TestCase):
+                 name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
+             ),
+         ]
+-        fix_actions = {"1": ("Gemini", "cli", "gemini")}
++        fix_actions = {"1": ("Gemini", "cli", "agy")}
+         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
+         output = _capture(dashboard, width=80)
+         self.assertIn("[1]", output)
+@@ -777,7 +752,7 @@ class AuthFixFooterTests(unittest.TestCase):
+         ]
+         fix_actions = {
+             "1": ("Cursor", "browser", "https://cursor.sh"),
+-            "2": ("Gemini", "cli", "gemini"),
++            "2": ("Gemini", "cli", "agy"),
+         }
+         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
+         output = _capture(dashboard, width=100)
+@@ -811,7 +786,7 @@ class AuthFixFooterTests(unittest.TestCase):
+         snaps = [
+             ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
+         ]
+-        fix_actions = {"1": ("Gemini", "cli", "gemini")}
++        fix_actions = {"1": ("Gemini", "cli", "agy")}
+         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
+         output = _capture(dashboard, width=80)
+         self.assertIn("auth error", output)

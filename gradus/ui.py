@@ -162,7 +162,7 @@ PROVIDER_RENDER_SPECS = {
         windows=(
             WindowRenderSpec(
                 "premium",
-                "rem",
+                "mo",
                 "mo ↻",
                 None,
                 "premium_percent_left",
@@ -826,11 +826,6 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
                 # Window has remaining capacity but provider is blocked;
                 # show the blocking reset so the user knows when they can work again.
                 _row(window.session_label, blocking_reset)
-    elif name == "Copilot":
-        reset_value = data.get("premium_reset") or (
-            f"Resets {_copilot_monthly_reset_target(now).astimezone().strftime('%b %d at %H:%M')}"
-        )
-        _row("mo", str(reset_value))
     elif name == "Cursor":
         reset_value = data.get("billing_cycle_end")
         reset_str = str(reset_value) if isinstance(reset_value, str) else None
@@ -1023,6 +1018,73 @@ class PackedProviderCards:
             yield Segment.line()
 
 
+def _extract_depleted_reset_str(snapshot: ProviderSnapshot, now: datetime) -> str | None:
+    """Extract reset timestamp for any depleted provider."""
+    data = snapshot.data or {}
+    name = snapshot.name.removesuffix(" [HTTP]")
+    spec = PROVIDER_RENDER_SPECS.get(name)
+    if spec:
+        windows = spec.windows
+        if name == "Antigravity":
+            windows = (*windows, *ANTIGRAVITY_CG_WINDOWS)
+        for window in windows:
+            pct = data.get(window.percent_key)
+            if _is_empty_window(pct):
+                raw = data.get(window.reset_key)
+                if raw is not None:
+                    return str(raw)
+    for key in (
+        "premium_reset",
+        "reset_at",
+        "billing_cycle_end",
+        "weekly_reset_at",
+        "session_reset_at",
+        "five_hour_reset_at",
+    ):
+        val = data.get(key)
+        if val is not None:
+            return str(val)
+    return None
+
+
+def build_micro_depleted_panel(
+    snapshot: ProviderSnapshot,
+    now: datetime,
+    width: int = 21,
+) -> Panel:
+    """Build a quarter-width micro Panel (centered text) for any depleted provider."""
+    name = snapshot.name.removesuffix(" [HTTP]")
+    reset_str = _extract_depleted_reset_str(snapshot, now)
+    reset_disp = _format_reset_display(reset_str, now)
+    body = Text(f"0% until {reset_disp}", style="text.red", justify="center")
+    return Panel(
+        body,
+        title=f"[bold text.red]{name} [!][/]",
+        border_style="text.red",
+        width=width,
+        subtitle_align="left",
+        padding=(0, 0),
+    )
+
+
+class DynamicMicroDepletedPair:
+    """Two depleted micro panels side-by-side dynamically filling column width."""
+
+    def __init__(self, snap1: ProviderSnapshot, snap2: ProviderSnapshot, now: datetime) -> None:
+        self.snap1 = snap1
+        self.snap2 = snap2
+        self.now = now
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        w1 = (options.max_width - 1) // 2
+        w2 = options.max_width - 1 - w1
+        p1 = build_micro_depleted_panel(self.snap1, self.now, width=w1)
+        p2 = build_micro_depleted_panel(self.snap2, self.now, width=w2)
+        grid = Table.grid(padding=(0, 1))
+        grid.add_row(p1, p2)
+        yield from console.render(grid, options)
+
+
 def build_dashboard(
     snapshots: list[ProviderSnapshot],
     updated_at: datetime,
@@ -1038,7 +1100,7 @@ def build_dashboard(
     # Header
     refresh_value = f"{update_elapsed:0.1f}s" if updating else f"{next_refresh_seconds}s"
     header = Text.assemble(
-        ("AI Usage Monitor", "bold text.cyan"),
+        ("Gradus", "bold text.cyan"),
         ("  |  ", "text.muted"),
         ("Last Updated: ", "text.muted"),
         (updated_at.strftime("%b %d %H:%M:%S"), "text.yellow"),
@@ -1047,28 +1109,56 @@ def build_dashboard(
         (refresh_value, "text.cyan"),
     )
 
-    # Build panels — Cursor and Vibe are compact (3 rows); sort them last so they
-    # always share a row rather than being paired with a taller provider.
+    # Build panels — active providers first; pairs of exhausted providers are grouped
+    # into side-by-side micro cards (ratio Cursor:Copilot:Vibe = 2:1:1) at the bottom.
+    active_snaps = [s for s in snapshots if not _provider_is_empty(s, now)]
+    exhausted_snaps = [s for s in snapshots if _provider_is_empty(s, now)]
+
     _COMPACT = {"Cursor", "Vibe"}
-    ordered = sorted(snapshots, key=lambda s: s.name in _COMPACT)
+    active_ordered = sorted(
+        active_snaps,
+        key=lambda s: (
+            (s.name.removesuffix(" [HTTP]") if hasattr(s.name, "removesuffix") else s.name)
+            in _COMPACT
+        ),
+    )
+
     fix_key_by_name: dict[str, str] = {}
     if fix_actions:
         for key, (name, _, _) in fix_actions.items():
             fix_key_by_name[name] = key
-    panels = [
-        build_provider_panel(
-            snap,
-            now,
-            auth_fix_key=fix_key_by_name.get(snap.name),
-        )
-        for snap in ordered
+
+    active_panels = [
+        build_provider_panel(snap, now, auth_fix_key=fix_key_by_name.get(snap.name))
+        for snap in active_ordered
     ]
 
+    all_panels: list[RenderableType] = list(active_panels)
+    if len(exhausted_snaps) >= 2:
+        for i in range(0, len(exhausted_snaps), 2):
+            pair = exhausted_snaps[i : i + 2]
+            if len(pair) == 2:
+                all_panels.append(DynamicMicroDepletedPair(pair[0], pair[1], now))
+            else:
+                all_panels.append(
+                    build_provider_panel(
+                        pair[0], now, auth_fix_key=fix_key_by_name.get(pair[0].name)
+                    )
+                )
+    elif len(exhausted_snaps) == 1:
+        all_panels.append(
+            build_provider_panel(
+                exhausted_snaps[0],
+                now,
+                auth_fix_key=fix_key_by_name.get(exhausted_snaps[0].name),
+            )
+        )
+
     # Layout: cards pack into the shorter stack at safe two-column widths.
-    if len(panels) > 1:
-        body: RenderableType = PackedProviderCards(panels)
-    elif panels:
-        body = panels[0]
+    if len(all_panels) > 1:
+        body: RenderableType = PackedProviderCards(all_panels)
+    elif all_panels:
+        body = all_panels[0]
     else:
         body = Text("No providers configured.", style="text.muted")
 
@@ -1090,7 +1180,7 @@ def build_dashboard(
 def build_loading_screen(message: str, updated_at: datetime, elapsed_seconds: float = 0.0) -> Group:
     """Build the loading/startup screen as a Rich Group."""
     header = Text.assemble(
-        ("AI Usage Monitor", "bold text.cyan"),
+        ("Gradus", "bold text.cyan"),
         ("  |  ", "text.muted"),
         ("Last Updated: ", "text.muted"),
         (updated_at.strftime("%b %d %H:%M:%S"), "text.yellow"),

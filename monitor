@@ -1,10 +1,10 @@
 #!/bin/sh
 """:" # Shell/Python polyglot — finds the project venv automatically
-exec "$(dirname "$0")/.venv/bin/python3" "$0" "$@"
+exec "$(dirname "$0")/.venv/bin/python3" -m gradus "$@"
 """
-"""Convenience wrapper for launching the monitor from the repo root."""
+"""Convenience wrapper for launching the monitor (delegating to gradus)."""
 
-from ai_monitor.__main__ import main
+from gradus.__main__ import main
 
 
 if __name__ == "__main__":
