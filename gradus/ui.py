@@ -314,7 +314,21 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
         )
         values = [snapshot.data.get(key) for key in percent_keys]
         available = [value for value in values if percent_is_valid(value)]
-        return bool(available) and all(percent_is_depleted(value) for value in available)
+        if available and all(percent_is_depleted(value) for value in available):
+            return True
+        # Each pool (native Gemini, third-party C+G) is itself blocked the
+        # moment either of its two windows hits 0% -- same "any window at
+        # 0% blocks usage" rule Codex/Claude already use. The provider as a
+        # whole is only exhausted once BOTH pools are blocked, including via
+        # different windows (e.g. native 5h=0% and third-party 1w=0%, even
+        # though native 1w and third-party 5h both still have capacity).
+        native_blocked = percent_is_depleted(
+            snapshot.data.get("five_hour_percent_left")
+        ) or percent_is_depleted(snapshot.data.get("weekly_percent_left"))
+        third_party_blocked = percent_is_depleted(
+            snapshot.data.get("third_party_five_hour_percent_left")
+        ) or percent_is_depleted(snapshot.data.get("third_party_weekly_percent_left"))
+        return native_blocked and third_party_blocked
 
     windows = normalized_warning_windows(snapshot, now)
     depleted = {
@@ -747,16 +761,16 @@ def _add_usage_rows(
 
 
 def _antigravity_cg_data(data: dict[str, object]) -> dict[str, object]:
-    """Return the C+G windows that should be visible in the Antigravity panel.
+    """Return the C+G windows that have a valid, reportable percentage.
 
-    An entirely full C+G group is intentionally idle and stays out of the
-    compact panel. The decision uses the unrounded, validated source values:
-    99.9 must render even though its display text is ``100%``.
+    Malformed or missing values are excluded so a downstream row is never
+    rendered from invalid data. A valid value renders regardless of level,
+    including a fully unused 100% pool — every tracked window stays visible.
     """
     visible: dict[str, object] = {}
     for window in ANTIGRAVITY_CG_WINDOWS:
         percent = data.get(window.percent_key)
-        if percent_is_valid(percent) and float(percent) < 100.0:
+        if percent_is_valid(percent):
             visible[window.percent_key] = percent
             reset = data.get(window.reset_key)
             if reset is not None:
@@ -779,7 +793,12 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
     """All rows show depleted format — provider has no usable capacity.
 
     Depleted windows show their own reset. Non-depleted windows (still blocked
-    because another window is at 0%) show the blocking window's reset time.
+    because another window in the same quota pool is at 0%) show that pool's
+    blocking reset. Antigravity has two independent pools (native Gemini,
+    third-party C+G) that can each be blocked via a different window, so the
+    blocking reset is computed per pool rather than once globally — otherwise
+    a capacity-remaining row could be stamped with the other pool's reset, a
+    time that doesn't actually free up that row's own pool.
     """
     data = snapshot.data
     assert data is not None
@@ -796,22 +815,26 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
             _e,
         )
 
-    spec = PROVIDER_RENDER_SPECS.get(name)
-    if spec:
-        windows = spec.windows
-        if name == "Antigravity":
-            # C+G rows use the same depleted presentation when every usable
-            # quota is exhausted, while malformed/absent C+G values remain
-            # omitted rather than producing phantom rows.
-            windows = (*windows, *ANTIGRAVITY_CG_WINDOWS)
-
-        # Find the reset of the first depleted window — that's what blocks usage.
-        blocking_reset: str | None = None
-        for window in windows:
+    def _pool_blocking_reset(pool_windows: tuple[WindowRenderSpec, ...]) -> str | None:
+        """Reset of the first depleted window in this pool — what blocks it."""
+        for window in pool_windows:
             if _is_empty_window(data.get(window.percent_key)):
                 raw = data.get(window.reset_key)
-                blocking_reset = None if raw is None else str(raw)
-                break
+                return None if raw is None else str(raw)
+        return None
+
+    spec = PROVIDER_RENDER_SPECS.get(name)
+    if spec:
+        # C+G rows use the same depleted presentation when every usable quota
+        # is exhausted, while malformed/absent C+G values remain omitted
+        # rather than producing phantom rows.
+        pools = (spec.windows, ANTIGRAVITY_CG_WINDOWS) if name == "Antigravity" else (spec.windows,)
+        windows = tuple(window for pool in pools for window in pool)
+        blocking_reset_by_key: dict[str, str | None] = {}
+        for pool in pools:
+            pool_blocking = _pool_blocking_reset(pool)
+            for window in pool:
+                blocking_reset_by_key[window.percent_key] = pool_blocking
 
         for window in windows:
             percent = data.get(window.percent_key)
@@ -823,9 +846,10 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
                 raw = data.get(window.reset_key)
                 _row(window.session_label, None if raw is None else str(raw))
             else:
-                # Window has remaining capacity but provider is blocked;
-                # show the blocking reset so the user knows when they can work again.
-                _row(window.session_label, blocking_reset)
+                # Window has remaining capacity but its pool is blocked;
+                # show that pool's blocking reset so the user knows when
+                # they can work again.
+                _row(window.session_label, blocking_reset_by_key[window.percent_key])
     elif name == "Cursor":
         reset_value = data.get("billing_cycle_end")
         reset_str = str(reset_value) if isinstance(reset_value, str) else None
@@ -1018,21 +1042,92 @@ class PackedProviderCards:
             yield Segment.line()
 
 
+def _pool_is_present(pool_windows: tuple[WindowRenderSpec, ...], data: dict[str, object]) -> bool:
+    """Return whether this pool has at least one tracked (valid) window.
+
+    Antigravity's third-party (C+G) pool is entirely absent -- both percents
+    ``None`` -- for accounts the API doesn't track it for, even while the
+    probe otherwise succeeds. `_provider_is_empty` reacts to that: with one
+    pool fully absent, the "both pools independently blocked" AND can never
+    fire (an absent pool's blocked flag is permanently False), so exhaustion
+    falls back to its other rule -- every *available* window depleted -- which
+    has different unblock semantics than the normal two-pool case.
+    """
+    return any(percent_is_valid(data.get(window.percent_key)) for window in pool_windows)
+
+
+def _pool_free_reset(
+    pool_windows: tuple[WindowRenderSpec, ...], data: dict[str, object], now: datetime
+) -> str | None:
+    """Reset string for when this pool stops blocking, or None if unknown.
+
+    A pool stays blocked until every one of its currently-depleted windows has
+    reset, so this is the latest (max) reset among them, not just the first
+    depleted window found. If any depleted window's reset is missing, the
+    pool's true clear time can't be determined — reporting another window's
+    reset could understate how long the pool stays blocked, so this reports
+    unknown (None) rather than guessing.
+    """
+    depleted_raw: list[str] = []
+    for window in pool_windows:
+        if not _is_empty_window(data.get(window.percent_key)):
+            continue
+        raw = data.get(window.reset_key)
+        if raw is None:
+            return None
+        depleted_raw.append(str(raw))
+    if not depleted_raw:
+        return None
+    far_future = datetime.max.replace(tzinfo=now.tzinfo)
+    return max(depleted_raw, key=lambda raw: _parse_reset_target(raw, now) or far_future)
+
+
 def _extract_depleted_reset_str(snapshot: ProviderSnapshot, now: datetime) -> str | None:
-    """Extract reset timestamp for any depleted provider."""
+    """Extract reset timestamp for any depleted provider.
+
+    A provider with independent quota pools (Antigravity's native + third-party)
+    becomes usable again as soon as any one currently-blocking pool clears, so
+    this picks the soonest (min) reset among the blocking pools rather than the
+    first depleted window found.
+    """
     data = snapshot.data or {}
     name = snapshot.name.removesuffix(" [HTTP]")
     spec = PROVIDER_RENDER_SPECS.get(name)
     if spec:
-        windows = spec.windows
+        far_future = datetime.max.replace(tzinfo=now.tzinfo)
         if name == "Antigravity":
-            windows = (*windows, *ANTIGRAVITY_CG_WINDOWS)
-        for window in windows:
-            pct = data.get(window.percent_key)
-            if _is_empty_window(pct):
-                raw = data.get(window.reset_key)
-                if raw is not None:
-                    return str(raw)
+            native, third_party = spec.windows, ANTIGRAVITY_CG_WINDOWS
+            if _pool_is_present(native, data) and _pool_is_present(third_party, data):
+                pool_resets = [
+                    reset
+                    for pool in (native, third_party)
+                    if (reset := _pool_free_reset(pool, data, now)) is not None
+                ]
+                if pool_resets:
+                    return min(
+                        pool_resets, key=lambda raw: _parse_reset_target(raw, now) or far_future
+                    )
+            else:
+                # One whole pool is absent (see `_pool_is_present`), so
+                # `_provider_is_empty` isn't held exhausted by the two-pool AND --
+                # it falls back to "every available window is depleted", which
+                # un-exhausts the instant any single depleted window recovers.
+                # That's a flat soonest (min) across all currently-depleted
+                # windows, not a per-pool latest-then-soonest.
+                depleted_raw = [
+                    str(data[window.reset_key])
+                    for window in (*native, *third_party)
+                    if _is_empty_window(data.get(window.percent_key))
+                    and data.get(window.reset_key) is not None
+                ]
+                if depleted_raw:
+                    return min(
+                        depleted_raw, key=lambda raw: _parse_reset_target(raw, now) or far_future
+                    )
+        else:
+            reset = _pool_free_reset(spec.windows, data, now)
+            if reset is not None:
+                return reset
     for key in (
         "premium_reset",
         "reset_at",
@@ -1083,6 +1178,23 @@ class DynamicMicroDepletedPair:
         grid = Table.grid(padding=(0, 1))
         grid.add_row(p1, p2)
         yield from console.render(grid, options)
+
+
+class DynamicMicroDepletedSingle:
+    """One depleted micro panel dynamically filling column width.
+
+    Used for a trailing unpaired exhausted provider so it matches the same
+    condensed micro-card treatment as paired exhausted providers, instead of
+    falling back to the taller full provider panel.
+    """
+
+    def __init__(self, snapshot: ProviderSnapshot, now: datetime) -> None:
+        self.snapshot = snapshot
+        self.now = now
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        panel = build_micro_depleted_panel(self.snapshot, self.now, width=options.max_width)
+        yield from console.render(panel, options)
 
 
 def build_dashboard(
@@ -1140,19 +1252,9 @@ def build_dashboard(
             if len(pair) == 2:
                 all_panels.append(DynamicMicroDepletedPair(pair[0], pair[1], now))
             else:
-                all_panels.append(
-                    build_provider_panel(
-                        pair[0], now, auth_fix_key=fix_key_by_name.get(pair[0].name)
-                    )
-                )
+                all_panels.append(DynamicMicroDepletedSingle(pair[0], now))
     elif len(exhausted_snaps) == 1:
-        all_panels.append(
-            build_provider_panel(
-                exhausted_snaps[0],
-                now,
-                auth_fix_key=fix_key_by_name.get(exhausted_snaps[0].name),
-            )
-        )
+        all_panels.append(DynamicMicroDepletedSingle(exhausted_snaps[0], now))
 
     # Layout: cards pack into the shorter stack at safe two-column widths.
     if len(all_panels) > 1:

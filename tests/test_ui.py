@@ -14,11 +14,13 @@ from gradus.snapshot import SAFE_DATA_KEYS
 from gradus.ui import (
     THEME,
     DynamicMicroDepletedPair,
+    DynamicMicroDepletedSingle,
     PaceLabel,
     PercentageBar,
     _compact_pace,
     _extract_depleted_reset_str,
     _format_reset_display,
+    _provider_is_empty,
     _style_for_percent,
     build_dashboard,
     build_loading_screen,
@@ -354,7 +356,10 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("Mar 21 08:22", output)
         self.assertTrue(any(token in output for token in ("↑", "↓", "=")))
 
-    def test_antigravity_hides_idle_cg_windows_at_exactly_hundred(self) -> None:
+    def test_antigravity_shows_cg_windows_at_exactly_hundred(self) -> None:
+        # A fully unused C+G pool (100% remaining) is still real, trackable
+        # quota -- it must render like any other window, not be hidden as
+        # "idle".
         snap = ProviderSnapshot(
             name="Antigravity",
             ok=True,
@@ -362,14 +367,20 @@ class ProviderPanelTests(unittest.TestCase):
             data={
                 **self.antigravity_data,
                 "third_party_five_hour_percent_left": 100.0,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
                 "third_party_weekly_percent_left": 100,
+                "third_party_weekly_reset": "Resets Mar 21 at 8:22 AM",
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=44)
-        self.assertNotIn("cg5", output)
-        self.assertNotIn("cg1w", output)
+        self.assertIn("cg5", output)
+        self.assertIn("cg1w", output)
+        self.assertEqual(output.count("100%"), 2)
 
-    def test_antigravity_cg_raw_99_point_9_is_not_treated_as_idle(self) -> None:
+    def test_antigravity_cg_fractional_value_rounds_to_hundred_for_display(self) -> None:
+        # A near-full pool (99.9% raw) is a genuinely different value from an
+        # exactly-100% one, but both render the same way now that neither is
+        # hidden -- 99.9 just displays rounded to "100%".
         snap = ProviderSnapshot(
             name="Antigravity",
             ok=True,
@@ -378,13 +389,12 @@ class ProviderPanelTests(unittest.TestCase):
                 **self.antigravity_data,
                 "third_party_five_hour_percent_left": 99.9,
                 "third_party_five_hour_reset": "Resets 9:22 AM",
-                "third_party_weekly_percent_left": 100.0,
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=44)
-        self.assertIn("cg5", output)
-        self.assertIn("100%", output)
-        self.assertNotIn("cg1w", output)
+        cg5_lines = [line for line in output.splitlines() if "cg5" in line and "cg1w" not in line]
+        self.assertTrue(cg5_lines, "expected a cg5 row in the output")
+        self.assertIn("100%", cg5_lines[0])
 
     def test_antigravity_omits_missing_or_malformed_cg_windows_independently(self) -> None:
         for invalid_value in (None, "unknown"):
@@ -661,6 +671,192 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("cg1w", output)
         self.assertIn("until", output)
         self.assertNotIn("▓", output)
+
+    def test_empty_view_antigravity_five_hour_pair_both_zero(self) -> None:
+        # Regression: native 5h and third-party cg5 both at 0% block all
+        # usage right now even though the 1w windows still have capacity.
+        # Previously this required *every* window to be zero before the
+        # provider switched to the depleted view.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 45,
+                "weekly_reset": "Resets Mar 15 at 06:45",
+                "third_party_five_hour_percent_left": 0,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 60,
+                "third_party_weekly_reset": "Resets Mar 15 at 06:45",
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("until", output)
+        self.assertNotIn("▓", output)
+
+    def test_empty_view_antigravity_weekly_pair_both_zero(self) -> None:
+        # Same rule, applied to the 1w pair: native weekly and cg1w both at
+        # 0% block usage even though the 5h windows still have capacity.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 35,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 15 at 06:45",
+                "third_party_five_hour_percent_left": 50,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 0,
+                "third_party_weekly_reset": "Resets Mar 15 at 06:45",
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("until", output)
+        self.assertNotIn("▓", output)
+
+    def test_empty_view_antigravity_cross_window_both_pools_blocked(self) -> None:
+        # Regression: each pool (native, third-party) is blocked the moment
+        # EITHER of its own windows hits 0% -- so native 5h=0% blocks the
+        # native pool even with weekly capacity left, and third-party
+        # weekly=0% blocks the third-party pool even with 5h capacity left.
+        # Both pools blocked, via different windows, still means you can't
+        # use agy at all right now.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 50,
+                "weekly_reset": "Resets Mar 15 at 06:45",
+                "third_party_five_hour_percent_left": 50,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 0,
+                "third_party_weekly_reset": "Resets Mar 15 at 06:45",
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("until", output)
+        self.assertNotIn("▓", output)
+
+    def test_empty_view_antigravity_cross_window_both_pools_blocked_reverse(self) -> None:
+        # Symmetric case: third-party 5h=0% blocks the third-party pool,
+        # native weekly=0% blocks the native pool.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 50,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 15 at 06:45",
+                "third_party_five_hour_percent_left": 0,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 50,
+                "third_party_weekly_reset": "Resets Mar 15 at 06:45",
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("until", output)
+        self.assertNotIn("▓", output)
+
+    def test_empty_view_antigravity_only_one_pool_blocked_stays_normal(self) -> None:
+        # Negative case: native pool blocked (5h=0%) but the third-party pool
+        # has capacity in both windows -- third-party is independently
+        # usable, so the provider must not flip to the depleted view.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 50,
+                "weekly_reset": "Resets Mar 15 at 06:45",
+                "third_party_five_hour_percent_left": 40,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 60,
+                "third_party_weekly_reset": "Resets Mar 15 at 06:45",
+            },
+        )
+        self.assertFalse(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertNotIn("until", output)
+        self.assertIn("▓", output)
+
+    def test_empty_view_antigravity_only_third_party_pool_blocked_stays_normal(self) -> None:
+        # Symmetric case: third-party pool blocked (cg5=0%) but the native
+        # pool has capacity in both windows -- native is independently
+        # usable, so the provider must not flip to the depleted view.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 40,
+                "five_hour_reset": "Resets at 23:58",
+                "weekly_percent_left": 60,
+                "weekly_reset": "Resets Mar 15 at 06:45",
+                "third_party_five_hour_percent_left": 0,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 50,
+                "third_party_weekly_reset": "Resets Mar 15 at 06:45",
+            },
+        )
+        self.assertFalse(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertNotIn("until", output)
+        self.assertIn("▓", output)
+
+    def test_empty_view_antigravity_blocking_reset_is_scoped_per_pool(self) -> None:
+        # Regression: the depleted view used to compute one global "blocking
+        # reset" (the first depleted window across all four) and stamp it on
+        # every non-depleted row. With native 5h=0% and third-party cg1w=0%
+        # blocking the provider via different windows, that leaked the native
+        # pool's reset onto the third-party pool's capacity-remaining row
+        # (cg5) -- a resume time that has nothing to do with when cg5 is
+        # actually usable again. Each pool's non-depleted row must show its
+        # OWN pool's blocking reset, never the other pool's.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets at 10:00",
+                "weekly_percent_left": 50,
+                "weekly_reset": "Resets Mar 18 at 06:45",
+                "third_party_five_hour_percent_left": 60,
+                "third_party_five_hour_reset": "Resets at 23:58",
+                "third_party_weekly_percent_left": 0,
+                "third_party_weekly_reset": "Resets at 12:00",
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        row_labels = ("5h", "1w", "cg5", "cg1w")
+        lines = {
+            tokens[1]: line
+            for line in output.splitlines()
+            if len(tokens := line.split()) >= 2 and tokens[1] in row_labels
+        }
+        # native 1w (non-depleted, 50%) is blocked by native 5h -> until 10:00
+        self.assertIn("10:00", lines["1w"])
+        self.assertNotIn("12:00", lines["1w"])
+        # cg5 (non-depleted, 60%) is blocked by cg1w -> until 12:00, never
+        # the native pool's 10:00
+        self.assertIn("12:00", lines["cg5"])
+        self.assertNotIn("10:00", lines["cg5"])
 
     def test_empty_view_claude_weekly_zero(self) -> None:
         snap = ProviderSnapshot(
@@ -1550,6 +1746,127 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
         self.assertNotEqual(copilot_idx, -1)
         self.assertLess(codex_idx, copilot_idx)
 
+    def test_dashboard_odd_exhausted_count_all_use_micro_card_style(self) -> None:
+        # Regression: with three exhausted providers, the first two paired up
+        # as condensed micro-cards but the trailing unpaired one fell back to
+        # the taller full depleted panel — an inconsistent look. All three
+        # must now render with the same single-line "0% until <reset>" micro
+        # format.
+        antigravity_depleted = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets 19:16",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets 19:16",
+            },
+        )
+        copilot_depleted = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Jul 31 20:00"},
+        )
+        vibe_depleted = ProviderSnapshot(
+            name="Vibe",
+            ok=True,
+            source="cli",
+            data={"usage_percent": 100.0, "reset_at": "Resets Jul 31 20:00"},
+        )
+        group = build_dashboard(
+            [antigravity_depleted, copilot_depleted, vibe_depleted], self.now, 79
+        )
+        output = _capture(group, width=90)
+        self.assertIn("Antigravity [!]", output)
+        self.assertIn("Copilot [!]", output)
+        self.assertIn("Vibe [!]", output)
+        self.assertEqual(output.count("0% until"), 3)
+
+    def test_dashboard_single_exhausted_provider_uses_micro_card_style(self) -> None:
+        # Regression: a lone exhausted provider (alongside an active one) used
+        # to fall back to the taller full depleted panel, which shows "0%"
+        # and "until <reset>" in separate table cells rather than the
+        # condensed micro-card's single contiguous "0% until <reset>" string.
+        codex_active = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 68,
+                "five_hour_reset": "Resets 1:16 PM",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        copilot_depleted = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Apr 01"},
+        )
+        group = build_dashboard([codex_active, copilot_depleted], self.now, 30)
+        output = _capture(group, width=90)
+        self.assertIn("Copilot [!]", output)
+        self.assertIn("0% until Apr 01", output)
+
+    def test_dashboard_even_exhausted_count_all_pair_up(self) -> None:
+        # Characterization: this branch predates the odd-leftover fix, but is
+        # adjacent code exercised by the same pairing loop — lock in that an
+        # even count of exhausted providers pairs up completely, with no
+        # trailing DynamicMicroDepletedSingle card.
+        antigravity_depleted = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets 19:16",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets 19:16",
+            },
+        )
+        claude_depleted = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={
+                "session_percent_left": 0,
+                "primary_reset": "Resets 19:16",
+                "weekly_percent_left": 0,
+                "secondary_reset": "Resets 19:16",
+            },
+        )
+        copilot_depleted = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Jul 31 20:00"},
+        )
+        vibe_depleted = ProviderSnapshot(
+            name="Vibe",
+            ok=True,
+            source="cli",
+            data={"usage_percent": 100.0, "reset_at": "Resets Jul 31 20:00"},
+        )
+        group = build_dashboard(
+            [antigravity_depleted, claude_depleted, copilot_depleted, vibe_depleted],
+            self.now,
+            30,
+        )
+        output = _capture(group, width=90)
+        lines = output.splitlines()
+        self.assertTrue(
+            any("Antigravity" in line and "Claude" in line for line in lines),
+            "expected the first exhausted pair on the same micro-card row",
+        )
+        self.assertTrue(
+            any("Copilot" in line and "Vibe" in line for line in lines),
+            "expected the second exhausted pair on the same micro-card row",
+        )
+        self.assertEqual(output.count("0% until"), 4)
+
     # ------------------------------------------------------------------
     # _billing_cycle_pace_label — naive date-only billing cycle
     # 2026-03-01..2026-03-20, now=2026-03-14T08:22:30 → ~29.7% remaining
@@ -1611,10 +1928,159 @@ class ExtractDepletedResetStrTests(unittest.TestCase):
         )
         self.assertIsNone(_extract_depleted_reset_str(snap, self.now))
 
+    def test_extract_reset_str_antigravity_cross_window_picks_soonest_blocking_pool(self) -> None:
+        # Native pool is blocked solely by 5h (resets 8pm); third-party pool
+        # is blocked solely by cg5 (resets 9am, earlier). The provider is
+        # usable again the moment either pool clears, so the soonest (9am)
+        # is correct — not native 5h just because it iterates first. Reset
+        # strings use the real "Resets <date> at <time>" format providers.py
+        # emits (raw ISO strings never reach this function in production).
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 08:00 PM",
+                "weekly_percent_left": 50.0,
+                "third_party_five_hour_percent_left": 0.0,
+                "third_party_five_hour_reset": "Resets Mar 14 at 09:00 AM",
+                "third_party_weekly_percent_left": 50.0,
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 14 at 09:00 AM")
+
+    def test_extract_reset_str_antigravity_within_pool_picks_latest_depleted_window(self) -> None:
+        # Native pool has BOTH windows depleted (5h resets 9am, weekly resets
+        # 11am same day) -- the pool doesn't clear until the LATER of the two
+        # (11am), not whichever window iterates first (5h). Third-party pool
+        # is blocked only by cg5, resetting the next day (much later), so
+        # native's 11am correctly wins the overall soonest-pool selection --
+        # a wrong within-pool pick (9am) would surface directly in the result.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 09:00 AM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 14 at 11:00 AM",
+                "third_party_five_hour_percent_left": 0.0,
+                "third_party_five_hour_reset": "Resets Mar 15 at 09:00 AM",
+                "third_party_weekly_percent_left": 50.0,
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 14 at 11:00 AM")
+
+    def test_extract_reset_str_antigravity_third_party_absent_picks_soonest_native_window(
+        self,
+    ) -> None:
+        # Accounts with no C+G tracking report third-party fields as None
+        # entirely (not 0%), so `_provider_is_empty`'s two-pool AND can never
+        # fire -- an absent pool's blocked flag is permanently False. It
+        # falls back to "every available window depleted", which un-exhausts
+        # the instant ANY currently-depleted window recovers -- the soonest
+        # (min) of native's two resets, not the latest (max) a present pool
+        # would use. Reporting the later one would overstate the wait far
+        # beyond how long the card actually stays up.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 11:00 AM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 19 at 09:00 AM",
+                "third_party_five_hour_percent_left": None,
+                "third_party_weekly_percent_left": None,
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 14 at 11:00 AM")
+
 
 class MicroDepletedPanelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    def test_micro_depleted_panel_antigravity_cross_window_shows_soonest_pool_reset(self) -> None:
+        # Regression test through the actual live-rendered path: exhausted
+        # Antigravity always reaches the micro-card (never build_provider_panel),
+        # so this must exercise build_micro_depleted_panel directly.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 08:00 PM",
+                "weekly_percent_left": 50.0,
+                "third_party_five_hour_percent_left": 0.0,
+                "third_party_five_hour_reset": "Resets Mar 14 at 09:00 AM",
+                "third_party_weekly_percent_left": 50.0,
+            },
+        )
+        panel = build_micro_depleted_panel(snap, self.now, width=25)
+        output = _capture(panel, width=25)
+        self.assertIn("0% until 09:00", output)
+        self.assertNotIn("20:00", output)
+
+    def test_micro_depleted_panel_antigravity_within_pool_shows_latest_depleted_window(
+        self,
+    ) -> None:
+        # Native pool has both windows depleted (5h resets 9am, weekly resets
+        # 11am same day); native wins the soonest-pool selection over
+        # third-party's next-day reset. Must show 11am (the later, correct
+        # within-pool clear time), not 9am (the first-iterated window).
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 09:00 AM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 14 at 11:00 AM",
+                "third_party_five_hour_percent_left": 0.0,
+                "third_party_five_hour_reset": "Resets Mar 15 at 09:00 AM",
+                "third_party_weekly_percent_left": 50.0,
+            },
+        )
+        panel = build_micro_depleted_panel(snap, self.now, width=25)
+        output = _capture(panel, width=25)
+        self.assertIn("0% until 11:00", output)
+        self.assertNotIn("09:00", output)
+        self.assertNotIn("Mar 15", output)
+
+    def test_micro_depleted_panel_antigravity_third_party_absent_shows_soonest_native_window(
+        self,
+    ) -> None:
+        # Live-render counterpart: an account with no C+G tracking (third-party
+        # fields entirely None) must show native's soonest depleted window
+        # (11am), not the later one (Mar 19) a two-pool-present account would
+        # use.
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 11:00 AM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 19 at 09:00 AM",
+                "third_party_five_hour_percent_left": None,
+                "third_party_weekly_percent_left": None,
+            },
+        )
+        panel = build_micro_depleted_panel(snap, self.now, width=25)
+        output = _capture(panel, width=25)
+        self.assertIn("0% until 11:00", output)
+        self.assertNotIn("Mar 19", output)
+        self.assertNotIn("09:00", output)
 
     def test_build_micro_depleted_panel_strips_http_suffix(self) -> None:
         snap = ProviderSnapshot(
@@ -1661,3 +2127,42 @@ class DynamicMicroDepletedPairTests(unittest.TestCase):
         self.assertIn("Cursor", output)
         self.assertIn("0% until Apr 01", output)
         self.assertIn("0% until 11:59", output)
+
+
+class DynamicMicroDepletedSingleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    def test_dynamic_micro_depleted_single_renders_micro_content(self) -> None:
+        snap = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Apr 01"},
+        )
+        single = DynamicMicroDepletedSingle(snap, self.now)
+        output = _capture(single, width=50)
+        self.assertIn("Copilot", output)
+        self.assertIn("[!]", output)
+        self.assertIn("0% until Apr 01", output)
+
+    def test_dynamic_micro_depleted_single_renders_one_box_unlike_pair(self) -> None:
+        # A Single card fills the entire available column width as *one*
+        # panel, unlike Pair which splits that same width between *two*
+        # side-by-side panels. This is the one behavior Single adds over
+        # calling build_micro_depleted_panel directly, and it's the reason
+        # Single exists (an odd-leftover/lone provider shouldn't get a
+        # half-width, mismatched micro card).
+        snap = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 0.0, "premium_reset": "Resets Apr 01"},
+        )
+        single_output = _capture(DynamicMicroDepletedSingle(snap, self.now), width=50)
+        self.assertEqual(single_output.count("╭"), 1)
+        single_border = next(line for line in single_output.splitlines() if line.startswith("╭"))
+        self.assertEqual(len(single_border), 50)
+
+        pair_output = _capture(DynamicMicroDepletedPair(snap, snap, self.now), width=50)
+        self.assertEqual(pair_output.count("╭"), 2)
