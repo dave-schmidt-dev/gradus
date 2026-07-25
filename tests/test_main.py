@@ -473,8 +473,8 @@ class IsAuthErrorTests(unittest.TestCase):
         snap = ProviderSnapshot(name="Claude", ok=False, source="api", error=None)
         self.assertFalse(_is_auth_error(snap))
 
-    def test_all_six_providers_in_auth_actions(self) -> None:
-        expected = {"Claude", "Codex", "Antigravity", "Copilot", "Cursor", "Vibe"}
+    def test_all_seven_providers_in_auth_actions(self) -> None:
+        expected = {"Claude", "Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"}
         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
 
     def test_codex_action_guards_against_blind_clobber(self) -> None:

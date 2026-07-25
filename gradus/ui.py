@@ -55,6 +55,7 @@ THEME = Theme(
         "accent.copilot": "color(117)",
         "accent.cursor": "color(214)",
         "accent.vibe": "color(208)",
+        "accent.opencode": "color(150)",
     }
 )
 
@@ -168,6 +169,46 @@ PROVIDER_RENDER_SPECS = {
                 "premium_percent_left",
                 "premium_reset",
                 None,
+            ),
+        ),
+    ),
+    # Windows are omitted (not "n/a") whenever the console response lacks them:
+    # the provider raises when all three are missing, so a rendered card always
+    # has at least one row and an absent window means the console changed.
+    "OpenCode Go": ProviderRenderSpec(
+        title="OpenCode Go",
+        subtitle="OpenCode Go usage",
+        windows=(
+            WindowRenderSpec(
+                "five_hour",
+                "5h",
+                "5h ↻",
+                None,
+                "five_hour_percent_left",
+                "five_hour_reset",
+                5.0,
+                omit_when_empty=True,
+            ),
+            WindowRenderSpec(
+                "weekly",
+                "1w",
+                "1w ↻",
+                None,
+                "weekly_percent_left",
+                "weekly_reset",
+                24.0 * 7.0,
+                omit_when_empty=True,
+            ),
+            WindowRenderSpec(
+                "monthly",
+                "mo",
+                "mo ↻",
+                None,
+                "monthly_percent_left",
+                "monthly_reset",
+                # Subscription-anchored month (28-31 days); 30-day approximation.
+                24.0 * 30.0,
+                omit_when_empty=True,
             ),
         ),
     ),
@@ -416,6 +457,7 @@ ACCENT_STYLES: dict[str, str] = {
     "Copilot": "accent.copilot",
     "Cursor": "accent.cursor",
     "Vibe": "accent.vibe",
+    "OpenCode Go": "accent.opencode",
 }
 
 # Display-only title overrides, keyed by canonical provider name. Empty now that
@@ -1258,9 +1300,11 @@ def build_dashboard(
 
     # Layout: cards pack into the shorter stack at safe two-column widths.
     if len(all_panels) > 1:
-        body: RenderableType = PackedProviderCards(all_panels)
+        body: RenderableType = _ResponsiveDashboardBody(
+            all_panels, _build_compact_lines(snapshots, now)
+        )
     elif all_panels:
-        body = all_panels[0]
+        body = _ResponsiveDashboardBody(all_panels, _build_compact_lines(snapshots, now))
     else:
         body = Text("No providers configured.", style="text.muted")
 
@@ -1277,6 +1321,200 @@ def build_dashboard(
     footer = Text.assemble(*footer_parts)
 
     return Group(header, Text(""), body, Text(""), footer)
+
+
+# ---------------------------------------------------------------------------
+# Responsive dashboard body — picks compact or panel layout at render time
+# ---------------------------------------------------------------------------
+
+# Below this width the dashboard switches from 2-column panels to compact single lines.
+# Must match PackedProviderCards._TWO_COLUMN_MIN_WIDTH so the 1-column panel fallback
+# is never used — below this point, compact mode takes over.
+_COMPACT_THRESHOLD = PackedProviderCards._TWO_COLUMN_MIN_WIDTH
+
+
+class _ResponsiveDashboardBody:
+    """At render time picks compact or full panel layout based on available width."""
+
+    def __init__(
+        self,
+        panels: list[RenderableType],
+        compact_lines: list[RenderableType],
+    ) -> None:
+        self._panels = panels
+        self._compact = compact_lines
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        if options.max_width < _COMPACT_THRESHOLD:
+            if self._compact:
+                yield from console.render(Group(*self._compact), options)
+            else:
+                yield from console.render(
+                    Text("No providers configured.", style="text.muted"), options
+                )
+        elif len(self._panels) > 1:
+            yield from console.render(PackedProviderCards(self._panels), options)
+        elif self._panels:
+            yield from console.render(self._panels[0], options)
+        else:
+            yield from console.render(Text("No providers configured.", style="text.muted"), options)
+
+
+def _build_compact_lines(snapshots: list[ProviderSnapshot], now: datetime) -> list[RenderableType]:
+    """Build compact single/double-line renderables for active providers.
+
+    Each provider gets one line per pair of windows::
+
+        Antigravity  5h:100%↑    1w:74%↑
+                      cg5:100%=   cg1w:42%=
+        Claude       5h:44%↑     1w:43%=
+        Codex        1w:76%↑
+
+    The provider name column and each window pair column are aligned.
+    """
+    active_snaps = [s for s in snapshots if not _provider_is_empty(s, now)]
+    if not active_snaps:
+        return []
+
+    # First pass: collect window parts and compute column widths.
+    all_parts: list[tuple[str, str, list[tuple[str, str]]]] = []  # (name, accent, [(text, style)])
+    name_width = 0
+    col_widths = [0, 0]
+
+    for snap in active_snaps:
+        name = snap.name.removesuffix(" [HTTP]")
+        accent = ACCENT_STYLES.get(name, "text.cyan")
+        parts = _compact_window_parts(snap, now)
+        all_parts.append((name, accent, parts))
+        name_width = max(name_width, len(name))
+        for i, (text, _) in enumerate(parts):
+            col_widths[i % 2] = max(col_widths[i % 2], len(text))
+
+    # Build rows: one Text per row (no Rich Table — simpler with Group).
+    rows: list[RenderableType] = []
+    for name, accent, parts in all_parts:
+        name_style = f"bold {accent}"
+        for pair_idx in range(0, max(1, len(parts)), 2):
+            if pair_idx == 0:
+                prefix = f"{name:<{name_width}}  "
+                prefix_style = name_style
+            else:
+                prefix = " " * (name_width + 2)
+                prefix_style = ""
+
+            cols: list[tuple[str, str]] = [(prefix, prefix_style)]
+            for offset in range(2):
+                idx = pair_idx + offset
+                if idx < len(parts):
+                    text, style = parts[idx]
+                    padded = f"{text:<{col_widths[offset]}}  "
+                    cols.append((padded, style))
+                else:
+                    cols.append((" " * col_widths[offset] + "  ", ""))
+            rows.append(Text.assemble(*cols) if cols else Text(""))
+
+        # Blank line between providers (but not after the last).
+        if parts and all_parts[-1][0] != name:
+            rows.append(Text(""))
+
+    # Strip trailing blank line.
+    while rows and rows[-1].plain.strip() == "":
+        rows.pop()
+
+    return rows
+
+
+def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tuple[str, str]]:
+    """Return [(window_text, style), ...] for each window of a provider.
+
+    Window text is e.g. ``5h:68%↑41pt``.  Style is a theme style name based
+    on the pace direction (text.green / text.red / text.yellow / text.muted).
+    """
+    name = snapshot.name.removesuffix(" [HTTP]")
+
+    if not snapshot.ok or not snapshot.data:
+        return []
+
+    def _pace_style(part: str) -> str:
+        if "↓" in part:
+            return "text.red"
+        if "↑" in part:
+            return "text.green"
+        if "=" in part:
+            return "text.yellow"
+        return "text.muted"
+
+    spec = PROVIDER_RENDER_SPECS.get(name)
+
+    # --- Cursor (percent-used → percent-remaining, billing-cycle pace) ---
+    if spec is None and name == "Cursor":
+        data = snapshot.data
+        parts: list[tuple[str, str]] = []
+        start_iso = data.get("billing_cycle_start")
+        end_iso = data.get("billing_cycle_end_iso")
+        start = str(start_iso) if isinstance(start_iso, str) else None
+        end = str(end_iso) if isinstance(end_iso, str) else None
+        for label, key in (("ac", "auto_percent_used"), ("ap", "api_percent_used")):
+            value = data.get(key)
+            if not percent_is_valid(value):
+                continue
+            pct_left = 100.0 - float(value)
+            pace = _billing_cycle_pace_label(pct_left, start, end, now)
+            part = f"{label}:{round(pct_left)}% {_compact_pace(pace)}"
+            parts.append((part, _pace_style(part)))
+        return parts
+
+    # --- Vibe (percent-used → percent-remaining, billing-cycle pace) ---
+    if spec is None and name == "Vibe":
+        data = snapshot.data
+        usage = data.get("usage_percent")
+        if not isinstance(usage, (int, float)):
+            return []
+        pct_left = max(0.0, 100.0 - float(usage))
+        start_iso = data.get("start_date")
+        end_iso = data.get("end_date")
+        pace = _billing_cycle_pace_label(
+            pct_left,
+            str(start_iso) if isinstance(start_iso, str) else None,
+            str(end_iso) if isinstance(end_iso, str) else None,
+            now,
+        )
+        part = f"mo:{round(pct_left)}% {_compact_pace(pace)}"
+        return [(part, _pace_style(part))]
+
+    # --- Unknown provider ---
+    if spec is None:
+        return []
+
+    # --- Standard window-based provider ---
+    parts: list[tuple[str, str]] = []
+    for window in spec.windows:
+        percent = snapshot.data.get(window.percent_key)
+        if window.omit_when_empty and percent is None:
+            continue
+        if percent is None:
+            continue
+        pct = round(percent)
+        reset = snapshot.data.get(window.reset_key)
+        reset_str = None if reset is None else str(reset)
+        pace = _pace_label(percent, reset_str, now, window.window_hours)
+        part = f"{window.session_label}:{pct}% {_compact_pace(pace)}"
+        parts.append((part, _pace_style(part)))
+
+    # Antigravity C+G windows
+    if name == "Antigravity":
+        for window in ANTIGRAVITY_CG_WINDOWS:
+            percent = snapshot.data.get(window.percent_key)
+            if not percent_is_valid(percent):
+                continue
+            pct = round(percent)
+            reset = snapshot.data.get(window.reset_key)
+            reset_str = None if reset is None else str(reset)
+            pace = _pace_label(percent, reset_str, now, window.window_hours)
+            part = f"{window.session_label}:{pct}% {_compact_pace(pace)}"
+            parts.append((part, _pace_style(part)))
+
+    return parts
 
 
 def build_loading_screen(message: str, updated_at: datetime, elapsed_seconds: float = 0.0) -> Group:

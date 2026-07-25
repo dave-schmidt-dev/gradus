@@ -1,4 +1,4 @@
-"""Status dataclasses for Codex, Claude, Antigravity, Cursor, and Vibe providers."""
+"""Status dataclasses for Codex, Claude, Antigravity, Cursor, Vibe, and OpenCode Go providers."""
 
 from __future__ import annotations
 
@@ -80,6 +80,27 @@ class VibeStatus:
     payg_enabled: bool | None
     start_date: str | None
     end_date: str | None
+    raw_text: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class OpenCodeGoStatus:
+    """OpenCode Go subscription quota from the opencode.ai console.
+
+    The console tracks three dollar-denominated windows ($12 / 5 hours,
+    $30 / week, $60 / month, anchored to the subscription date). Percentages
+    are remaining capacity (0-100); resets are vendor-display strings.
+    """
+
+    five_hour_percent_left: int | None
+    five_hour_reset: str | None
+    weekly_percent_left: int | None
+    weekly_reset: str | None
+    monthly_percent_left: int | None
+    monthly_reset: str | None
     raw_text: str
 
     def to_dict(self) -> dict[str, Any]:

@@ -356,6 +356,29 @@ WINDOW_SPECS: dict[str, tuple[WindowSpec, ...]] = {
             reset_key="premium_reset",
         ),
     ),
+    # OpenCode Go is dashboard/--json only (not in CANONICAL_PROVIDERS); these
+    # specs feed in-process warning membership via WARNING_WINDOW_SPECS. The
+    # monthly window is anchored to the subscription date (not the calendar
+    # month), so 30 days is an approximation of its true 28-31 day length.
+    "OpenCode Go": (
+        WindowSpec(
+            "five_hour",
+            "session",
+            "five_hour_percent_left",
+            reset_key="five_hour_reset",
+            window_hours=5.0,
+        ),
+        WindowSpec(
+            "weekly", "session", "weekly_percent_left", reset_key="weekly_reset", window_hours=168.0
+        ),
+        WindowSpec(
+            "monthly",
+            "session",
+            "monthly_percent_left",
+            reset_key="monthly_reset",
+            window_hours=720.0,
+        ),
+    ),
 }
 
 
@@ -605,6 +628,8 @@ SAFE_DATA_KEYS = frozenset(
         "payg_enabled",
         "start_date",
         "end_date",
+        "monthly_percent_left",
+        "monthly_reset",
         "auto_percent_used",
         "api_percent_used",
         "billing_cycle_start",

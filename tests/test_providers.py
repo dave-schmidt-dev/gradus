@@ -21,14 +21,17 @@ from gradus.providers import (
     CodexHttpProvider,
     CopilotHttpProvider,
     CursorProvider,
+    OpenCodeGoProvider,
     ProbeFailure,
     ProviderSnapshot,
     VibeProvider,
+    _AuthRejected,
     _classify_codex_windows,
     _codex_percent_left,
     _format_reset_time,
     _http_json,
     _is_jwt_expired,
+    _seroval_decode,
     _write_debug_dump,
     fetch_provider_snapshot,
 )
@@ -2297,6 +2300,274 @@ class TestChromeCookieDecrypt(unittest.TestCase):
         self.assertIsNone(VibeProvider._decrypt_chrome_cookie(b"\x00" * 16, self.V10_BLOB))
         # Garbage ciphertext -> None.
         self.assertIsNone(VibeProvider._decrypt_chrome_cookie(self.KEY, b"v10" + b"\x00" * 16))
+
+
+def _seroval_stream(node_json: str) -> bytes:
+    """Frame one seroval JSON node as a solid-start stream chunk."""
+    payload = node_json.encode("utf-8")
+    return b";0x" + f"{len(payload):08x}".encode("ascii") + b";" + payload
+
+
+# Decoded shape: [{"id": "wrk_a", "name": "Personal", "slug": "personal"}]
+_SEROVAL_WORKSPACES = (
+    '{"t":9,"i":0,"a":[{"t":10,"i":1,"p":{"k":["id","name","slug"],"v":['
+    '{"t":1,"s":"wrk_a"},{"t":1,"s":"Personal"},{"t":1,"s":"personal"}]},"o":0}],"o":0}'
+)
+
+# Decoded shape: three usage windows; the repeated "ok" status string is
+# deduped by seroval into one node (i:9) plus IndexedValue back-references.
+_SEROVAL_SUBSCRIPTION = (
+    '{"t":10,"i":0,"p":{"k":["mine","useBalance","rollingUsage","weeklyUsage","monthlyUsage"],'
+    '"v":[{"t":2,"s":2},{"t":2,"s":3},'
+    '{"t":10,"i":1,"p":{"k":["status","resetInSec","usagePercent"],"v":['
+    '{"t":1,"i":9,"s":"ok"},{"t":0,"s":18000},{"t":0,"s":25}]},"o":0},'
+    '{"t":10,"i":2,"p":{"k":["status","resetInSec","usagePercent"],"v":['
+    '{"t":4,"i":9},{"t":0,"s":400000},{"t":0,"s":10}]},"o":0},'
+    '{"t":10,"i":3,"p":{"k":["status","resetInSec","usagePercent"],"v":['
+    '{"t":4,"i":9},{"t":0,"s":1200000},{"t":0,"s":100}]},"o":0}]},"o":0}'
+)
+
+
+class SerovalDecodeTests(unittest.TestCase):
+    """The console's SolidStart server functions answer in seroval cross-JSON."""
+
+    def test_framed_object_array_decodes(self) -> None:
+        result = _seroval_decode(_seroval_stream(_SEROVAL_WORKSPACES))
+        self.assertEqual(result, [{"id": "wrk_a", "name": "Personal", "slug": "personal"}])
+
+    def test_indexed_value_backreferences_resolve(self) -> None:
+        result = _seroval_decode(_seroval_stream(_SEROVAL_SUBSCRIPTION))
+        self.assertEqual(result["rollingUsage"]["status"], "ok")
+        self.assertEqual(result["weeklyUsage"]["status"], "ok")
+        self.assertEqual(result["monthlyUsage"]["status"], "ok")
+        self.assertEqual(result["rollingUsage"]["resetInSec"], 18000)
+        self.assertEqual(result["monthlyUsage"]["usagePercent"], 100)
+        self.assertIs(result["mine"], True)
+        self.assertIs(result["useBalance"], False)
+
+    def test_null_constant_decodes_to_none(self) -> None:
+        self.assertIsNone(_seroval_decode(_seroval_stream('{"t":2,"s":0}')))
+
+    def test_unframed_json_body_passes_through(self) -> None:
+        self.assertEqual(_seroval_decode(b'{"status":500}'), {"status": 500})
+
+    def test_empty_body_decodes_to_none(self) -> None:
+        self.assertIsNone(_seroval_decode(b""))
+
+    def test_invalid_payload_raises_probe_failure(self) -> None:
+        with self.assertRaises(ProbeFailure):
+            _seroval_decode(b"\x00\xff not json")
+
+    def test_solidstart_js_response_decodes(self) -> None:
+        js_body = (
+            b';0x00000090;((self.$R=self.$R||{})["server-fn:0"]=[],'
+            b'($R=>$R[0]=[$R[1]={id:"wrk_123",name:"test",slug:null}])($R["server-fn:0"]))'
+        )
+        result = _seroval_decode(js_body)
+        self.assertEqual(result, [{"id": "wrk_123", "name": "test", "slug": None}])
+
+
+class OpenCodeGoProviderTests(unittest.TestCase):
+    WORKSPACES = [
+        {"id": "wrk_a", "name": "Personal", "slug": "personal"},
+        {"id": "wrk_b", "name": "Team", "slug": "team"},
+    ]
+    SUBSCRIPTION = {
+        "mine": True,
+        "useBalance": False,
+        "rollingUsage": {"status": "ok", "resetInSec": 18000, "usagePercent": 25},
+        "weeklyUsage": {"status": "ok", "resetInSec": 400000, "usagePercent": 10},
+        "monthlyUsage": {"status": "rate-limited", "resetInSec": 1200000, "usagePercent": 100},
+    }
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._cache_path = Path(self._tmpdir.name) / "opencode_go_cookies.json"
+        self._patcher = patch.object(OpenCodeGoProvider, "_CACHE_PATH", self._cache_path)
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._tmpdir.cleanup()
+
+    def _provider(self) -> OpenCodeGoProvider:
+        with patch("gradus.providers._read_safari_cookies", return_value={"auth": "cookie-value"}):
+            provider = OpenCodeGoProvider()
+            provider._acquire()
+        return provider
+
+    def test_field_mapping_percent_remaining_and_resets(self) -> None:
+        provider = self._provider()
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(provider, "_fetch_subscription", return_value=self.SUBSCRIPTION),
+        ):
+            status = provider.fetch()
+        # usagePercent is percent USED of the dollar limit; fields are remaining.
+        self.assertEqual(status.five_hour_percent_left, 75)
+        self.assertEqual(status.weekly_percent_left, 90)
+        # rate-limited window reports usagePercent 100 -> 0% remaining.
+        self.assertEqual(status.monthly_percent_left, 0)
+        for reset in (status.five_hour_reset, status.weekly_reset, status.monthly_reset):
+            self.assertIsNotNone(reset)
+            assert reset is not None
+            self.assertTrue(reset.startswith("Resets "))
+
+    def test_subscribed_workspace_is_remembered(self) -> None:
+        provider = self._provider()
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(provider, "_fetch_subscription", side_effect=[None, self.SUBSCRIPTION]),
+        ):
+            provider.fetch()
+        self.assertEqual(provider._workspace_id, "wrk_b")
+        # Next refresh probes the remembered workspace first (two calls total).
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(
+                provider, "_fetch_subscription", return_value=self.SUBSCRIPTION
+            ) as call_sub,
+        ):
+            provider.fetch()
+        self.assertEqual(call_sub.call_count, 1)
+        self.assertEqual(call_sub.call_args_list[0].args[0], "wrk_b")
+
+    def test_no_subscription_anywhere_raises(self) -> None:
+        provider = self._provider()
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(provider, "_fetch_subscription", return_value=None),
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("No OpenCode Go subscription", str(ctx.exception))
+
+    def test_all_windows_missing_raises(self) -> None:
+        provider = self._provider()
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(
+                provider,
+                "_fetch_subscription",
+                return_value={"rollingUsage": {}, "weeklyUsage": None},
+            ),
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("no recognizable windows", str(ctx.exception))
+
+    def test_null_workspaces_is_auth_error_and_evicts_cache(self) -> None:
+        provider = self._provider()
+        self.assertTrue(self._cache_path.exists())
+        with patch.object(provider, "_call_server_fn", return_value=None):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("session expired", str(ctx.exception).lower())
+        self.assertFalse(self._cache_path.exists())
+        self.assertEqual(provider._auth_cookie, "")
+
+    def test_rejected_cookie_evicts_cache(self) -> None:
+        provider = self._provider()
+        with patch.object(provider, "_call_server_fn", side_effect=_AuthRejected("redirect")):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("session expired", str(ctx.exception).lower())
+        self.assertFalse(self._cache_path.exists())
+
+    def test_missing_cookie_raises_auth_message(self) -> None:
+        with patch("gradus.providers._read_safari_cookies", return_value={}):
+            provider = OpenCodeGoProvider()
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("sign in at opencode.ai", str(ctx.exception))
+
+    def test_auth_error_routes_to_fix_action(self) -> None:
+        snap = ProviderSnapshot(
+            name="OpenCode Go",
+            ok=False,
+            source="api",
+            error="OpenCode Go session expired. Sign in at opencode.ai to refresh.",
+        )
+        self.assertTrue(_is_auth_error(snap))
+
+    def test_cache_used_when_safari_empty(self) -> None:
+        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cache_path.write_text(json.dumps({"auth": "cached-cookie"}), encoding="utf-8")
+        with (
+            patch("gradus.providers._read_safari_cookies", return_value={}) as safari,
+            patch("gradus.providers.subprocess.Popen") as popen,
+        ):
+            provider = OpenCodeGoProvider()
+            provider._acquire()
+        self.assertEqual(provider._auth_cookie, "cached-cookie")
+        safari.assert_not_called()
+        popen.assert_not_called()
+
+    def test_safari_read_writes_cache(self) -> None:
+        with patch("gradus.providers._read_safari_cookies", return_value={"auth": "safari-cookie"}):
+            provider = OpenCodeGoProvider()
+            provider._acquire()
+        self.assertTrue(self._cache_path.exists())
+        cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(cached["auth"], "safari-cookie")
+
+
+class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
+    """End-to-end: framed seroval wire bodies -> parsed status fields."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        patcher = patch.object(
+            OpenCodeGoProvider,
+            "_CACHE_PATH",
+            Path(self._tmpdir.name) / "opencode_go_cookies.json",
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self._tmpdir.cleanup)
+
+    def test_fetch_decodes_wire_payloads(self) -> None:
+        with patch("gradus.providers._read_safari_cookies", return_value={"auth": "cookie-value"}):
+            provider = OpenCodeGoProvider()
+        bodies = [
+            _seroval_stream(_SEROVAL_WORKSPACES),
+        ]
+
+        class _Resp:
+            def __init__(self, body: bytes) -> None:
+                self.headers: dict[str, str] = {}
+                self._body = body
+
+            def read(self) -> bytes:
+                return self._body
+
+            def __enter__(self) -> _Resp:
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+        class _RespSub(_Resp):
+            def __init__(self, body: bytes) -> None:
+                super().__init__(body)
+                self.url = "https://opencode.ai/workspace/1/go"
+
+        responses = [_Resp(body) for body in bodies]
+        html_body = b'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:25}weeklyUsage:$R[2]={status:"ok",resetInSec:100,usagePercent:10}monthlyUsage:$R[3]={status:"rate-limited",resetInSec:1200000,usagePercent:100}'
+
+        with (
+            patch("gradus.providers.urllib.request.build_opener") as build,
+            patch("gradus.providers.urllib.request.urlopen") as urlopen_mock,
+        ):
+            opener = MagicMock()
+            opener.open.side_effect = responses
+            build.return_value = opener
+            urlopen_mock.return_value = _RespSub(html_body)
+            status = provider.fetch()
+
+        self.assertEqual(status.five_hour_percent_left, 75)
+        self.assertEqual(status.weekly_percent_left, 90)
+        self.assertEqual(status.monthly_percent_left, 0)
 
 
 if __name__ == "__main__":

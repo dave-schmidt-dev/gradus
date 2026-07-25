@@ -17,10 +17,13 @@ from gradus.ui import (
     DynamicMicroDepletedSingle,
     PaceLabel,
     PercentageBar,
+    _build_compact_lines,
     _compact_pace,
+    _compact_window_parts,
     _extract_depleted_reset_str,
     _format_reset_display,
     _provider_is_empty,
+    _ResponsiveDashboardBody,
     _style_for_percent,
     build_dashboard,
     build_loading_screen,
@@ -1172,9 +1175,8 @@ class DashboardTests(unittest.TestCase):
         last_panel_line = max(index for index, line in enumerate(lines) if line.startswith("╰"))
         self.assertTrue(all(line.strip() for line in lines[first_panel_line : last_panel_line + 1]))
 
-    def test_dashboard_falls_back_to_one_column_below_safe_threshold(self) -> None:
-        # Below 79 two cards can no longer show a full reset+pace row side by
-        # side, so the grid stacks into one column.
+    def test_dashboard_switches_to_compact_below_two_column_threshold(self) -> None:
+        # Below 79, two cards switch to compact lines instead of 1-column panels.
         output = _capture(
             build_dashboard([self.codex_snap, self.claude_snap], self.now, 30), width=78
         )
@@ -1182,11 +1184,11 @@ class DashboardTests(unittest.TestCase):
         self.assertFalse(any("Codex" in line and "Claude" in line for line in lines))
         self.assertEqual(output.count("Codex"), 1)
         self.assertEqual(output.count("Claude"), 1)
-        # A single-column card fills the whole width — its border spans all 78
-        # columns. This guards against a "cards not side by side" false pass
-        # where the panels merely rendered narrow and staggered.
-        border = next(line for line in lines if line.startswith("╭"))
-        self.assertEqual(len(border), 78)
+        # Compact mode uses plain text with pace arrows (no panel borders).
+        self.assertNotIn("╭", output)
+        self.assertNotIn("╰", output)
+        # Pace arrows confirm compact notation is in use.
+        self.assertTrue(any("↑" in line or "↓" in line or "=" in line for line in lines))
 
     def test_dashboard_stays_two_column_with_bars_collapsed_when_narrow(self) -> None:
         # The whole point of the low two-column floor: a narrowing terminal
@@ -1641,6 +1643,250 @@ class AuthFixFooterTests(unittest.TestCase):
         self.assertIn("to fix", output)
         # Raw error should not appear in the panel body
         self.assertNotIn("auth failed", output)
+
+
+class CompactModeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    # -- _compact_window_parts -------------------------------------------------
+
+    def test_compact_window_parts_error_snapshot_returns_empty(self) -> None:
+        snap = ProviderSnapshot(name="Codex", ok=False, source="cli", error="timeout")
+        self.assertEqual(_compact_window_parts(snap, self.now), [])
+
+    def test_compact_window_parts_cursor_converts_used_to_remaining(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "auto_percent_used": 6.6,
+                "api_percent_used": 1.5,
+                "billing_cycle_start": "2026-03-01T00:00:00",
+                "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        self.assertEqual(len(result), 2)
+        labels = {part.split(":")[0] for part, _ in result}
+        self.assertEqual(labels, {"ac", "ap"})
+        for text, style in result:
+            self.assertIn(style, ("text.green", "text.red", "text.yellow", "text.muted"))
+
+    def test_compact_window_parts_cursor_missing_percent_skipped(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "api_percent_used": 1.5,
+                "billing_cycle_start": "2026-03-01T00:00:00",
+                "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        self.assertEqual(len(result), 1)
+        self.assertIn("ap:", result[0][0])
+        self.assertNotIn("ac:", result[0][0])
+
+    def test_compact_window_parts_vibe_usage_to_remaining(self) -> None:
+        snap = ProviderSnapshot(
+            name="Vibe",
+            ok=True,
+            source="api",
+            data={
+                "usage_percent": 1.17,
+                "start_date": "2026-03-01T00:00:00+00:00",
+                "end_date": "2026-04-01T00:00:00+00:00",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        self.assertEqual(len(result), 1)
+        text = result[0][0]
+        self.assertIn("mo:", text)
+        self.assertIn("99%", text)
+        self.assertTrue(any(c in text for c in "↑↓=—"))
+
+    def test_compact_window_parts_vibe_non_numeric_usage_returns_empty(self) -> None:
+        snap = ProviderSnapshot(
+            name="Vibe",
+            ok=True,
+            source="api",
+            data={"usage_percent": "unknown"},
+        )
+        self.assertEqual(_compact_window_parts(snap, self.now), [])
+
+    def test_compact_window_parts_unknown_provider_returns_empty(self) -> None:
+        snap = ProviderSnapshot(
+            name="Foobar",
+            ok=True,
+            source="cli",
+            data={"some_key": 42},
+        )
+        self.assertEqual(_compact_window_parts(snap, self.now), [])
+
+    def test_compact_window_parts_codex_standard_format(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 68,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        self.assertEqual(len(result), 2)
+        texts = [text for text, _ in result]
+        self.assertIn("5h:", texts[0])
+        self.assertIn("68%", texts[0])
+        self.assertIn("1w:", texts[1])
+        self.assertIn("91%", texts[1])
+        for text in texts:
+            self.assertTrue(any(c in text for c in "↑↓=—"))
+        for _text, style in result:
+            self.assertIn(style, ("text.green", "text.red", "text.yellow", "text.muted"))
+
+    def test_compact_window_parts_antigravity_cg_windows(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 86,
+                "five_hour_reset": "resets in 3h 19m",
+                "weekly_percent_left": 96,
+                "weekly_reset": "resets in 5d 18h",
+                "third_party_five_hour_percent_left": 55,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+                "third_party_weekly_percent_left": 72,
+                "third_party_weekly_reset": "Resets Mar 21 at 8:22 AM",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        self.assertEqual(len(result), 4)
+        labels = [part.split(":")[0] for part, _ in result]
+        self.assertEqual(labels, ["5h", "1w", "cg5", "cg1w"])
+
+    # -- _build_compact_lines --------------------------------------------------
+
+    def test_build_compact_lines_no_active_returns_empty(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 0,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        self.assertEqual(_build_compact_lines([snap], self.now), [])
+
+    def test_build_compact_lines_multiple_providers_layout(self) -> None:
+        codex = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 68,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        claude = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={
+                "session_percent_left": 73,
+                "primary_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 64,
+                "secondary_reset": "Resets Mar 17 at 8 PM",
+            },
+        )
+        lines = [
+            _capture(r, width=120).rstrip() for r in _build_compact_lines([codex, claude], self.now)
+        ]
+        self.assertTrue(any("Codex" in line for line in lines))
+        self.assertTrue(any("Claude" in line for line in lines))
+        # Blank line between providers
+        self.assertIn("", [ln.strip() for ln in lines])
+        # Names aligned at the same column
+        codex_line = next(ln for ln in lines if "Codex" in ln)
+        claude_line = next(ln for ln in lines if "Claude" in ln)
+        self.assertEqual(codex_line.index("Codex"), claude_line.index("Claude"))
+
+    def test_build_compact_lines_antigravity_max_two_windows_per_line(self) -> None:
+        antigravity = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 86,
+                "five_hour_reset": "resets in 3h 19m",
+                "weekly_percent_left": 96,
+                "weekly_reset": "resets in 5d 18h",
+                "third_party_five_hour_percent_left": 55,
+                "third_party_five_hour_reset": "Resets 9:22 AM",
+                "third_party_weekly_percent_left": 72,
+                "third_party_weekly_reset": "Resets Mar 21 at 8:22 AM",
+            },
+        )
+        lines = [
+            _capture(r, width=120).rstrip() for r in _build_compact_lines([antigravity], self.now)
+        ]
+        self.assertEqual(len(lines), 2)
+        self.assertIn("5h:", lines[0])
+        self.assertIn("1w:", lines[0])
+        self.assertIn("cg5:", lines[1])
+        self.assertIn("cg1w:", lines[1])
+
+    # -- _ResponsiveDashboardBody ----------------------------------------------
+
+    def test_responsive_body_below_threshold_renders_compact(self) -> None:
+        codex = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 68,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        panels = [build_provider_panel(codex, self.now)]
+        compact = _build_compact_lines([codex], self.now)
+        body = _ResponsiveDashboardBody(panels, compact)
+        output = _capture(body, width=70)
+        self.assertIn("Codex", output)
+        self.assertNotIn("╭", output)
+        self.assertNotIn("╰", output)
+
+    def test_responsive_body_above_threshold_renders_panels(self) -> None:
+        codex = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 68,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        panels = [build_provider_panel(codex, self.now)]
+        compact = _build_compact_lines([codex], self.now)
+        body = _ResponsiveDashboardBody(panels, compact)
+        output = _capture(body, width=92)
+        self.assertIn("Codex", output)
+        self.assertIn("╭", output)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Provider probes for Codex, Claude, Antigravity, and Cursor usage."""
+"""Provider probes for Codex, Claude, Antigravity, Cursor, and OpenCode Go usage."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from .parsing import (
     CodexStatus,
     CopilotStatus,
     CursorStatus,
+    OpenCodeGoStatus,
     VibeStatus,
 )
 
@@ -1854,6 +1856,509 @@ class AntigravityProvider:
 
     def close(self) -> None:
         pass
+
+
+# ---------------------------------------------------------------------------
+# SolidStart server-function probe support (OpenCode Go)
+# ---------------------------------------------------------------------------
+#
+# The opencode.ai console is a SolidStart app. Its data queries ("use server"
+# functions) are callable over HTTP: POST /_server with an X-Server-Id header
+# and the `auth` session cookie. A single string argument is sent as the raw
+# request body with X-Start-Type: 1 (BodyFormat.String). The response is a
+# seroval cross-JSON stream: chunks framed as ``;0x<8-hex-byte-len>;<json>``,
+# where each json payload is a typed node tree (plain JSON is NOT used).
+# The helpers below decode the plain-data node types only (numbers, strings,
+# constants, arrays, objects, back-references, resolved promises/dates), which
+# is everything the quota queries return.
+
+# seroval SerovalNodeType Constant payloads (SerovalConstant enum).
+_SEROVAL_CONSTANTS = {0: None, 1: None, 2: True, 3: False}
+
+
+def _seroval_chunks(body: bytes) -> list[bytes]:
+    """Split a seroval stream into its JSON chunk payloads.
+
+    Framing per chunk: ``;0x`` + 8 lowercase hex digits (payload byte length)
+    + ``;`` + payload. A body that does not start with the frame marker is
+    returned whole (tolerates non-streamed/plain error bodies).
+    """
+    if not body.startswith(b";0x"):
+        return [body] if body else []
+    chunks: list[bytes] = []
+    rest = body
+    while rest:
+        if len(rest) < 12 or not rest.startswith(b";0x") or rest[11:12] != b";":
+            break
+        try:
+            length = int(rest[3:11], 16)
+        except ValueError:
+            break
+        chunks.append(rest[12 : 12 + length])
+        rest = rest[12 + length :]
+    return chunks
+
+
+def _solidstart_js_to_json(js: str) -> str:
+    """Convert a SolidStart JS expression to JSON for ``json.loads``.
+
+    The opencode.ai console returns JavaScript expressions like::
+
+        ((self.$R=self.$R||{})["server-fn:0"]=[],($R=>$R[0]=[$R[1]={id:"...",...}])($R["server-fn:0"]))
+
+    This function:
+    1. Strips the ``((self.$R=...)`` prefix and ``)($R["server-fn:0"]))`` suffix.
+    2. Replaces ``$R[n]`` back-references with ``null``.
+    3. Quotes unquoted keys (``{id:"...}`` -> ``{"id":"..."}``).
+    4. Converts ``null`` and ``true``/``false`` (already JSON-valid).
+    """
+    import re
+
+    s = js.strip()
+
+    # Strip the SolidStart self-init wrapper:
+    # ((self.$R=self.$R||{})["server-fn:0"]=[],($R=  ...  )($R["server-fn:0"]))
+    prefix_re = r"^\(\(self\.\$R=self\.\$R\|\|\{\}\)\[\"[^\"]+\"\]=\[\],\(\$R=>"
+    suffix_re = r"\)\(\$R\[\"[^\"]+\"\]\)\)+$"
+    s = re.sub(prefix_re, "", s)
+    s = re.sub(suffix_re, "", s)
+
+    # Strip $R[n]= assignment targets (e.g. $R[0]= or $R[1]=)
+    s = re.sub(r"\$R\[[^\]]*\]\s*=\s*", "", s)
+
+    # Replace remaining $R[n] back-references with null
+    s = re.sub(r"\$R\[[^\]]*\]", "null", s)
+
+    # Quote unquoted object keys: match word-chars before a colon
+    s = re.sub(r"(?<=[{,\s])(\w+)\s*:", r'"\1":', s)
+
+    return s
+
+
+def _is_solidstart_js(body: bytes) -> bool:
+    """Return True if body looks like a SolidStart JS expression (not plain seroval)."""
+    return b"(self.$R=" in body or b"server-fn:" in body
+
+
+def _seroval_decode(body: bytes) -> Any:
+    """Decode the first chunk of a seroval cross-JSON stream to plain data.
+
+    Handles two wire formats:
+    1. **Plain seroval**: JSON node-tree with ``{"t":...}`` typed nodes.
+    2. **SolidStart JS**: JavaScript expression with ``$R[n]`` assignments,
+       which is converted to JSON via :func:`_solidstart_js_to_json` first.
+
+    Node types handled (plain seroval): 0 Number, 1 String, 2 Constant,
+    4 IndexedValue (back-reference), 5 Date, 9 Array, 10/11 Object,
+    12 Promise. Unknown types decode to None.
+    """
+    chunks = _seroval_chunks(body)
+    if not chunks:
+        return None
+
+    chunk = chunks[0]
+
+    # SolidStart JS format: convert to JSON first.
+    if _is_solidstart_js(chunk):
+        raw_text = chunk.decode("utf-8", errors="replace")
+        # Detect `new Error(...)` — the console returns this for invalid/unauthenticated workspaces.
+        if "new Error(" in raw_text:
+            if (
+                "actor of type" in raw_text
+                or "not associated" in raw_text
+                or "unauthorized" in raw_text.lower()
+            ):
+                raise _AuthRejected("session not associated with workspace")
+            raise ProbeFailure("OpenCode Go server returned an error", raw_text[:500])
+        try:
+            json_str = _solidstart_js_to_json(raw_text)
+            root = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise ProbeFailure(
+                "Invalid SolidStart JS response",
+                raw_text[:500],
+            ) from exc
+    else:
+        try:
+            root = json.loads(chunk)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProbeFailure(
+                "Invalid seroval response",
+                chunk[:500].decode("utf-8", "replace"),
+            ) from exc
+
+    # If root is already plain data (from SolidStart JS), return it directly.
+    if not isinstance(root, dict) or "t" not in root:
+        return root
+
+    # Pass 1: index every node carrying a reference id so IndexedValue
+    # back-references (t:4) resolve, including duplicate strings seroval
+    # emits once and re-references by id.
+    raw_by_id: dict[int, Any] = {}
+
+    def _index(node: Any) -> None:
+        if not isinstance(node, dict) or "t" not in node:
+            return
+        ref = node.get("i")
+        if isinstance(ref, int) and not isinstance(ref, bool):
+            raw_by_id[ref] = node
+        props = node.get("p")
+        if isinstance(props, dict):
+            for value in props.get("v") or []:
+                _index(value)
+        for key in ("a",):
+            items = node.get(key)
+            if isinstance(items, list):
+                for item in items:
+                    _index(item)
+        fulfilled = node.get("f")
+        if isinstance(fulfilled, dict):
+            _index(fulfilled)
+
+    _index(root)
+
+    # Pass 2: decode with memoized reference resolution.
+    decoded_by_id: dict[int, Any] = {}
+
+    def _decode(node: Any) -> Any:
+        if not isinstance(node, dict) or "t" not in node:
+            return node
+        ref = node.get("i")
+        if isinstance(ref, int) and not isinstance(ref, bool) and ref in decoded_by_id:
+            return decoded_by_id[ref]
+        kind = node.get("t")
+        if kind == 0:  # Number
+            value = node.get("s")
+            result = float(value) if isinstance(value, str) else value
+        elif kind == 1:  # String
+            result = node.get("s")
+        elif kind == 2:  # Constant (null/undefined/true/false; NaN/Inf unused here)
+            result = _SEROVAL_CONSTANTS.get(node.get("s"))
+        elif kind == 4:  # IndexedValue back-reference
+            target = raw_by_id.get(node.get("i"))
+            result = _decode(target) if target is not None else None
+        elif kind == 5:  # Date -> ISO string
+            result = node.get("s")
+        elif kind == 9:  # Array
+            result = [_decode(item) for item in node.get("a") or []]
+        elif kind in (10, 11):  # Object / null-constructor Object
+            props = node.get("p") or {}
+            keys = props.get("k") or []
+            values = props.get("v") or []
+            result = {str(k): _decode(v) for k, v in zip(keys, values)}
+        elif kind == 12:  # Promise -> fulfilled value
+            result = _decode(node.get("f"))
+        else:
+            result = None
+        if isinstance(ref, int) and not isinstance(ref, bool):
+            decoded_by_id[ref] = result
+        return result
+
+    return _decode(root)
+
+
+class OpenCodeGoProvider:
+    """Fetch OpenCode Go subscription quota via the opencode.ai console.
+
+    The zen API exposes no quota endpoint (Go limits surface only as 429
+    ``GoUsageLimitError`` responses), so usage is read from the same
+    SolidStart server functions the console's workspace /go page calls:
+
+    1. ``workspaces`` — lists the account's workspaces (id, name, slug).
+    2. ``lite.subscription.get`` — per-window Go usage for one workspace:
+       ``{rollingUsage, weeklyUsage, monthlyUsage}``, each
+       ``{status, resetInSec, usagePercent}`` (percent USED of the dollar
+       limits: $12 / 5 hours, $30 / week, $60 / month).
+
+    Auth is the console's ``auth`` session cookie, read from Safari and
+    cached locally (same pattern as Claude). The cookie is never written
+    back; a rejected cookie evicts the cache so the next probe re-reads
+    Safari. Server-function ids are content hashes of the deployed console
+    build — if opencode rebuilds the console they may change (see README
+    Limitations).
+    """
+
+    _SERVER_URL = "https://opencode.ai/_server"
+    _WORKSPACES_FN_ID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
+    _SUBSCRIPTION_FN_ID = "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4"
+    _CACHE_PATH = Path(__file__).resolve().parent.parent / ".cache" / "opencode_go_cookies.json"
+    _USER_AGENT = "gradus (opencode-go quota probe)"
+
+    def __init__(self) -> None:
+        self._auth_cookie = ""
+        self._workspace_id = ""
+
+    def _acquire(self) -> None:
+        """Ensure the session cookie is loaded, idempotently."""
+        if not self._auth_cookie:
+            self._load_cookie()
+
+    def _load_cookie(self) -> None:
+        """Load the console cookie from cache or Safari; a pure read."""
+        if self._load_from_cache():
+            return
+        cookies = _read_safari_cookies("opencode")
+        auth = cookies.get("auth", "")
+        if auth:
+            self._auth_cookie = auth
+            self._save_to_cache()
+
+    def _load_from_cache(self) -> bool:
+        """Load the cookie from local cache. Returns True if usable."""
+        if not self._CACHE_PATH.exists():
+            return False
+        try:
+            data = json.loads(self._CACHE_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        auth = data.get("auth")
+        if not (isinstance(auth, str) and auth):
+            return False
+        self._auth_cookie = auth
+        _harden_existing(self._CACHE_PATH)
+        return True
+
+    def _save_to_cache(self) -> None:
+        """Persist the current cookie to local cache."""
+        if not self._auth_cookie:
+            return
+        try:
+            payload = {
+                "auth": self._auth_cookie,
+                "cached_at": datetime.now().isoformat(),
+            }
+            _write_private(self._CACHE_PATH, json.dumps(payload))
+        except OSError as exc:
+            log.warning("Failed to write OpenCode Go cookie cache: %s", exc)
+
+    def _clear_cache(self) -> None:
+        """Remove the local cookie cache (call when the cookie is rejected)."""
+        _remove_private(self._CACHE_PATH)
+
+    def _call_server_fn(self, fn_id: str, arg: str | None) -> Any:
+        """POST one SolidStart server function and decode the seroval body.
+
+        Auth failure surfaces as :class:`_AuthRejected`: the console answers
+        an unauthenticated server-function call with a ``Location`` header
+        (redirect to /auth/authorize) and a seroval null body, or HTTP
+        401/403. Redirects are never followed, so the cookie is not leaked
+        to the auth origin.
+        """
+        import urllib.error
+        import urllib.request
+
+        headers = {
+            "X-Server-Id": fn_id,
+            "X-Server-Instance": "server-fn:0",
+            "Cookie": f"auth={self._auth_cookie}",
+            "Accept": "application/json",
+            "User-Agent": self._USER_AGENT,
+        }
+        body: bytes | None = None
+        if arg is not None:
+            headers["Content-Type"] = "text/plain"
+            headers["X-Start-Type"] = "1"  # BodyFormat.String
+            body = arg.encode("utf-8")
+        req = urllib.request.Request(self._SERVER_URL, data=body, headers=headers, method="POST")
+        opener = urllib.request.build_opener(_NoRedirectHandler)
+        try:
+            with opener.open(req, timeout=15) as resp:  # noqa: S310
+                if resp.headers.get("Location"):
+                    raise _AuthRejected("redirect to sign-in")
+                raw = resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (301, 302, 303, 307, 308, 401, 403):
+                raise _AuthRejected(f"HTTP {exc.code}") from exc
+            raise ProbeFailure(
+                f"OpenCode Go probe failed (HTTP {exc.code}) — console build may have changed",
+                f"HTTP {exc.code}",
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise ProbeFailure(
+                f"Could not reach opencode.ai: {exc.reason}", f"POST {self._SERVER_URL}"
+            ) from exc
+        return _seroval_decode(raw)
+
+    @staticmethod
+    def _window_fields(window: Any) -> tuple[int | None, str | None]:
+        """Map one console usage window to (percent_left, reset label).
+
+        ``usagePercent`` is percent USED of the window's dollar limit;
+        percent_left is the remaining capacity (INV-3). The reset is the
+        server-computed ``resetInSec`` from the probe instant.
+        """
+        if not isinstance(window, dict):
+            return None, None
+        used = window.get("usagePercent")
+        percent_left: int | None = None
+        if isinstance(used, (int, float)) and not isinstance(used, bool):
+            percent_left = max(0, round(100 - float(used)))
+        reset: str | None = None
+        reset_in = window.get("resetInSec")
+        if isinstance(reset_in, (int, float)) and not isinstance(reset_in, bool):
+            reset = _format_reset_time(time.time() + float(reset_in))
+        return percent_left, reset
+
+    def _fetch_subscription(self, workspace_id: str) -> dict[str, Any] | None:
+        import re
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"https://opencode.ai/workspace/{workspace_id}/go",
+            headers={"Cookie": f"auth={self._auth_cookie}", "User-Agent": self._USER_AGENT},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if "auth.opencode.ai" in resp.url or "/auth/authorize" in resp.url:
+                raise _AuthRejected("redirect to sign-in")
+            html = resp.read().decode("utf-8", errors="replace")
+
+        def _extract_usage(name: str) -> dict[str, Any] | None:
+            m = re.search(
+                rf"{name}:\$R\[\d+\]=\{{status:\"([^\"]+)\",resetInSec:(\d+),usagePercent:(\d+)\}}",
+                html,
+            )
+            if m:
+                return {
+                    "status": m.group(1),
+                    "resetInSec": int(m.group(2)),
+                    "usagePercent": int(m.group(3)),
+                }
+            return None
+
+        rolling = _extract_usage("rollingUsage")
+        weekly = _extract_usage("weeklyUsage")
+        monthly = _extract_usage("monthlyUsage")
+        if rolling or weekly or monthly:
+            return {
+                "rollingUsage": rolling,
+                "weeklyUsage": weekly,
+                "monthlyUsage": monthly,
+            }
+        return None
+
+    def fetch(self) -> OpenCodeGoStatus:
+        self._acquire()
+        if not self._auth_cookie:
+            raise ProbeFailure(
+                _auth_required_message("OpenCode Go session expired: sign in at opencode.ai"),
+                "",
+            )
+
+        expired = ProbeFailure(
+            "OpenCode Go session expired. Sign in at opencode.ai to refresh.",
+            "console rejected the session cookie",
+        )
+        try:
+            workspaces = self._call_server_fn(self._WORKSPACES_FN_ID, None)
+        except _AuthRejected as exc:
+            self._auth_cookie = ""
+            self._workspace_id = ""
+            self._clear_cache()
+            raise expired from exc
+
+        if workspaces is None:
+            # The console answers an unauthenticated server-function call with
+            # a seroval null body (plus a Location redirect header, caught
+            # above). A null here therefore means the cookie was rejected.
+            self._auth_cookie = ""
+            self._workspace_id = ""
+            self._clear_cache()
+            raise expired
+        if not isinstance(workspaces, list):
+            # Any other non-list shape is an error payload, not an auth
+            # verdict — keep the cookie and report the shape change.
+            raise ProbeFailure(
+                "OpenCode Go workspaces response changed shape",
+                json.dumps(workspaces, default=str)[:500],
+            )
+
+        ids = [
+            str(ws["id"])
+            for ws in workspaces
+            if isinstance(ws, dict) and isinstance(ws.get("id"), str) and ws["id"]
+        ]
+        # Re-check the remembered workspace first so steady-state refreshes
+        # cost two calls total; scan the rest only when it has no subscription.
+        if self._workspace_id in ids:
+            ids.remove(self._workspace_id)
+            ids.insert(0, self._workspace_id)
+
+        import urllib.error
+
+        subscription: dict[str, Any] | None = None
+        for workspace_id in ids:
+            try:
+                result = self._fetch_subscription(workspace_id)
+            except _AuthRejected as exc:
+                self._auth_cookie = ""
+                self._workspace_id = ""
+                self._clear_cache()
+                raise ProbeFailure(
+                    "OpenCode Go session expired. Sign in at opencode.ai to refresh.",
+                    str(exc),
+                ) from exc
+            except (urllib.error.URLError, urllib.error.HTTPError):
+                continue
+            if isinstance(result, dict) and result:
+                subscription = result
+                self._workspace_id = workspace_id
+                break
+
+        raw_text = json.dumps(
+            {"workspaces": workspaces, "subscription": subscription},
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+
+        if subscription is None:
+            raise ProbeFailure(
+                "No OpenCode Go subscription found",
+                raw_text[:500],
+            )
+
+        five_hour_percent_left, five_hour_reset = self._window_fields(
+            subscription.get("rollingUsage")
+        )
+        weekly_percent_left, weekly_reset = self._window_fields(subscription.get("weeklyUsage"))
+        monthly_percent_left, monthly_reset = self._window_fields(subscription.get("monthlyUsage"))
+
+        if (
+            five_hour_percent_left is None
+            and weekly_percent_left is None
+            and monthly_percent_left is None
+        ):
+            raise ProbeFailure(
+                "OpenCode Go usage response has no recognizable windows",
+                raw_text[:500],
+            )
+
+        return OpenCodeGoStatus(
+            five_hour_percent_left=five_hour_percent_left,
+            five_hour_reset=five_hour_reset,
+            weekly_percent_left=weekly_percent_left,
+            weekly_reset=weekly_reset,
+            monthly_percent_left=monthly_percent_left,
+            monthly_reset=monthly_reset,
+            raw_text=raw_text,
+        )
+
+    def close(self) -> None:
+        pass
+
+
+class _AuthRejected(Exception):
+    """Internal signal: the console rejected the session cookie."""
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so the session cookie is never forwarded cross-origin."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
+        return None
 
 
 def fetch_provider_snapshot(

@@ -27,6 +27,7 @@ from .providers import (
     CodexHttpProvider,
     CopilotHttpProvider,
     CursorProvider,
+    OpenCodeGoProvider,
     ProviderSnapshot,
     VibeProvider,
     fetch_provider_snapshot,
@@ -67,6 +68,7 @@ AUTH_ACTIONS: dict[str, tuple[str, str]] = {
     "Copilot": ("cli", "gh auth login"),
     "Cursor": ("browser", "https://cursor.sh"),
     "Vibe": ("browser", "https://console.mistral.ai"),
+    "OpenCode Go": ("browser", "https://opencode.ai"),
 }
 
 _AUTH_KEYWORDS = (
@@ -238,6 +240,14 @@ def initialize_providers(
             cleanup.append(vibe)
         except Exception as exc:  # noqa: BLE001
             providers.append(("Vibe", exc))
+
+    if enabled is None or "OpenCode Go" in enabled:
+        try:
+            opencode_go = OpenCodeGoProvider()
+            providers.append(("OpenCode Go", opencode_go))
+            cleanup.append(opencode_go)
+        except Exception as exc:  # noqa: BLE001
+            providers.append(("OpenCode Go", exc))
 
     return providers, cleanup
 
@@ -500,7 +510,7 @@ def main() -> int:
                     while not future.done():
                         live.update(
                             build_loading_screen(
-                                "Getting initial usage from Claude, Codex, Antigravity, Copilot, Cursor, and Vibe…",
+                                "Getting initial usage from Claude, Codex, Antigravity, Copilot, Cursor, Vibe, and OpenCode Go…",
                                 datetime.now(),
                                 time.monotonic() - started,
                             )

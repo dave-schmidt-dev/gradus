@@ -1,6 +1,6 @@
 # gradus
 
-Real-time terminal monitor for local `codex`, `claude`, `agy`, `copilot`, `cursor`, and `vibe` usage.
+Real-time terminal monitor for local `codex`, `claude`, `agy`, `copilot`, `cursor`, `vibe`, and `opencode go` usage.
 
 Probes provider APIs directly using locally authenticated credentials — no PTY, no CLI scraping. Each provider uses its own HTTP or internal API path, so probes are fast and reliable.
 
@@ -16,12 +16,14 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors Copilot usage via the GitHub REST API (using `gh` CLI credentials)
 - Monitors Cursor credit usage via the Cursor Dashboard API
 - Monitors Vibe usage via the Mistral billing API
+- Monitors OpenCode Go usage via the opencode.ai SolidStart console (5h/1w/monthly quota)
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position — so when OpenAI removed the Codex 5-hour limit (2026-07) the card automatically shows just the 1-week window, and the 5-hour row reappears on its own if OpenAI restores it (no code change)
 - Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus conditional Claude+GPT (`cg5`, `cg1w`) group activation when at least one valid C+G remaining percentage is below 100%. Rows render independently: each valid C+G row below 100% appears; exact-100%, missing, or malformed sibling rows are omitted.
 - Shows Copilot monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
 - Shows Vibe monthly remaining (`mo`), reset, and billing-cycle pace
+- Shows OpenCode Go 5h/1w/monthly remaining quota, reset times, and pace indicators
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
 - Retains cached usage data during transient network errors with an `(offline Xm)` title indicator; shows a `stale` panel after 5 minutes of continuous failure
 - Supports live keyboard shortcuts (`q` quit, `r` refresh now)
@@ -42,6 +44,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Copilot: `gh` CLI authenticated (`gh auth login` or OAuth token present)
 - Cursor: app or browser session authenticated
 - Mistral console session authenticated (Safari/Chrome cookie extraction supported)
+- OpenCode Go: opencode.ai console session authenticated (Safari `auth` cookie)
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
 - `cryptography>=42` (installed automatically; used to decrypt Chrome `v10` cookies in-process so the AES key is never placed on a subprocess command line)
 - A terminal that supports ANSI color
@@ -98,7 +101,7 @@ stacks with a one-cell horizontal gutter and no empty vertical-row gutter. The
 two-column layout holds down to 79 columns — the width at which two bar-less cards
 still fit a full `reset` and `pace` cell — so a narrowing terminal shrinks the usage
 bars to nothing and stays compact instead of stacking early and re-widening the bars.
-Below 79 columns the dashboard falls back to one column.
+Below 79 columns the dashboard automatically switches to a compact single/double-line layout: each active provider gets 1–2 lines (max 2 windows per line, continuation lines indented), blank lines separate providers, and exhausted (0%) providers are dropped entirely. Window labels (`5h:`, `1w:`, `ac:`, etc.) show percentage and pace arrows (`↑`/`↓`/`=`). Cursor and Vibe get special compact handling converting percent-used to percent-remaining with billing-cycle pace. No `--compact` flag is needed — the switch is fully automatic and responsive to terminal width.
 
 Codex and Claude cards show:
 
@@ -219,10 +222,11 @@ In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sou
 
 ## Limitations
 
-- This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `copilot`, `cursor`, and `vibe`.
+- This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `copilot`, `cursor`, `vibe`, and `opencode.ai`.
 - If any vendor changes its TUI wording or layout, the parser may need to be updated.
 - Reset windows are only shown when the CLI output exposes them.
 - Terminal rendering can vary across fonts and terminal emulators.
+- OpenCode Go uses content-hash server-function IDs from the deployed opencode.ai console build. If opencode rebuilds the console, these hashes change and the probe returns an error until the IDs are updated in the provider. The probe gracefully surfaces this as a clear error message.
 
 ## Known Issues
 
