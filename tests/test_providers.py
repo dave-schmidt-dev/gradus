@@ -153,7 +153,7 @@ class CopilotHttpProviderTests(unittest.TestCase):
     def test_paid_tier_field_mapping(self) -> None:
         provider = self._make_provider()
         with (
-            patch("gradus.providers._http_json", return_value=self.PAID_RESPONSE),
+            patch("gradus.providers._base._http_json", return_value=self.PAID_RESPONSE),
             patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
@@ -167,7 +167,7 @@ class CopilotHttpProviderTests(unittest.TestCase):
     def test_free_tier_field_mapping(self) -> None:
         provider = self._make_provider()
         with (
-            patch("gradus.providers._http_json", return_value=self.FREE_RESPONSE),
+            patch("gradus.providers._base._http_json", return_value=self.FREE_RESPONSE),
             patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
@@ -180,13 +180,49 @@ class CopilotHttpProviderTests(unittest.TestCase):
     def test_401_raises_probe_failure(self) -> None:
         provider = self._make_provider()
         with (
-            patch("gradus.providers._http_json", side_effect=ProbeFailure("HTTP 401", "")),
+            patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")),
             patch("subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertIn("gh auth login", str(ctx.exception))
+
+    def test_read_hosts_yml_extracts_token(self) -> None:
+        provider = CopilotHttpProvider()
+        content = "github.com:\n    oauth_token: gho_testtoken\n    user: dave\n"
+        with patch("pathlib.Path.read_text", return_value=content):
+            with patch("pathlib.Path.exists", return_value=True):
+                self.assertEqual(provider._read_hosts_yml(), "gho_testtoken")
+
+    def test_read_hosts_yml_user_before_oauth_token(self) -> None:
+        provider = CopilotHttpProvider()
+        content = "github.com:\n    user: dave\n    oauth_token: gho_reorderedtoken\n"
+        with patch("pathlib.Path.read_text", return_value=content):
+            with patch("pathlib.Path.exists", return_value=True):
+                self.assertEqual(provider._read_hosts_yml(), "gho_reorderedtoken")
+
+    def test_read_hosts_yml_no_oauth_token(self) -> None:
+        provider = CopilotHttpProvider()
+        content = "github.com:\n    user: dave\n"
+        with patch("pathlib.Path.read_text", return_value=content):
+            with patch("pathlib.Path.exists", return_value=True):
+                self.assertIsNone(provider._read_hosts_yml())
+
+    def test_read_hosts_yml_file_missing(self) -> None:
+        provider = CopilotHttpProvider()
+        with patch("pathlib.Path.exists", return_value=False):
+            self.assertIsNone(provider._read_hosts_yml())
+
+    def test_read_hosts_yml_multiple_hosts(self) -> None:
+        provider = CopilotHttpProvider()
+        content = (
+            "github.com:\n    oauth_token: gho_first\n    user: dave\n"
+            "enterprise.github.com:\n    oauth_token: gho_enterprise\n"
+        )
+        with patch("pathlib.Path.read_text", return_value=content):
+            with patch("pathlib.Path.exists", return_value=True):
+                self.assertEqual(provider._read_hosts_yml(), "gho_first")
 
 
 class VibeProviderTests(unittest.TestCase):
@@ -421,7 +457,7 @@ class CursorTokenCacheTests(unittest.TestCase):
             encoding="utf-8",
         )
         with (
-            patch("gradus.providers._read_safari_cookies", return_value={}) as safari,
+            patch("gradus.providers._base._read_safari_cookies", return_value={}) as safari,
             patch("gradus.providers.subprocess.Popen") as popen,
         ):
             provider = CursorProvider()
@@ -442,7 +478,7 @@ class CursorTokenCacheTests(unittest.TestCase):
         fresh_jwt = _make_jwt(3600)
         cookie_value = f"user_x%3A%3A{fresh_jwt}"
         with patch(
-            "gradus.providers._read_safari_cookies",
+            "gradus.providers._base._read_safari_cookies",
             return_value={"WorkosCursorSessionToken": cookie_value},
         ):
             provider = CursorProvider()
@@ -455,7 +491,7 @@ class CursorTokenCacheTests(unittest.TestCase):
         fresh_jwt = _make_jwt(3600)
         cookie_value = f"user_x%3A%3A{fresh_jwt}"
         with patch(
-            "gradus.providers._read_safari_cookies",
+            "gradus.providers._base._read_safari_cookies",
             return_value={"WorkosCursorSessionToken": cookie_value},
         ):
             provider = CursorProvider()
@@ -471,7 +507,7 @@ class CursorTokenCacheTests(unittest.TestCase):
         valid_jwt = _make_jwt(3600)
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(json.dumps({"access_token": valid_jwt}), encoding="utf-8")
-        with patch("gradus.providers._read_safari_cookies", return_value={}):
+        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
             provider = CursorProvider()
         err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
         with patch.object(provider, "_api_post", side_effect=err):
@@ -500,7 +536,7 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             encoding="utf-8",
         )
         with (
-            patch("gradus.providers._read_safari_cookies", return_value={}) as safari,
+            patch("gradus.providers._base._read_safari_cookies", return_value={}) as safari,
             patch("gradus.providers.subprocess.Popen") as popen,
         ):
             provider = ClaudeHttpProvider()
@@ -513,7 +549,7 @@ class ClaudeCookieCacheTests(unittest.TestCase):
 
     def test_safari_read_writes_cache(self) -> None:
         with patch(
-            "gradus.providers._read_safari_cookies",
+            "gradus.providers._base._read_safari_cookies",
             return_value={"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"},
         ):
             provider = ClaudeHttpProvider()
@@ -530,10 +566,10 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             json.dumps({"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"}),
             encoding="utf-8",
         )
-        with patch("gradus.providers._read_safari_cookies", return_value={}):
+        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
             provider = ClaudeHttpProvider()
         with patch(
-            "gradus.providers._http_json",
+            "gradus.providers._base._http_json",
             side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
         ):
             with self.assertRaises(ProbeFailure):
@@ -551,10 +587,10 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        with patch("gradus.providers._read_safari_cookies", return_value={}):
+        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
             provider = ClaudeHttpProvider()
         with patch(
-            "gradus.providers._http_json",
+            "gradus.providers._base._http_json",
             side_effect=ProbeFailure("HTTP 400", ""),
         ):
             with self.assertRaises(ProbeFailure) as ctx:
@@ -665,7 +701,7 @@ class CacheResilienceTests(unittest.TestCase):
         fresh_jwt = _make_jwt(3600)
         cookie_value = f"user_x%3A%3A{fresh_jwt}"
         with patch(
-            "gradus.providers._read_safari_cookies",
+            "gradus.providers._base._read_safari_cookies",
             return_value={"WorkosCursorSessionToken": cookie_value},
         ):
             provider = CursorProvider()
@@ -678,7 +714,7 @@ class CacheResilienceTests(unittest.TestCase):
         self._claude_cache.parent.mkdir(parents=True, exist_ok=True)
         self._claude_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
         with patch(
-            "gradus.providers._read_safari_cookies",
+            "gradus.providers._base._read_safari_cookies",
             return_value={"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"},
         ):
             provider = ClaudeHttpProvider()
@@ -709,7 +745,7 @@ class CacheResilienceTests(unittest.TestCase):
         cookie_value = f"user_x%3A%3A{fresh_jwt}"
         with (
             patch(
-                "gradus.providers._read_safari_cookies",
+                "gradus.providers._base._read_safari_cookies",
                 return_value={"WorkosCursorSessionToken": cookie_value},
             ),
             patch("pathlib.Path.mkdir", side_effect=OSError("no space")),
@@ -728,7 +764,7 @@ class CacheResilienceTests(unittest.TestCase):
             json.dumps({"access_token": valid_jwt, "refresh_token": "old_rt"}),
             encoding="utf-8",
         )
-        with patch("gradus.providers._read_safari_cookies", return_value={}):
+        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
             provider = CursorProvider()
 
         # Simulate: first API call → 401, refresh succeeds with new tokens, retry succeeds
@@ -809,6 +845,11 @@ class CodexWindowClassificationTests(unittest.TestCase):
         self.assertIsNone(_codex_percent_left({}))
         self.assertIsNone(_codex_percent_left({"used_percent": None}))
 
+    def test_percent_left_returns_float(self) -> None:
+        result = _codex_percent_left({"used_percent": 5})
+        self.assertIsInstance(result, float)
+        self.assertEqual(result, 95.0)
+
 
 class CodexHttpProviderTests(unittest.TestCase):
     # Real API uses rate_limit.{primary,secondary}_window.used_percent (epoch reset_at)
@@ -846,7 +887,7 @@ class CodexHttpProviderTests(unittest.TestCase):
 
     def test_normal_response_field_mapping(self) -> None:
         provider = self._make_provider()
-        with patch("gradus.providers._http_json", return_value=self.NORMAL_RESPONSE):
+        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
             status = provider.fetch()
         # 100 - 20 = 80
         self.assertEqual(status.five_hour_percent_left, 80)
@@ -854,6 +895,13 @@ class CodexHttpProviderTests(unittest.TestCase):
         self.assertAlmostEqual(status.credits, 12.5)
         self.assertIsNotNone(status.five_hour_reset)
         self.assertIsNotNone(status.weekly_reset)
+
+    def test_percent_left_fields_are_float(self) -> None:
+        provider = self._make_provider()
+        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
+            status = provider.fetch()
+        self.assertIsInstance(status.five_hour_percent_left, float)
+        self.assertIsInstance(status.weekly_percent_left, float)
 
     def test_five_hour_removal_maps_weekly_only(self) -> None:
         # Live shape after OpenAI dropped the 5h window: primary_window is the
@@ -870,7 +918,7 @@ class CodexHttpProviderTests(unittest.TestCase):
             },
             "credits": {"balance": None},
         }
-        with patch("gradus.providers._http_json", return_value=response):
+        with patch("gradus.providers._base._http_json", return_value=response):
             status = provider.fetch()
         # Weekly is populated correctly; the 5h slot stays empty (not mislabeled).
         self.assertEqual(status.weekly_percent_left, 95)
@@ -895,7 +943,7 @@ class CodexHttpProviderTests(unittest.TestCase):
                 },
             },
         }
-        with patch("gradus.providers._http_json", return_value=response):
+        with patch("gradus.providers._base._http_json", return_value=response):
             status = provider.fetch()
         self.assertEqual(status.five_hour_percent_left, 70)
         self.assertEqual(status.weekly_percent_left, 60)
@@ -904,7 +952,7 @@ class CodexHttpProviderTests(unittest.TestCase):
 
     def test_401_raises_probe_failure(self) -> None:
         provider = self._make_provider()
-        with patch("gradus.providers._http_json", side_effect=ProbeFailure("HTTP 401", "")):
+        with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")):
             with self.assertRaises(ProbeFailure):
                 provider.fetch()
 
@@ -923,7 +971,7 @@ class CodexHttpProviderTests(unittest.TestCase):
             mock_path.exists.return_value = True
             mock_path.read_text.return_value = refreshed_auth
             with patch(
-                "gradus.providers._http_json",
+                "gradus.providers._base._http_json",
                 side_effect=[ProbeFailure("HTTP 401", ""), self.NORMAL_RESPONSE],
             ):
                 status = provider.fetch()
@@ -967,7 +1015,7 @@ class CodexHttpProviderTests(unittest.TestCase):
 
             with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
                 with patch(
-                    "gradus.providers._http_json",
+                    "gradus.providers._base._http_json",
                     side_effect=[
                         ProbeFailure(
                             "HTTP 401",
@@ -1016,7 +1064,7 @@ class CodexHttpProviderTests(unittest.TestCase):
         with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
             provider = CodexHttpProvider()
             with patch(
-                "gradus.providers._http_json",
+                "gradus.providers._base._http_json",
                 side_effect=[
                     ProbeFailure("HTTP 401", '{"error":{"code":"token_invalidated"}}'),
                     ProbeFailure(
@@ -1048,7 +1096,7 @@ class CodexHttpProviderTests(unittest.TestCase):
             mock_path.exists.return_value = True
             mock_path.read_text.return_value = same_auth
             provider = CodexHttpProvider()
-            with patch("gradus.providers._http_json") as mock_http:
+            with patch("gradus.providers._base._http_json") as mock_http:
                 mock_http.side_effect = ProbeFailure("HTTP 401", "")
                 with self.assertRaises(ProbeFailure) as ctx:
                     provider.fetch()
@@ -1077,7 +1125,7 @@ class CodexHttpProviderTests(unittest.TestCase):
         with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
             provider = CodexHttpProvider()
             with patch(
-                "gradus.providers._http_json",
+                "gradus.providers._base._http_json",
                 side_effect=[
                     ProbeFailure("HTTP 401", ""),
                     {"token_type": "Bearer"},  # refresh response with no access_token
@@ -1143,7 +1191,7 @@ class CodexHttpProviderTests(unittest.TestCase):
                 return normal_response
 
         with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
-            with patch("gradus.providers._http_json", side_effect=side_effect_fn):
+            with patch("gradus.providers._base._http_json", side_effect=side_effect_fn):
                 status = provider.fetch()
 
         # usage(401) → refresh(500) → reload → usage(200)
@@ -1184,7 +1232,7 @@ class CodexHttpProviderTests(unittest.TestCase):
                 raise ProbeFailure("HTTP 500", "internal server error")
 
         with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
-            with patch("gradus.providers._http_json", side_effect=side_effect_fn):
+            with patch("gradus.providers._base._http_json", side_effect=side_effect_fn):
                 with self.assertRaises(ProbeFailure) as ctx:
                     provider.fetch()
 
@@ -1236,7 +1284,7 @@ class CodexHttpProviderTests(unittest.TestCase):
                 raise ProbeFailure("HTTP 401", "")
 
         with patch.object(CodexHttpProvider, "_AUTH_PATH", auth_path):
-            with patch("gradus.providers._http_json", side_effect=side_effect_fn):
+            with patch("gradus.providers._base._http_json", side_effect=side_effect_fn):
                 with self.assertRaises(ProbeFailure) as ctx:
                     provider.fetch()
 
@@ -1358,14 +1406,14 @@ class ClaudeHttpProviderTests(unittest.TestCase):
             "cf_clearance": "cf_test",
             "lastActiveOrg": "org-123",
         }
-        patcher = patch("gradus.providers._read_safari_cookies", return_value=cookies)
+        patcher = patch("gradus.providers._base._read_safari_cookies", return_value=cookies)
         patcher.start()
         self.addCleanup(patcher.stop)
         return ClaudeHttpProvider()
 
     def test_normal_response_field_mapping(self) -> None:
         provider = self._make_provider()
-        with patch("gradus.providers._http_json", return_value=self.NORMAL_RESPONSE):
+        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
             status = provider.fetch()
         # 100 - 30 = 70
         self.assertEqual(status.session_percent_left, 70)
@@ -1377,9 +1425,17 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIsNone(status.account_organization)
         self.assertIsNone(status.login_method)
 
+    def test_percent_left_fields_are_float(self) -> None:
+        provider = self._make_provider()
+        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
+            status = provider.fetch()
+        self.assertIsInstance(status.session_percent_left, float)
+        self.assertIsInstance(status.weekly_percent_left, float)
+        self.assertIsInstance(status.opus_percent_left, float)
+
     def test_401_raises_probe_failure(self) -> None:
         provider = self._make_provider()
-        with patch("gradus.providers._http_json", side_effect=ProbeFailure("HTTP 401", "")):
+        with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertIn("session expired", str(ctx.exception).lower())
@@ -1387,7 +1443,7 @@ class ClaudeHttpProviderTests(unittest.TestCase):
     def test_missing_cookies_raises_probe_failure(self) -> None:
         # Patches must stay active through fetch() so _load_cookies() still finds nothing
         with (
-            patch("gradus.providers._read_safari_cookies", return_value={}),
+            patch("gradus.providers._base._read_safari_cookies", return_value={}),
             patch("subprocess.Popen"),
         ):
             provider = ClaudeHttpProvider()
@@ -1456,11 +1512,13 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=self.SUMMARY_RESPONSE) as mock_http,
+            patch(
+                "gradus.providers._base._http_json", return_value=self.SUMMARY_RESPONSE
+            ) as mock_http,
         ):
             status = provider.fetch()
-        self.assertEqual(status.five_hour_percent_left, 86)
-        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertAlmostEqual(status.five_hour_percent_left, 86.24946, places=5)
+        self.assertAlmostEqual(status.weekly_percent_left, 95.879453, places=6)
         self.assertIsNotNone(status.five_hour_reset)
         self.assertIsNotNone(status.weekly_reset)
         # The endpoint rejects a non-empty body (400) and the default urllib UA (403).
@@ -1469,21 +1527,33 @@ class AntigravityProviderTests(unittest.TestCase):
         self.assertIn("antigravity", kwargs["headers"]["User-Agent"].lower())
         self.assertTrue(kwargs["headers"]["Authorization"].startswith("Bearer "))
 
+    def test_percent_left_fields_are_float(self) -> None:
+        provider = self._make_provider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("gradus.providers._base._http_json", return_value=self.SUMMARY_RESPONSE),
+        ):
+            status = provider.fetch()
+        self.assertIsInstance(status.five_hour_percent_left, float)
+        self.assertIsInstance(status.weekly_percent_left, float)
+        self.assertIsInstance(status.third_party_five_hour_percent_left, float)
+        self.assertIsInstance(status.third_party_weekly_percent_left, float)
+
     def test_selects_gemini_group_not_third_party(self) -> None:
         # Gemini weekly is 96%, the Claude+GPT group is 100%; we must read Gemini's.
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=self.SUMMARY_RESPONSE),
+            patch("gradus.providers._base._http_json", return_value=self.SUMMARY_RESPONSE),
         ):
             status = provider.fetch()
-        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertAlmostEqual(status.weekly_percent_left, 95.879453, places=6)
 
     def test_parses_third_party_group_5h_and_weekly(self) -> None:
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=self.SUMMARY_RESPONSE),
+            patch("gradus.providers._base._http_json", return_value=self.SUMMARY_RESPONSE),
         ):
             status = provider.fetch()
         self.assertEqual(status.third_party_five_hour_percent_left, 42.1)
@@ -1529,11 +1599,11 @@ class AntigravityProviderTests(unittest.TestCase):
                     patch.object(
                         AntigravityProvider, "_load_keychain_token", return_value=self._token()
                     ),
-                    patch("gradus.providers._http_json", return_value=response),
+                    patch("gradus.providers._base._http_json", return_value=response),
                 ):
                     status = provider.fetch()
-                self.assertEqual(status.five_hour_percent_left, 86)
-                self.assertEqual(status.weekly_percent_left, 96)
+                self.assertAlmostEqual(status.five_hour_percent_left, 86.24946, places=5)
+                self.assertAlmostEqual(status.weekly_percent_left, 95.879453, places=6)
                 self.assertIsNone(status.third_party_five_hour_percent_left)
                 self.assertIsNone(status.third_party_weekly_percent_left)
                 self.assertIsNone(status.third_party_five_hour_reset)
@@ -1559,11 +1629,11 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=response),
+            patch("gradus.providers._base._http_json", return_value=response),
         ):
             status = provider.fetch()
-        self.assertEqual(status.five_hour_percent_left, 86)
-        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertAlmostEqual(status.five_hour_percent_left, 86.24946, places=5)
+        self.assertAlmostEqual(status.weekly_percent_left, 95.879453, places=6)
         self.assertEqual(status.third_party_five_hour_percent_left, 42.1)
         self.assertIsNone(status.third_party_five_hour_reset)
         self.assertEqual(status.third_party_weekly_percent_left, 73.4)
@@ -1589,10 +1659,10 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=response),
+            patch("gradus.providers._base._http_json", return_value=response),
         ):
             status = provider.fetch()
-        self.assertEqual(status.five_hour_percent_left, 86)
+        self.assertAlmostEqual(status.five_hour_percent_left, 86.24946, places=5)
         self.assertIsNone(status.weekly_percent_left)
         self.assertIsNone(status.third_party_five_hour_percent_left)
         self.assertEqual(status.third_party_weekly_percent_left, 73.4)
@@ -1620,11 +1690,11 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=response),
+            patch("gradus.providers._base._http_json", return_value=response),
         ):
             status = provider.fetch()
-        self.assertEqual(status.five_hour_percent_left, 86)
-        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertAlmostEqual(status.five_hour_percent_left, 86.24946, places=5)
+        self.assertAlmostEqual(status.weekly_percent_left, 95.879453, places=6)
         self.assertEqual(status.third_party_five_hour_percent_left, 99.9)
         self.assertEqual(status.third_party_weekly_percent_left, 100.0)
 
@@ -1651,7 +1721,7 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=response),
+            patch("gradus.providers._base._http_json", return_value=response),
         ):
             status = provider.fetch()
         self.assertEqual(status.third_party_five_hour_percent_left, 0.0)
@@ -1680,11 +1750,11 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=response),
+            patch("gradus.providers._base._http_json", return_value=response),
         ):
             status = provider.fetch()
-        self.assertEqual(status.five_hour_percent_left, 86)
-        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertAlmostEqual(status.five_hour_percent_left, 86.24946, places=5)
+        self.assertAlmostEqual(status.weekly_percent_left, 95.879453, places=6)
         self.assertIsNone(status.third_party_five_hour_percent_left)
         self.assertIsNone(status.third_party_weekly_percent_left)
 
@@ -1699,8 +1769,7 @@ class AntigravityProviderTests(unittest.TestCase):
 
     def test_gemini_fraction_parsing_keeps_prior_non_finite_behavior(self) -> None:
         bucket = {"remainingFraction": "nan"}
-        with self.assertRaises(ValueError):
-            AntigravityProvider._percent_from_fraction(bucket)
+        self.assertIsNone(AntigravityProvider._percent_from_fraction(bucket))
 
     # ---- self-heal: nudge `agy` to refresh its OWN token via `agy models` ----
 
@@ -1716,7 +1785,7 @@ class AntigravityProviderTests(unittest.TestCase):
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
             ) as mock_run,
-            patch("gradus.providers._http_json") as mock_http,
+            patch("gradus.providers._base._http_json") as mock_http,
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -1736,10 +1805,10 @@ class AntigravityProviderTests(unittest.TestCase):
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
             ) as mock_run,
-            patch("gradus.providers._http_json", return_value=self.SUMMARY_RESPONSE),
+            patch("gradus.providers._base._http_json", return_value=self.SUMMARY_RESPONSE),
         ):
             status = provider.fetch()
-        self.assertEqual(status.five_hour_percent_left, 86)
+        self.assertAlmostEqual(status.five_hour_percent_left, 86.24946, places=5)
         # Pin the exact command: non-interactive + quota-free. Never `agy --print`.
         self.assertEqual(list(mock_run.call_args[0][0]), ["agy", "models"])
 
@@ -1803,7 +1872,7 @@ class AntigravityProviderTests(unittest.TestCase):
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
             patch("gradus.providers.subprocess.run", side_effect=FileNotFoundError),
-            patch("gradus.providers._http_json") as mock_http,
+            patch("gradus.providers._base._http_json") as mock_http,
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -1825,7 +1894,7 @@ class AntigravityProviderTests(unittest.TestCase):
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
             ),
-            patch("gradus.providers._http_json") as mock_http,
+            patch("gradus.providers._base._http_json") as mock_http,
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -1840,7 +1909,7 @@ class AntigravityProviderTests(unittest.TestCase):
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=valid),
             patch("gradus.providers.subprocess.run", side_effect=FileNotFoundError),
-            patch("gradus.providers._http_json", side_effect=ProbeFailure("HTTP 401", "{}")),
+            patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "{}")),
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -1863,7 +1932,7 @@ class AntigravityProviderTests(unittest.TestCase):
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
             ),
-            patch("gradus.providers._http_json", side_effect=_http),
+            patch("gradus.providers._base._http_json", side_effect=_http),
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -1880,7 +1949,7 @@ class AntigravityProviderTests(unittest.TestCase):
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=valid),
             patch("gradus.providers.subprocess.run") as mock_run,
             patch(
-                "gradus.providers._http_json",
+                "gradus.providers._base._http_json",
                 side_effect=ProbeFailure("Network error: timed out", "x"),
             ),
         ):
@@ -1908,10 +1977,10 @@ class AntigravityProviderTests(unittest.TestCase):
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
             ) as mock_run,
-            patch("gradus.providers._http_json", side_effect=_http),
+            patch("gradus.providers._base._http_json", side_effect=_http),
         ):
             status = provider.fetch()
-        self.assertEqual(status.weekly_percent_left, 96)
+        self.assertAlmostEqual(status.weekly_percent_left, 95.879453, places=6)
         self.assertEqual(state["summary_calls"], 2)  # original + one retry
         mock_run.assert_called_once()
 
@@ -1960,7 +2029,7 @@ class AntigravityProviderTests(unittest.TestCase):
         only_third_party = {"groups": [self.SUMMARY_RESPONSE["groups"][1]]}
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
-            patch("gradus.providers._http_json", return_value=only_third_party),
+            patch("gradus.providers._base._http_json", return_value=only_third_party),
         ):
             with self.assertRaises(ProbeFailure):
                 provider.fetch()
@@ -2093,7 +2162,7 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         try:
             for headless in (False, True):
                 with (
-                    patch("gradus.providers._read_safari_cookies", return_value={}),
+                    patch("gradus.providers._base._read_safari_cookies", return_value={}),
                     patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None),
                     patch("gradus.providers.subprocess.Popen") as popen,
                 ):
@@ -2149,8 +2218,8 @@ class LazyAcquireContractTests(unittest.TestCase):
         with (
             patch("gradus.providers.subprocess.run") as mock_run,
             patch("gradus.providers.subprocess.Popen") as mock_popen,
-            patch("gradus.providers._read_safari_cookies", return_value={}) as mock_safari,
-            patch("gradus.providers._write_private") as mock_write,
+            patch("gradus.providers._base._read_safari_cookies", return_value={}) as mock_safari,
+            patch("gradus.providers._base._write_private") as mock_write,
         ):
             try:
                 CodexHttpProvider()
@@ -2176,7 +2245,7 @@ class LazyAcquireContractTests(unittest.TestCase):
         path stopped producing a message containing an auth keyword.
         """
         with (
-            patch("gradus.providers._read_safari_cookies", return_value={}),
+            patch("gradus.providers._base._read_safari_cookies", return_value={}),
             patch("gradus.providers.subprocess.Popen"),
         ):
             provider = ClaudeHttpProvider()
@@ -2254,7 +2323,7 @@ class TestCredentialCachePermissions(unittest.TestCase):
             shared.mkdir()
             os.chmod(shared, 0o777)  # permissive, like /tmp
             dump_path = shared / "gradus_test_capture.txt"
-            with patch("gradus.providers._debug_dump_path", return_value=dump_path):
+            with patch("gradus.providers._base._debug_dump_path", return_value=dump_path):
                 _write_debug_dump("Test", "raw capture output")
             # The dump file itself is private...
             self.assertEqual(stat.S_IMODE(os.stat(dump_path).st_mode), 0o600)
@@ -2391,7 +2460,9 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def _provider(self) -> OpenCodeGoProvider:
-        with patch("gradus.providers._read_safari_cookies", return_value={"auth": "cookie-value"}):
+        with patch(
+            "gradus.providers._base._read_safari_cookies", return_value={"auth": "cookie-value"}
+        ):
             provider = OpenCodeGoProvider()
             provider._acquire()
         return provider
@@ -2412,6 +2483,17 @@ class OpenCodeGoProviderTests(unittest.TestCase):
             self.assertIsNotNone(reset)
             assert reset is not None
             self.assertTrue(reset.startswith("Resets "))
+
+    def test_percent_left_fields_are_float(self) -> None:
+        provider = self._provider()
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(provider, "_fetch_subscription", return_value=self.SUBSCRIPTION),
+        ):
+            status = provider.fetch()
+        self.assertIsInstance(status.five_hour_percent_left, float)
+        self.assertIsInstance(status.weekly_percent_left, float)
+        self.assertIsInstance(status.monthly_percent_left, float)
 
     def test_subscribed_workspace_is_remembered(self) -> None:
         provider = self._provider()
@@ -2475,7 +2557,7 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self.assertFalse(self._cache_path.exists())
 
     def test_missing_cookie_raises_auth_message(self) -> None:
-        with patch("gradus.providers._read_safari_cookies", return_value={}):
+        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
             provider = OpenCodeGoProvider()
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -2494,7 +2576,7 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(json.dumps({"auth": "cached-cookie"}), encoding="utf-8")
         with (
-            patch("gradus.providers._read_safari_cookies", return_value={}) as safari,
+            patch("gradus.providers._base._read_safari_cookies", return_value={}) as safari,
             patch("gradus.providers.subprocess.Popen") as popen,
         ):
             provider = OpenCodeGoProvider()
@@ -2504,7 +2586,9 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         popen.assert_not_called()
 
     def test_safari_read_writes_cache(self) -> None:
-        with patch("gradus.providers._read_safari_cookies", return_value={"auth": "safari-cookie"}):
+        with patch(
+            "gradus.providers._base._read_safari_cookies", return_value={"auth": "safari-cookie"}
+        ):
             provider = OpenCodeGoProvider()
             provider._acquire()
         self.assertTrue(self._cache_path.exists())
@@ -2527,7 +2611,9 @@ class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
         self.addCleanup(self._tmpdir.cleanup)
 
     def test_fetch_decodes_wire_payloads(self) -> None:
-        with patch("gradus.providers._read_safari_cookies", return_value={"auth": "cookie-value"}):
+        with patch(
+            "gradus.providers._base._read_safari_cookies", return_value={"auth": "cookie-value"}
+        ):
             provider = OpenCodeGoProvider()
         bodies = [
             _seroval_stream(_SEROVAL_WORKSPACES),

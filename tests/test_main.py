@@ -774,7 +774,7 @@ class WriteSnapshotTests(unittest.TestCase):
     """
 
     def _snapshots(self) -> list[ProviderSnapshot]:
-        """Return a canonical five-provider mix including a failed probe."""
+        """Return a canonical provider mix including a failed probe."""
         return [
             ProviderSnapshot(
                 name="Codex",
@@ -880,7 +880,7 @@ class WriteSnapshotTests(unittest.TestCase):
         self.assertEqual(res.rc, 0)
         self.assertEqual(res.write.call_count, 2)
         self.assertEqual([payload["schema_version"] for payload in res.payloads], [1, 2])
-        self.assertEqual(len(res.payloads[0]["providers"]), 5)
+        self.assertEqual(len(res.payloads[0]["providers"]), 7)
 
     def test_write_snapshot_exit_zero_when_all_providers_failed(self) -> None:
         """Every probe ok:false but the file was written ⇒ exit 0."""
@@ -903,8 +903,8 @@ class WriteSnapshotTests(unittest.TestCase):
         self.assertEqual(res.rc, 1)
         self.assertEqual([payload["schema_version"] for payload in res.payloads], [1, 2])
 
-    def test_write_snapshot_emits_all_five_providers_when_filtered(self) -> None:
-        """A ``--providers`` filter still yields all five canonical entries."""
+    def test_write_snapshot_emits_all_canonical_providers_when_filtered(self) -> None:
+        """A ``--providers`` filter still yields all seven canonical entries."""
         codex_only = [
             ProviderSnapshot(
                 name="Codex",
@@ -916,10 +916,13 @@ class WriteSnapshotTests(unittest.TestCase):
         res = self._drive(codex_only, providers="Codex")
         self.assertEqual(res.rc, 0)
         names = {p["name"] for p in res.payloads[0]["providers"]}
-        self.assertEqual(names, {"Codex", "Claude", "Antigravity", "Cursor", "Vibe"})
+        self.assertEqual(
+            names,
+            {"Codex", "Claude", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"},
+        )
         by_name = {p["name"]: p for p in res.payloads[0]["providers"]}
         self.assertTrue(by_name["Codex"]["ok"])
-        for other in ("Claude", "Antigravity", "Cursor", "Vibe"):
+        for other in ("Claude", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"):
             self.assertFalse(by_name[other]["ok"])
 
     def test_write_snapshot_payload_validates_schema(self) -> None:
@@ -933,10 +936,61 @@ class WriteSnapshotTests(unittest.TestCase):
         for payload in res.payloads:
             updated = datetime.fromisoformat(payload["updated_at"])
             self.assertIsNotNone(updated.tzinfo)
-            self.assertEqual(len(payload["providers"]), 5)
+            self.assertEqual(len(payload["providers"]), 7)
             for provider in payload["providers"]:
                 for key in ("name", "ok", "error", "windows", "data"):
                     self.assertIn(key, provider)
+
+
+class HeadlessGateTests(unittest.TestCase):
+    """INV-2: headless path is strictly read-only with zero side effects.
+
+    Unlike WriteSnapshotTests (which mocks initialize_providers and
+    collect_snapshots), this test drives the real provider pipeline to
+    verify the _is_headless() guards work at the provider level.
+    """
+
+    def setUp(self) -> None:
+        set_headless(False)
+        self.addCleanup(set_headless, False)
+
+    def test_write_snapshot_no_subprocess(self) -> None:
+        """--write-snapshot must not call subprocess.Popen or subprocess.run
+        through any provider, even when providers are initialized normally."""
+        captured_payloads: list[dict[str, object]] = []
+
+        def fake_write(payload: object, *args: object, **kwargs: object) -> bool:
+            captured_payloads.append(payload)  # type: ignore[arg-type]
+            return True
+
+        with (
+            patch("gradus.providers._base._http_json", return_value={}),
+            patch("gradus.providers.copilot.subprocess.run") as mock_copilot_run,
+            patch("gradus.providers.copilot.subprocess.Popen") as mock_copilot_popen,
+            patch("gradus.providers.antigravity.subprocess.run") as mock_agy_run,
+            patch("gradus.providers.antigravity.subprocess.Popen") as mock_agy_popen,
+            patch("gradus.providers.vibe.subprocess.run") as mock_vibe_run,
+            patch("gradus.providers.vibe.subprocess.Popen") as mock_vibe_popen,
+            patch("gradus.__main__.subprocess.Popen") as mock_main_popen,
+            patch("gradus.__main__.subprocess.run") as mock_main_run,
+            patch("gradus.__main__.write_snapshot", side_effect=fake_write),
+        ):
+            test_args = ["prog", "--write-snapshot"]
+            with patch("sys.argv", test_args):
+                rc = main()
+
+        self.assertEqual(rc, 0)
+        mock_copilot_run.assert_not_called()
+        mock_copilot_popen.assert_not_called()
+        mock_agy_run.assert_not_called()
+        mock_agy_popen.assert_not_called()
+        mock_vibe_run.assert_not_called()
+        mock_vibe_popen.assert_not_called()
+        mock_main_popen.assert_not_called()
+        mock_main_run.assert_not_called()
+        self.assertGreaterEqual(len(captured_payloads), 1)
+        copilot_entry = next(p for p in captured_payloads[0]["providers"] if p["name"] == "Copilot")
+        self.assertIn(copilot_entry["ok"], (True, False))
 
 
 if __name__ == "__main__":

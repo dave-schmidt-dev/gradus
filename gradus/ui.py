@@ -328,10 +328,16 @@ def _pace_label(
     return f"over -{diff_points}pt"
 
 
+def _percent_str(percent: float) -> str:
+    if percent < 10:
+        return f"{percent:.1f}"
+    return f"{round(percent)}"
+
+
 def _format_percent_value(percent: float | None) -> str:
     if percent is None:
         return "n/a"
-    return f"{round(percent)}%"
+    return f"{_percent_str(percent)}%"
 
 
 def _is_empty_window(percent: float | None) -> bool:
@@ -1460,7 +1466,7 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
                 continue
             pct_left = 100.0 - float(value)
             pace = _billing_cycle_pace_label(pct_left, start, end, now)
-            part = f"{label}:{round(pct_left)}% {_compact_pace(pace)}"
+            part = f"{label}:{_percent_str(pct_left)}% {_compact_pace(pace)}"
             parts.append((part, _pace_style(part)))
         return parts
 
@@ -1479,7 +1485,7 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
             str(end_iso) if isinstance(end_iso, str) else None,
             now,
         )
-        part = f"mo:{round(pct_left)}% {_compact_pace(pace)}"
+        part = f"mo:{_percent_str(pct_left)}% {_compact_pace(pace)}"
         return [(part, _pace_style(part))]
 
     # --- Unknown provider ---
@@ -1494,7 +1500,7 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
             continue
         if percent is None:
             continue
-        pct = round(percent)
+        pct = _percent_str(percent)
         reset = snapshot.data.get(window.reset_key)
         reset_str = None if reset is None else str(reset)
         pace = _pace_label(percent, reset_str, now, window.window_hours)
@@ -1507,7 +1513,7 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
             percent = snapshot.data.get(window.percent_key)
             if not percent_is_valid(percent):
                 continue
-            pct = round(percent)
+            pct = _percent_str(percent)
             reset = snapshot.data.get(window.reset_key)
             reset_str = None if reset is None else str(reset)
             pace = _pace_label(percent, reset_str, now, window.window_hours)

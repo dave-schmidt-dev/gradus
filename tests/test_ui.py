@@ -21,7 +21,9 @@ from gradus.ui import (
     _compact_pace,
     _compact_window_parts,
     _extract_depleted_reset_str,
+    _format_percent_value,
     _format_reset_display,
+    _percent_str,
     _provider_is_empty,
     _ResponsiveDashboardBody,
     _style_for_percent,
@@ -133,6 +135,35 @@ class PaceLabelTests(unittest.TestCase):
         self.assertIn("totally bogus", output)
 
 
+class PercentStrTests(unittest.TestCase):
+    """Direct unit tests for the percent formatting helpers."""
+
+    def test_values_below_ten_show_one_decimal(self) -> None:
+        self.assertEqual(_percent_str(0.0), "0.0")
+        self.assertEqual(_percent_str(5.5), "5.5")
+        self.assertEqual(_percent_str(9.9), "9.9")
+
+    def test_values_ten_and_above_show_integer(self) -> None:
+        self.assertEqual(_percent_str(10.0), "10")
+        self.assertEqual(_percent_str(10.4), "10")
+        self.assertEqual(_percent_str(99.9), "100")
+        self.assertEqual(_percent_str(100.0), "100")
+
+    def test_nine_nine_nine_rounds_to_ten_point_zero(self) -> None:
+        # Just below the threshold rounds to 10.0 (one decimal) rather than 10.
+        self.assertEqual(_percent_str(9.99), "10.0")
+        self.assertEqual(_percent_str(9.94), "9.9")
+
+    def test_format_percent_value_none(self) -> None:
+        self.assertEqual(_format_percent_value(None), "n/a")
+
+    def test_format_percent_value_edge_values(self) -> None:
+        self.assertEqual(_format_percent_value(0.0), "0.0%")
+        self.assertEqual(_format_percent_value(9.99), "10.0%")
+        self.assertEqual(_format_percent_value(10.0), "10%")
+        self.assertEqual(_format_percent_value(100.0), "100%")
+
+
 class ProviderPanelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.now = datetime(2026, 3, 14, 8, 22, 30)
@@ -174,6 +205,22 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("Copilot", output)
         self.assertIn("mo", output)
         self.assertIn("98%", output)
+
+    def test_panel_shows_decimal_for_fractional_percent_below_ten(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 5.5,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("5.5%", output)
+        self.assertIn("91%", output)
 
     def test_normal_rows_preserve_full_percentages_across_card_widths(self) -> None:
         # The Antigravity panel stays in normal mode because the non-zero C+G
@@ -1726,6 +1773,57 @@ class CompactModeTests(unittest.TestCase):
         )
         self.assertEqual(_compact_window_parts(snap, self.now), [])
 
+    def test_compact_window_parts_codex_fractional_below_ten(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 5.5,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        self.assertEqual(len(result), 2)
+        texts = [text for text, _ in result]
+        self.assertIn("5h:5.5%", texts[0])
+        self.assertIn("1w:91%", texts[1])
+
+    def test_compact_window_parts_cursor_fractional_below_ten(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={
+                "auto_percent_used": 94.5,
+                "api_percent_used": 1.5,
+                "billing_cycle_start": "2026-03-01T00:00:00",
+                "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        texts = [text for text, _ in result]
+        self.assertEqual(len(result), 2)
+        self.assertTrue(any("ac:5.5%" in text for text in texts))
+        self.assertTrue(any("ap:98%" in text for text in texts))
+
+    def test_compact_window_parts_vibe_fractional_below_ten(self) -> None:
+        snap = ProviderSnapshot(
+            name="Vibe",
+            ok=True,
+            source="api",
+            data={
+                "usage_percent": 94.5,
+                "start_date": "2026-03-01T00:00:00+00:00",
+                "end_date": "2026-04-01T00:00:00+00:00",
+            },
+        )
+        result = _compact_window_parts(snap, self.now)
+        self.assertEqual(len(result), 1)
+        self.assertIn("mo:5.5%", result[0][0])
+
     def test_compact_window_parts_codex_standard_format(self) -> None:
         snap = ProviderSnapshot(
             name="Codex",
@@ -1868,6 +1966,22 @@ class CompactModeTests(unittest.TestCase):
         self.assertIn("Codex", output)
         self.assertNotIn("╭", output)
         self.assertNotIn("╰", output)
+
+    def test_dashboard_compact_shows_decimal_for_fractional_percent(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 5.5,
+                "five_hour_reset": "Resets 1:16 PM (EDT)",
+                "weekly_percent_left": 91,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
+        )
+        output = _capture(build_dashboard([snap], self.now, 30), width=78)
+        self.assertIn("5.5%", output)
+        self.assertIn("91%", output)
 
     def test_responsive_body_above_threshold_renders_panels(self) -> None:
         codex = ProviderSnapshot(

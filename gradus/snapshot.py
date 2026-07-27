@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
     from .providers import ProviderSnapshot
 
+from .providers._base import _canonical_providers
+
 log = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
@@ -356,9 +358,7 @@ WINDOW_SPECS: dict[str, tuple[WindowSpec, ...]] = {
             reset_key="premium_reset",
         ),
     ),
-    # OpenCode Go is dashboard/--json only (not in CANONICAL_PROVIDERS); these
-    # specs feed in-process warning membership via WARNING_WINDOW_SPECS. The
-    # monthly window is anchored to the subscription date (not the calendar
+    # The monthly window is anchored to the subscription date (not the calendar
     # month), so 30 days is an approximation of its true 28-31 day length.
     "OpenCode Go": (
         WindowSpec(
@@ -635,6 +635,8 @@ SAFE_DATA_KEYS = frozenset(
         "billing_cycle_start",
         "billing_cycle_end",
         "billing_cycle_end_iso",
+        "premium_percent_left",
+        "premium_reset",
     }
 )
 
@@ -674,7 +676,8 @@ def _json_safe_value(value: object) -> object:
     return _UNSAFE_JSON
 
 
-CANONICAL_PROVIDERS = ("Codex", "Claude", "Antigravity", "Cursor", "Vibe")
+def CANONICAL_PROVIDERS() -> tuple[str, ...]:
+    return _canonical_providers()
 
 
 def _sanitize_prior_entry(
@@ -779,7 +782,7 @@ def _build_snapshot_payload(
 ) -> dict:
     """Build one versioned router-facing snapshot payload.
 
-    Providers always appear in :data:`CANONICAL_PROVIDERS` order. Missing
+    Providers always appear in :func:`CANONICAL_PROVIDERS` order. Missing
     providers are emitted as disabled entries. For failed-but-transient probes
     a fresh prior entry may be retained to avoid flapping (CR-6).
 
@@ -790,7 +793,8 @@ def _build_snapshot_payload(
 
     Returns:
         A dict with ``schema_version``, ``updated_at`` (offset-aware ISO), and
-        ``providers`` (a list of exactly five entries).
+        ``providers`` (a list of exactly seven entries — Codex, Claude,
+        Antigravity, Copilot, Cursor, OpenCode Go, and Vibe).
     """
     updated_at_iso = local_iso(updated_at)
     updated_at_aware = updated_at if updated_at.tzinfo else updated_at.astimezone()
@@ -809,7 +813,7 @@ def _build_snapshot_payload(
         prior_updated = _parse_aware_iso_timestamp(prior.get("updated_at"))
 
     providers: list[dict] = []
-    for name in CANONICAL_PROVIDERS:
+    for name in CANONICAL_PROVIDERS():
         snap = by_name.get(name)
         if snap is None:
             providers.append(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
 import os
@@ -22,17 +23,11 @@ from rich.console import Console
 from rich.live import Live
 
 from .providers import (
-    AntigravityProvider,
-    ClaudeHttpProvider,
-    CodexHttpProvider,
-    CopilotHttpProvider,
-    CursorProvider,
-    OpenCodeGoProvider,
     ProviderSnapshot,
-    VibeProvider,
     fetch_provider_snapshot,
     set_headless,
 )
+from .providers._base import _PROVIDER_REGISTRY
 from .snapshot import (
     SNAPSHOT_V2_PATH,
     STALE_THRESHOLD_SECONDS,
@@ -193,61 +188,21 @@ def initialize_providers(
     providers: list[tuple[str, object]] = []
     cleanup: list[object] = []
 
-    if enabled is None or "Codex" in enabled:
+    for name, provider_cls in _PROVIDER_REGISTRY.items():
+        if enabled is not None and name not in enabled:
+            continue
         try:
-            codex = CodexHttpProvider()
-            providers.append(("Codex", codex))
-            cleanup.append(codex)
+            sig = inspect.signature(provider_cls.__init__)
+            if "cwd" in sig.parameters:
+                instance = provider_cls(cwd=cwd)
+            elif "project_root" in sig.parameters:
+                instance = provider_cls(project_root=cwd)
+            else:
+                instance = provider_cls()
+            providers.append((name, instance))
+            cleanup.append(instance)
         except Exception as exc:  # noqa: BLE001
-            providers.append(("Codex", exc))
-
-    if enabled is None or "Claude" in enabled:
-        try:
-            claude = ClaudeHttpProvider()
-            providers.append(("Claude", claude))
-            cleanup.append(claude)
-        except Exception as exc:  # noqa: BLE001
-            providers.append(("Claude", exc))
-
-    if enabled is None or "Antigravity" in enabled:
-        try:
-            antigravity = AntigravityProvider()
-            providers.append(("Antigravity", antigravity))
-            cleanup.append(antigravity)
-        except Exception as exc:  # noqa: BLE001
-            providers.append(("Antigravity", exc))
-
-    if enabled is None or "Copilot" in enabled:
-        try:
-            copilot = CopilotHttpProvider()
-            providers.append(("Copilot", copilot))
-            cleanup.append(copilot)
-        except Exception as exc:  # noqa: BLE001
-            providers.append(("Copilot", exc))
-
-    if enabled is None or "Cursor" in enabled:
-        try:
-            cursor = CursorProvider()
-            providers.append(("Cursor", cursor))
-            cleanup.append(cursor)
-        except Exception as exc:  # noqa: BLE001
-            providers.append(("Cursor", exc))
-
-    if enabled is None or "Vibe" in enabled:
-        try:
-            vibe = VibeProvider(cwd)
-            providers.append(("Vibe", vibe))
-            cleanup.append(vibe)
-        except Exception as exc:  # noqa: BLE001
-            providers.append(("Vibe", exc))
-
-    if enabled is None or "OpenCode Go" in enabled:
-        try:
-            opencode_go = OpenCodeGoProvider()
-            providers.append(("OpenCode Go", opencode_go))
-            cleanup.append(opencode_go)
-        except Exception as exc:  # noqa: BLE001
-            providers.append(("OpenCode Go", exc))
+            providers.append((name, exc))
 
     return providers, cleanup
 

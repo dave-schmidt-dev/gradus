@@ -1,0 +1,285 @@
+"""Shared provider utilities."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+_HEADLESS = False
+
+
+def set_headless(value: bool) -> None:
+    global _HEADLESS
+    _HEADLESS = bool(value)
+
+
+def _is_headless() -> bool:
+    return _HEADLESS
+
+
+@dataclass(slots=True)
+class ProviderSnapshot:
+    name: str
+    ok: bool
+    source: str
+    data: dict[str, Any] | None = None
+    error: str | None = None
+    cached_since: datetime | None = None
+    debug_detail: str | None = None
+
+
+class ProbeFailure(RuntimeError):
+    def __init__(self, message: str, raw_text: str) -> None:
+        super().__init__(message)
+        self.raw_text = raw_text
+
+
+def _http_json(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: bytes | None = None,
+    timeout: int = 15,
+) -> dict[str, Any]:
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        try:
+            err_body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        raise ProbeFailure(f"HTTP {exc.code}", err_body) from exc
+    except urllib.error.URLError as exc:
+        raise ProbeFailure(f"Network error: {exc.reason}", f"{method} {url}") from exc
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ProbeFailure("Invalid JSON response", raw[:500]) from exc
+
+
+def _format_reset_time(value: str | int | float | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            target = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            secs = float(value) / 1000.0 if float(value) > 1e12 else float(value)
+            target = datetime.fromtimestamp(secs, tz=timezone.utc)
+        return f"Resets {target.astimezone().strftime('%b %d at %I:%M %p')}"
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
+def _debug_dump_path(name: str) -> Path:
+    safe_name = name.lower().replace(" ", "_")
+    return Path("/tmp") / f"gradus_{safe_name}_capture.txt"
+
+
+def _write_debug_dump(name: str, raw_text: str) -> None:
+    if _is_headless():
+        return
+    _write_private(_debug_dump_path(name), raw_text, harden_parent=False)
+
+
+def _write_private(path: Path, text: str, *, harden_parent: bool = True) -> None:
+    if _is_headless():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if harden_parent:
+        os.chmod(path.parent, 0o700)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _remove_private(path: Path) -> None:
+    if _is_headless():
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("Failed to delete credential cache at %s: %s", path, exc)
+
+
+def _harden_existing(path: Path) -> None:
+    if _is_headless():
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _auth_required_message(interactive: str) -> str:
+    return "auth required: no cached credentials" if _is_headless() else interactive
+
+
+def _is_jwt_expired(token: str, leeway_seconds: int = 60) -> bool:
+    import base64
+    import time
+
+    try:
+        payload_b64 = token.split(".")[1]
+    except IndexError:
+        return False
+    padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+    except (ValueError, json.JSONDecodeError):
+        return False
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return False
+    return time.time() + leeway_seconds >= exp
+
+
+def _read_safari_cookies(host_filter: str) -> dict[str, str]:
+    if _is_headless():
+        return {}
+
+    import struct
+
+    cookie_file = (
+        Path.home()
+        / "Library"
+        / "Containers"
+        / "com.apple.Safari"
+        / "Data"
+        / "Library"
+        / "Cookies"
+        / "Cookies.binarycookies"
+    )
+    if not cookie_file.exists():
+        return {}
+
+    try:
+        data = cookie_file.read_bytes()
+    except OSError:
+        return {}
+
+    if len(data) < 8 or data[:4] != b"cook":
+        return {}
+
+    num_pages = struct.unpack(">I", data[4:8])[0]
+    page_sizes: list[int] = []
+    offset = 8
+    for _ in range(num_pages):
+        if offset + 4 > len(data):
+            return {}
+        page_sizes.append(struct.unpack(">I", data[offset : offset + 4])[0])
+        offset += 4
+
+    cookies: dict[str, str] = {}
+
+    for page_size in page_sizes:
+        page_data = data[offset : offset + page_size]
+        offset += page_size
+        if len(page_data) < 8:
+            continue
+        cookie_count = struct.unpack("<I", page_data[4:8])[0]
+        cookie_offsets: list[int] = []
+        co = 8
+        for _ in range(cookie_count):
+            if co + 4 > len(page_data):
+                break
+            cookie_offsets.append(struct.unpack("<I", page_data[co : co + 4])[0])
+            co += 4
+
+        for c_off in cookie_offsets:
+            if c_off + 48 > len(page_data):
+                continue
+            cookie_data = page_data[c_off:]
+            if len(cookie_data) < 48:
+                continue
+
+            def _read_cstr(d: bytes, o: int) -> str:
+                end = d.index(b"\x00", o) if b"\x00" in d[o:] else len(d)
+                return d[o:end].decode("utf-8", errors="replace")
+
+            try:
+                url_off = struct.unpack("<I", cookie_data[16:20])[0]
+                name_off = struct.unpack("<I", cookie_data[20:24])[0]
+                value_off = struct.unpack("<I", cookie_data[28:32])[0]
+                url = _read_cstr(cookie_data, url_off)
+                name = _read_cstr(cookie_data, name_off)
+                value = _read_cstr(cookie_data, value_off)
+            except (ValueError, IndexError):
+                continue
+
+            if host_filter.lower() in url.lower():
+                cookies[name] = value
+
+    return cookies
+
+
+class _AuthRejected(Exception):
+    """Internal signal: the console rejected the session cookie."""
+
+
+_PROVIDER_REGISTRY: dict[str, type] = {}
+
+
+def register(name: str):
+    def _decorator(cls):
+        _PROVIDER_REGISTRY[name] = cls
+        return cls
+
+    return _decorator
+
+
+_REGISTRATION_ORDER = ("Codex", "Claude", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe")
+
+
+def _canonical_providers() -> tuple[str, ...]:
+    return tuple(name for name in _REGISTRATION_ORDER if name in _PROVIDER_REGISTRY)
+
+
+def fetch_provider_snapshot(
+    name: str, fetcher: Any, debug: bool = False, source: str = "api"
+) -> ProviderSnapshot:
+    try:
+        status = fetcher.fetch()
+    except ProbeFailure as exc:
+        if debug:
+            _write_debug_dump(name, exc.raw_text or "")
+        error = str(exc)
+        debug_detail = None
+        if debug:
+            tail = exc.raw_text[-1600:] if exc.raw_text else ""
+            dump_hint = f"raw dump: {_debug_dump_path(name)}"
+            debug_detail = f"{error}\n\n{dump_hint}\n\n{tail}".strip()
+        return ProviderSnapshot(
+            name=name, ok=False, source=source, error=error, debug_detail=debug_detail
+        )
+    except Exception as exc:
+        return ProviderSnapshot(name=name, ok=False, source=source, error=str(exc))
+    data = status.to_dict()
+    if debug:
+        _write_debug_dump(name, str(data.get("raw_text", "")))
+    if not debug:
+        data.pop("raw_text", None)
+    return ProviderSnapshot(name=name, ok=True, source=source, data=data)

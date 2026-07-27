@@ -75,7 +75,7 @@ Optional config file (`.gradus.json` in your current working directory; legacy `
 
 ```json
 {
-  "providers": ["Claude", "Codex", "Copilot", "Cursor", "Antigravity", "Vibe"],
+  "providers": ["Claude", "Codex", "Copilot", "Cursor", "Antigravity", "OpenCode Go", "Vibe"],
   "interval": 120
 }
 ```
@@ -201,7 +201,7 @@ Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m g
 }
 ```
 
-All 6 canonical providers are always present (Codex, Claude, Antigravity, Copilot, Cursor, Vibe); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
+All 7 canonical providers are always present (Codex, Claude, Antigravity, Copilot, Cursor, OpenCode Go, Vibe); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
 
 In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sourced from its numeric `credit_percent_left` remaining percentage. Schema v2 preserves every non-Cursor window and instead publishes Cursor's independent numeric `ac` (Auto + Composer, from `autoPercentUsed`) and `ap` (API pool, from `apiPercentUsed`) windows, omitting either unavailable pool. Consumers may roll back by selecting the v1 path/version; retain v1 until all consumers have migrated.
 
@@ -243,6 +243,24 @@ uv run pytest
 uv run ruff check gradus/ tests/
 uv run ruff format --check gradus/ tests/
 ```
+
+### Project layout
+
+- `gradus/providers/` — provider package:
+  - `__init__.py` — re-exports + provider registry
+  - `_base.py` — shared utilities, credential mgmt, headless guard
+  - `_codex_helpers.py` — Codex window helpers
+  - `_seroval.py` — SolidStart seroval decoder
+  - `antigravity.py`, `claude.py`, `codex.py`, `copilot.py`, `cursor.py`, `opencode_go.py`, `vibe.py`
+- `gradus/parsing.py` — status dataclasses
+- `gradus/snapshot.py` — snapshot normalization and persistence
+- `gradus/ui.py` — terminal dashboard
+- `gradus/__main__.py` — CLI entry, provider registry iteration
+- `tests/test_providers.py` — provider unit tests
+- `tests/test_snapshot.py` — normalization tests
+- `tests/test_snapshot_property.py` — Hypothesis property tests
+- `tests/test_ui.py` — UI tests
+- `tests/test_main.py` — CLI and integration tests
 
 ### Git hooks (enforcement)
 

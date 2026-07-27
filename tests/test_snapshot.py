@@ -487,8 +487,8 @@ class TestPayloadSchema(unittest.TestCase):
         self.assertIsNotNone(parsed_updated.tzinfo)
 
         names = [p["name"] for p in payload["providers"]]
-        self.assertEqual(tuple(names), snap.CANONICAL_PROVIDERS)
-        self.assertEqual(len(payload["providers"]), 5)
+        self.assertEqual(tuple(names), snap.CANONICAL_PROVIDERS())
+        self.assertEqual(len(payload["providers"]), 7)
 
         cursor = next(entry for entry in payload["providers"] if entry["name"] == "Cursor")
         self.assertIn("auto_percent_used", cursor["data"])

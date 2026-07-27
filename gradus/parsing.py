@@ -2,18 +2,40 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from typing import Any
+
+
+def _clamp_percent(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value):
+        return None
+    return max(0.0, min(100.0, float(value)))
 
 
 @dataclass(slots=True)
 class CodexStatus:
     credits: float | None
-    five_hour_percent_left: int | None
-    weekly_percent_left: int | None
+    five_hour_percent_left: float | None
+    weekly_percent_left: float | None
     five_hour_reset: str | None
     weekly_reset: str | None
     raw_text: str
+
+    def __post_init__(self) -> None:
+        for field in ("five_hour_percent_left", "weekly_percent_left"):
+            val = _clamp_percent(getattr(self, field))
+            object.__setattr__(self, field, val)
+        for field in ("five_hour_reset", "weekly_reset"):
+            val = getattr(self, field)
+            if val is not None and not isinstance(val, str):
+                object.__setattr__(self, field, None)
+        if not isinstance(self.raw_text, str):
+            object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -21,9 +43,9 @@ class CodexStatus:
 
 @dataclass(slots=True)
 class ClaudeStatus:
-    session_percent_left: int | None
-    weekly_percent_left: int | None
-    opus_percent_left: int | None
+    session_percent_left: float | None
+    weekly_percent_left: float | None
+    opus_percent_left: float | None
     primary_reset: str | None
     secondary_reset: str | None
     opus_reset: str | None
@@ -31,6 +53,17 @@ class ClaudeStatus:
     account_organization: str | None
     login_method: str | None
     raw_text: str
+
+    def __post_init__(self) -> None:
+        for field in ("session_percent_left", "weekly_percent_left", "opus_percent_left"):
+            val = _clamp_percent(getattr(self, field))
+            object.__setattr__(self, field, val)
+        for field in ("primary_reset", "secondary_reset", "opus_reset"):
+            val = getattr(self, field)
+            if val is not None and not isinstance(val, str):
+                object.__setattr__(self, field, None)
+        if not isinstance(self.raw_text, str):
+            object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -45,8 +78,8 @@ class AntigravityStatus:
     independent so a malformed group cannot hide the other group's quota.
     """
 
-    five_hour_percent_left: int | None
-    weekly_percent_left: int | None
+    five_hour_percent_left: float | None
+    weekly_percent_left: float | None
     five_hour_reset: str | None
     weekly_reset: str | None
     third_party_five_hour_percent_left: float | None
@@ -56,6 +89,27 @@ class AntigravityStatus:
     account_email: str | None
     account_tier: str | None
     raw_text: str
+
+    def __post_init__(self) -> None:
+        for field in (
+            "five_hour_percent_left",
+            "weekly_percent_left",
+            "third_party_five_hour_percent_left",
+            "third_party_weekly_percent_left",
+        ):
+            val = _clamp_percent(getattr(self, field))
+            object.__setattr__(self, field, val)
+        for field in (
+            "five_hour_reset",
+            "weekly_reset",
+            "third_party_five_hour_reset",
+            "third_party_weekly_reset",
+        ):
+            val = getattr(self, field)
+            if val is not None and not isinstance(val, str):
+                object.__setattr__(self, field, None)
+        if not isinstance(self.raw_text, str):
+            object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -68,6 +122,17 @@ class CopilotStatus:
     premium_percent_left: float | None
     premium_reset: str | None
     raw_text: str
+
+    def __post_init__(self) -> None:
+        for field in ("premium_percent_left",):
+            val = _clamp_percent(getattr(self, field))
+            object.__setattr__(self, field, val)
+        for field in ("premium_reset",):
+            val = getattr(self, field)
+            if val is not None and not isinstance(val, str):
+                object.__setattr__(self, field, None)
+        if not isinstance(self.raw_text, str):
+            object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -82,6 +147,17 @@ class VibeStatus:
     end_date: str | None
     raw_text: str
 
+    def __post_init__(self) -> None:
+        for field in ("usage_percent",):
+            val = _clamp_percent(getattr(self, field))
+            object.__setattr__(self, field, val)
+        for field in ("reset_at",):
+            val = getattr(self, field)
+            if val is not None and not isinstance(val, str):
+                object.__setattr__(self, field, None)
+        if not isinstance(self.raw_text, str):
+            object.__setattr__(self, "raw_text", str(self.raw_text))
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -95,13 +171,24 @@ class OpenCodeGoStatus:
     are remaining capacity (0-100); resets are vendor-display strings.
     """
 
-    five_hour_percent_left: int | None
+    five_hour_percent_left: float | None
     five_hour_reset: str | None
-    weekly_percent_left: int | None
+    weekly_percent_left: float | None
     weekly_reset: str | None
-    monthly_percent_left: int | None
+    monthly_percent_left: float | None
     monthly_reset: str | None
     raw_text: str
+
+    def __post_init__(self) -> None:
+        for field in ("five_hour_percent_left", "weekly_percent_left", "monthly_percent_left"):
+            val = _clamp_percent(getattr(self, field))
+            object.__setattr__(self, field, val)
+        for field in ("five_hour_reset", "weekly_reset", "monthly_reset"):
+            val = getattr(self, field)
+            if val is not None and not isinstance(val, str):
+                object.__setattr__(self, field, None)
+        if not isinstance(self.raw_text, str):
+            object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -119,6 +206,13 @@ class CursorStatus:
     billing_cycle_end: str | None
     billing_cycle_end_iso: str | None
     raw_text: str
+
+    def __post_init__(self) -> None:
+        for field in ("credit_percent_left", "auto_percent_used", "api_percent_used"):
+            val = _clamp_percent(getattr(self, field))
+            object.__setattr__(self, field, val)
+        if not isinstance(self.raw_text, str):
+            object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
