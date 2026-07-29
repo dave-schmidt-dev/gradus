@@ -345,9 +345,9 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("to fix", output)
         self.assertNotIn("▓", output)
 
-    def test_codex_panel_omits_absent_five_hour_row(self) -> None:
+    def test_codex_panel_shows_absent_five_hour_row_as_na(self) -> None:
         # After OpenAI removed the 5h window the provider reports it as None; the
-        # card must drop the 5h row entirely rather than render "5h  n/a".
+        # card now renders "5h  n/a".
         data = {
             "five_hour_percent_left": None,
             "five_hour_reset": None,
@@ -359,8 +359,10 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("Codex", output)
         self.assertIn("1w", output)
         self.assertIn("91%", output)
-        self.assertNotIn("5h", output)
-        self.assertNotIn("n/a", output)
+        self.assertTrue(
+            any("5h" in line and "n/a" in line for line in output.splitlines()),
+            "Expected '5h' and 'n/a' on the same line",
+        )
 
     def test_claude_panel_contains_labels(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=True, source="cli", data=self.claude_data)
@@ -647,8 +649,8 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertNotIn("88%", output)
 
     def test_empty_view_codex_weekly_zero_without_five_hour(self) -> None:
-        # Weekly depleted and the 5h window removed: the depleted view shows only
-        # the 1w row — no phantom "5h until …" row for a window that's gone.
+        # Weekly depleted and the 5h window removed: the depleted view shows
+        # the 1w row and the 5h row as n/a.
         snap = ProviderSnapshot(
             name="Codex",
             ok=True,
@@ -663,7 +665,10 @@ class ProviderPanelTests(unittest.TestCase):
         output = _capture(build_provider_panel(snap, self.now), width=70)
         self.assertIn("until", output)
         self.assertIn("1w", output)
-        self.assertNotIn("5h", output)
+        self.assertTrue(
+            any("5h" in line and "n/a" in line for line in output.splitlines()),
+            "Expected '5h' and 'n/a' on the same line in depleted view",
+        )
 
     def test_empty_view_antigravity_requires_both_zero(self) -> None:
         # 5h=0 but weekly has usage → normal view
@@ -1145,37 +1150,38 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(len(first_panel_line), 92)
 
     def test_packed_cards_place_next_provider_below_shorter_stack(self) -> None:
-        short_codex = ProviderSnapshot(
-            name="Codex",
+        copilot = ProviderSnapshot(
+            name="Copilot",
             ok=True,
             source="cli",
-            data={"weekly_percent_left": 91, "weekly_reset": "Resets Mar 17 at 9 PM"},
+            data={"premium_percent_left": 80, "premium_reset": "Resets Mar 17"},
         )
-        antigravity = ProviderSnapshot(
-            name="Antigravity",
+        cursor = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="api",
+            data={"auto_percent_used": 10, "api_percent_used": 20, "billing_cycle_end": "Mar 17"},
+        )
+        vibe = ProviderSnapshot(
+            name="Vibe",
             ok=True,
             source="cli",
-            data={
-                "five_hour_percent_left": 75,
-                "five_hour_reset": "Resets 1:16 PM",
-                "weekly_percent_left": 60,
-                "weekly_reset": "Resets Mar 17 at 9 PM",
-            },
+            data={"usage_percent": 9, "reset_at": "Resets Mar 17"},
         )
 
         output = _capture(
-            build_dashboard([short_codex, self.claude_snap, antigravity], self.now, 30),
+            build_dashboard([copilot, cursor, vibe], self.now, 30),
             width=92,
         )
         lines = output.splitlines()
-        codex_title = next(index for index, line in enumerate(lines) if "Codex" in line)
-        antigravity_title = next(index for index, line in enumerate(lines) if "Antigravity" in line)
+        copilot_title = next(index for index, line in enumerate(lines) if "Copilot" in line)
+        vibe_title = next(index for index, line in enumerate(lines) if "Vibe" in line)
 
-        # Codex is one row shorter than Claude, so Antigravity starts directly
-        # below Codex while Claude is still finishing in the opposite stack.
-        self.assertEqual(antigravity_title, codex_title + 3)
-        self.assertTrue(lines[antigravity_title - 1].startswith("╰"))
-        self.assertTrue(lines[antigravity_title].startswith("╭"))
+        # Copilot is one row shorter than Cursor, so Vibe starts directly
+        # below Copilot while Cursor is still finishing in the opposite stack.
+        self.assertEqual(vibe_title, copilot_title + 3)
+        self.assertTrue(lines[vibe_title - 1].startswith("╰"))
+        self.assertTrue(lines[vibe_title].startswith("╭"))
 
     def test_five_provider_packing_keeps_every_card_and_no_vertical_gutter(self) -> None:
         antigravity = ProviderSnapshot(

@@ -18,7 +18,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors Vibe usage via the Mistral billing API
 - Monitors OpenCode Go usage via the opencode.ai SolidStart console (5h/1w/monthly quota)
 - Refreshes every 120 seconds by default
-- Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position — so when OpenAI removed the Codex 5-hour limit (2026-07) the card automatically shows just the 1-week window, and the 5-hour row reappears on its own if OpenAI restores it (no code change)
+- Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position. The Codex 5-hour limit row is permanently visible and will display as `n/a` when omitted by the upstream API, ensuring immediate visibility upon restoration.
 - Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus conditional Claude+GPT (`cg5`, `cg1w`) group activation when at least one valid C+G remaining percentage is below 100%. Rows render independently: each valid C+G row below 100% appears; exact-100%, missing, or malformed sibling rows are omitted.
 - Shows Copilot monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
@@ -108,7 +108,7 @@ Codex and Claude cards show:
 - `5h`: remaining usage for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining usage for the current 1-week window, weekly reset time, pace indicator
 
-For Codex the `5h` row is shown only while OpenAI's API reports a sub-day window; after the 2026-07 removal of the 5-hour limit the Codex card shows just the `1w` row. The row is not rendered as `n/a` — it is omitted, and returns automatically if the window comes back.
+For Codex the `5h` row is permanently visible; if OpenAI's API ceases to report a sub-day window, it gracefully renders as `n/a` rather than omitting the row entirely. This ensures immediate visibility if and when the window is restored.
 
 Antigravity card shows (Gemini model group — the pool `agy` consumes):
 

@@ -96,7 +96,6 @@ PROVIDER_RENDER_SPECS = {
                 "five_hour_percent_left",
                 "five_hour_reset",
                 5.0,
-                omit_when_empty=True,
             ),
             WindowRenderSpec(
                 "weekly",
@@ -853,15 +852,24 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
     name = snapshot.name.removesuffix(" [HTTP]")
     _e = Text("")
 
-    def _row(label: str, reset_str: str | None) -> None:
-        reset_display = _format_reset_display(reset_str, now)
-        table.add_row(
-            Text(label, style="text.muted"),
-            Text("0%", style="bar.red"),
-            Text(f"until {reset_display}", style="text.red"),
-            _e,
-            _e,
-        )
+    def _row(label: str, reset_str: str | None, is_na: bool = False) -> None:
+        if is_na:
+            table.add_row(
+                Text(label, style="text.muted"),
+                Text("n/a", style="text.muted"),
+                _e,
+                _e,
+                _e,
+            )
+        else:
+            reset_display = _format_reset_display(reset_str, now)
+            table.add_row(
+                Text(label, style="text.muted"),
+                Text("0%", style="bar.red"),
+                Text(f"until {reset_display}", style="text.red"),
+                _e,
+                _e,
+            )
 
     def _pool_blocking_reset(pool_windows: tuple[WindowRenderSpec, ...]) -> str | None:
         """Reset of the first depleted window in this pool — what blocks it."""
@@ -890,7 +898,9 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
                 continue
             if name == "Antigravity" and not percent_is_valid(percent):
                 continue
-            if _is_empty_window(percent):
+            if percent is None:
+                _row(window.session_label, None, is_na=True)
+            elif _is_empty_window(percent):
                 raw = data.get(window.reset_key)
                 _row(window.session_label, None if raw is None else str(raw))
             else:
