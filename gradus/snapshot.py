@@ -113,6 +113,43 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
     return any(marker in message for marker in transient_markers)
 
 
+# The exact message a provider emits when it DELIBERATELY declines to probe
+# because gradus is running headless (INV-2: the headless --write-snapshot /
+# --json path must have zero side effects, so a Keychain-only provider like
+# Antigravity refuses to read its credential rather than risk a GUI unlock
+# prompt or an `agy` refresh subprocess). Produced ONLY under ``_is_headless()``
+# — see ``providers/_base._auth_required_message`` and
+# ``AntigravityProvider._acquire`` — so it can never appear on the live/
+# interactive probe path. That headless-exclusivity is what makes retaining a
+# recent healthy prior safe here: it cannot mask a genuinely revoked token on
+# the interactive path (which reports "not logged in" / "run agy to sign in"
+# instead, neither of which matches).
+_HEADLESS_DEFERRED_PROBE_MESSAGE = "auth required: no cached credentials"
+
+
+def _is_headless_deferred_probe(snapshot: ProviderSnapshot) -> bool:
+    """Return True when a probe was skipped solely because gradus ran headless.
+
+    Distinct from :func:`_is_transient_probe_error`: this is not a flaky or
+    retryable failure but a deliberate headless refusal to touch a credential
+    store. The most recent interactive snapshot is the authoritative state for
+    such a provider, so it should be carried forward (bounded by
+    ``STALE_THRESHOLD_SECONDS``, exactly like a transient failure) rather than
+    published as ``ok: false`` — which would otherwise drop the provider out of
+    every downstream router's candidate set (e.g. Switchyard fails closed with
+    ``no_provider`` when its only permitted provider reads ``ok: false``).
+
+    Args:
+        snapshot: Any object exposing ``ok`` (bool) and ``error`` (str | None).
+
+    Returns:
+        True if the probe failed solely because it was deferred while headless.
+    """
+    if snapshot.ok or not snapshot.error:
+        return False
+    return _HEADLESS_DEFERRED_PROBE_MESSAGE in snapshot.error.lower()
+
+
 def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None:
     """Parse a human reset string into a concrete future ``datetime``.
 
@@ -850,7 +887,7 @@ def _build_snapshot_payload(
             "windows": [],
             "data": project_data(snap),
         }
-        if _is_transient_probe_error(snap):
+        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
             prior_entry = prior_by_name.get(name)
             retained_entry = _sanitize_prior_entry(
                 name,

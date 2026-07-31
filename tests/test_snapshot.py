@@ -783,6 +783,54 @@ class TestTransientMerge(unittest.TestCase):
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
         self.assertFalse(codex["ok"])
 
+    def test_headless_deferred_probe_retains_recent_prior(self) -> None:
+        """A headless-deferred probe within 300s reuses the healthy prior.
+
+        The headless snapshot path (--write-snapshot / --json) refuses to touch
+        a Keychain-only provider's credential (INV-2) and reports
+        "auth required: no cached credentials". A recent interactive prior is
+        authoritative, so it must be carried forward with ok=True and windows —
+        otherwise a downstream router (Switchyard) sees ok=false and drops the
+        provider, failing closed with no_provider.
+        """
+        prior = self._healthy_prior(NOW - timedelta(seconds=100))
+        failing = _ps("Codex", False, error="auth required: no cached credentials")
+        payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+        codex = next(p for p in payload["providers"] if p["name"] == "Codex")
+        prior_codex = next(p for p in prior["providers"] if p["name"] == "Codex")
+        self.assertTrue(codex["ok"])
+        self.assertTrue(codex["windows"])
+        self.assertEqual(codex, prior_codex)
+
+    def test_headless_deferred_probe_drops_stale_prior(self) -> None:
+        """A headless-deferred probe past 300s does NOT retain the prior."""
+        prior = self._healthy_prior(NOW - timedelta(seconds=400))
+        failing = _ps("Codex", False, error="auth required: no cached credentials")
+        payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+        codex = next(p for p in payload["providers"] if p["name"] == "Codex")
+        self.assertFalse(codex["ok"])
+
+    def test_live_auth_failures_are_not_carried_forward(self) -> None:
+        """Only the headless sentinel is carried forward, not live auth errors.
+
+        Guards the scope of _is_headless_deferred_probe: a genuinely revoked or
+        signed-out credential on the interactive path (which never emits the
+        headless sentinel) must still surface ok=false, so a stale ok=True can
+        never mask real credential loss.
+        """
+        for message in (
+            "Antigravity token not found in Keychain: run `agy` to sign in",
+            "Antigravity session expired: run `agy` to re-authenticate",
+            "not authenticated",
+            "not logged in",
+        ):
+            with self.subTest(message=message):
+                prior = self._healthy_prior(NOW - timedelta(seconds=50))
+                failing = _ps("Codex", False, error=message)
+                payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+                codex = next(p for p in payload["providers"] if p["name"] == "Codex")
+                self.assertFalse(codex["ok"])
+
     def test_transient_priors_are_schema_specific(self) -> None:
         """A v1 prior cannot seed v2 (and vice versa)."""
         prior_v1 = self._healthy_prior(NOW - timedelta(seconds=100))
