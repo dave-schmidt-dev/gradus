@@ -38,6 +38,14 @@ if [[ -z "$sim_udid" ]]; then
 fi
 echo "    Simulator UDID: $sim_udid"
 
+# Bug fix: the gate previously left the simulator running after tests
+# finished (any exit path, including failures). Background simulator
+# daemons (e.g. mediaanalysisd re-indexing the simulated Photos library)
+# can then spin at 800%+ CPU indefinitely with nothing to notice or stop
+# them. Shut the simulator down on every exit path so a gate run never
+# leaves runaway processes behind.
+trap 'echo "==> Shutting down simulator to release its background processes"; xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true' EXIT
+
 echo "==> Booting simulator"
 xcrun simctl bootstatus "$sim_udid" -b || true
 
