@@ -47,10 +47,15 @@ final class PublishPipeline {
     /// `snapshotPath` is the publisher's single injected dependency onto the
     /// filesystem (INV-7) -- defaults to the real snapshot location but is
     /// overridable, so nothing downstream needs to compute or guess a path.
-    func start(snapshotPath: URL = PublishPipeline.defaultSnapshotPath) {
+    /// Resolved to `nil` rather than defaulted to the MainActor-isolated
+    /// `defaultSnapshotPath` directly: a default-argument expression is
+    /// evaluated in a nonisolated context, which Swift 6 mode rejects for a
+    /// MainActor-isolated static property.
+    func start(snapshotPath: URL? = nil) {
         guard !started else { return }
         started = true
 
+        let snapshotPath = snapshotPath ?? Self.defaultSnapshotPath
         let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
         let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
         let database = CKDatabaseAdapter(database: container.privateCloudDatabase)

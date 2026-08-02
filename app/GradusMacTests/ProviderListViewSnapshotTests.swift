@@ -32,10 +32,10 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
 }
 
 // T2b.1/T2b.4 gate: XCUITest can't drive a LSUIElement status item, so the
-// menu content view is rendered standalone (fixture data, no CloudKit/file
+// provider rows are rendered standalone (fixture data, no CloudKit/file
 // watching) and snapshot-tested instead.
 @MainActor
-@Test func menuContentViewRendersFromFixtureData() {
+@Test func providerListViewRendersFromFixtureData() {
     let viewModel = PublisherViewModel()
     viewModel.apply(
         SnapshotPayload(
@@ -91,7 +91,7 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
 }
 
 @MainActor
-@Test func menuContentViewRendersEmptyState() {
+@Test func providerListViewRendersEmptyState() {
     let image = snapshotImage(ProviderListView(providers: []), size: CGSize(width: 260, height: 40))
     assertSnapshot(of: image, as: .image)
 }
