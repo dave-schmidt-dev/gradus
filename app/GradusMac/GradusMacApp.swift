@@ -13,6 +13,10 @@ struct GradusMacApp: App {
             Task { await T17SeamGate.run() }
             return
         }
+        if CommandLine.arguments.contains("--t2-5-schema-gate") {
+            Task { await T25SchemaGate.run() }
+            return
+        }
         PublishPipeline.shared.start()
     }
 

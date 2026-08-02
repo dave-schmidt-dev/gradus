@@ -28,14 +28,15 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         CODE_SIGN_STYLE: Automatic
-    entitlements:
-      path: GradusMac/GradusMac.entitlements
-      properties:
-        com.apple.developer.icloud-container-identifiers:
-          - iCloud.com.zerodelta.gradus
-        com.apple.developer.icloud-services:
-          - CloudKit
-        com.apple.developer.aps-environment: development
+        # Hand-maintained entitlements files (not XcodeGen's `entitlements:`
+        # block -- that block unconditionally stamps CODE_SIGN_ENTITLEMENTS
+        # into every config, which silently overrides any per-config value
+        # set here). Debug targets Development; Release targets Production
+        # for the T2.5 (CV-7/PM-11) schema-promotion verification probe.
+        CODE_SIGN_ENTITLEMENTS: GradusMac/GradusMac.entitlements
+      configs:
+        Release:
+          CODE_SIGN_ENTITLEMENTS: GradusMac/GradusMacProduction.entitlements
 
   GradusiOS:
     type: application
