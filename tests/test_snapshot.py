@@ -554,8 +554,13 @@ class TestPayloadSchema(unittest.TestCase):
         )
 
         for entry in payload["providers"]:
-            for key in ("name", "ok", "error", "windows", "data"):
+            for key in ("name", "ok", "error", "windows", "data", "observed_at"):
                 self.assertIn(key, entry)
+            if entry["ok"]:
+                self.assertIsInstance(entry["observed_at"], str)
+                datetime.fromisoformat(entry["observed_at"])
+            else:
+                self.assertIsNone(entry["observed_at"])
             if entry["ok"]:
                 for win in entry["windows"]:
                     self.assertIsInstance(win["percent_left"], (int, float))
@@ -718,6 +723,34 @@ class TestPayloadSchema(unittest.TestCase):
         self.assertEqual(claude["windows"], [])
         self.assertEqual(claude["data"], {})
 
+    def test_v2_antigravity_claude_synthetic_entry_observed_at(self) -> None:
+        """P-BUG-1 scope expansion: the synthetic "Antigravity (Claude)"
+        entry (commit 87c201b) has its own carry-forward retention path that
+        mirrors the primary Antigravity entry's -- observed_at must thread
+        through it too, both fresh and carried-forward, or the synthetic
+        entry re-introduces the exact stale-shown-as-fresh bug P-BUG-1 fixes.
+        """
+        antigravity = _ps("Antigravity", True, data={"third_party_five_hour_percent_left": 50})
+        fresh = snap.build_snapshot_v2_payload([antigravity], NOW)
+        claude_fresh = next(
+            entry for entry in fresh["providers"] if entry["name"] == "Antigravity (Claude)"
+        )
+        self.assertEqual(claude_fresh["observed_at"], fresh["updated_at"])
+
+        original_observed_at = NOW - timedelta(seconds=250)
+        prior = snap.build_snapshot_v2_payload([antigravity], original_observed_at)
+        failing = _ps("Antigravity", False, error="network error")
+        payload = prior
+        hop_at = original_observed_at
+        for _ in range(3):
+            hop_at = hop_at + timedelta(seconds=120)
+            payload = snap.build_snapshot_v2_payload([failing], hop_at, prior=payload)
+        claude_carried = next(
+            entry for entry in payload["providers"] if entry["name"] == "Antigravity (Claude)"
+        )
+        self.assertTrue(claude_carried["ok"])
+        self.assertEqual(claude_carried["observed_at"], snap.local_iso(original_observed_at))
+
 
 class TestTransientMerge(unittest.TestCase):
     def _healthy_prior(self, at: datetime) -> dict:
@@ -747,6 +780,78 @@ class TestTransientMerge(unittest.TestCase):
         self.assertIsNot(codex, prior_codex)
         codex["data"]["five_hour_percent_left"] = 1
         self.assertEqual(prior_codex["data"]["five_hour_percent_left"], 88)
+
+    def test_fresh_entry_observed_at_equals_updated_at(self) -> None:
+        """A freshly-probed ok:true entry's observed_at equals updated_at."""
+        prior = self._healthy_prior(NOW)
+        codex = next(p for p in prior["providers"] if p["name"] == "Codex")
+        self.assertEqual(codex["observed_at"], prior["updated_at"])
+
+    def test_carry_forward_preserves_original_observed_at_across_multiple_hops(
+        self,
+    ) -> None:
+        """P-BUG-1: observed_at pins to the ORIGINAL observation, not each
+        carry-forward hop's publish time.
+
+        Before this fix, a deferred provider's carry-forward renewed
+        indefinitely against ``prior_updated`` (publish continuity, always
+        < 300s under the 120s launchd refresher) with no signal a consumer
+        could use to tell a freshly-observed entry from one that has been
+        silently stale for hours. This is the regression test: it must be
+        RED before the fix (no ``observed_at`` key exists at all) and GREEN
+        after (the value survives every hop unchanged, even as the
+        publish-time ``updated_at`` keeps advancing).
+        """
+        original_observed_at = NOW - timedelta(seconds=250)
+        prior = self._healthy_prior(original_observed_at)
+        failing = _ps("Codex", False, error="rate limited")
+
+        payload = prior
+        hop_at = original_observed_at
+        for _ in range(3):
+            hop_at = hop_at + timedelta(seconds=120)
+            payload = snap.build_snapshot_payload([failing], hop_at, prior=payload)
+
+        codex = next(p for p in payload["providers"] if p["name"] == "Codex")
+        self.assertTrue(codex["ok"])
+        self.assertEqual(codex["observed_at"], snap.local_iso(original_observed_at))
+
+        published_gap = (
+            datetime.fromisoformat(payload["updated_at"])
+            - datetime.fromisoformat(codex["observed_at"])
+        ).total_seconds()
+        # The publish clock has advanced well past STALE_THRESHOLD_SECONDS
+        # from the true observation, yet the carry keeps renewing because
+        # each individual hop's gap is < 300s -- exactly the bug. observed_at
+        # is what now makes that gap detectable to a consumer.
+        self.assertGreater(published_gap, snap.STALE_THRESHOLD_SECONDS)
+
+    def test_carry_forward_legacy_prior_without_observed_at_falls_back_to_prior_updated_at(
+        self,
+    ) -> None:
+        """A prior written before P-BUG-1 (old 5-key entry shape, no
+        observed_at) still retains -- falling back to the prior payload's
+        own top-level updated_at rather than dropping retention outright.
+        """
+        prior_at = NOW - timedelta(seconds=100)
+        legacy_prior = {
+            "schema_version": 1,
+            "updated_at": snap.local_iso(prior_at),
+            "providers": [
+                {
+                    "name": "Codex",
+                    "ok": True,
+                    "error": None,
+                    "windows": [],
+                    "data": {},
+                }
+            ],
+        }
+        failing = _ps("Codex", False, error="rate limited")
+        payload = snap.build_snapshot_payload([failing], NOW, prior=legacy_prior)
+        codex = next(p for p in payload["providers"] if p["name"] == "Codex")
+        self.assertTrue(codex["ok"])
+        self.assertEqual(codex["observed_at"], snap.local_iso(prior_at))
 
     def test_transient_rejects_prior_with_extra_or_error_metadata(self) -> None:
         """A retained prior cannot carry unrecognized metadata or an error."""

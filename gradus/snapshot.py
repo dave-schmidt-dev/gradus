@@ -776,7 +776,11 @@ def CANONICAL_PROVIDERS() -> tuple[str, ...]:
 
 
 def _sanitize_prior_entry(
-    name: str, entry: object, *, allowed_window_ids: frozenset[str]
+    name: str,
+    entry: object,
+    *,
+    allowed_window_ids: frozenset[str],
+    fallback_observed_at: str | None = None,
 ) -> dict | None:
     """Return a fresh, schema-valid retained entry or ``None``.
 
@@ -784,15 +788,28 @@ def _sanitize_prior_entry(
     have exactly the canonical provider shape and are rebuilt rather than
     reused so unrecognized metadata and mutable caller-owned values cannot
     cross into the new snapshot.
+
+    ``observed_at`` (P-BUG-1) is required going forward, but a prior written
+    before this fix landed will have the old 5-key shape with no
+    ``observed_at`` at all. That legacy shape is still accepted, falling back
+    to ``fallback_observed_at`` (the prior payload's own top-level
+    ``updated_at``) so the very first run after deploy doesn't drop
+    carry-forward retention outright.
     """
-    required_entry_keys = {"name", "ok", "error", "windows", "data"}
-    if (
-        not isinstance(entry, dict)
-        or set(entry) != required_entry_keys
-        or entry["name"] != name
-        or entry["ok"] is not True
-        or entry["error"] is not None
-    ):
+    required_entry_keys = {"name", "ok", "error", "windows", "data", "observed_at"}
+    legacy_entry_keys = required_entry_keys - {"observed_at"}
+    if not isinstance(entry, dict):
+        return None
+    entry_keys = set(entry)
+    if entry_keys == required_entry_keys:
+        observed_at = entry.get("observed_at")
+    elif entry_keys == legacy_entry_keys:
+        observed_at = fallback_observed_at
+    else:
+        return None
+    if not isinstance(observed_at, str) or _parse_aware_iso_timestamp(observed_at) is None:
+        return None
+    if entry["name"] != name or entry["ok"] is not True or entry["error"] is not None:
         return None
     data = entry.get("data")
     windows = entry.get("windows")
@@ -853,6 +870,7 @@ def _sanitize_prior_entry(
         "error": None,
         "windows": sanitized_windows,
         "data": {key: _json_safe_value(value) for key, value in data.items()},
+        "observed_at": observed_at,
     }
 
 
@@ -908,6 +926,11 @@ def _build_snapshot_payload(
         except Exception:  # noqa: BLE001 - malformed prior is best-effort
             prior_by_name = {}
         prior_updated = _parse_aware_iso_timestamp(prior.get("updated_at"))
+    # Legacy-prior fallback (P-BUG-1): a prior written before this fix has no
+    # per-entry observed_at. Falling back to the prior payload's own
+    # top-level updated_at keeps carry-forward working on the first run
+    # after deploy instead of silently dropping retention.
+    fallback_observed_at = local_iso(prior_updated) if prior_updated is not None else None
 
     providers: list[dict] = []
 
@@ -926,6 +949,7 @@ def _build_snapshot_payload(
                 "error": "provider not enabled",
                 "windows": [],
                 "data": {},
+                "observed_at": None,
             }
         if snap.ok:
             return {
@@ -936,6 +960,7 @@ def _build_snapshot_payload(
                     snap, updated_at, {"Antigravity": THIRD_PARTY_WINDOW_SPECS}
                 ),
                 "data": _project_antigravity_claude_data(snap),
+                "observed_at": updated_at_iso,
             }
         # ok is False: default to a fresh failure entry, but retain a recent
         # healthy prior entry for transient errors (CR-6 anti-flap) — mirrors
@@ -949,6 +974,7 @@ def _build_snapshot_payload(
             "error": snap.error[:200] if snap.error else snap.error,
             "windows": [],
             "data": _project_antigravity_claude_data(snap),
+            "observed_at": None,
         }
         if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
             prior_entry = prior_by_name.get("Antigravity (Claude)")
@@ -958,6 +984,7 @@ def _build_snapshot_payload(
                 allowed_window_ids=frozenset(
                     spec.window_id for spec in specs_by_provider.get("Antigravity (Claude)", ())
                 ),
+                fallback_observed_at=fallback_observed_at,
             )
             if (
                 retained_entry is not None
@@ -979,6 +1006,7 @@ def _build_snapshot_payload(
                     "error": "provider not enabled",
                     "windows": [],
                     "data": {},
+                    "observed_at": None,
                 }
             )
             if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
@@ -992,6 +1020,7 @@ def _build_snapshot_payload(
                     "error": None,
                     "windows": _build_windows(snap, updated_at, specs_by_provider),
                     "data": project_data(snap),
+                    "observed_at": updated_at_iso,
                 }
             )
             if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
@@ -1009,6 +1038,7 @@ def _build_snapshot_payload(
             "error": snap.error[:200] if snap.error else snap.error,
             "windows": [],
             "data": project_data(snap),
+            "observed_at": None,
         }
         if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
             prior_entry = prior_by_name.get(name)
@@ -1018,6 +1048,7 @@ def _build_snapshot_payload(
                 allowed_window_ids=frozenset(
                     spec.window_id for spec in specs_by_provider.get(name, ())
                 ),
+                fallback_observed_at=fallback_observed_at,
             )
             if (
                 retained_entry is not None

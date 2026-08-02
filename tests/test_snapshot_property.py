@@ -104,6 +104,7 @@ class TestSnapshotInvariants:
                 },
             ],
             "data": {"five_hour_percent_left": 75},
+            "observed_at": "2026-03-14T12:00:00+00:00",
         }
         result = _sanitize_prior_entry(
             "Codex", entry, allowed_window_ids=frozenset({"five_hour", "weekly"})
@@ -112,6 +113,27 @@ class TestSnapshotInvariants:
         assert result["name"] == "Codex"
         assert result["ok"] is True
         assert result["error"] is None
+        assert result["observed_at"] == "2026-03-14T12:00:00+00:00"
+
+    def test_sanitize_prior_entry_legacy_shape_falls_back_to_provided_observed_at(self):
+        """A pre-P-BUG-1 prior (no observed_at key) still validates when the
+        caller supplies a fallback (the prior payload's top-level updated_at).
+        """
+        entry = {
+            "name": "Codex",
+            "ok": True,
+            "error": None,
+            "windows": [],
+            "data": {},
+        }
+        result = _sanitize_prior_entry(
+            "Codex",
+            entry,
+            allowed_window_ids=frozenset({"five_hour", "weekly"}),
+            fallback_observed_at="2026-03-14T12:00:00+00:00",
+        )
+        assert isinstance(result, dict)
+        assert result["observed_at"] == "2026-03-14T12:00:00+00:00"
 
     @given(
         entry=st.one_of(
