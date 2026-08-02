@@ -1,0 +1,142 @@
+{
+  "schema_version": 2,
+  "updated_at": "2026-08-02T20:00:00-04:00",
+  "providers": [
+    {
+      "name": "Codex",
+      "ok": true,
+      "error": null,
+      "windows": [
+        {
+          "id": "weekly",
+          "percent_left": 58.0,
+          "reset_iso": "2026-08-08T05:00:00-04:00",
+          "window_hours": 168.0,
+          "pace_delta": -0.18785714285714294
+        }
+      ],
+      "data": {
+        "weekly_percent_left": 58.0,
+        "weekly_reset": "Resets Aug 08 at 05:00 AM",
+        "five_hour_percent_left": null,
+        "five_hour_reset": null,
+        "credits": null
+      },
+      "observed_at": "2026-08-02T20:00:00-04:00"
+    },
+    {
+      "name": "Claude",
+      "ok": true,
+      "error": null,
+      "windows": [
+        {
+          "id": "five_hour",
+          "percent_left": 0.0,
+          "reset_iso": "2026-08-02T19:30:00-04:00",
+          "window_hours": 5.0,
+          "pace_delta": 0.0
+        },
+        {
+          "id": "weekly",
+          "percent_left": 18.0,
+          "reset_iso": "2026-08-04T22:00:00-04:00",
+          "window_hours": 168.0,
+          "pace_delta": -0.11761904761904762
+        }
+      ],
+      "data": {
+        "session_percent_left": 0.0,
+        "weekly_percent_left": 18.0,
+        "opus_percent_left": null,
+        "primary_reset": "Resets Aug 02 at 07:30 PM",
+        "secondary_reset": "Resets Aug 04 at 10:00 PM",
+        "opus_reset": null
+      },
+      "observed_at": "2026-08-02T20:00:00-04:00"
+    },
+    {
+      "name": "Antigravity",
+      "ok": true,
+      "error": null,
+      "windows": [
+        {
+          "id": "five_hour",
+          "percent_left": 78.28798,
+          "reset_iso": null,
+          "window_hours": 5.0,
+          "pace_delta": null
+        },
+        {
+          "id": "weekly",
+          "percent_left": 24.35567,
+          "reset_iso": null,
+          "window_hours": 168.0,
+          "pace_delta": null
+        }
+      ],
+      "data": {
+        "five_hour_percent_left": 78.28798,
+        "weekly_percent_left": 24.35567,
+        "five_hour_reset": "2026-08-02T20:00:00-04:00",
+        "weekly_reset": "2026-08-04T14:16:00-04:00"
+      },
+      "observed_at": "2026-08-02T20:00:00-04:00"
+    },
+    {
+      "name": "Antigravity (Claude)",
+      "ok": true,
+      "error": null,
+      "windows": [],
+      "data": {},
+      "observed_at": "2026-08-02T20:00:00-04:00"
+    },
+    {
+      "name": "Copilot",
+      "ok": false,
+      "error": "rate limited, retry later",
+      "windows": [],
+      "data": {},
+      "observed_at": null
+    },
+    {
+      "name": "Cursor",
+      "ok": true,
+      "error": null,
+      "windows": [
+        {
+          "id": "ac",
+          "percent_left": 8.0,
+          "reset_iso": null,
+          "window_hours": null,
+          "pace_delta": null
+        }
+      ],
+      "data": {
+        "auto_percent_used": 92.0,
+        "api_percent_used": null,
+        "billing_cycle_start": "2026-08-01T00:00:00",
+        "billing_cycle_end": "2026-09-01T00:00:00"
+      },
+      "observed_at": "2026-08-02T20:00:00-04:00"
+    },
+    {
+      "name": "OpenCode Go",
+      "ok": false,
+      "error": "provider not enabled",
+      "windows": [],
+      "data": {},
+      "observed_at": null
+    },
+    {
+      "name": "Vibe",
+      "ok": true,
+      "error": null,
+      "windows": [],
+      "data": {
+        "premium_percent_left": 45.5,
+        "premium_reset": "2026-08-15T00:00:00"
+      },
+      "observed_at": "2026-08-02T20:00:00-04:00"
+    }
+  ]
+}

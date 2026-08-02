@@ -18,7 +18,8 @@ let package = Package(
         .testTarget(
             name: "GradusKitTests",
             dependencies: ["GradusKit"],
-            path: "Tests/GradusKitTests"
+            path: "Tests/GradusKitTests",
+            resources: [.copy("Fixtures/golden-v2-snapshot.json")]
         ),
     ]
 )
