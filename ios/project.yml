@@ -16,7 +16,7 @@ targets:
     type: application
     platform: macOS
     deploymentTarget: "13.0"
-    sources: [GradusMac]
+    sources: [GradusMac, Shared]
     dependencies:
       - package: GradusKit
     settings:
@@ -27,12 +27,20 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
+    entitlements:
+      path: GradusMac/GradusMac.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.zerodelta.gradus
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.developer.aps-environment: development
 
   GradusiOS:
     type: application
     platform: iOS
     deploymentTarget: "16.0"
-    sources: [GradusiOS]
+    sources: [GradusiOS, Shared]
     dependencies:
       - package: GradusKit
     settings:
@@ -43,6 +51,14 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
+    entitlements:
+      path: GradusiOS/GradusiOS.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.zerodelta.gradus
+        com.apple.developer.icloud-services:
+          - CloudKit
+        com.apple.developer.aps-environment: development
 
   GradusMacTests:
     type: bundle.unit-test
