@@ -8,6 +8,9 @@ configs:
 packages:
   GradusKit:
     path: GradusKit
+  SnapshotTesting:
+    url: https://github.com/pointfreeco/swift-snapshot-testing
+    exactVersion: 1.19.4
 targets:
   GradusMac:
     type: application
@@ -61,6 +64,8 @@ targets:
     sources: [GradusMacUITests]
     dependencies:
       - target: GradusMac
+      - package: SnapshotTesting
+        product: SnapshotTesting
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -74,6 +79,8 @@ targets:
     sources: [GradusiOSUITests]
     dependencies:
       - target: GradusiOS
+      - package: SnapshotTesting
+        product: SnapshotTesting
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
