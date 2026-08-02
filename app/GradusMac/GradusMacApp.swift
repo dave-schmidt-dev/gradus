@@ -9,6 +9,10 @@ struct GradusMacApp: App {
             Task { await CloudKitSpike.run() }
             return
         }
+        if CommandLine.arguments.contains("--t1-7-gate") {
+            Task { await T17SeamGate.run() }
+            return
+        }
         PublishPipeline.shared.start()
     }
 
