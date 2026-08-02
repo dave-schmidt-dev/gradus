@@ -113,6 +113,60 @@ class TestAllowlist(unittest.TestCase):
             snap.project_data(cursor), {"auto_percent_used": 20.0, "api_percent_used": 30.0}
         )
 
+    def test_project_antigravity_claude_data_reads_only_third_party_fields(self) -> None:
+        """The synthetic entry's projection reads only the third_party_* fields.
+
+        ``snapshot.data`` holds both the Gemini and third-party buckets under
+        the same ProviderSnapshot, and both use five_hour/weekly headroom
+        concepts. The dedicated projection must map the third_party_* source
+        fields onto the standard key names WITHOUT ever picking up the plain
+        Gemini-bucket values that share those names.
+        """
+        antigravity = _ps(
+            "Antigravity",
+            True,
+            data={
+                "five_hour_percent_left": 90,
+                "weekly_percent_left": 70,
+                "five_hour_reset": "in 3h",
+                "weekly_reset": "in 5d",
+                "third_party_five_hour_percent_left": 42.5,
+                "third_party_weekly_percent_left": 15.0,
+                "third_party_five_hour_reset": "in 1h",
+                "third_party_weekly_reset": "in 2d",
+            },
+        )
+        projected = snap._project_antigravity_claude_data(antigravity)
+        self.assertEqual(
+            projected,
+            {
+                "five_hour_percent_left": 42.5,
+                "weekly_percent_left": 15.0,
+                "five_hour_reset": "in 1h",
+                "weekly_reset": "in 2d",
+            },
+        )
+        self.assertTrue(set(projected).issubset(snap.SAFE_DATA_KEYS))
+
+    def test_project_antigravity_claude_data_drops_nonfinite_values(self) -> None:
+        """Bad third-party source metadata cannot poison the synthetic entry."""
+        antigravity = _ps(
+            "Antigravity",
+            True,
+            data={
+                "third_party_five_hour_percent_left": math.nan,
+                "third_party_weekly_percent_left": 15.0,
+                "third_party_five_hour_reset": "in 1h",
+                "third_party_weekly_reset": "in 2d",
+            },
+        )
+        projected = snap._project_antigravity_claude_data(antigravity)
+        self.assertNotIn("five_hour_percent_left", projected)
+        self.assertEqual(
+            projected,
+            {"weekly_percent_left": 15.0, "five_hour_reset": "in 1h", "weekly_reset": "in 2d"},
+        )
+
     def test_payload_error_carries_no_raw_payload(self) -> None:
         sentinel = "SENTINEL-a1b2c3-raw-body"
 
@@ -565,6 +619,105 @@ class TestPayloadSchema(unittest.TestCase):
         v2 = snap.build_snapshot_v2_payload([codex], NOW)
         self.assertEqual(v1["providers"][0], v2["providers"][0])
 
+    def test_v2_antigravity_claude_entry_from_same_probe(self) -> None:
+        """Schema v2 surfaces the third-party bucket as its own entry (A.1).
+
+        One Antigravity probe carries both the Gemini bucket and the
+        third-party (Claude) bucket; v2 must publish them as two independent
+        entries without a second probe. The synthetic entry's windows are
+        built from the third_party_* fields under the standard
+        five_hour/weekly IDs.
+        """
+        antigravity = _ps(
+            "Antigravity",
+            True,
+            data={
+                "five_hour_percent_left": 90,
+                "weekly_percent_left": 70,
+                "five_hour_reset": "in 3h",
+                "weekly_reset": "in 5d",
+                "third_party_five_hour_percent_left": 42.5,
+                "third_party_weekly_percent_left": 15.0,
+                "third_party_five_hour_reset": "in 1h",
+                "third_party_weekly_reset": "in 2d",
+            },
+        )
+        v2 = snap.build_snapshot_v2_payload([antigravity], NOW)
+        by_name = {entry["name"]: entry for entry in v2["providers"]}
+
+        gemini = by_name["Antigravity"]
+        self.assertTrue(gemini["ok"])
+        self.assertEqual(
+            {window["id"]: window["percent_left"] for window in gemini["windows"]},
+            {"five_hour": 90.0, "weekly": 70.0},
+        )
+
+        claude = by_name["Antigravity (Claude)"]
+        self.assertTrue(claude["ok"])
+        self.assertIsNone(claude["error"])
+        self.assertEqual(
+            claude["data"],
+            {
+                "five_hour_percent_left": 42.5,
+                "weekly_percent_left": 15.0,
+                "five_hour_reset": "in 1h",
+                "weekly_reset": "in 2d",
+            },
+        )
+        windows = {window["id"]: window for window in claude["windows"]}
+        self.assertEqual(set(windows), {"five_hour", "weekly"})
+        # The synthetic entry reflects the third-party bucket, not Gemini's.
+        self.assertEqual(windows["five_hour"]["percent_left"], 42.5)
+        self.assertEqual(windows["weekly"]["percent_left"], 15.0)
+        self.assertEqual(windows["five_hour"]["window_hours"], 5.0)
+        self.assertEqual(windows["weekly"]["window_hours"], 168.0)
+        self.assertIsNotNone(windows["five_hour"]["reset_iso"])
+        self.assertIsNotNone(windows["weekly"]["reset_iso"])
+
+    def test_v1_antigravity_has_no_synthetic_claude_entry(self) -> None:
+        """The synthetic entry is schema-v2 only; v1 keeps its 7-entry shape."""
+        antigravity = _ps("Antigravity", True, data={"five_hour_percent_left": 90})
+        v1 = snap.build_snapshot_payload([antigravity], NOW)
+        names = [entry["name"] for entry in v1["providers"]]
+        self.assertEqual(tuple(names), snap.CANONICAL_PROVIDERS())
+        self.assertEqual(len(v1["providers"]), 7)
+        self.assertNotIn("Antigravity (Claude)", names)
+
+    def test_v2_antigravity_claude_disabled_when_not_enabled(self) -> None:
+        """An absent Antigravity probe yields a symmetric disabled entry."""
+        v2 = snap.build_snapshot_v2_payload([], NOW)
+        by_name = {entry["name"]: entry for entry in v2["providers"]}
+        primary = by_name["Antigravity"]
+        claude = by_name["Antigravity (Claude)"]
+        for key in ("ok", "error", "windows", "data"):
+            self.assertEqual(claude[key], primary[key])
+        self.assertFalse(claude["ok"])
+        self.assertEqual(claude["error"], "provider not enabled")
+        self.assertEqual(claude["windows"], [])
+        self.assertEqual(claude["data"], {})
+
+    def test_v2_antigravity_claude_transient_failure_retains_recent_prior(self) -> None:
+        """A transient synthetic failure now retains a healthy recent prior (A.2).
+
+        A.1 intentionally published the failure fresh (its specs were not yet
+        registered in V2_WINDOW_SPECS, so retention was out of scope); A.2
+        wired CR-6 retention, so a transient failure within
+        STALE_THRESHOLD_SECONDS of a healthy prior carries the prior forward —
+        mirroring the primary Antigravity entry. The prior here is built from
+        empty probe data, so the retained entry carries no windows; the
+        windows-carrying case is covered by TestTransientMerge.
+        """
+        prior = snap.build_snapshot_v2_payload(
+            [_ps("Antigravity", True, data={})], NOW - timedelta(seconds=50)
+        )
+        failing = _ps("Antigravity", False, error="network error")
+        v2 = snap.build_snapshot_v2_payload([failing], NOW, prior=prior)
+        claude = next(entry for entry in v2["providers"] if entry["name"] == "Antigravity (Claude)")
+        self.assertTrue(claude["ok"])
+        self.assertIsNone(claude["error"])
+        self.assertEqual(claude["windows"], [])
+        self.assertEqual(claude["data"], {})
+
 
 class TestTransientMerge(unittest.TestCase):
     def _healthy_prior(self, at: datetime) -> dict:
@@ -891,6 +1044,65 @@ class TestTransientMerge(unittest.TestCase):
                 current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
                 self.assertFalse(current["ok"])
                 self.assertEqual(current["windows"], [])
+
+    def test_transient_antigravity_claude_retains_recent_prior(self) -> None:
+        """A transient synthetic failure within 300s reuses the healthy prior (A.2).
+
+        Before A.2, specs_by_provider.get("Antigravity (Claude)", ()) was the
+        empty frozenset, so _sanitize_prior_entry rejected every retained
+        window and the failure was always published fresh. With the synthetic
+        name registered in V2_WINDOW_SPECS, the prior's five_hour/weekly
+        windows validate and are carried forward exactly like the primary
+        Antigravity entry.
+        """
+        antigravity = _ps(
+            "Antigravity",
+            True,
+            data={
+                "five_hour_percent_left": 90,
+                "weekly_percent_left": 70,
+                "five_hour_reset": "in 3h",
+                "weekly_reset": "in 5d",
+                "third_party_five_hour_percent_left": 42.5,
+                "third_party_weekly_percent_left": 15.0,
+                "third_party_five_hour_reset": "in 1h",
+                "third_party_weekly_reset": "in 2d",
+            },
+        )
+        prior = snap.build_snapshot_v2_payload([antigravity], NOW - timedelta(seconds=100))
+        failing = _ps("Antigravity", False, error="rate limited")
+        payload = snap.build_snapshot_v2_payload([failing], NOW, prior=prior)
+        claude = next(
+            entry for entry in payload["providers"] if entry["name"] == "Antigravity (Claude)"
+        )
+        prior_claude = next(
+            entry for entry in prior["providers"] if entry["name"] == "Antigravity (Claude)"
+        )
+        self.assertTrue(claude["ok"])
+        windows = {window["id"]: window for window in claude["windows"]}
+        self.assertEqual(set(windows), {"five_hour", "weekly"})
+        self.assertEqual(windows["five_hour"]["percent_left"], 42.5)
+        self.assertEqual(windows["weekly"]["percent_left"], 15.0)
+        self.assertEqual(claude, prior_claude)
+        self.assertIsNot(claude, prior_claude)
+
+    def test_transient_antigravity_claude_no_prior_is_fresh(self) -> None:
+        """A transient synthetic failure with no prior stays a fresh failure (A.2).
+
+        Retention has nothing to seed from, so the
+        ``retained_entry is not None and prior_updated is not None`` guard
+        must fall through to a plain fresh failure entry — never a raise or a
+        malformed entry.
+        """
+        failing = _ps("Antigravity", False, error="rate limited")
+        payload = snap.build_snapshot_v2_payload([failing], NOW, prior=None)
+        claude = next(
+            entry for entry in payload["providers"] if entry["name"] == "Antigravity (Claude)"
+        )
+        self.assertFalse(claude["ok"])
+        self.assertEqual(claude["error"], "rate limited")
+        self.assertEqual(claude["windows"], [])
+        self.assertEqual(claude["data"], {})
 
 
 class TestPathContract(unittest.TestCase):

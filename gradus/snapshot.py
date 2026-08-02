@@ -481,6 +481,34 @@ V2_WINDOW_SPECS = {
     "Cursor": WARNING_WINDOW_SPECS["Cursor"],
 }
 
+# Task A.1: the same third_party_* fields WARNING_WINDOW_SPECS["Antigravity"]
+# already sources for its interactive-only cg5/cg1w alert windows, but under
+# the standard five_hour/weekly window-id convention every other v1/v2
+# provider entry uses — this tuple is what the synthetic "Antigravity
+# (Claude)" entry's OWN windows are built from. Registered below under both
+# V2_WINDOW_SPECS and WARNING_WINDOW_SPECS (Task A.2) so CR-6 retention
+# validation and interactive-alert lookups both resolve correctly for the
+# synthetic name.
+THIRD_PARTY_WINDOW_SPECS: tuple[WindowSpec, ...] = (
+    WindowSpec(
+        "five_hour",
+        "session",
+        "third_party_five_hour_percent_left",
+        reset_key="third_party_five_hour_reset",
+        window_hours=5.0,
+    ),
+    WindowSpec(
+        "weekly",
+        "session",
+        "third_party_weekly_percent_left",
+        reset_key="third_party_weekly_reset",
+        window_hours=168.0,
+    ),
+)
+
+V2_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
+WARNING_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
+
 
 def _build_windows(
     snapshot: ProviderSnapshot,
@@ -713,6 +741,36 @@ def _json_safe_value(value: object) -> object:
     return _UNSAFE_JSON
 
 
+def _project_antigravity_claude_data(snapshot: ProviderSnapshot) -> dict:
+    """Project the third-party (Claude) bucket into the synthetic entry's
+    data, under the same key names project_data() uses for a primary
+    entry's five_hour/weekly headroom (Task A.3).
+
+    A DEDICATED projection, not a reuse of SAFE_DATA_KEYS/project_data():
+    ``snapshot.data`` holds BOTH the Gemini and third-party buckets under
+    the SAME ProviderSnapshot, so adding raw third_party_* key names to
+    SAFE_DATA_KEYS would leak them into the PRIMARY "Antigravity" entry's
+    data too (project_data(snapshot) is called on that exact same object
+    for that entry). Mapping to the standard five_hour_percent_left/
+    weekly_percent_left/*_reset names instead keeps the two entries' data
+    namespaces independent, and — since those names are already in
+    SAFE_DATA_KEYS — keeps _sanitize_prior_entry's
+    ``set(data).issubset(SAFE_DATA_KEYS)`` check passing for CR-6 retention.
+    """
+    data = snapshot.data if isinstance(snapshot.data, Mapping) else {}
+    field_map = {
+        "third_party_five_hour_percent_left": "five_hour_percent_left",
+        "third_party_weekly_percent_left": "weekly_percent_left",
+        "third_party_five_hour_reset": "five_hour_reset",
+        "third_party_weekly_reset": "weekly_reset",
+    }
+    return {
+        out_key: value
+        for raw_key, out_key in field_map.items()
+        if raw_key in data and (value := _json_safe_value(data[raw_key])) is not _UNSAFE_JSON
+    }
+
+
 def CANONICAL_PROVIDERS() -> tuple[str, ...]:
     return _canonical_providers()
 
@@ -831,7 +889,9 @@ def _build_snapshot_payload(
     Returns:
         A dict with ``schema_version``, ``updated_at`` (offset-aware ISO), and
         ``providers`` (a list of exactly seven entries — Codex, Claude,
-        Antigravity, Copilot, Cursor, OpenCode Go, and Vibe).
+        Antigravity, Copilot, Cursor, OpenCode Go, and Vibe; schema v2 adds
+        an eighth, "Antigravity (Claude)", synthesized from the same
+        Antigravity probe).
     """
     updated_at_iso = local_iso(updated_at)
     updated_at_aware = updated_at if updated_at.tzinfo else updated_at.astimezone()
@@ -850,6 +910,65 @@ def _build_snapshot_payload(
         prior_updated = _parse_aware_iso_timestamp(prior.get("updated_at"))
 
     providers: list[dict] = []
+
+    def _antigravity_claude_entry(snap: ProviderSnapshot | None) -> dict:
+        """Synthesize the schema-v2 "Antigravity (Claude)" entry (Task A.1).
+
+        Mirrors the primary Antigravity entry's shape from the SAME probe —
+        no second lookup, no second fetch, no Keychain re-read. Its windows
+        are built from the third-party (Claude) bucket's fields under the
+        standard ``five_hour``/``weekly`` window IDs.
+        """
+        if snap is None:
+            return {
+                "name": "Antigravity (Claude)",
+                "ok": False,
+                "error": "provider not enabled",
+                "windows": [],
+                "data": {},
+            }
+        if snap.ok:
+            return {
+                "name": "Antigravity (Claude)",
+                "ok": True,
+                "error": None,
+                "windows": _build_windows(
+                    snap, updated_at, {"Antigravity": THIRD_PARTY_WINDOW_SPECS}
+                ),
+                "data": _project_antigravity_claude_data(snap),
+            }
+        # ok is False: default to a fresh failure entry, but retain a recent
+        # healthy prior entry for transient errors (CR-6 anti-flap) — mirrors
+        # the primary Antigravity entry's retention logic above. Now that
+        # V2_WINDOW_SPECS["Antigravity (Claude)"] is registered (Task A.2),
+        # specs_by_provider.get(...) resolves to THIRD_PARTY_WINDOW_SPECS
+        # instead of an empty tuple, so retained entries validate correctly.
+        entry: dict = {
+            "name": "Antigravity (Claude)",
+            "ok": False,
+            "error": snap.error[:200] if snap.error else snap.error,
+            "windows": [],
+            "data": _project_antigravity_claude_data(snap),
+        }
+        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
+            prior_entry = prior_by_name.get("Antigravity (Claude)")
+            retained_entry = _sanitize_prior_entry(
+                "Antigravity (Claude)",
+                prior_entry,
+                allowed_window_ids=frozenset(
+                    spec.window_id for spec in specs_by_provider.get("Antigravity (Claude)", ())
+                ),
+            )
+            if (
+                retained_entry is not None
+                and prior_updated is not None
+                and 0
+                <= (updated_at_aware - prior_updated).total_seconds()
+                < STALE_THRESHOLD_SECONDS
+            ):
+                entry = retained_entry
+        return entry
+
     for name in CANONICAL_PROVIDERS():
         snap = by_name.get(name)
         if snap is None:
@@ -862,6 +981,8 @@ def _build_snapshot_payload(
                     "data": {},
                 }
             )
+            if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
+                providers.append(_antigravity_claude_entry(snap))
             continue
         if snap.ok:
             providers.append(
@@ -873,6 +994,8 @@ def _build_snapshot_payload(
                     "data": project_data(snap),
                 }
             )
+            if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
+                providers.append(_antigravity_claude_entry(snap))
             continue
         # ok is False: default to a fresh failure entry, but retain a recent
         # healthy prior entry for transient errors (CR-6 anti-flap).
@@ -905,6 +1028,8 @@ def _build_snapshot_payload(
             ):
                 entry = retained_entry
         providers.append(entry)
+        if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
+            providers.append(_antigravity_claude_entry(snap))
 
     return {
         "schema_version": schema_version,
