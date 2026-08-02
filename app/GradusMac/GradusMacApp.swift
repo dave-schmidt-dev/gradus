@@ -18,7 +18,7 @@ struct GradusMacApp: App {
 
     var body: some Scene {
         MenuBarExtra("Gradus", systemImage: "gauge") {
-            Text("Gradus")
+            MenuContentView(viewModel: PublishPipeline.shared.viewModel)
         }
     }
 }
@@ -37,10 +37,17 @@ final class PublishPipeline {
     private var accountMonitor: AccountStatusMonitor?
     private var started = false
 
-    private static let snapshotPath = URL(fileURLWithPath: NSHomeDirectory())
+    /// Local display state + the opt-in sync toggle -- the menu content
+    /// view's single source of truth.
+    let viewModel = PublisherViewModel()
+
+    static let defaultSnapshotPath = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Documents/Projects/gradus/.state/snapshot-v2.json")
 
-    func start() {
+    /// `snapshotPath` is the publisher's single injected dependency onto the
+    /// filesystem (INV-7) -- defaults to the real snapshot location but is
+    /// overridable, so nothing downstream needs to compute or guess a path.
+    func start(snapshotPath: URL = PublishPipeline.defaultSnapshotPath) {
         guard !started else { return }
         started = true
 
@@ -58,8 +65,14 @@ final class PublishPipeline {
         self.accountMonitor = accountMonitor
         Task { await accountMonitor.start() }
 
-        let watcher = SnapshotWatcher(path: Self.snapshotPath) { payload in
+        let viewModel = viewModel
+        let watcher = SnapshotWatcher(path: snapshotPath) { payload in
             Task {
+                // Local display always reflects the on-device snapshot --
+                // only the CloudKit publish is gated on opt-in sync.
+                await viewModel.apply(payload)
+
+                guard await viewModel.syncEnabled else { return }
                 let status = await accountMonitor.lastKnownStatus
                 guard AccountStatusMonitor.publishingState(for: status) == .ready else { return }
                 let publishedAt = Date()
