@@ -1,0 +1,98 @@
+name: Gradus
+options:
+  bundleIdPrefix: com.zerodelta.gradus
+  developmentLanguage: en
+configs:
+  Debug: debug
+  Release: release
+packages:
+  GradusKit:
+    path: GradusKit
+targets:
+  GradusMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources: [GradusMac]
+    dependencies:
+      - package: GradusKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+
+  GradusiOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [GradusiOS]
+    dependencies:
+      - package: GradusKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.ios
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+
+  GradusMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources: [GradusMacTests]
+    dependencies:
+      - target: GradusMac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+
+  GradusMacUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources: [GradusMacUITests]
+    dependencies:
+      - target: GradusMac
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+
+  GradusiOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [GradusiOSUITests]
+    dependencies:
+      - target: GradusiOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+
+schemes:
+  GradusMac:
+    build:
+      targets:
+        GradusMac: all
+    test:
+      targets:
+        - GradusMacTests
+        - GradusMacUITests
+  GradusiOS:
+    build:
+      targets:
+        GradusiOS: all
+    test:
+      targets:
+        - GradusiOSUITests

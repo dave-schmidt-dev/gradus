@@ -1,0 +1,11 @@
+# XcodeGen-generated project — regenerate with `xcodegen generate` from project.yml
+Gradus.xcodeproj/
+
+# SwiftPM build artifacts
+.build/
+.swiftpm/
+
+# Xcode user state / DerivedData
+xcuserdata/
+DerivedData/
+*.xcresult
