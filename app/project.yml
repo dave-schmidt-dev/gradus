@@ -67,6 +67,9 @@ targets:
       path: GradusiOS/Info.plist
       properties:
         UIBackgroundModes: [remote-notification]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIRequiresFullScreen: true
+        UILaunchScreen: {}
     entitlements:
       path: GradusiOS/GradusiOS.entitlements
       properties:
