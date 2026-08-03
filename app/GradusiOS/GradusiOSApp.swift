@@ -4,7 +4,10 @@ import SwiftUI
 
 @main
 struct GradusiOSApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel: DashboardViewModel
+    private let accountMonitor: AccountStatusMonitor
+    private let subscriptionManager: CKSubscriptionManager
 
     init() {
         if CommandLine.arguments.contains("--cloudkit-spike") {
@@ -16,21 +19,53 @@ struct GradusiOSApp: App {
 
         let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
         let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
-        let fetcher = CKCloudFetcher(database: container.privateCloudDatabase, zoneID: zoneID)
+        let database = container.privateCloudDatabase
+        let fetcher = CKCloudFetcher(database: database, zoneID: zoneID)
+        let zoneChangesFetcher = CKZoneChangesFetcher(database: database, zoneID: zoneID)
         let accountSource = ContainerAccountStatusSource(containerIdentifier: CloudKitConstants.containerIdentifier)
 
-        _viewModel = StateObject(
-            wrappedValue: DashboardViewModel(cache: cache, fetcher: fetcher, accountSource: accountSource))
+        let viewModel = DashboardViewModel(
+            cache: cache, fetcher: fetcher, accountSource: accountSource, zoneChangesFetcher: zoneChangesFetcher)
+        _viewModel = StateObject(wrappedValue: viewModel)
+
+        self.subscriptionManager = CKSubscriptionManager(
+            database: CKSubscriptionDatabaseAdapter(database: database), zoneID: zoneID)
+
+        // PM-16: mid-session account-status reset (sign-out/switch-account
+        // while the app is running), reusing the same actor Phase 2a wired
+        // on the Mac side (moved to GradusKit in Phase 3 for exactly this).
+        self.accountMonitor = AccountStatusMonitor(source: accountSource) { status in
+            Task { @MainActor in viewModel.updateAccountStatus(status) }
+        }
+
+        appDelegate.onRemoteNotification = {
+            await viewModel.handleRemoteNotification()
+        }
     }
 
     var body: some Scene {
         WindowGroup {
             DashboardView(viewModel: viewModel)
                 .task {
-                    await viewModel.refreshAccountStatus()
+                    await accountMonitor.start()
                     await viewModel.sync()
+                    await subscribeIfEnabled()
+                }
+                .onChange(of: viewModel.syncEnabled) { enabled in
+                    guard enabled else { return }
+                    Task { await subscribeIfEnabled() }
                 }
         }
+    }
+
+    /// Subscription creation is idempotent (PM-8-style, see
+    /// `CKSubscriptionManager`) but still gated on opt-in + an available
+    /// account -- creating a private-DB subscription with no signed-in user
+    /// or before the user has opted in would just fail/leak silently.
+    private func subscribeIfEnabled() async {
+        guard viewModel.syncEnabled, viewModel.accountStatus == .available else { return }
+        try? await subscriptionManager.subscribeToZoneChanges()
+        try? await subscriptionManager.subscribeToWarnings()
     }
 
     private static func cacheDirectory() -> URL {

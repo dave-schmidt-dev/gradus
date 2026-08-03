@@ -51,8 +51,22 @@ targets:
         DEVELOPMENT_TEAM: 4CJ49V6QHW
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
+    # Background Modes > Remote notifications (T4.1/T4.2): required for the
+    # silent content-available push (zone-sync subscription) to wake the
+    # app. `INFOPLIST_KEY_UIBackgroundModes` (both scalar and array form)
+    # does NOT synthesize into the generated Info.plist -- confirmed empty
+    # via `plutil -p` on the actual built artifact after a full clean
+    # rebuild, not assumed. `UIBackgroundModes` isn't on Xcode's
+    # synthesized-key allowlist the way boolean keys like
+    # `INFOPLIST_KEY_LSUIElement` (used on GradusMac) are. Fix: a real
+    # physical Info.plist via XcodeGen's `info:` block instead of
+    # `GENERATE_INFOPLIST_FILE` -- mutually exclusive mechanisms, so
+    # `GENERATE_INFOPLIST_FILE` is dropped for this target.
+    info:
+      path: GradusiOS/Info.plist
+      properties:
+        UIBackgroundModes: [remote-notification]
     entitlements:
       path: GradusiOS/GradusiOS.entitlements
       properties:
