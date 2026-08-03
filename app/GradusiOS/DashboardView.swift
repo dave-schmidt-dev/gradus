@@ -42,7 +42,7 @@ struct DashboardView: View {
         NavigationSplitView(preferredCompactColumn: $preferredColumn) {
             EmptyView()
         } detail: {
-            DashboardContent(viewModel: viewModel)
+            DashboardContent(viewModel: viewModel, now: now)
         }
     }
 }
@@ -64,12 +64,34 @@ struct DashboardView: View {
 /// snapshot-testing harness.
 struct DashboardContent: View {
     @ObservedObject var viewModel: DashboardViewModel
+    let now: Date
+    /// Row-tap navigation target (P4/T4.2): set on tap of either the hero
+    /// `StatTile` or a compact ranked-row `StatTile`, pushing
+    /// `ProviderDetailView` for that provider. Tracked by `providerName`
+    /// (not the `ProviderStatus` value itself) since `ProviderStatus` isn't
+    /// `Hashable` and `.navigationDestination(item:)` requires that --
+    /// looking the provider back up from `viewModel.providers` by name
+    /// keeps this file from having to add a `Hashable` conformance to a
+    /// `GradusKit` model type for a purely-iOS navigation concern.
+    @State private var selectedProviderName: String?
+    /// Settings presentation (P5/T5.3): a sheet rather than a
+    /// `navigationDestination` push -- decoupled from the `selectedProviderName`
+    /// push-navigation state Phase 4 owns above, and matches the design
+    /// system's "one trailing accessory" nav-bar rule without needing
+    /// Settings to participate in the same navigation stack as provider
+    /// detail drill-in.
+    @State private var showingSettings = false
+
+    init(viewModel: DashboardViewModel, now: Date = Date()) {
+        self.viewModel = viewModel
+        self.now = now
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             MobileNavBar(title: "Gradus") {
                 IconButton(Icon.settings) {
-                    // TODO: navigate to SettingsView once it ships (Phase 5).
+                    showingSettings = true
                 }
             }
 
@@ -83,21 +105,39 @@ struct DashboardContent: View {
                 }
             }
         }
+        .navigationDestination(item: $selectedProviderName) { providerName in
+            if let provider = viewModel.providers.first(where: { $0.providerName == providerName }) {
+                ProviderDetailView(provider: provider, now: now)
+            }
+        }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(dashboardViewModel: viewModel)
+        }
     }
 
     @ViewBuilder
     private var nowList: some View {
         List {
             if let hero = viewModel.heroProvider {
-                StatTile(provider: hero, worstWindow: worstWindow(for: hero), isHero: true)
-                    .listRowSeparator(.hidden)
+                StatTile(
+                    provider: hero, worstWindow: worstWindow(for: hero), isHero: true,
+                    isLocallyUrgent: isLocallyUrgent(for: hero)
+                )
+                .listRowSeparator(.hidden)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedProviderName = hero.providerName
+                }
             }
             ForEach(viewModel.restProviders, id: \.providerName) { provider in
-                StatTile(provider: provider, worstWindow: worstWindow(for: provider), isHero: false)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // TODO: push ProviderDetailView once it ships (Phase 4).
-                    }
+                StatTile(
+                    provider: provider, worstWindow: worstWindow(for: provider), isHero: false,
+                    isLocallyUrgent: isLocallyUrgent(for: provider)
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedProviderName = provider.providerName
+                }
             }
         }
         .listStyle(.plain)
@@ -107,5 +147,15 @@ struct DashboardContent: View {
     /// (lowest `percentLeft`), the same definition `rankProviders` uses.
     private func worstWindow(for provider: ProviderStatus) -> ProviderWindow? {
         provider.windows.min { $0.percentLeft < $1.percentLeft }
+    }
+
+    /// P5/T5.2: whether this provider's `StatTile` gets the local-urgent
+    /// ring, evaluated against the live `localWarningThresholdPercent`
+    /// (not a hardcoded default) -- `false` when there's no window to
+    /// evaluate (errored/no-data providers), matching `localIsUrgent`'s own
+    /// guard on `worstWindow == nil`.
+    private func isLocallyUrgent(for provider: ProviderStatus) -> Bool {
+        guard let worst = worstWindow(for: provider) else { return false }
+        return localIsUrgent(worst, threshold: viewModel.localWarningThresholdPercent)
     }
 }

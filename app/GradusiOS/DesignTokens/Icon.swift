@@ -20,4 +20,9 @@ enum Icon {
     static var infoCircle: Image { Image(systemName: "info.circle") }
     static var noConnection: Image { Image(systemName: "wifi.slash") }
     static var accountWarning: Image { Image(systemName: "person.crop.circle.badge.exclamationmark") }
+    /// P5/T5.3: dismiss control for the Settings sheet -- not in the
+    /// original SF-Symbol/Lucide map (the map covers Phase 1-4 call sites
+    /// only), added here since Settings ships as a sheet with its own close
+    /// affordance.
+    static var close: Image { Image(systemName: "xmark") }
 }

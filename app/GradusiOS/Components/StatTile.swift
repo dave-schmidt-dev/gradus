@@ -21,6 +21,12 @@ struct StatTile: View {
     let provider: ProviderStatus
     let worstWindow: ProviderWindow?
     var isHero: Bool = false
+    /// P5/T5.2: "your local setting flagged this" cue -- true when
+    /// `localIsUrgent` holds for `worstWindow` against the caller's current
+    /// `localWarningThresholdPercent`. Purely visual; never affects layout
+    /// sizing or gates rendering of anything else, so existing callers that
+    /// don't pass it (default `false`) are pixel-identical to before.
+    var isLocallyUrgent: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: isHero ? 8 : 4) {
@@ -34,6 +40,13 @@ struct StatTile: View {
             }
         }
         .padding(.vertical, isHero ? 12 : 6)
+        .padding(.horizontal, isLocallyUrgent ? 8 : 0)
+        .overlay {
+            if isLocallyUrgent {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(LocalUrgentAccent.ring, lineWidth: 2)
+            }
+        }
     }
 
     @ViewBuilder

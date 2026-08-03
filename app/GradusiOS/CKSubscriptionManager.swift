@@ -7,6 +7,7 @@ import GradusKit
 /// connection.
 public protocol SubscriptionDatabase: Sendable {
     func saveSubscription(_ subscription: CKSubscription) async throws
+    func deleteSubscription(withID subscriptionID: CKSubscription.ID) async throws
 }
 
 public struct CKSubscriptionDatabaseAdapter: SubscriptionDatabase {
@@ -18,6 +19,10 @@ public struct CKSubscriptionDatabaseAdapter: SubscriptionDatabase {
 
     public func saveSubscription(_ subscription: CKSubscription) async throws {
         _ = try await database.save(subscription)
+    }
+
+    public func deleteSubscription(withID subscriptionID: CKSubscription.ID) async throws {
+        _ = try await database.deleteSubscription(withID: subscriptionID)
     }
 }
 
@@ -46,7 +51,7 @@ public enum WarningAlertLocalization {
 /// `CKFetchDatabaseChangesOperation` round-trip to learn which zone, then a
 /// per-zone token; with exactly one zone, a zone subscription reports "this
 /// zone changed" directly and matches T3.2's single persisted-token model.
-public struct CKSubscriptionManager {
+public struct CKSubscriptionManager: Sendable {
     private let database: SubscriptionDatabase
     private let zoneID: CKRecordZone.ID
 
@@ -80,5 +85,17 @@ public struct CKSubscriptionManager {
         info.shouldBadge = true
         subscription.notificationInfo = info
         try await database.saveSubscription(subscription)
+    }
+
+    /// P5/T5.1: the disable-path counterpart to `subscribeToWarnings()`,
+    /// delete-by-ID (mirroring the save-by-ID idempotency pattern above).
+    /// Unlike the enable path (best-effort, `try?` at call sites), this is
+    /// deliberately allowed to throw -- callers success-gate the
+    /// user-visible "notifications off" state on this actually succeeding
+    /// (Key decision #2, `ios-design-system-2026-08-03.md`), so a stale
+    /// server-side `CKQuerySubscription` never keeps firing while the UI
+    /// claims it's off.
+    public func unsubscribeFromWarnings() async throws {
+        try await database.deleteSubscription(withID: GradusSubscriptionID.warning)
     }
 }

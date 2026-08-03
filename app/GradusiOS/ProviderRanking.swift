@@ -1,9 +1,8 @@
 import GradusKit
 
 /// iOS-local "locally urgent" predicate (P3/T3.1; the real `@Published`
-/// `localWarningThresholdPercent` control that drives `threshold` ships in
-/// Phase 5.2 -- this function is wired into ranking today with a placeholder
-/// constant, see `DashboardViewModel`). Deliberately lives in `GradusiOS`,
+/// `localWarningThresholdPercent` control that drives `threshold` shipped in
+/// Phase 5.2 -- see `DashboardViewModel`). Deliberately lives in `GradusiOS`,
 /// not `GradusKit`: it is device-local by definition and must never be
 /// confused with the shared, fixed `GradusKit.windowWarns` (Key decision #5,
 /// `ios-design-system-2026-08-03.md`) -- that keeps `GradusKit`'s

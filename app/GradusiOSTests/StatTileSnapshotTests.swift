@@ -136,3 +136,31 @@ private func noWindowDataProvider() -> ProviderStatus {
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: 80), traits: UITraitCollection(userInterfaceStyle: .light)))
 }
+
+// P5/T5.2 gate: the local-urgent ring cue is a purely visual overlay
+// (`LocalUrgentAccent.ring`), independent of `SignalColor`'s percent-based
+// fill -- covered here for both hero and compact sizing, light+dark.
+
+@MainActor
+@Test func statTileCompactLocallyUrgentLight() {
+    let provider = okProvider()
+    let view = StatTile(provider: provider, worstWindow: provider.windows.first, isHero: false, isLocallyUrgent: true)
+    assertSnapshot(
+        of: view, as: .image(layout: .fixed(width: 390, height: 100), traits: UITraitCollection(userInterfaceStyle: .light)))
+}
+
+@MainActor
+@Test func statTileCompactLocallyUrgentDark() {
+    let provider = okProvider()
+    let view = StatTile(provider: provider, worstWindow: provider.windows.first, isHero: false, isLocallyUrgent: true)
+    assertSnapshot(
+        of: view, as: .image(layout: .fixed(width: 390, height: 100), traits: UITraitCollection(userInterfaceStyle: .dark)))
+}
+
+@MainActor
+@Test func statTileHeroLocallyUrgentLight() {
+    let provider = okProvider()
+    let view = StatTile(provider: provider, worstWindow: provider.windows.first, isHero: true, isLocallyUrgent: true)
+    assertSnapshot(
+        of: view, as: .image(layout: .fixed(width: 390, height: 220), traits: UITraitCollection(userInterfaceStyle: .light)))
+}

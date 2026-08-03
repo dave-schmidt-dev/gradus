@@ -23,13 +23,15 @@ struct GradusiOSApp: App {
         let fetcher = CKCloudFetcher(database: database, zoneID: zoneID)
         let zoneChangesFetcher = CKZoneChangesFetcher(database: database, zoneID: zoneID)
         let accountSource = ContainerAccountStatusSource(containerIdentifier: CloudKitConstants.containerIdentifier)
+        let subscriptionManager = CKSubscriptionManager(
+            database: CKSubscriptionDatabaseAdapter(database: database), zoneID: zoneID)
 
         let viewModel = DashboardViewModel(
-            cache: cache, fetcher: fetcher, accountSource: accountSource, zoneChangesFetcher: zoneChangesFetcher)
+            cache: cache, fetcher: fetcher, accountSource: accountSource, zoneChangesFetcher: zoneChangesFetcher,
+            subscriptionManager: subscriptionManager)
         _viewModel = StateObject(wrappedValue: viewModel)
 
-        self.subscriptionManager = CKSubscriptionManager(
-            database: CKSubscriptionDatabaseAdapter(database: database), zoneID: zoneID)
+        self.subscriptionManager = subscriptionManager
 
         // PM-16: mid-session account-status reset (sign-out/switch-account
         // while the app is running), reusing the same actor Phase 2a wired
@@ -56,6 +58,16 @@ struct GradusiOSApp: App {
                     guard enabled, !Self.isUITesting else { return }
                     Task { await subscribeIfEnabled() }
                 }
+                .onChange(of: viewModel.notificationsEnabled) { enabled in
+                    // P5/T5.1: re-runs `subscribeIfEnabled()` when
+                    // notifications are flipped on mid-session (e.g. from
+                    // Settings while sync is already active) -- turning off
+                    // is handled separately, success-gated, by
+                    // `DashboardViewModel.setNotificationsEnabled(_:)`
+                    // itself calling `unsubscribeFromWarnings()` directly.
+                    guard enabled, !Self.isUITesting else { return }
+                    Task { await subscribeIfEnabled() }
+                }
         }
     }
 
@@ -63,9 +75,14 @@ struct GradusiOSApp: App {
     /// `CKSubscriptionManager`) but still gated on opt-in + an available
     /// account -- creating a private-DB subscription with no signed-in user
     /// or before the user has opted in would just fail/leak silently.
+    /// P5/T5.1: `subscribeToWarnings()` additionally gates on
+    /// `notificationsEnabled` -- the zone-sync subscription (silent,
+    /// drives the offline cache) is independent of the user-visible warning
+    /// opt-out and still runs whenever sync is on.
     private func subscribeIfEnabled() async {
         guard viewModel.syncEnabled, viewModel.accountStatus == .available else { return }
         try? await subscriptionManager.subscribeToZoneChanges()
+        guard viewModel.notificationsEnabled else { return }
         try? await subscriptionManager.subscribeToWarnings()
     }
 
