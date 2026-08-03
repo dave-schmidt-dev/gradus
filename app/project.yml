@@ -24,7 +24,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac
         DEVELOPMENT_TEAM: 4CJ49V6QHW
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         CODE_SIGN_STYLE: Automatic
@@ -64,7 +64,7 @@ targets:
         # as an "update" no matter the build number, so build 2 never
         # appeared for testers. Must stay >= 1.0 from here on.
         MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Background Modes > Remote notifications (T4.1/T4.2): required for the
