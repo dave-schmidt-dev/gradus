@@ -24,7 +24,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac
         DEVELOPMENT_TEAM: 4CJ49V6QHW
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         CODE_SIGN_STYLE: Automatic
@@ -56,15 +56,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.ios
         DEVELOPMENT_TEAM: 4CJ49V6QHW
-        # Build 1 shipped with a hardcoded CFBundleShortVersionString of "1.0"
-        # (Info.plist wasn't yet deriving from MARKETING_VERSION). Once fixed
-        # to derive properly, this project's actual MARKETING_VERSION of
-        # "0.1.0" became a silent version *regression* vs. what TestFlight
-        # had already seen -- Apple won't surface a lower marketing version
-        # as an "update" no matter the build number, so build 2 never
-        # appeared for testers. Must stay >= 1.0 from here on.
-        MARKETING_VERSION: "1.1"
-        CURRENT_PROJECT_VERSION: "3"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Background Modes > Remote notifications (T4.1/T4.2): required for the
@@ -81,24 +74,8 @@ targets:
     info:
       path: GradusiOS/Info.plist
       properties:
-        # XcodeGen regenerates this physical file from this `properties:`
-        # block on every `xcodegen generate` -- it does not merge with
-        # whatever's on disk. Without these two explicit entries, XcodeGen
-        # stamps its own literal "1.0"/"1" defaults over MARKETING_VERSION/
-        # CURRENT_PROJECT_VERSION every time, silently undoing any build-
-        # number bump (confirmed: a hand-edited token in the physical file
-        # got reverted back to a literal by the very next `generate` call).
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIBackgroundModes: [remote-notification]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
-        UISupportedInterfaceOrientations~ipad:
-          [
-            UIInterfaceOrientationPortrait,
-            UIInterfaceOrientationPortraitUpsideDown,
-            UIInterfaceOrientationLandscapeLeft,
-            UIInterfaceOrientationLandscapeRight,
-          ]
         UIRequiresFullScreen: true
         UILaunchScreen: {}
         # France requires extra export-compliance paperwork (a self-declaration
