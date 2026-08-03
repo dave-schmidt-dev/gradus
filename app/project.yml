@@ -92,11 +92,40 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 4CJ49V6QHW
 
+  # T3.5 gate: real `XCUIApplication` behavioral test only (renders the
+  # dashboard from a seeded on-disk cache via `launchEnvironment`). Snapshot
+  # tests of `DashboardView`/`EmptyStateView` live in `GradusiOSTests`
+  # instead (see that target's comment for why) -- this target intentionally
+  # has no SnapshotTesting dependency.
   GradusiOSUITests:
     type: bundle.ui-testing
     platform: iOS
     deploymentTarget: "16.0"
     sources: [GradusiOSUITests]
+    dependencies:
+      - target: GradusiOS
+      - package: GradusKit
+        product: GradusKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+
+  # A `bundle.ui-testing` target doesn't link against the app's compiled
+  # code at all -- it only drives a separately-launched `XCUIApplication`
+  # externally, so `@testable import GradusiOS` type-checks there but fails
+  # at link time (undefined symbols for GradusiOS/GradusKit types). Rendering
+  # `DashboardView`/`EmptyStateView` directly for swift-snapshot-testing
+  # needs a real unit-test bundle (host-app-linked, exactly like
+  # `GradusMacTests`), so this target exists alongside the plan's original
+  # 4-test-target inventory (CR-14) -- a real toolchain constraint found by
+  # running the gate, same class of discovery as T2b.4's ImageRenderer limit.
+  GradusiOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources: [GradusiOSTests]
     dependencies:
       - target: GradusiOS
       - package: SnapshotTesting
@@ -122,4 +151,5 @@ schemes:
         GradusiOS: all
     test:
       targets:
+        - GradusiOSTests
         - GradusiOSUITests

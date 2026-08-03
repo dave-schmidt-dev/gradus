@@ -2,7 +2,7 @@ import CloudKit
 import Foundation
 import Testing
 
-@testable import GradusMac
+@testable import GradusKit
 
 private actor MockAccountStatusSource: AccountStatusSource {
     var nextStatus: Result<CKAccountStatus, Error> = .success(.available)

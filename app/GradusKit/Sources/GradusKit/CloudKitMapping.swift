@@ -11,7 +11,7 @@ public enum CloudKitConstants {
 
 /// One record per provider (§5.1) — `sourceDevice` deliberately omitted
 /// (CR-10/INV-1: no device-identifying value enters CloudKit).
-public struct ProviderStatus: Equatable, Sendable {
+public struct ProviderStatus: Codable, Equatable, Sendable {
     public let providerName: String
     public let providerDisplayName: String
     public let ok: Bool
