@@ -257,6 +257,22 @@ bash test-gate.sh   # boots the pinned simulator, runs GradusMac + GradusiOS uni
 
 Project docs for the Swift side live at the repo root alongside the Python ones (`INVARIANTS.md`, `ledger.yaml`) — INV-7 covers the CloudKit publisher's credential isolation.
 
+### Deploying GradusiOS
+
+**Policy: ship major GradusiOS changes to TestFlight as soon as they land on `main`, not on a batched/periodic schedule.** A "major change" is a completed plan phase, a full plan (design-system work, a new screen, a sync/notification behavior change) — not every commit. Deploy once the change is gate-green and committed; don't wait to be asked.
+
+```bash
+cd app
+./test-gate.sh                                    # must be green first
+# bump MARKETING_VERSION in project.yml if this is a user-visible release
+# (Apple won't surface a lower/equal MARKETING_VERSION as an update to
+# existing testers no matter how CURRENT_PROJECT_VERSION compares)
+bws-run -- ./archive-upload-ios.sh                 # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
+bws-run -- uv run --with pyjwt --with cryptography testflight-setup.py <build>  # assigns the build to Internal Testers
+```
+
+`archive-upload-ios.sh` prints the exact `testflight-setup.py` follow-up command (with the build number it just uploaded) as its last line.
+
 ## Development
 
 ```bash
