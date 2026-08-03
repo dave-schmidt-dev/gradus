@@ -1,6 +1,6 @@
 # Auth Fix Actions Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** When a provider has an auth error, show a numbered key hint in the card and footer; pressing the key opens Terminal.app (CLI auth) or the browser (web auth).
 
@@ -29,7 +29,7 @@
 - Modify: `tests/test_main.py` (add new test class at end of file)
 - Modify: `ai_monitor/__main__.py:1-38` (add constants and function after imports)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_main.py`:
 
@@ -40,15 +40,24 @@ from ai_monitor.providers import ProviderSnapshot
 
 class IsAuthErrorTests(unittest.TestCase):
     def test_auth_keyword_with_known_provider(self) -> None:
-        snap = ProviderSnapshot(name="Claude", ok=False, source="api", error="session expired — visit claude.ai to authenticate")
+        snap = ProviderSnapshot(
+            name="Claude",
+            ok=False,
+            source="api",
+            error="session expired — visit claude.ai to authenticate",
+        )
         self.assertTrue(_is_auth_error(snap))
 
     def test_token_expired_matches(self) -> None:
-        snap = ProviderSnapshot(name="Codex", ok=False, source="api", error="Token expired, please re-login")
+        snap = ProviderSnapshot(
+            name="Codex", ok=False, source="api", error="Token expired, please re-login"
+        )
         self.assertTrue(_is_auth_error(snap))
 
     def test_case_insensitive(self) -> None:
-        snap = ProviderSnapshot(name="Gemini", ok=False, source="api", error="AUTH FAILED: run gemini to fix")
+        snap = ProviderSnapshot(
+            name="Gemini", ok=False, source="api", error="AUTH FAILED: run gemini to fix"
+        )
         self.assertTrue(_is_auth_error(snap))
 
     def test_non_auth_error_returns_false(self) -> None:
@@ -56,11 +65,15 @@ class IsAuthErrorTests(unittest.TestCase):
         self.assertFalse(_is_auth_error(snap))
 
     def test_ok_snapshot_returns_false(self) -> None:
-        snap = ProviderSnapshot(name="Claude", ok=True, source="api", data={"session_percent_left": 50})
+        snap = ProviderSnapshot(
+            name="Claude", ok=True, source="api", data={"session_percent_left": 50}
+        )
         self.assertFalse(_is_auth_error(snap))
 
     def test_unknown_provider_returns_false(self) -> None:
-        snap = ProviderSnapshot(name="UnknownAI", ok=False, source="api", error="please authenticate")
+        snap = ProviderSnapshot(
+            name="UnknownAI", ok=False, source="api", error="please authenticate"
+        )
         self.assertFalse(_is_auth_error(snap))
 
     def test_no_error_text_returns_false(self) -> None:
@@ -72,12 +85,12 @@ class IsAuthErrorTests(unittest.TestCase):
         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_main.py::IsAuthErrorTests -v`
 Expected: ImportError — `_is_auth_error` and `AUTH_ACTIONS` don't exist yet.
 
-- [ ] **Step 3: Implement AUTH_ACTIONS, _AUTH_KEYWORDS, and _is_auth_error()**
+- [x] **Step 3: Implement AUTH_ACTIONS, _AUTH_KEYWORDS, and _is_auth_error()**
 
 Add after the imports block in `ai_monitor/__main__.py` (after line 38, before `parse_args`):
 
@@ -113,12 +126,12 @@ def _is_auth_error(snapshot: ProviderSnapshot) -> bool:
     return any(kw in lower for kw in _AUTH_KEYWORDS)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_main.py::IsAuthErrorTests -v`
 Expected: 8 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ai_monitor/__main__.py tests/test_main.py
@@ -133,7 +146,7 @@ git commit -m "feat: add AUTH_ACTIONS table and _is_auth_error() detection"
 - Modify: `tests/test_main.py` (add new test class)
 - Modify: `ai_monitor/__main__.py` (add function after `_is_auth_error`)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_main.py`:
 
@@ -153,7 +166,9 @@ class BuildFixActionsTests(unittest.TestCase):
         snaps = [
             ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
             ProviderSnapshot(name="Claude", ok=False, source="api", error="authenticate required"),
-            ProviderSnapshot(name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}),
+            ProviderSnapshot(
+                name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
+            ),
         ]
         actions = _build_fix_actions(snaps)
         self.assertEqual(actions["1"], ("Claude", "cli", "claude login"))
@@ -162,7 +177,9 @@ class BuildFixActionsTests(unittest.TestCase):
 
     def test_no_auth_errors_returns_empty(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Claude", ok=True, source="api", data={"session_percent_left": 50}),
+            ProviderSnapshot(
+                name="Claude", ok=True, source="api", data={"session_percent_left": 50}
+            ),
             ProviderSnapshot(name="Codex", ok=False, source="api", error="connection timeout"),
         ]
         actions = _build_fix_actions(snaps)
@@ -179,18 +196,20 @@ class BuildFixActionsTests(unittest.TestCase):
 
     def test_browser_action_type(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Cursor", ok=False, source="api", error="please login to continue"),
+            ProviderSnapshot(
+                name="Cursor", ok=False, source="api", error="please login to continue"
+            ),
         ]
         actions = _build_fix_actions(snaps)
         self.assertEqual(actions["1"], ("Cursor", "browser", "https://cursor.sh"))
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_main.py::BuildFixActionsTests -v`
 Expected: ImportError — `_build_fix_actions` doesn't exist yet.
 
-- [ ] **Step 3: Implement _build_fix_actions()**
+- [x] **Step 3: Implement _build_fix_actions()**
 
 Add after `_is_auth_error()` in `ai_monitor/__main__.py`:
 
@@ -207,12 +226,12 @@ def _build_fix_actions(
     return actions
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_main.py::BuildFixActionsTests -v`
 Expected: 5 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ai_monitor/__main__.py tests/test_main.py
@@ -227,7 +246,7 @@ git commit -m "feat: add _build_fix_actions() to map number keys to auth fixes"
 - Modify: `tests/test_main.py` (add new test class)
 - Modify: `ai_monitor/__main__.py` (add function after `_build_fix_actions`)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_main.py`:
 
@@ -255,12 +274,12 @@ class LaunchFixTests(unittest.TestCase):
         mock_popen.assert_not_called()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_main.py::LaunchFixTests -v`
 Expected: ImportError — `_launch_fix` doesn't exist yet.
 
-- [ ] **Step 3: Implement _launch_fix()**
+- [x] **Step 3: Implement _launch_fix()**
 
 Add after `_build_fix_actions()` in `ai_monitor/__main__.py`:
 
@@ -268,21 +287,23 @@ Add after `_build_fix_actions()` in `ai_monitor/__main__.py`:
 def _launch_fix(kind: str, target: str) -> None:
     """Open a Terminal window (CLI) or browser (web) to fix an auth error."""
     if kind == "cli":
-        subprocess.Popen([
-            "osascript",
-            "-e",
-            f'tell application "Terminal" to do script "{target}"',
-        ])
+        subprocess.Popen(
+            [
+                "osascript",
+                "-e",
+                f'tell application "Terminal" to do script "{target}"',
+            ]
+        )
     elif kind == "browser":
         subprocess.Popen(["open", target])
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_main.py::LaunchFixTests -v`
 Expected: 3 PASSED
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add ai_monitor/__main__.py tests/test_main.py
@@ -297,7 +318,7 @@ git commit -m "feat: add _launch_fix() for Terminal/browser auth actions"
 - Modify: `tests/test_ui.py` (add new test class)
 - Modify: `ai_monitor/ui.py:487-521` (`build_provider_panel` signature + error branch)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_ui.py`:
 
@@ -319,9 +340,7 @@ class AuthFixPanelTests(unittest.TestCase):
         self.assertNotIn("run gemini", output)
 
     def test_non_auth_error_shows_raw_error(self) -> None:
-        snap = ProviderSnapshot(
-            name="Claude", ok=False, source="api", error="connection timeout"
-        )
+        snap = ProviderSnapshot(name="Claude", ok=False, source="api", error="connection timeout")
         panel = build_provider_panel(snap, self.now, auth_fix_key=None)
         output = _capture(panel, width=60)
         self.assertIn("error:", output)
@@ -329,30 +348,26 @@ class AuthFixPanelTests(unittest.TestCase):
         self.assertNotIn("to fix", output)
 
     def test_auth_error_keeps_red_border(self) -> None:
-        snap = ProviderSnapshot(
-            name="Claude", ok=False, source="api", error="authenticate failed"
-        )
+        snap = ProviderSnapshot(name="Claude", ok=False, source="api", error="authenticate failed")
         panel = build_provider_panel(snap, self.now, auth_fix_key="2")
         # Panel border_style is set to "text.red" — verify by checking the Panel object
         self.assertEqual(panel.border_style, "text.red")
 
     def test_auth_fix_key_none_on_error_shows_normal_error(self) -> None:
         """When auth_fix_key is not passed, error panel is unchanged from current behavior."""
-        snap = ProviderSnapshot(
-            name="Codex", ok=False, source="api", error="HTTP 500 server error"
-        )
+        snap = ProviderSnapshot(name="Codex", ok=False, source="api", error="HTTP 500 server error")
         panel = build_provider_panel(snap, self.now)
         output = _capture(panel, width=60)
         self.assertIn("error:", output)
         self.assertIn("HTTP 500 server error", output)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_ui.py::AuthFixPanelTests -v`
 Expected: TypeError — `build_provider_panel` does not accept `auth_fix_key` parameter yet.
 
-- [ ] **Step 3: Add auth_fix_key parameter to build_provider_panel()**
+- [x] **Step 3: Add auth_fix_key parameter to build_provider_panel()**
 
 Modify `ai_monitor/ui.py` — change the signature of `build_provider_panel` at line 487:
 
@@ -399,17 +414,17 @@ With:
 
 Note: The `\\[` is needed because Rich markup uses `[` for style tags — escaping it with `\\[` renders a literal `[`.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_ui.py::AuthFixPanelTests -v`
 Expected: 4 PASSED
 
-- [ ] **Step 5: Verify existing panel tests still pass**
+- [x] **Step 5: Verify existing panel tests still pass**
 
 Run: `uv run pytest tests/test_ui.py -v`
 Expected: All existing tests PASS (signature change is backwards-compatible via default `auth_fix_key=None`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ai_monitor/ui.py tests/test_ui.py
@@ -424,7 +439,7 @@ git commit -m "feat: render auth-error CTA in provider panel with fix key hint"
 - Modify: `tests/test_ui.py` (add new test class)
 - Modify: `ai_monitor/ui.py:780-833` (`build_dashboard` signature + footer + panel wiring)
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/test_ui.py`:
 
@@ -436,7 +451,9 @@ class AuthFixFooterTests(unittest.TestCase):
     def test_footer_shows_fix_hints(self) -> None:
         snaps = [
             ProviderSnapshot(name="Gemini", ok=False, source="api", error="auth failed"),
-            ProviderSnapshot(name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}),
+            ProviderSnapshot(
+                name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
+            ),
         ]
         fix_actions = {"1": ("Gemini", "cli", "gemini")}
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions=fix_actions)
@@ -465,7 +482,9 @@ class AuthFixFooterTests(unittest.TestCase):
 
     def test_footer_no_fix_hints_when_empty(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}),
+            ProviderSnapshot(
+                name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
+            ),
         ]
         dashboard = build_dashboard(snaps, self.now, 30, fix_actions={})
         output = _capture(dashboard, width=80)
@@ -473,7 +492,9 @@ class AuthFixFooterTests(unittest.TestCase):
 
     def test_footer_no_fix_hints_when_none(self) -> None:
         snaps = [
-            ProviderSnapshot(name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}),
+            ProviderSnapshot(
+                name="Codex", ok=True, source="api", data={"five_hour_percent_left": 80}
+            ),
         ]
         dashboard = build_dashboard(snaps, self.now, 30)
         output = _capture(dashboard, width=80)
@@ -494,12 +515,12 @@ class AuthFixFooterTests(unittest.TestCase):
         self.assertNotIn("auth failed", output)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_ui.py::AuthFixFooterTests -v`
 Expected: TypeError — `build_dashboard` does not accept `fix_actions` yet.
 
-- [ ] **Step 3: Modify build_dashboard() to accept fix_actions and render footer + panel CTAs**
+- [x] **Step 3: Modify build_dashboard() to accept fix_actions and render footer + panel CTAs**
 
 In `ai_monitor/ui.py`, update the `build_dashboard` signature (line 780) to add `fix_actions`:
 
@@ -527,18 +548,21 @@ Then compute per-provider fix keys and pass to panel builder. Replace the panel-
 With:
 
 ```python
-    _COMPACT = {"Cursor", "Vibe"}
-    ordered = sorted(snapshots, key=lambda s: s.name in _COMPACT)
-    fix_key_by_name: dict[str, str] = {}
-    if fix_actions:
-        for key, (name, _, _) in fix_actions.items():
-            fix_key_by_name[name] = key
-    panels = [
-        build_provider_panel(
-            snap, now, threshold=threshold, auth_fix_key=fix_key_by_name.get(snap.name),
-        )
-        for snap in ordered
-    ]
+_COMPACT = {"Cursor", "Vibe"}
+ordered = sorted(snapshots, key=lambda s: s.name in _COMPACT)
+fix_key_by_name: dict[str, str] = {}
+if fix_actions:
+    for key, (name, _, _) in fix_actions.items():
+        fix_key_by_name[name] = key
+panels = [
+    build_provider_panel(
+        snap,
+        now,
+        threshold=threshold,
+        auth_fix_key=fix_key_by_name.get(snap.name),
+    )
+    for snap in ordered
+]
 ```
 
 Then update the footer (lines 826-831). Replace:
@@ -568,17 +592,17 @@ With:
     footer = Text.assemble(*footer_parts)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_ui.py::AuthFixFooterTests -v`
 Expected: 5 PASSED
 
-- [ ] **Step 5: Verify all existing tests still pass**
+- [x] **Step 5: Verify all existing tests still pass**
 
 Run: `uv run pytest tests/ -q`
 Expected: All tests pass (70+ existing + new tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ai_monitor/ui.py tests/test_ui.py
@@ -594,7 +618,7 @@ git commit -m "feat: render auth fix hints in dashboard footer and wire CTA to p
 
 This task modifies the main event loop. No new tests for the key-handler wiring itself — it's deeply coupled to the terminal I/O loop and already covered by the unit tests on the building blocks. The existing `MainOnceTests` in `test_main.py` verify `--once` mode still works.
 
-- [ ] **Step 1: Add fix_actions computation and pass to build_dashboard in --once mode**
+- [x] **Step 1: Add fix_actions computation and pass to build_dashboard in --once mode**
 
 In `ai_monitor/__main__.py`, update the `--once` code path (around line 335). Replace:
 
@@ -605,11 +629,13 @@ In `ai_monitor/__main__.py`, update the `--once` code path (around line 335). Re
 With:
 
 ```python
-            fix_actions = _build_fix_actions(snapshots)
-            console.print(build_dashboard(snapshots, updated_at, 0, threshold=threshold, fix_actions=fix_actions))
+fix_actions = _build_fix_actions(snapshots)
+console.print(
+    build_dashboard(snapshots, updated_at, 0, threshold=threshold, fix_actions=fix_actions)
+)
 ```
 
-- [ ] **Step 2: Add fix_actions to the countdown render loop**
+- [x] **Step 2: Add fix_actions to the countdown render loop**
 
 In the main refresh loop, update the countdown phase `build_dashboard` call (around line 376). Replace:
 
@@ -641,7 +667,7 @@ With:
                         )
 ```
 
-- [ ] **Step 3: Add number-key handler in the countdown input handler**
+- [x] **Step 3: Add number-key handler in the countdown input handler**
 
 In the countdown input handler (around lines 388-395), after the `r`/`R` check, add the number-key handler. Replace:
 
@@ -672,7 +698,7 @@ With:
                                     _launch_fix(kind, target)
 ```
 
-- [ ] **Step 4: Add fix_actions to the refresh-phase render loop**
+- [x] **Step 4: Add fix_actions to the refresh-phase render loop**
 
 In the refresh-phase `build_dashboard` call (around lines 411-419). Replace:
 
@@ -707,12 +733,12 @@ With:
                             )
 ```
 
-- [ ] **Step 5: Run full test suite + linter**
+- [x] **Step 5: Run full test suite + linter**
 
 Run: `uv run pytest tests/ -q && ruff check ai_monitor/`
 Expected: All tests pass, no ruff errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add ai_monitor/__main__.py
@@ -723,22 +749,22 @@ git commit -m "feat: wire auth fix actions into main loop with number-key dispat
 
 ### Task 7: Quality Gate — Full Validation
 
-- [ ] **Step 1: Run full test suite**
+- [x] **Step 1: Run full test suite**
 
 Run: `uv run pytest tests/ -v`
 Expected: All tests pass (70 existing + ~20 new).
 
-- [ ] **Step 2: Run ruff**
+- [x] **Step 2: Run ruff**
 
 Run: `ruff check ai_monitor/`
 Expected: All checks passed!
 
-- [ ] **Step 3: Verify --once mode renders fix hints**
+- [x] **Step 3: Verify --once mode renders fix hints**
 
 Run: `uv run python -m ai_monitor --once --providers Claude,Gemini 2>&1 | head -30`
 Expected: Dashboard renders. If any provider has an auth error, `[N] fix <Name>` should appear in the footer.
 
-- [ ] **Step 4: Update TASKS.md**
+- [x] **Step 4: Update TASKS.md**
 
 Add completed task entry:
 
@@ -746,11 +772,11 @@ Add completed task entry:
 - [x] Auth fix actions: numbered key hints for auth-errored providers, launching Terminal or browser to fix.
 ```
 
-- [ ] **Step 5: Update HISTORY.md**
+- [x] **Step 5: Update HISTORY.md**
 
 Add entry for this feature.
 
-- [ ] **Step 6: Final commit**
+- [x] **Step 6: Final commit**
 
 ```bash
 git add TASKS.md HISTORY.md

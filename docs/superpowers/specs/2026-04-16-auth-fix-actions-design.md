@@ -30,12 +30,12 @@ Defined as `AUTH_ACTIONS: dict[str, tuple[str, str]]` in `__main__.py`:
 
 ```python
 AUTH_ACTIONS = {
-    "Claude":   ("cli",     "claude login"),
-    "Codex":    ("cli",     "codex login"),
-    "Gemini":   ("cli",     "gemini"),
-    "Copilot":  ("cli",     "gh auth login"),
-    "Cursor":   ("browser", "https://cursor.sh"),
-    "Vibe":     ("browser", "https://console.mistral.ai"),
+    "Claude": ("cli", "claude login"),
+    "Codex": ("cli", "codex login"),
+    "Gemini": ("cli", "gemini"),
+    "Copilot": ("cli", "gh auth login"),
+    "Cursor": ("browser", "https://cursor.sh"),
+    "Vibe": ("browser", "https://console.mistral.ai"),
 }
 ```
 
@@ -67,10 +67,7 @@ Each hint is only shown when the corresponding provider has an active auth error
 
 **CLI auth** (`kind = "cli"`):
 ```python
-subprocess.Popen([
-    "osascript", "-e",
-    f'tell application "Terminal" to do script "{command}"'
-])
+subprocess.Popen(["osascript", "-e", f'tell application "Terminal" to do script "{command}"'])
 ```
 Opens a new Terminal.app window with the command pre-loaded.
 
