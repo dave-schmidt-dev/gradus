@@ -72,20 +72,36 @@ private func makeViewModel(providers: [ProviderStatus]) -> DashboardViewModel {
     return DashboardViewModel(cache: cache)
 }
 
+// P3/T3.3 gate: under the corrected ranking (Key decision #6), `cursor`
+// (errored, tier 1) is the hero -- not `codex` (62%, the highest percent) --
+// so these snapshots assert the error-variant `StatTile` renders as the
+// hero, with the rest of `sampleProviders()` following in ranked order.
+// Supersedes the old pre-ranking `dashboardRendersPopulatedCards*` pair
+// (deleted here, along with their baselines): same view model, same
+// fixture, now covered by these two under the rewritten `DashboardView`.
+//
+// Snapshots `DashboardContent` directly (not `DashboardView`, which wraps
+// it in a `NavigationSplitView`): no navigation chrome to verify here, and
+// rendering `DashboardView` directly through swift-snapshot-testing's
+// offscreen hosting is what caused a SIGSEGV earlier this session (see
+// `DashboardContent`'s doc comment in DashboardView.swift) -- this keeps
+// these tests independent of `DashboardView`'s outer shell entirely.
 @MainActor
-@Test func dashboardRendersPopulatedCardsLight() {
+@Test func dashboardRendersRankedHeroAndListLight() {
     let viewModel = makeViewModel(providers: sampleProviders())
-    let view = DashboardView(viewModel: viewModel, now: fixedNow)
+    #expect(viewModel.heroProvider?.providerName == "cursor")
+    let view = DashboardContent(viewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 500), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .light)))
 }
 
 @MainActor
-@Test func dashboardRendersPopulatedCardsDark() {
+@Test func dashboardRendersRankedHeroAndListDark() {
     let viewModel = makeViewModel(providers: sampleProviders())
-    let view = DashboardView(viewModel: viewModel, now: fixedNow)
+    #expect(viewModel.heroProvider?.providerName == "cursor")
+    let view = DashboardContent(viewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 500), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .dark)))
 }
 
 @MainActor

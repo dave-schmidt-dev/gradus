@@ -33,6 +33,12 @@ public final class DashboardViewModel: ObservableObject {
 
     static let syncEnabledKey = "iCloudSyncEnabled"
 
+    // TODO(Phase 5.2): replace with a real `@Published var
+    // localWarningThresholdPercent` property (backed by Settings) once it
+    // ships. Hardcoded placeholder so `rankProviders` has a real threshold
+    // today without inventing Phase 5's API surface early.
+    private static let localWarningThresholdPlaceholder: Double = 20.0
+
     private let cache: LocalCacheStore
     private let fetcher: CloudFetcher?
     private let accountSource: AccountStatusSource?
@@ -56,7 +62,7 @@ public final class DashboardViewModel: ObservableObject {
         self.userDefaults = userDefaults
         // Default OFF: usage data leaves the device only on explicit opt-in.
         self.syncEnabled = userDefaults.bool(forKey: Self.syncEnabledKey)
-        self.providers = cache.loadCachedStatuses()
+        self.providers = rankProviders(cache.loadCachedStatuses(), localThreshold: Self.localWarningThresholdPlaceholder)
         self.lastSyncedAt = cache.lastSyncedAt()
     }
 
@@ -68,6 +74,16 @@ public final class DashboardViewModel: ObservableObject {
         if !syncEnabled { return .syncDisabled }
         return .waitingForFirstPublish
     }
+
+    /// The most urgent provider per `rankProviders`' total order (P3/T3.2).
+    /// Always the first element: `providers` is ranked at every one of its
+    /// three assignment sites (`init`, `sync()`, `reconcile()`) -- the
+    /// `.zoneNotFound`/`.zoneDeleted` reset path assigns `[]` directly, which
+    /// is trivially "ranked" (empty), so this invariant holds unconditionally.
+    public var heroProvider: ProviderStatus? { providers.first }
+
+    /// All providers other than the hero, still in ranked order.
+    public var restProviders: [ProviderStatus] { Array(providers.dropFirst()) }
 
     public func refreshAccountStatus() async {
         guard let accountSource else { return }
@@ -131,7 +147,7 @@ public final class DashboardViewModel: ObservableObject {
         var byName = Dictionary(uniqueKeysWithValues: providers.map { ($0.providerName, $0) })
         for status in changed { byName[status.providerName] = status }
         for name in deletedProviderNames { byName.removeValue(forKey: name) }
-        providers = byName.values.sorted { $0.providerName < $1.providerName }
+        providers = rankProviders(Array(byName.values), localThreshold: Self.localWarningThresholdPlaceholder)
     }
 
     /// Fetches the current CloudKit state and refreshes the offline cache.
@@ -144,7 +160,7 @@ public final class DashboardViewModel: ObservableObject {
         isSyncing = true
         defer { isSyncing = false }
         guard let fetched = try? await fetcher.fetchAll() else { return }
-        providers = fetched
+        providers = rankProviders(fetched, localThreshold: Self.localWarningThresholdPlaceholder)
         let syncedAt = Date()
         lastSyncedAt = syncedAt
         try? cache.saveCachedStatuses(fetched, syncedAt: syncedAt)

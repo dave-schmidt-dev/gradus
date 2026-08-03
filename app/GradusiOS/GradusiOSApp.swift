@@ -47,12 +47,13 @@ struct GradusiOSApp: App {
         WindowGroup {
             DashboardView(viewModel: viewModel)
                 .task {
+                    guard !Self.isUITesting else { return }
                     await accountMonitor.start()
                     await viewModel.sync()
                     await subscribeIfEnabled()
                 }
                 .onChange(of: viewModel.syncEnabled) { enabled in
-                    guard enabled else { return }
+                    guard enabled, !Self.isUITesting else { return }
                     Task { await subscribeIfEnabled() }
                 }
         }
@@ -85,5 +86,27 @@ struct GradusiOSApp: App {
             let seeded = try? JSONDecoder().decode([ProviderStatus].self, from: data)
         else { return }
         try? cache.saveCachedStatuses(seeded, syncedAt: Date())
+    }
+
+    /// True whenever a UITest has seeded the offline cache (see above). Also
+    /// gates `accountMonitor.start()`/`sync()`/subscription creation off of a
+    /// real, live CloudKit round-trip: on the shared dev simulator, the
+    /// signed-in Apple ID genuinely needs periodic re-verification, so a real
+    /// `CKContainer.accountStatus()` call (inside `AccountStatusMonitor.start()`)
+    /// surfaces a full-screen, OS-level "Apple Account Verification" dialog
+    /// that's unrelated to app correctness and can recur mid-test (observed:
+    /// it reappeared after being dismissed once). This is a genuine,
+    /// independent OS-level nag on the shared simulator's real signed-in
+    /// Apple ID -- confirmed to resurface roughly every 5s on its own,
+    /// unrelated to any particular view lifecycle event (an earlier
+    /// hypothesis blaming `NavigationSplitView` collapse transitions
+    /// rerunning `.task` was investigated and ruled out: the dialog kept
+    /// recurring even with CloudKit calls gated off entirely). Fixture data
+    /// from `GRADUS_UITEST_SEED_JSON` already renders the dashboard fully
+    /// from the on-disk cache with no CloudKit involvement at all, so
+    /// skipping these calls under UI tests removes a source of flakiness
+    /// without weakening what's under test.
+    private static var isUITesting: Bool {
+        ProcessInfo.processInfo.environment["GRADUS_UITEST_SEED_JSON"] != nil
     }
 }
