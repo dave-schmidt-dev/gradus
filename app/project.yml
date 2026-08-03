@@ -72,6 +72,11 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIRequiresFullScreen: true
         UILaunchScreen: {}
+        # France requires extra export-compliance paperwork (a self-declaration
+        # filed with ANSSI) for apps distributed there. ASC's upload dialog asks
+        # this per-submission regardless of the flag below; answered "No" since
+        # French distribution isn't planned. Revisit both this answer and the
+        # ITSAppUsesNonExemptEncryption exemption if that changes.
         ITSAppUsesNonExemptEncryption: false
     entitlements:
       path: GradusiOS/GradusiOS.entitlements
