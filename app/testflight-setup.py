@@ -13,17 +13,29 @@ button does under the hood — it triggers Apple's own invitation email, not a
 raw account action.
 
 Run via:
-    bws-run -- uv run --with pyjwt --with cryptography app/testflight-setup.py
+    bws-run -- uv run --with pyjwt --with cryptography app/testflight-setup.py [version]
+
+If `version` is given, polls specifically for that build's version number
+instead of "whatever /builds returns as newest by uploadedDate". That
+distinction matters: a build that altool just successfully uploaded can take
+several minutes before it's even indexed as a queryable /builds resource at
+all (separate from its processingState reaching VALID) -- polling by
+uploadedDate alone can silently grab an older, already-processed build
+instead of waiting for the new one, and happily report "already assigned,
+nothing to do" without ever having looked at the build you actually meant.
 """
 
 from __future__ import annotations
 
 import sys
+import time
 
 from _asc_api import call, make_token
 
 BUNDLE_ID = "com.zerodelta.gradus.ios"
 INTERNAL_GROUP_NAME = "Internal Testers"
+BUILD_POLL_INTERVAL_SECONDS = 30
+BUILD_POLL_TIMEOUT_SECONDS = 30 * 60
 
 
 def main() -> int:
@@ -118,19 +130,45 @@ def main() -> int:
                 )
                 print(f"    Invited {email} — TestFlight invite email is on its way.")
 
-    print("==> Finding latest processed build")
-    builds = call(
-        token,
-        "GET",
-        f"/builds?filter[app]={app_id}&filter[processingState]=VALID&sort=-uploadedDate&limit=1",
-    )
-    build_data = (builds or {}).get("data") or []
-    if not build_data:
-        print("No VALID (processed) build found yet — nothing to assign.")
-        return 0
+    target_version = sys.argv[1] if len(sys.argv) > 1 else None
+    if target_version:
+        print(f"==> Waiting for build version {target_version} to appear and process")
+    else:
+        print(
+            "==> Finding latest processed build (polling — Apple processing can take several minutes)"
+        )
+    deadline = time.monotonic() + BUILD_POLL_TIMEOUT_SECONDS
+    build_data: list = []
+    while True:
+        filter_version = f"&filter[version]={target_version}" if target_version else ""
+        builds = call(
+            token,
+            "GET",
+            f"/builds?filter[app]={app_id}{filter_version}&sort=-uploadedDate&limit=1",
+        )
+        build_data = (builds or {}).get("data") or []
+        if build_data:
+            state = build_data[0]["attributes"].get("processingState")
+            version = build_data[0]["attributes"].get("version")
+            if state == "VALID":
+                break
+            if state == "FAILED" or state == "INVALID":
+                print(
+                    f"FAIL: build (version {version}) processing state is {state}",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"    Build (version {version}) still processing ({state})...")
+        else:
+            label = f"version {target_version}" if target_version else "any builds"
+            print(f"    No indexed build yet for {label}...")
+        if time.monotonic() >= deadline:
+            print("No VALID (processed) build found within the timeout — nothing to assign.")
+            return 0
+        time.sleep(BUILD_POLL_INTERVAL_SECONDS)
     build_id = build_data[0]["id"]
     build_version = build_data[0]["attributes"].get("version")
-    print(f"    Latest build: version {build_version} ({build_id})")
+    print(f"    Build: version {build_version} ({build_id})")
 
     print("==> Checking whether build is already assigned to the group")
     group_builds = call(token, "GET", f"/betaGroups/{group_id}/builds?limit=50")

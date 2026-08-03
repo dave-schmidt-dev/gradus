@@ -48,6 +48,17 @@ xcodebuild -exportArchive \
   -exportPath "$EXPORT_PATH" \
   -exportOptionsPlist ExportOptionsMac.plist
 
+# Every file in the exported bundle -- including ones codesign itself just
+# wrote -- can carry a com.apple.provenance extended attribute (macOS
+# re-tags files as a side effect of codesign running, so this must happen
+# after export/signing, not before -- same root cause hit on the iOS side,
+# see archive-upload-ios.sh and apple_developer/LESSONS.md). A strict
+# codesign verify rejects it; strip before verifying/zipping.
+xattr -cr "$APP_PATH"
+
+echo "==> Verifying signature"
+codesign --verify --deep --strict "$APP_PATH"
+
 echo "==> Zipping app bundle for notary submission"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 

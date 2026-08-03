@@ -1,4 +1,5 @@
 import UIKit
+import UserNotifications
 
 /// Bridges UIKit's remote-notification delegate callbacks (T4.1/T4.2) into
 /// the SwiftUI app -- SwiftUI's `App` protocol has no equivalent hook, so
@@ -16,7 +17,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        application.registerForRemoteNotifications()
+        // `registerForRemoteNotifications` alone only gets an APNs token for
+        // the silent `content-available` zone-sync push. The warning
+        // `CKQuerySubscription`'s banner/sound/badge needs this separate
+        // authorization request, or CloudKit's alert push is delivered but
+        // never shown.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
+            DispatchQueue.main.async {
+                application.registerForRemoteNotifications()
+            }
+        }
         return true
     }
 

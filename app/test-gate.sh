@@ -38,13 +38,29 @@ if [[ -z "$sim_udid" ]]; then
 fi
 echo "    Simulator UDID: $sim_udid"
 
+# A crashing test (e.g. a segfault inside a snapshot-diffing dependency)
+# still produces a valid, useful .ips in ~/Library/Logs/DiagnosticReports --
+# only the interactive "GradusiOS quit unexpectedly" dialog is suppressed,
+# scoped to this run and restored on exit so it never leaks into the rest
+# of the system.
+prior_dialog_type="$(defaults read com.apple.CrashReporter DialogType 2>/dev/null || true)"
+defaults write com.apple.CrashReporter DialogType none
+
 # Bug fix: the gate previously left the simulator running after tests
 # finished (any exit path, including failures). Background simulator
 # daemons (e.g. mediaanalysisd re-indexing the simulated Photos library)
 # can then spin at 800%+ CPU indefinitely with nothing to notice or stop
 # them. Shut the simulator down on every exit path so a gate run never
 # leaves runaway processes behind.
-trap 'echo "==> Shutting down simulator to release its background processes"; xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true' EXIT
+trap '
+  echo "==> Shutting down simulator to release its background processes"
+  xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true
+  if [[ -z "$prior_dialog_type" ]]; then
+    defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
+  else
+    defaults write com.apple.CrashReporter DialogType "$prior_dialog_type"
+  fi
+' EXIT
 
 echo "==> Booting simulator"
 xcrun simctl bootstatus "$sim_udid" -b || true
