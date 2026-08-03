@@ -233,6 +233,24 @@ In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sou
 - **Claude `/usage` may return "only available for subscription plans"** even on valid Team or Pro seats. This is a server-side issue where the Anthropic usage API returns empty limit buckets (`five_hour`, `seven_day`, `seven_day_sonnet` are all null). The PTY probe itself works correctly. When the API starts returning data again, the Claude card will populate automatically.
 - The Antigravity token is minted under `agy`'s own OAuth client, so this path is coupled to `agy`'s internal API. If a future `agy` release changes the Keychain layout or the `retrieveUserQuotaSummary` contract, the card will show an error until the provider is updated.
 
+## Companion apps (macOS/iOS)
+
+`app/` holds a Swift companion pair that mirrors this dashboard off-machine:
+
+- **GradusMac** — a menu-bar app that reads the same `.state/snapshot.json`/`snapshot-v2.json` this CLI writes and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/` or any credential path (INV-7) — its only input is the credential-free snapshot file, threaded through a single injected path dependency.
+- **GradusiOS** — a consumer-only SwiftUI dashboard. It has no independent data source: it renders whatever the Mac last published, kept current via a `CKRecordZoneSubscription` (silent push, delta sync with `CKFetchRecordZoneChangesOperation`) plus a `CKQuerySubscription` that raises a local notification banner when a provider's `isWarning` flag flips.
+- Both apps share `GradusKit`, a CloudKit-free Swift package holding the reconciliation logic, so it can be unit-tested against mocks instead of live CloudKit.
+- Sync is opt-in per device (off by default) and independent per device — pairing two devices doesn't couple them beyond both reading the same published snapshot.
+
+Build/test (requires Xcode + `xcodegen`, pinned version in `app/.xcode-version`):
+
+```bash
+cd app
+bash test-gate.sh   # boots the pinned simulator, runs GradusMac + GradusiOS unit/UI tests
+```
+
+Project docs for the Swift side live at the repo root alongside the Python ones (`INVARIANTS.md`, `ledger.yaml`) — INV-7 covers the CloudKit publisher's credential isolation.
+
 ## Development
 
 ```bash

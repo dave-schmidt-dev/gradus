@@ -75,3 +75,16 @@ rationale: The provider credential caches (Vibe/Cursor/Claude cookies + tokens) 
   `_write_private` (tempfile.mkstemp — born 0600, independent of umask — then chmod + os.replace),
   is the SOLE sanctioned write path for all credential/secret writes, so the mode is never
   world-readable even momentarily and the contract is enforceable at one site. Prevents F1.
+
+### INV-7 — The CloudKit publisher takes its snapshot data through a single injected snapshot-path dependency, and its source references no credential path
+area: ["app/GradusMac/**", "app/GradusKit/**"]
+gate_test: app/GradusMacTests/INV7Tests.swift::snapshotPathHasExactlyOneInjectionPoint, publisherSourceReferencesNoCredentialPath
+threshold: 3
+rationale: The Mac app runs on the same machine holding live credentials in `.cache/`. The single-dependency
+  shape keeps the off-device publish boundary as tight as the Python producer's and forecloses the obvious
+  "just read the cookies directly" regression. Honest scope (CR-13): this wording is deliberately narrowed
+  to what the test actually proves. It is a grep tripwire against a hardcoded credential-path string plus a
+  structural check that the snapshot path is constructed at exactly one call site
+  (`PublishPipeline.defaultSnapshotPath` in GradusMacApp.swift) and threaded through `start(snapshotPath:)` —
+  not a proof that every filesystem read in GradusMac is confined to that one path. PM-15's fs_usage
+  runtime canary check is deferred beta-hardening, not this gate.
