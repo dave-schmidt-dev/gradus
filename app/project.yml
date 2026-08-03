@@ -28,6 +28,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
         # Hand-maintained entitlements files (not XcodeGen's `entitlements:`
         # block -- that block unconditionally stamps CODE_SIGN_ENTITLEMENTS
         # into every config, which silently overrides any per-config value
