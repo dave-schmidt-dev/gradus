@@ -52,6 +52,7 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Background Modes > Remote notifications (T4.1/T4.2): required for the
     # silent content-available push (zone-sync subscription) to wake the
     # app. `INFOPLIST_KEY_UIBackgroundModes` (both scalar and array form)
