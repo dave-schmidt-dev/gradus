@@ -13,18 +13,52 @@
 #    it in favor of a manually-installed profile.
 set -euo pipefail
 
+unset HISTFILE
+set +o history 2>/dev/null || true
+umask 077
+
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-PROFILE="gradus-notary"
+PROFILE="${NOTARY_PROFILE:-gradus-notary}"
+NOTARY_STATUS_SCRIPT="${NOTARY_STATUS_SCRIPT:-./notary-status.sh}"
+PLIST_BUDDY="${PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
+PYTHON="${NOTARY_PYTHON:-python3}"
 ARCHIVE_PATH="build/GradusMac.xcarchive"
 EXPORT_PATH="build/export"
 APP_PATH="$EXPORT_PATH/GradusMac.app"
 ZIP_PATH="build/GradusMac.app.zip"
+submit_output=""
+acceptance_output=""
+
+cleanup() {
+  if [[ -n "$submit_output" ]]; then
+    rm -f "$submit_output" 2>/dev/null || true
+  fi
+  if [[ -n "$acceptance_output" ]]; then
+    rm -f "$acceptance_output" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+progress() {
+  printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$1" >&2
+}
+
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  echo "FAIL: required tool is missing: $PYTHON" >&2
+  exit 69
+fi
 
 echo "==> Checking notarytool credential profile ($PROFILE)"
+progress "Requesting Apple notarization history for release preflight"
 if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
-  echo "FAIL: no notarytool keychain profile named '$PROFILE'." >&2
-  echo "      Run the one-time store-credentials step first." >&2
+  echo "FAIL: Apple notarytool history request failed using profile '$PROFILE'." >&2
+  echo "      This can be a service, network, request, or Keychain-profile issue." >&2
+  echo "      A sandboxed agent may not see the login Keychain. Do not recreate the" >&2
+  echo "      profile based on this check alone; verify in Terminal or approve an" >&2
+  echo "      outside-sandbox check first:" >&2
+  echo "      xcrun notarytool history --keychain-profile $PROFILE" >&2
   exit 1
 fi
 echo "    Profile found. OK."
@@ -62,8 +96,77 @@ codesign --verify --deep --strict "$APP_PATH"
 echo "==> Zipping app bundle for notary submission"
 ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
 
-echo "==> Submitting to Apple notary service (can take a few minutes; notarytool reports status as it polls)"
-xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$PROFILE" --wait
+echo "==> Submitting to Apple notary service (upload progress remains visible)"
+submit_output="$(mktemp "${TMPDIR:-/tmp}/gradus-notary-submit.XXXXXX")"
+set +e
+xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$PROFILE" --no-wait 2>&1 | tee "$submit_output"
+submit_status=${PIPESTATUS[0]}
+set -e
+if ((submit_status != 0)); then
+  echo "FAIL: notarytool did not accept the upload; no submission was recorded." >&2
+  exit "$submit_status"
+fi
+
+submission_id="$(awk '/^[[:space:]]*id:[[:space:]]*[[:xdigit:]-]{36}[[:space:]]*$/ { print $2; exit }' "$submit_output")"
+if [[ -z "$submission_id" ]]; then
+  echo "FAIL: upload completed, but its submission ID could not be read." >&2
+  echo "      Recover the ID from Apple history; do not resubmit:" >&2
+  echo "      $NOTARY_STATUS_SCRIPT" >&2
+  exit 70
+fi
+
+"$NOTARY_STATUS_SCRIPT" --record "$submission_id" --name "GradusMac.app.zip" --artifact "$ZIP_PATH"
+echo "==> Submission recorded before polling: $submission_id"
+echo "    If this process is interrupted, resume the queue check without resubmitting:"
+echo "    $NOTARY_STATUS_SCRIPT --watch --id $submission_id"
+"$NOTARY_STATUS_SCRIPT" --watch --id "$submission_id"
+
+echo "==> Independently confirming exact Accepted status directly with Apple"
+acceptance_output="$(mktemp "${TMPDIR:-/tmp}/gradus-notary-acceptance.XXXXXX")"
+progress "Requesting live Apple notarization info for submission $submission_id"
+if ! xcrun notarytool info "$submission_id" --keychain-profile "$PROFILE" --output-format json >"$acceptance_output" 2>/dev/null; then
+  echo "FAIL: direct Apple info request failed; this may be a service, network," >&2
+  echo "      request, or Keychain-profile issue. Refusing to staple or package." >&2
+  exit 70
+fi
+
+set +e
+"$PYTHON" - "$acceptance_output" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        status = json.load(handle).get("status")
+except (OSError, ValueError, AttributeError):
+    raise SystemExit(70)
+
+if status == "Accepted":
+    raise SystemExit(0)
+if status == "In Progress":
+    raise SystemExit(2)
+raise SystemExit(3)
+PY
+acceptance_status=$?
+set -e
+
+case "$acceptance_status" in
+  0)
+    echo "    Direct Apple status: Accepted. OK."
+    ;;
+  2)
+    echo "FAIL: direct Apple status is still In Progress; refusing to staple or package." >&2
+    exit 2
+    ;;
+  3)
+    echo "FAIL: direct Apple status is terminal and not Accepted; refusing to staple or package." >&2
+    exit 3
+    ;;
+  *)
+    echo "FAIL: direct Apple status response was unreadable; refusing to staple or package." >&2
+    exit 70
+    ;;
+esac
 
 echo "==> Stapling notarization ticket to the app"
 xcrun stapler staple "$APP_PATH"
@@ -71,7 +174,7 @@ xcrun stapler staple "$APP_PATH"
 echo "==> Verifying Gatekeeper acceptance"
 spctl -a -vv -t install "$APP_PATH"
 
-version="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")"
+version="$("$PLIST_BUDDY" -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")"
 dist_zip="build/GradusMac-${version}.zip"
 echo "==> Packaging distributable: $dist_zip"
 ditto -c -k --keepParent "$APP_PATH" "$dist_zip"

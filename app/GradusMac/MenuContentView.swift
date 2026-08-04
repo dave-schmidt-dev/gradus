@@ -20,6 +20,9 @@ struct MenuContentView: View {
             Divider()
 
             Toggle("Enable iCloud Sync", isOn: $viewModel.syncEnabled)
+            if viewModel.syncEnabled {
+                cloudSyncStatus
+            }
             Toggle(
                 "Launch at Login",
                 isOn: Binding(
@@ -36,6 +39,23 @@ struct MenuContentView: View {
         }
         .padding(12)
         .frame(width: 260)
+    }
+
+    @ViewBuilder
+    private var cloudSyncStatus: some View {
+        switch viewModel.syncState {
+        case .idle:
+            EmptyView()
+        case .publishing:
+            Text("Syncing with iCloud…")
+                .foregroundStyle(.secondary)
+        case .synced:
+            Text("iCloud sync complete")
+                .foregroundStyle(.secondary)
+        case .failed:
+            Text("iCloud sync failed. Will retry with the next update.")
+                .foregroundStyle(.red)
+        }
     }
 }
 

@@ -7,6 +7,9 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+echo "==> Hermetic notarization script behavior tests"
+./test-notary-scripts.sh
+
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
 SIM_DEVICE_NAME="iPhone 16"
 SIM_OS_VERSION="26.5"

@@ -2,6 +2,7 @@ import CloudKit
 import Foundation
 import GradusKit
 
+#if DEBUG
 // T1.7 Phase-1 exit gate (PM-14, real Dev DB, not mocked): proves the
 // CloudPublisher write path built in Phase 2a round-trips a real
 // `ProviderStatus` through the actual production mapping/adapter code
@@ -88,3 +89,4 @@ enum T17SeamGate {
         exit(0)
     }
 }
+#endif

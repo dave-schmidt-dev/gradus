@@ -5,6 +5,7 @@ import SwiftUI
 @main
 struct GradusMacApp: App {
     init() {
+        #if DEBUG
         if CommandLine.arguments.contains("--cloudkit-spike") {
             Task { await CloudKitSpike.run() }
             return
@@ -17,6 +18,7 @@ struct GradusMacApp: App {
             Task { await T25SchemaGate.run() }
             return
         }
+        #endif
         PublishPipeline.shared.start()
     }
 
@@ -84,11 +86,20 @@ final class PublishPipeline {
                 guard await viewModel.syncEnabled else { return }
                 let status = await accountMonitor.lastKnownStatus
                 guard AccountStatusMonitor.publishingState(for: status) == .ready else { return }
-                let publishedAt = Date()
-                let statuses = payload.providers.map {
-                    makeProviderStatus(from: $0, snapshotUpdatedAt: payload.updatedAt, publishedAt: publishedAt)
+                guard let operationID = await viewModel.cloudSyncDidStart() else { return }
+                do {
+                    let publishedAt = Date()
+                    let statuses = try payload.providers.map {
+                        try makeProviderStatus(from: $0, snapshotUpdatedAt: payload.updatedAt, publishedAt: publishedAt)
+                    }
+                    try await coordinator.upsert(statuses)
+                    await viewModel.cloudSyncDidSucceed(operationID: operationID)
+                } catch {
+                    // Do not put CloudKit's error description in the UI: it
+                    // can include record metadata. The menu exposes a stable,
+                    // actionable state without reflecting payload contents.
+                    await viewModel.cloudSyncDidFail(operationID: operationID)
                 }
-                try? await coordinator.upsert(statuses)
             }
         }
         self.watcher = watcher

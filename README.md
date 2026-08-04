@@ -273,6 +273,28 @@ bws-run -- uv run --with pyjwt --with cryptography testflight-setup.py <build>  
 
 `archive-upload-ios.sh` prints the exact `testflight-setup.py` follow-up command (with the build number it just uploaded) as its last line.
 
+### Notarizing GradusMac
+
+`notarize-mac.sh` archives, Developer-ID signs, verifies, uploads, waits for Apple, staples, and packages GradusMac. The upload stays visible, and the submission ID is recorded before polling in the gitignored `.state/notary-submissions.tsv` ledger.
+
+```bash
+cd app
+./test-notary-scripts.sh   # hermetic; fake Apple/Xcode tools, never submits
+./notary-status.sh         # one live check of every locally tracked submission
+./notary-status.sh --watch # poll while pending; stop on acceptance or terminal failure
+./notarize-mac.sh          # creates and submits a new build; run only after review
+```
+
+The status command prints its Apple check time, status source, submission name, full ID, creation time, and current state. Exit `0` means all displayed submissions are `Accepted`; in one-shot mode, `2` means at least one is still `In Progress`; `3` means a terminal non-accepted result; `4` means no tracked or matching submission was returned. Usage, dependency, and `notarytool`/profile failures use `64`, `69`, and `70`. Watch mode polls while submissions remain pending, then exits when all are accepted or as soon as any terminal failure appears.
+
+If polling is interrupted, resume the existing submission without uploading again:
+
+```bash
+./notary-status.sh --watch --id SUBMISSION_UUID
+```
+
+A sandboxed agent may not see the login-Keychain profile even when it exists. `notary-status.sh` reports that case explicitly; run it in Terminal or approve an outside-sandbox, read-only check rather than recreating `gradus-notary`.
+
 ## Development
 
 ```bash

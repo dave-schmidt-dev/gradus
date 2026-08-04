@@ -2,6 +2,7 @@ import CloudKit
 import Foundation
 import GradusKit
 
+#if DEBUG
 // T2.5 (CV-7/PM-11) schema gate: proves every `ProviderStatus` field is
 // registered with the correct type in whichever CloudKit environment the
 // running binary is entitled for, and that a real save->fetch round-trip
@@ -123,3 +124,4 @@ enum T25SchemaGate {
         exit(0)
     }
 }
+#endif

@@ -1,6 +1,7 @@
 import CloudKit
 import Foundation
 
+#if DEBUG
 // T0.3 hard-seam spike (throwaway): proves CloudKit auth + a real round-trip
 // against the Development database before any feature code is written.
 // Invoke with `--cloudkit-spike`; prints PASS/FAIL lines and exits.
@@ -82,3 +83,4 @@ enum CloudKitSpike {
         }
     }
 }
+#endif

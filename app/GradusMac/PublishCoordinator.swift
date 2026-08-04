@@ -10,6 +10,10 @@ struct ProviderPublishState: Equatable {
     var wasWarning: Bool = false
 }
 
+enum PublishCoordinatorError: Error, Equatable {
+    case recordFailures(Int)
+}
+
 /// Implements `GradusKit.CloudPublisher`: idempotent zone creation (PM-8),
 /// content-hash save-suppression (PM-2), non-atomic per-record
 /// partial-failure handling with retry/backoff (CV-4/PM-17), and warning
@@ -26,6 +30,7 @@ public actor PublishCoordinator: CloudPublisher {
     public private(set) var newlyWarningProviders: Set<String> = []
 
     private static let maxBackoffAttempts = 3
+    static let maxRetryDelaySeconds = 60.0
 
     public init(database: CloudDatabase, zoneID: CKRecordZone.ID) {
         self.database = database
@@ -67,15 +72,22 @@ public actor PublishCoordinator: CloudPublisher {
         outcome = await retryServerRecordChanged(outcome, toSave: toSave)
         outcome = await retryWithBackoff(outcome, toSave: toSave, attempt: 1)
 
+        var failedRecordCount = 0
         for (status, hash) in toSave {
             let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
             guard case .success = outcome.results[recordID] else {
+                failedRecordCount += 1
                 continue  // Well-defined state: leave prior lastSavedContentHash/publishedAt untouched.
             }
             var updated = state[status.providerName] ?? ProviderPublishState()
             updated.lastSavedContentHash = hash
             updated.lastSuccessfulPublishedAt = status.publishedAt
             state[status.providerName] = updated
+        }
+        if failedRecordCount > 0 {
+            // Successful records retain their committed state, while the
+            // caller receives a sanitized aggregate signal suitable for UI.
+            throw PublishCoordinatorError.recordFailures(failedRecordCount)
         }
     }
 
@@ -131,13 +143,13 @@ public actor PublishCoordinator: CloudPublisher {
         }
         guard !retryable.isEmpty else { return outcome }
 
-        let delaySeconds =
-            retryable.lazy.compactMap { entry -> Double? in
+        let retryAfterSeconds = retryable.lazy.compactMap { entry -> Double? in
                 guard case .failure(let error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: self.zoneID)],
                     let ckError = error as? CKError
                 else { return nil }
                 return ckError.retryAfterSeconds
-            }.max() ?? pow(2.0, Double(attempt))
+            }
+        let delaySeconds = Self.retryDelaySeconds(retryAfter: Array(retryAfterSeconds), attempt: attempt)
         try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
 
         guard let retryRecords = try? retryable.map({ try $0.status.toCKRecord(zoneID: zoneID) }) else {
@@ -149,6 +161,17 @@ public actor PublishCoordinator: CloudPublisher {
             combined[id] = result
         }
         return await retryWithBackoff(RecordSaveOutcome(results: combined), toSave: toSave, attempt: attempt + 1)
+    }
+
+    /// Bounds both server-provided hints and the exponential fallback before
+    /// converting seconds to nanoseconds. Invalid hints are ignored.
+    static func retryDelaySeconds(retryAfter hints: [Double], attempt: Int) -> Double {
+        let validHints = hints.filter { $0.isFinite && $0 >= 0 }
+        if let longestHint = validHints.max() {
+            return min(longestHint, maxRetryDelaySeconds)
+        }
+        let boundedExponent = min(max(attempt, 0), 10)
+        return min(pow(2.0, Double(boundedExponent)), maxRetryDelaySeconds)
     }
 
     /// Deterministic fingerprint of everything EXCEPT `publishedAt` /
@@ -192,14 +215,82 @@ public actor PublishCoordinator: CloudPublisher {
 /// string as `name` — the Python producer already emits human-readable
 /// names ("Codex", "Antigravity (Claude)", ...), there is no separate
 /// display-name table.
-func makeProviderStatus(from entry: ProviderEntry, snapshotUpdatedAt: String, publishedAt: Date) -> ProviderStatus {
-    ProviderStatus(
+enum SnapshotDataValidationError: Error, Equatable {
+    case unsupportedKey(String)
+    case nonFiniteNumber(String)
+    case valueTooLarge(String)
+    case errorMessageTooLarge
+    case aggregateTooLarge
+}
+
+private let snapshotDataAllowedKeys: Set<String> = [
+    "credits",
+    "five_hour_percent_left",
+    "weekly_percent_left",
+    "five_hour_reset",
+    "weekly_reset",
+    "session_percent_left",
+    "opus_percent_left",
+    "primary_reset",
+    "secondary_reset",
+    "opus_reset",
+    "usage_percent",
+    "reset_at",
+    "payg_enabled",
+    "start_date",
+    "end_date",
+    "monthly_percent_left",
+    "monthly_reset",
+    "auto_percent_used",
+    "api_percent_used",
+    "billing_cycle_start",
+    "billing_cycle_end",
+    "billing_cycle_end_iso",
+    "premium_percent_left",
+    "premium_reset",
+]
+
+private let snapshotDataMaxStringBytes = 4_096
+private let snapshotDataMaxAggregateBytes = 32_768
+private let snapshotErrorMaxBytes = 4_096
+
+func validatedSnapshotData(_ data: [String: JSONValue]) throws -> [String: JSONValue] {
+    for (key, value) in data {
+        guard snapshotDataAllowedKeys.contains(key) else {
+            throw SnapshotDataValidationError.unsupportedKey(key)
+        }
+        switch value {
+        case .string(let string):
+            guard string.utf8.count <= snapshotDataMaxStringBytes else {
+                throw SnapshotDataValidationError.valueTooLarge(key)
+            }
+        case .double(let number):
+            guard number.isFinite else {
+                throw SnapshotDataValidationError.nonFiniteNumber(key)
+            }
+        case .bool, .null:
+            break
+        }
+    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    guard let encoded = try? encoder.encode(data), encoded.count <= snapshotDataMaxAggregateBytes else {
+        throw SnapshotDataValidationError.aggregateTooLarge
+    }
+    return data
+}
+
+func makeProviderStatus(from entry: ProviderEntry, snapshotUpdatedAt: String, publishedAt: Date) throws -> ProviderStatus {
+    if let error = entry.error, error.utf8.count > snapshotErrorMaxBytes {
+        throw SnapshotDataValidationError.errorMessageTooLarge
+    }
+    return ProviderStatus(
         providerName: entry.name,
         providerDisplayName: entry.name,
         ok: entry.ok,
         errorMessage: entry.error,
         windows: entry.windows,
-        data: entry.data,
+        data: try validatedSnapshotData(entry.data),
         observedAt: entry.observedAt,
         snapshotUpdatedAt: snapshotUpdatedAt,
         publishedAt: publishedAt
