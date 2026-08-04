@@ -8,6 +8,7 @@ import fcntl
 import inspect
 import json
 import logging
+import math
 import os
 import select
 import stat
@@ -26,6 +27,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 
+from .history import append_history_record, query_history
 from .providers import (
     ProviderSnapshot,
     fetch_provider_snapshot,
@@ -200,6 +202,27 @@ def parse_args() -> argparse.Namespace:
             "never initializes providers."
         ),
     )
+    parser.add_argument(
+        "--history-at",
+        action="append",
+        dest="history_at",
+        metavar="AWARE-ISO",
+        help="Read the nearest prior credential-free history record; repeatable.",
+    )
+    parser.add_argument(
+        "--history-provider",
+        action="append",
+        dest="history_provider",
+        metavar="NAME",
+        help="Limit historical output to this provider; repeatable.",
+    )
+    parser.add_argument(
+        "--history-max-gap",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Mark historical evidence unverified when its match is farther away.",
+    )
     args = parser.parse_args()
     if args.refresh_snapshot and (args.once or args.json or args.write_snapshot):
         parser.error(
@@ -224,6 +247,28 @@ def parse_args() -> argparse.Namespace:
             parser.error("argument --duration: must be greater than zero")
         if args.health_interval <= 0:
             parser.error("argument --health-interval: must be greater than zero")
+    if args.history_provider and not args.history_at:
+        parser.error("argument --history-provider requires --history-at")
+    if args.history_max_gap is not None and not args.history_at:
+        parser.error("argument --history-max-gap requires --history-at")
+    if args.history_at:
+        conflicts = [
+            flag
+            for flag, enabled in (
+                ("--once", args.once),
+                ("--json", args.json),
+                ("--write-snapshot", args.write_snapshot),
+                ("--refresh-snapshot", args.refresh_snapshot),
+                ("--verify-refresh-health", args.verify_refresh_health),
+            )
+            if enabled
+        ]
+        if conflicts:
+            parser.error("argument --history-at: not allowed with " + ", ".join(conflicts))
+        if args.history_max_gap is not None and (
+            not math.isfinite(args.history_max_gap) or args.history_max_gap < 0
+        ):
+            parser.error("argument --history-max-gap: must be a finite non-negative number")
     return args
 
 
@@ -355,8 +400,9 @@ def _write_snapshot_versions(
     on_status: Callable[[str], None] | None = None,
     lock_timeout: float | None = None,
     lock_poll_interval: float = 0.1,
-) -> tuple[bool, bool]:
-    """Write v1 then v2 independently, retaining schema-specific priors."""
+    journal_history: bool = False,
+) -> tuple[bool, bool] | tuple[bool, bool, bool]:
+    """Write v1 and v2 independently, optionally journaling committed v2."""
 
     def status(message: str) -> None:
         if on_status is not None:
@@ -383,9 +429,13 @@ def _write_snapshot_versions(
         v1_ok = False
     status(f"schema-v1 {'persisted' if v1_ok else 'persistence failed'}")
 
+    v2_payload: dict | None = None
     try:
+        v2_payload = build_snapshot_v2_payload(
+            snaps, when, prior=read_prior_snapshot(SNAPSHOT_V2_PATH)
+        )
         v2_ok = write_snapshot(
-            build_snapshot_v2_payload(snaps, when, prior=read_prior_snapshot(SNAPSHOT_V2_PATH)),
+            v2_payload,
             SNAPSHOT_V2_PATH,
             on_progress=writer_progress("schema-v2"),
             lock_timeout=lock_timeout,
@@ -395,7 +445,25 @@ def _write_snapshot_versions(
         log.warning("failed to write schema-v2 snapshot")
         v2_ok = False
     status(f"schema-v2 {'persisted' if v2_ok else 'persistence failed'}")
-    return v1_ok, v2_ok
+
+    if not journal_history:
+        return v1_ok, v2_ok
+
+    history_ok = False
+    if v2_ok and v2_payload is not None:
+        committed_v2 = read_prior_snapshot(SNAPSHOT_V2_PATH)
+        if committed_v2 == v2_payload:
+            try:
+                history_ok = append_history_record(
+                    v2_payload,
+                    snaps,
+                    committed_payload=committed_v2,
+                    history_dir=Path(SNAPSHOT_V2_PATH).resolve().parent / "history",
+                )
+            except Exception:  # noqa: BLE001 - history must not crash persistence callers
+                log.warning("failed to append snapshot history")
+    status(f"history {'persisted' if history_ok else 'persistence failed'}")
+    return v1_ok, v2_ok, history_ok
 
 
 _REFRESH_LOCK_NAME = ".refresh-snapshot.lock"
@@ -516,7 +584,7 @@ def _refresh_snapshot_once(
             on_waiting=lambda pending: _refresh_progress(f"waiting for {pending} provider(s)"),
             safe_errors=True,
         )
-        v1_ok, v2_ok = _write_snapshot_versions(
+        v1_ok, v2_ok, history_ok = _write_snapshot_versions(
             snapshots,
             datetime.now(),
             on_status=_refresh_progress,
@@ -528,8 +596,9 @@ def _refresh_snapshot_once(
                 if lock_poll_interval is None
                 else lock_poll_interval
             ),
+            journal_history=True,
         )
-        success = v1_ok and v2_ok
+        success = v1_ok and v2_ok and history_ok
         _refresh_progress("completed" if success else "failed")
         return 0 if success else 1
     except Exception:  # noqa: BLE001 - the CLI emits only a safe terminal status
@@ -791,8 +860,29 @@ def _setup_logging(debug: bool) -> None:
     root.addHandler(handler)
 
 
+def _history_query_once(
+    requested_at: list[str], providers: list[str] | None, max_gap: float | None
+) -> int:
+    """Emit read-only historical evidence before any provider initialization."""
+    result = query_history(
+        requested_at,
+        providers=providers,
+        max_gap=max_gap,
+        history_dir=Path(SNAPSHOT_V2_PATH).resolve().parent / "history",
+    )
+    sys.stdout.write(json.dumps(result, ensure_ascii=True, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+    return 0
+
+
 def main() -> int:
     args = parse_args()
+    if getattr(args, "history_at", None):
+        return _history_query_once(
+            args.history_at,
+            getattr(args, "history_provider", None),
+            getattr(args, "history_max_gap", None),
+        )
     if getattr(args, "verify_refresh_health", False):
         return _verify_refresh_health_once(args.duration, args.health_interval)
     _setup_logging(args.debug)
@@ -832,9 +922,14 @@ def main() -> int:
             snaps: The freshly collected provider snapshots.
             when: The instant the snapshot was captured.
         """
-        v1_ok, v2_ok = _write_snapshot_versions(snaps, when)
-        if not (v1_ok and v2_ok):
-            log.warning("snapshot persist partially failed: v1=%s v2=%s", v1_ok, v2_ok)
+        v1_ok, v2_ok, history_ok = _write_snapshot_versions(snaps, when, journal_history=True)
+        if not (v1_ok and v2_ok and history_ok):
+            log.warning(
+                "snapshot persist partially failed: v1=%s v2=%s history=%s",
+                v1_ok,
+                v2_ok,
+                history_ok,
+            )
 
     def refresh(previous: list[ProviderSnapshot]) -> list[ProviderSnapshot]:
         fresh: list[ProviderSnapshot] = []
@@ -863,11 +958,18 @@ def main() -> int:
             # checks (no notifications). Providers are already headless; the
             # outer `finally` closes them.
             snapshots = collect_snapshots(providers, args.debug)
-            v1_ok, v2_ok = _write_snapshot_versions(snapshots, datetime.now())
-            if v1_ok and v2_ok:
+            v1_ok, v2_ok, history_ok = _write_snapshot_versions(
+                snapshots, datetime.now(), journal_history=True
+            )
+            if v1_ok and v2_ok and history_ok:
                 log.info("wrote headless snapshots for %d providers", len(snapshots))
                 return 0
-            log.warning("headless snapshot write partially failed: v1=%s v2=%s", v1_ok, v2_ok)
+            log.warning(
+                "headless snapshot write partially failed: v1=%s v2=%s history=%s",
+                v1_ok,
+                v2_ok,
+                history_ok,
+            )
             return 1
 
         if args.json:

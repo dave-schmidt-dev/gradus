@@ -825,12 +825,23 @@ class WriteSnapshotTests(unittest.TestCase):
         from types import SimpleNamespace
 
         captured: list[tuple[object, tuple[object, ...]]] = []
+        committed_v2: dict | None = None
 
         def fake_write(payload, *args, **kwargs):
+            nonlocal committed_v2
             captured.append((payload, args))
             if isinstance(write_ok, list):
-                return write_ok[len(captured) - 1]
-            return write_ok
+                result = write_ok[len(captured) - 1]
+            else:
+                result = write_ok
+            if result and payload["schema_version"] == 2:
+                committed_v2 = payload
+            return result
+
+        def fake_read(path: Path | None = None) -> dict | None:
+            if path is not None and path.name == "snapshot-v2.json":
+                return committed_v2
+            return None
 
         ns = argparse.Namespace(
             write_snapshot=True,
@@ -851,7 +862,8 @@ class WriteSnapshotTests(unittest.TestCase):
             patch("gradus.__main__.collect_snapshots", return_value=snapshots),
             patch("gradus.__main__._check_warnings") as mock_check,
             patch("gradus.__main__._notify_warning") as mock_notify,
-            patch("gradus.__main__.read_prior_snapshot", return_value=None),
+            patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+            patch("gradus.__main__.append_history_record", return_value=True),
             patch("gradus.__main__.write_snapshot", side_effect=fake_write) as mock_write,
             patch("gradus.__main__.subprocess.Popen") as mock_popen,
             patch("gradus.__main__.subprocess.run") as mock_run,
@@ -957,6 +969,121 @@ class WriteSnapshotTests(unittest.TestCase):
                     self.assertIn(key, provider)
 
 
+class HistoryPersistenceIntegrationTests(unittest.TestCase):
+    """History is best-effort after a verified schema-v2 commit."""
+
+    def _snapshots(self) -> list[ProviderSnapshot]:
+        return [
+            ProviderSnapshot(
+                name="Antigravity",
+                ok=True,
+                source="api",
+                data={
+                    "five_hour_percent_left": 90,
+                    "weekly_percent_left": 70,
+                    "third_party_five_hour_percent_left": 42.5,
+                    "third_party_weekly_percent_left": 15.0,
+                },
+            )
+        ]
+
+    def test_journals_only_when_v2_readback_matches_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            v1_path = state_dir / "snapshot.json"
+            v2_path = state_dir / "snapshot-v2.json"
+            statuses: list[str] = []
+
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                path = args[0] if args else v1_path
+                assert isinstance(path, Path)
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                return True
+
+            with (
+                patch("gradus.__main__.SNAPSHOT_PATH", v1_path),
+                patch("gradus.__main__.SNAPSHOT_V2_PATH", v2_path),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
+                patch("gradus.__main__.append_history_record", return_value=True) as journal,
+            ):
+                result = _write_snapshot_versions(
+                    self._snapshots(),
+                    NOW,
+                    on_status=statuses.append,
+                    journal_history=True,
+                )
+
+            self.assertEqual(result, (True, True, True))
+            journal.assert_called_once()
+            args, kwargs = journal.call_args
+            self.assertEqual(args[0], json.loads(v2_path.read_text(encoding="utf-8")))
+            self.assertEqual(kwargs["committed_payload"], args[0])
+            self.assertEqual(kwargs["history_dir"], (state_dir / "history").resolve())
+            self.assertIn("schema-v1 persisted", statuses)
+            self.assertIn("schema-v2 persisted", statuses)
+            self.assertIn("history persisted", statuses)
+
+    def test_stale_v2_readback_cannot_create_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            v1_path = state_dir / "snapshot.json"
+            v2_path = state_dir / "snapshot-v2.json"
+            stale = {
+                "schema_version": 2,
+                "updated_at": "2026-03-14T08:00:00+00:00",
+                "providers": [],
+            }
+            current_v2: dict | None = None
+
+            def fake_read(path: Path) -> dict | None:
+                return current_v2 if path == v2_path else None
+
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                nonlocal current_v2
+                if args and args[0] == v2_path:
+                    current_v2 = stale
+                return True
+
+            with (
+                patch("gradus.__main__.SNAPSHOT_PATH", v1_path),
+                patch("gradus.__main__.SNAPSHOT_V2_PATH", v2_path),
+                patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
+                patch("gradus.__main__.append_history_record", return_value=True) as journal,
+            ):
+                result = _write_snapshot_versions(self._snapshots(), NOW, journal_history=True)
+
+            self.assertEqual(result, (True, True, False))
+            journal.assert_not_called()
+
+    def test_history_failure_does_not_rollback_committed_v2(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            v1_path = state_dir / "snapshot.json"
+            v2_path = state_dir / "snapshot-v2.json"
+
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                path = args[0] if args else v1_path
+                assert isinstance(path, Path)
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                return True
+
+            with (
+                patch("gradus.__main__.SNAPSHOT_PATH", v1_path),
+                patch("gradus.__main__.SNAPSHOT_V2_PATH", v2_path),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
+                patch("gradus.__main__.append_history_record", return_value=False),
+            ):
+                result = _write_snapshot_versions(self._snapshots(), NOW, journal_history=True)
+
+            self.assertEqual(result, (True, True, False))
+            self.assertTrue(v2_path.exists())
+            self.assertEqual(json.loads(v2_path.read_text(encoding="utf-8"))["schema_version"], 2)
+
+
 class TestCredentialAwareRefresh(unittest.TestCase):
     """The explicit refresh command is credential-aware but non-interactive."""
 
@@ -997,6 +1124,7 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             providers = [("Codex", MagicMock()), ("Antigravity", MagicMock())]
             calls: list[str] = []
             payloads: list[dict] = []
+            committed_v2: dict | None = None
 
             def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
                 calls.append(name)
@@ -1021,8 +1149,16 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 )
 
             def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                nonlocal committed_v2
                 payloads.append(payload)
+                if payload["schema_version"] == 2:
+                    committed_v2 = payload
                 return True
+
+            def fake_read(path: Path | None = None) -> dict | None:
+                if path is not None and path.name == "snapshot-v2.json":
+                    return committed_v2
+                return None
 
             set_headless_spy = MagicMock()
             stderr = StringIO()
@@ -1036,7 +1172,8 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 patch("gradus.__main__.set_headless", set_headless_spy),
                 patch("gradus.__main__.initialize_providers", return_value=(providers, [])) as init,
                 patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch),
-                patch("gradus.__main__.read_prior_snapshot", return_value=None),
+                patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+                patch("gradus.__main__.append_history_record", return_value=True),
                 patch("gradus.__main__.write_snapshot", side_effect=fake_write),
                 patch("gradus.__main__._check_warnings") as check,
                 patch("gradus.__main__._build_fix_actions") as fixes,
@@ -1089,10 +1226,19 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                     raise RuntimeError(sentinel)
 
             payloads: list[dict] = []
+            committed_v2: dict | None = None
 
             def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                nonlocal committed_v2
                 payloads.append(payload)
+                if payload["schema_version"] == 2:
+                    committed_v2 = payload
                 return True
+
+            def fake_read(path: Path | None = None) -> dict | None:
+                if path is not None and path.name == "snapshot-v2.json":
+                    return committed_v2
+                return None
 
             with (
                 patch("sys.argv", ["gradus", "--refresh-snapshot"]),
@@ -1105,7 +1251,8 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                     "gradus.__main__.initialize_providers",
                     return_value=([("Codex", FakeProvider())], []),
                 ),
-                patch("gradus.__main__.read_prior_snapshot", return_value=None),
+                patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+                patch("gradus.__main__.append_history_record", return_value=True),
                 patch("gradus.__main__.write_snapshot", side_effect=fake_write),
             ):
                 rc = main()
@@ -1261,6 +1408,7 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             release_slow = threading.Event()
             heartbeat_count = 0
             providers = [("Antigravity", MagicMock()), ("Codex", MagicMock())]
+            committed_v2: dict | None = None
 
             def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
                 if name == "Antigravity":
@@ -1287,6 +1435,17 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                     if heartbeat_count >= 2:
                         second_heartbeat_seen.set()
 
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                nonlocal committed_v2
+                if payload["schema_version"] == 2:
+                    committed_v2 = payload
+                return True
+
+            def fake_read(path: Path | None = None) -> dict | None:
+                if path is not None and path.name == "snapshot-v2.json":
+                    return committed_v2
+                return None
+
             with (
                 patch("gradus.__main__.parse_args", return_value=ns),
                 patch("gradus.__main__._setup_logging"),
@@ -1295,7 +1454,9 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
                 patch("gradus.__main__.initialize_providers", return_value=(providers, [])),
                 patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch),
-                patch("gradus.__main__.write_snapshot", return_value=True),
+                patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+                patch("gradus.__main__.append_history_record", return_value=True),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
                 patch("gradus.__main__._refresh_progress", side_effect=progress),
             ):
                 worker = threading.Thread(target=lambda: result.append(main()))
@@ -1332,6 +1493,19 @@ class TestCredentialAwareRefresh(unittest.TestCase):
 
             provider.close.side_effect = close
             providers = [("Codex", provider)]
+            committed_v2: dict | None = None
+
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                nonlocal committed_v2
+                if payload["schema_version"] == 2:
+                    committed_v2 = payload
+                return True
+
+            def fake_read(path: Path | None = None) -> dict | None:
+                if path is not None and path.name == "snapshot-v2.json":
+                    return committed_v2
+                return None
+
             with (
                 patch("gradus.__main__.parse_args", return_value=self._namespace()),
                 patch("gradus.__main__._setup_logging"),
@@ -1343,7 +1517,9 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                     "gradus.__main__.fetch_provider_snapshot",
                     return_value=ProviderSnapshot(name="Codex", ok=True, source="api", data={}),
                 ),
-                patch("gradus.__main__.write_snapshot", return_value=True),
+                patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+                patch("gradus.__main__.append_history_record", return_value=True),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
             ):
                 self.assertEqual(main(), 0)
 
@@ -1428,7 +1604,20 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 ("Codex", RuntimeError("account token details")),
                 ("Antigravity", MagicMock()),
             ]
+            committed_v2: dict | None = None
             stderr = StringIO()
+
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                nonlocal committed_v2
+                if payload["schema_version"] == 2:
+                    committed_v2 = payload
+                return True
+
+            def fake_read(path: Path | None = None) -> dict | None:
+                if path is not None and path.name == "snapshot-v2.json":
+                    return committed_v2
+                return None
+
             with (
                 patch("gradus.__main__.parse_args", return_value=self._namespace()),
                 patch("gradus.__main__._setup_logging"),
@@ -1445,7 +1634,9 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                         data={"five_hour_percent_left": 75},
                     ),
                 ),
-                patch("gradus.__main__.write_snapshot", return_value=True),
+                patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+                patch("gradus.__main__.append_history_record", return_value=True),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
                 patch("gradus.__main__.sys.stderr", stderr),
             ):
                 self.assertEqual(main(), 0)
@@ -1685,6 +1876,71 @@ class TestRefreshHealthVerifier(unittest.TestCase):
                     parse_args()
                 self.assertEqual(ctx.exception.code, 2)
 
+    def test_history_cli_accepts_repeatable_timestamps_and_filters(self) -> None:
+        with patch(
+            "sys.argv",
+            [
+                "gradus",
+                "--history-at",
+                "2026-08-04T12:00:00+00:00",
+                "--history-at",
+                "2026-08-04T08:00:00-04:00",
+                "--history-provider",
+                "Antigravity",
+                "--history-provider",
+                "Antigravity (Claude)",
+                "--history-max-gap",
+                "30",
+            ],
+        ):
+            args = parse_args()
+
+        self.assertEqual(
+            args.history_at,
+            ["2026-08-04T12:00:00+00:00", "2026-08-04T08:00:00-04:00"],
+        )
+        self.assertEqual(args.history_provider, ["Antigravity", "Antigravity (Claude)"])
+        self.assertEqual(args.history_max_gap, 30.0)
+
+        for argv in (
+            ["gradus", "--history-provider", "Codex"],
+            ["gradus", "--history-max-gap", "-1", "--history-at", "2026-08-04T12:00:00Z"],
+            ["gradus", "--history-at", "2026-08-04T12:00:00Z", "--json"],
+        ):
+            with self.subTest(argv=argv), patch("sys.argv", argv):
+                with self.assertRaises(SystemExit) as ctx:
+                    parse_args()
+                self.assertEqual(ctx.exception.code, 2)
+
+    def test_main_history_branch_is_read_only_and_emits_json(self) -> None:
+        args = argparse.Namespace(
+            history_at=["2026-08-04T12:00:00+00:00"],
+            history_provider=["Codex"],
+            history_max_gap=30.0,
+        )
+        expected = {
+            "executor_auth_verified": False,
+            "results": [{"verified": False, "reason": "no_history"}],
+        }
+        stdout = StringIO()
+        with (
+            patch("gradus.__main__.parse_args", return_value=args),
+            patch("gradus.__main__.query_history", return_value=expected) as query,
+            patch("gradus.__main__._setup_logging") as logging_setup,
+            patch("gradus.__main__.initialize_providers") as init,
+            patch("gradus.__main__.subprocess.run") as run,
+            patch("gradus.__main__.subprocess.Popen") as popen,
+            patch("gradus.__main__.sys.stdout", stdout),
+        ):
+            self.assertEqual(main(), 0)
+
+        logging_setup.assert_not_called()
+        init.assert_not_called()
+        run.assert_not_called()
+        popen.assert_not_called()
+        query.assert_called_once()
+        self.assertEqual(json.loads(stdout.getvalue()), expected)
+
     def test_main_health_branch_does_not_initialize_or_set_up_logging(self) -> None:
         args = argparse.Namespace(
             verify_refresh_health=True,
@@ -1726,10 +1982,19 @@ class HeadlessGateTests(unittest.TestCase):
         """--write-snapshot must not call subprocess.Popen or subprocess.run
         through any provider, even when providers are initialized normally."""
         captured_payloads: list[dict[str, object]] = []
+        committed_v2: dict[str, object] | None = None
 
         def fake_write(payload: object, *args: object, **kwargs: object) -> bool:
+            nonlocal committed_v2
             captured_payloads.append(payload)  # type: ignore[arg-type]
+            if isinstance(payload, dict) and payload.get("schema_version") == 2:
+                committed_v2 = payload
             return True
+
+        def fake_read(path: Path | None = None) -> dict[str, object] | None:
+            if path is not None and path.name == "snapshot-v2.json":
+                return committed_v2
+            return None
 
         with (
             patch("gradus.providers._base._http_json", return_value={}),
@@ -1741,6 +2006,8 @@ class HeadlessGateTests(unittest.TestCase):
             patch("gradus.providers.vibe.subprocess.Popen") as mock_vibe_popen,
             patch("gradus.__main__.subprocess.Popen") as mock_main_popen,
             patch("gradus.__main__.subprocess.run") as mock_main_run,
+            patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
+            patch("gradus.__main__.append_history_record", return_value=True),
             patch("gradus.__main__.write_snapshot", side_effect=fake_write),
         ):
             test_args = ["prog", "--write-snapshot"]

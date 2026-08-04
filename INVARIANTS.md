@@ -5,7 +5,7 @@
 > in this project's CLAUDE.md/README, not globally.
 
 ### INV-1 — The router-facing snapshot contains no credential material and no account PII, and lives in the credential-free .state/ dir
-area: ["gradus/snapshot.py", "gradus/parsing.py", "gradus/providers/*.py"]
+area: ["gradus/snapshot.py", "gradus/parsing.py", "gradus/providers/*.py", "gradus/history.py"]
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
 rationale: The snapshot files are read by a separate repo (review-plugin router). They are written to
@@ -19,7 +19,9 @@ rationale: The snapshot files are read by a separate repo (review-plugin router)
   copied verbatim into the file: it is held to the plain provider message (the raw `--debug` payload
   is diverted to a non-persisted `debug_detail`) and hard-capped at the persistence boundary, pinned
   by the companion gate test_payload_error_carries_no_raw_payload. Hence area now includes providers/*.py,
-  where that error string is constructed.
+  where that error string is constructed. The history writer accepts only an existing, validated schema-v2
+  payload plus fixed provider-owned safe provenance descriptors; it does not widen the allowlist or persist raw
+  upstream data.
 
 ### INV-2 — The machine-safe (--json / --write-snapshot) paths have zero credential side effects
 area: ["gradus/providers/*.py", "gradus/__main__.py"]
@@ -30,7 +32,8 @@ rationale: Machine-readable --json and headless --write-snapshot surfaces must n
   token, or evict a cookie cache the GUI TUI relies on. Missing/expired/rejected creds → ok:false.
   The gate asserts neither subprocess.Popen nor subprocess.run runs and no cred/cache file is written,
   INCLUDING on the cached-cred→HTTP-401 recovery path. --write-snapshot writes only its declared v1/v2
-  snapshot outputs; --json is read-only. Credential-aware launchd refresh is governed by INV-8.
+  snapshot outputs plus the credential-free history journal after schema-v2 read-back; --json and historical
+  queries are read-only. Credential-aware launchd refresh is governed by INV-8.
 
 ### INV-3 — percent_left is always *remaining*, 0–100, normalized exactly once
 area: ["gradus/snapshot.py"]
@@ -60,11 +63,12 @@ rationale: The router asserts schema_version. Both versioned files always carry 
   schema_version, so incompatible changes to the top-level payload, provider-entry fields, or
   windows[] require a schema bump and coordinated compatibility updates in both consumer projects. Schema v1
   remains at snapshot.json; schema v2 lives at snapshot-v2.json and Cursor's ac/ap windows are numeric or omitted.
-  Each file has a path- and schema-specific transient prior. Prevents silent schema drift that a version-asserting
-  consumer cannot detect.
+  Each file has a path- and schema-specific transient prior. The history envelope has an independent
+  history_schema_version and is not a replacement or redirect for either router schema. Prevents silent schema
+  drift that a version-asserting consumer cannot detect.
 
 ### INV-6 — All persisted credential material is written mode 0600 inside a 0700 dir, via an atomic temp-file swap
-area: ["gradus/providers/*.py"]
+area: ["gradus/providers/*.py", "gradus/history.py"]
 gate_test: tests/test_providers.py::TestCredentialCachePermissions::test_credential_artifacts_are_written_private
 threshold: 3
 rationale: The provider credential caches (Vibe/Cursor/Claude cookies + tokens) and the Codex auth.json
@@ -74,7 +78,9 @@ rationale: The provider credential caches (Vibe/Cursor/Claude cookies + tokens) 
   enabled on this tree, replicating live credentials to Apple's cloud. A single choke-point,
   `_write_private` (tempfile.mkstemp — born 0600, independent of umask — then chmod + os.replace),
   is the SOLE sanctioned write path for all credential/secret writes, so the mode is never
-  world-readable even momentarily and the contract is enforceable at one site. Prevents F1.
+  world-readable even momentarily and the contract is enforceable at one site. The credential-free history
+  directory and partitions also default to 0700/0600 as defense in depth, although history rejects
+  credential-like fields and stores no credential material. Prevents F1.
 
 ### INV-7 — The CloudKit publisher takes its snapshot data through a single injected snapshot-path dependency, and its source references no credential path
 area: ["app/GradusMac/**", "app/GradusKit/**"]

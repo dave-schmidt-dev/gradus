@@ -66,6 +66,10 @@ python3 -m gradus --json
 python3 -m gradus --debug
 python3 -m gradus --providers Claude,Codex,Copilot,Antigravity
 python3 -m gradus --write-snapshot
+python3 -m gradus --refresh-snapshot
+python3 -m gradus --verify-refresh-health --duration 360
+python3 -m gradus --history-at 2026-08-04T12:00:00Z
+python3 -m gradus --history-at 2026-08-04T12:00:00Z --history-provider Antigravity --history-max-gap 900
 ./monitor --once
 ```
 
@@ -161,9 +165,9 @@ Example:
 
 A sibling process or router can read `.state/snapshot.json` (schema v1) or `.state/snapshot-v2.json` (schema v2) instantly — no probing, no browser, no credential I/O. Both files are credential-free and gitignored (deliberately not `.cache/`, which holds auth cookies/tokens that a consuming router must never read).
 
-Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m gradus --write-snapshot` as a one-shot headless run.
+The TUI writes the snapshot on every refresh cycle. The one-shot `--write-snapshot` path and the explicit credential-aware `--refresh-snapshot` observer also write it when invoked. All three persistence paths journal the committed schema-v2 result to the local history store.
 
-**Read-only guarantee.** The `--write-snapshot` path never opens a browser, spawns a subprocess, refreshes a token, evicts a cookie cache, or sends notifications. Providers with missing or expired credentials surface as `ok: false`. It writes v1 first and v2 second; each file is independently atomic, so a partial failure is logged and exits 1 while the successful sibling remains current.
+**Read-only guarantee.** The `--write-snapshot` path never opens a browser, spawns a subprocess, refreshes a token, evicts a cookie cache, or sends notifications. Providers with missing or expired credentials surface as `ok: false`. It writes v1 first and v2 second; each file is independently atomic, so a partial failure is logged and exits 1 while the successful sibling remains current. History journaling is a separate best-effort output: it is attempted only after a read-back confirms that schema v2 committed, and a history failure never rolls back a valid snapshot.
 
 **Headless coverage.** Codex and any provider whose `.cache/` cookie file is still warm run headlessly — reading a cached cookie file is a benign read, allowed. Antigravity's only credential is an OAuth token read via a `security` subprocess, which the read-only path forbids, so a headless probe reports `auth required: no cached credentials`. When a recent healthy interactive snapshot exists, headless writes carry it forward, including the schema-v2 `Antigravity (Claude)` synthetic entry. Snapshot writers use a per-file lock and reject an older payload, so a slower background refresh cannot replace newer TUI data. Run the TUI once after a fresh install or when the prior snapshot has expired to seed the shared Agy buckets.
 
@@ -235,7 +239,24 @@ All 7 canonical providers are always present (Codex, Claude, Antigravity, Copilo
 
 In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sourced from its numeric `credit_percent_left` remaining percentage. Schema v2 preserves every non-Cursor window and instead publishes Cursor's independent numeric `ac` (Auto + Composer, from `autoPercentUsed`) and `ap` (API pool, from `apiPercentUsed`) windows, omitting either unavailable pool. Consumers may roll back by selecting the v1 path/version; retain v1 until all consumers have migrated.
 
-`.state/snapshot.json` is consumed by hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported schema_version; incompatible changes to top-level payload, provider-entry fields, or windows[] require schema bump and coordinated compatibility updates in both consumer projects. Antigravity's Claude+GPT fields and windows are deliberately excluded from router snapshot v1/v2 schemas, so the Gemini snapshot contract remains unchanged. `--json` remains schema-agnostic local/debug output and does not select or persist either router schema.
+`.state/snapshot.json` is consumed by hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported schema_version; incompatible changes to top-level payload, provider-entry fields, or windows[] require schema bump and coordinated compatibility updates in both consumer projects. Antigravity's Claude+GPT fields and windows remain excluded from router snapshot v1, while schema v2 includes the synthetic `Antigravity (Claude)` entry so the shared third-party pool is visible to v2 consumers. `--json` remains schema-agnostic local/debug output and does not select or persist either router schema.
+
+## Credential-free capacity history
+
+Each successful TUI refresh, `--write-snapshot`, or `--refresh-snapshot` run may append the committed schema-v2 payload to `.state/history/YYYY-MM-DD.jsonl`. The history envelope has its own `history_schema_version`, the unchanged snapshot, safe provider provenance, and separate probe/capacity observation metadata. It never stores credentials, raw upstream bodies, account identifiers, or debug text. The directory is mode `0700`; partitions and the lock file are mode `0600`.
+
+History is retained for seven days using the observation timestamp, written with a private lock and atomic partition replacement. Appends reject duplicate or backward timestamps; an incomplete final JSONL line is recoverable on the next append. History is best effort and never makes a committed snapshot appear uncommitted. The stored provenance identifies the Antigravity Gemini direct pool, the shared `3p-*` Claude/GPT pool with its `Sonnet target only` downstream policy, and the host-observed OpenCode Go route. These descriptors document capacity origin; they do not prove executor credentials, model liveness, or downstream routing success.
+
+Historical queries are read-only and initialize no providers, credentials, logging, subprocesses, or network calls:
+
+```bash
+python3 -m gradus --history-at 2026-08-04T12:00:00Z
+python3 -m gradus --history-at 2026-08-04T12:00:00Z \
+  --history-at 2026-08-04T13:00:00-04:00 \
+  --history-provider Antigravity --history-max-gap 900
+```
+
+The compact JSON result reports `history_status`, the nearest prior observation, its distance, each provider's `capacity_state` (`observed`, `carried`, `failed`, `not_enabled`, or `invalid`), probe outcome, synthetic status, and safe provenance. A result is marked `verified: false` when there is no prior record, the requested gap exceeds `--history-max-gap`, the history is corrupt, or the provider is absent. `executor_auth_verified` is always `false`: this feature reports observed capacity history, not proof that an executor can authenticate or serve a requested model. Times before history was introduced are therefore unverified rather than inferred.
 
 ## Notes
 

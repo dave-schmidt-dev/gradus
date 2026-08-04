@@ -25,6 +25,17 @@ from ._seroval import _seroval_decode
 
 log = logging.getLogger(__name__)
 
+HISTORY_SERVER_ROUTE = "https://opencode.ai/_server"
+HISTORY_WORKSPACE_ROUTE_TEMPLATE = "https://opencode.ai/workspace/{workspace_id}/go"
+HISTORY_PROVENANCE = {
+    "provenance_available": True,
+    "method": "POST",
+    "route_template": HISTORY_SERVER_ROUTE,
+    "subscription_route_template": HISTORY_WORKSPACE_ROUTE_TEMPLATE,
+    "workspace_identifiers": "redacted",
+    "observation": "host-observed capacity only",
+}
+
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(
@@ -35,7 +46,8 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 @register("OpenCode Go")
 class OpenCodeGoProvider:
-    _SERVER_URL = "https://opencode.ai/_server"
+    _SERVER_URL = HISTORY_SERVER_ROUTE
+    _WORKSPACE_ROUTE_TEMPLATE = HISTORY_WORKSPACE_ROUTE_TEMPLATE
     _WORKSPACES_FN_ID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
     _CACHE_PATH = (
         Path(__file__).resolve().parent.parent.parent / ".cache" / "opencode_go_cookies.json"
@@ -144,7 +156,7 @@ class OpenCodeGoProvider:
         import urllib.request
 
         req = urllib.request.Request(
-            f"https://opencode.ai/workspace/{workspace_id}/go",
+            self._WORKSPACE_ROUTE_TEMPLATE.format(workspace_id=workspace_id),
             headers={"Cookie": f"auth={self._auth_cookie}", "User-Agent": self._USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=15) as resp:

@@ -17,13 +17,31 @@ from ._base import ProbeFailure, _format_reset_time, _is_headless, register
 
 log = logging.getLogger(__name__)
 
+HISTORY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+HISTORY_PROVENANCE = {
+    "provenance_available": True,
+    "method": "POST",
+    "endpoint": HISTORY_ENDPOINT,
+    "bucket_family": "gemini-*",
+    "projection": "direct",
+}
+HISTORY_CLAUDE_PROVENANCE = {
+    "provenance_available": True,
+    "method": "POST",
+    "endpoint": HISTORY_ENDPOINT,
+    "bucket_family": "3p-*",
+    "projection": "synthetic",
+    "upstream_pool": "Claude and GPT models",
+    "downstream_policy": "Sonnet target only",
+}
+
 
 @register("Antigravity")
 class AntigravityProvider:
     _KEYCHAIN_SERVICE = "gemini"
     _KEYCHAIN_ACCOUNT = "antigravity"
     _KEYCHAIN_PREFIX = "go-keyring-base64:"
-    _SUMMARY_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+    _SUMMARY_URL = HISTORY_ENDPOINT
     _REFRESH_TRIGGER_CMD = ("agy", "models")
     _REFRESH_COOLDOWN_SECONDS = 300
     _USER_AGENT = "gradus (antigravity quota probe)"
