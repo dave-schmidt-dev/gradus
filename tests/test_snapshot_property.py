@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from hypothesis import given
 from hypothesis import strategies as st
@@ -15,8 +15,10 @@ from gradus.snapshot import (
     WINDOW_SPECS,
     _build_snapshot_payload,
     _build_windows,
+    _is_fresh_retained_entry,
     _json_safe_value,
     _sanitize_prior_entry,
+    local_iso,
     project_data,
 )
 
@@ -152,3 +154,15 @@ class TestSnapshotInvariants:
             "Codex", entry, allowed_window_ids=frozenset({"five_hour", "weekly"})
         )
         assert result is None
+
+    @given(age_milliseconds=st.integers(min_value=-600_000, max_value=600_000))
+    def test_retained_entry_freshness_is_exactly_the_300_second_window(self, age_milliseconds):
+        publish_time = datetime(2026, 3, 14, 8, 22, 30, tzinfo=timezone.utc)
+        observed_at = publish_time - timedelta(milliseconds=age_milliseconds)
+        entry = {"observed_at": local_iso(observed_at)}
+        assert _is_fresh_retained_entry(entry, publish_time) is (0 <= age_milliseconds < 300_000)
+
+    @given(observed_at=st.sampled_from([None, "malformed", "2026-03-14T08:22:30"]))
+    def test_retained_entry_invalid_observation_fails_closed(self, observed_at):
+        publish_time = datetime(2026, 3, 14, 8, 22, 30, tzinfo=timezone.utc)
+        assert not _is_fresh_retained_entry({"observed_at": observed_at}, publish_time)

@@ -888,6 +888,18 @@ def _parse_aware_iso_timestamp(value: object) -> datetime | None:
         return None
 
 
+def _is_fresh_retained_entry(entry: Mapping[str, object], publish_time: datetime) -> bool:
+    """Return whether a retained entry is fresh at the new publish time."""
+    observed_at = _parse_aware_iso_timestamp(entry.get("observed_at"))
+    if observed_at is None or publish_time.tzinfo is None or publish_time.utcoffset() is None:
+        return False
+    try:
+        age = (publish_time - observed_at).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return 0 <= age < STALE_THRESHOLD_SECONDS
+
+
 def _build_snapshot_payload(
     snapshots: list[ProviderSnapshot],
     updated_at: datetime,
@@ -989,12 +1001,8 @@ def _build_snapshot_payload(
                 ),
                 fallback_observed_at=fallback_observed_at,
             )
-            if (
-                retained_entry is not None
-                and prior_updated is not None
-                and 0
-                <= (updated_at_aware - prior_updated).total_seconds()
-                < STALE_THRESHOLD_SECONDS
+            if retained_entry is not None and _is_fresh_retained_entry(
+                retained_entry, updated_at_aware
             ):
                 entry = retained_entry
         return entry
@@ -1053,12 +1061,8 @@ def _build_snapshot_payload(
                 ),
                 fallback_observed_at=fallback_observed_at,
             )
-            if (
-                retained_entry is not None
-                and prior_updated is not None
-                and 0
-                <= (updated_at_aware - prior_updated).total_seconds()
-                < STALE_THRESHOLD_SECONDS
+            if retained_entry is not None and _is_fresh_retained_entry(
+                retained_entry, updated_at_aware
             ):
                 entry = retained_entry
         providers.append(entry)
@@ -1112,7 +1116,10 @@ def write_snapshot(
     ``os.replace`` for atomicity. By default, lock acquisition remains blocking
     for compatibility with existing callers. Callers may provide a finite
     ``lock_timeout`` and progress callback for bounded, visible waits. On any
-    failure the temp file is unlinked best-effort and False is returned.
+    failure the temp file is unlinked best-effort and False is returned. An
+    incoming payload with a missing, malformed, or naive ``updated_at`` is
+    rejected when the current snapshot has a valid timestamp; when no valid
+    current timestamp exists, the candidate is allowed for first-write recovery.
 
     Args:
         payload: The JSON-serializable payload to persist.
@@ -1146,6 +1153,9 @@ def write_snapshot(
                 current_updated_at = _parse_aware_iso_timestamp(
                     current.get("updated_at") if isinstance(current, Mapping) else None
                 )
+                if incoming_updated_at is None and current_updated_at is not None:
+                    log.warning("refusing snapshot write with invalid updated_at to %s", path)
+                    return False
                 if (
                     incoming_updated_at is not None
                     and current_updated_at is not None

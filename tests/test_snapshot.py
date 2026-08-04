@@ -724,11 +724,11 @@ class TestPayloadSchema(unittest.TestCase):
         self.assertEqual(claude["data"], {})
 
     def test_v2_antigravity_claude_synthetic_entry_observed_at(self) -> None:
-        """P-BUG-1 scope expansion: the synthetic "Antigravity (Claude)"
-        entry (commit 87c201b) has its own carry-forward retention path that
-        mirrors the primary Antigravity entry's -- observed_at must thread
-        through it too, both fresh and carried-forward, or the synthetic
-        entry re-introduces the exact stale-shown-as-fresh bug P-BUG-1 fixes.
+        """The synthetic entry shares the primary entry's observed-at expiry.
+
+        Its fresh observation is stamped, and a multi-hop transient sequence
+        must expire from that original observation instead of renewing the
+        carry-forward indefinitely.
         """
         antigravity = _ps("Antigravity", True, data={"third_party_five_hour_percent_left": 50})
         fresh = snap.build_snapshot_v2_payload([antigravity], NOW)
@@ -748,8 +748,58 @@ class TestPayloadSchema(unittest.TestCase):
         claude_carried = next(
             entry for entry in payload["providers"] if entry["name"] == "Antigravity (Claude)"
         )
-        self.assertTrue(claude_carried["ok"])
-        self.assertEqual(claude_carried["observed_at"], snap.local_iso(original_observed_at))
+        self.assertFalse(claude_carried["ok"])
+        self.assertEqual(claude_carried["error"], "network error")
+        self.assertIsNone(claude_carried["observed_at"])
+
+    def test_carry_forward_freshness_boundaries_for_canonical_and_synthetic(self) -> None:
+        """Both carry paths use the observed-at window, including its boundaries."""
+        failing = _ps("Antigravity", False, error="network error")
+        for schema_version, builder in (
+            (1, snap.build_snapshot_payload),
+            (2, snap.build_snapshot_v2_payload),
+        ):
+            for age in (0, 299.999, 300, 301):
+                with self.subTest(schema_version=schema_version, age=age):
+                    observed_at = NOW - timedelta(seconds=age)
+                    prior = builder(
+                        [_ps("Antigravity", True, data={"third_party_five_hour_percent_left": 50})],
+                        observed_at,
+                    )
+                    payload = builder([failing], NOW, prior=prior)
+                    names = ("Antigravity",)
+                    if schema_version == 2:
+                        names += ("Antigravity (Claude)",)
+                    for name in names:
+                        entry = next(item for item in payload["providers"] if item["name"] == name)
+                        self.assertEqual(entry["ok"], age < 300)
+
+    def test_carry_forward_rejects_invalid_observed_at_for_both_paths(self) -> None:
+        """Invalid, naive, and future observations fail closed for both entries."""
+        failing = _ps("Antigravity", False, error="network error")
+        for schema_version, builder in (
+            (1, snap.build_snapshot_payload),
+            (2, snap.build_snapshot_v2_payload),
+        ):
+            prior = builder([_ps("Antigravity", True, data={})], NOW - timedelta(seconds=50))
+            for observed_at in (
+                "not-a-timestamp",
+                "2026-03-14T08:22:30",
+                snap.local_iso(NOW + timedelta(seconds=1)),
+            ):
+                with self.subTest(schema_version=schema_version, observed_at=observed_at):
+                    tampered = copy.deepcopy(prior)
+                    for entry in tampered["providers"]:
+                        if entry["name"] in {"Antigravity", "Antigravity (Claude)"}:
+                            entry["observed_at"] = observed_at
+                    payload = builder([failing], NOW, prior=tampered)
+                    names = ("Antigravity",)
+                    if schema_version == 2:
+                        names += ("Antigravity (Claude)",)
+                    for name in names:
+                        entry = next(item for item in payload["providers"] if item["name"] == name)
+                        self.assertFalse(entry["ok"])
+                        self.assertEqual(entry["error"], "network error")
 
 
 class TestTransientMerge(unittest.TestCase):
@@ -790,40 +840,39 @@ class TestTransientMerge(unittest.TestCase):
     def test_carry_forward_preserves_original_observed_at_across_multiple_hops(
         self,
     ) -> None:
-        """P-BUG-1: observed_at pins to the ORIGINAL observation, not each
-        carry-forward hop's publish time.
+        """Carry-forward expires from the ORIGINAL observation, not each hop.
 
-        Before this fix, a deferred provider's carry-forward renewed
-        indefinitely against ``prior_updated`` (publish continuity, always
-        < 300s under the 120s launchd refresher) with no signal a consumer
-        could use to tell a freshly-observed entry from one that has been
-        silently stale for hours. This is the regression test: it must be
-        RED before the fix (no ``observed_at`` key exists at all) and GREEN
-        after (the value survives every hop unchanged, even as the
-        publish-time ``updated_at`` keeps advancing).
+        A deferred provider may carry through the first two 120-second hops,
+        but the third hop is 360 seconds after the original observation and
+        must publish the fresh error entry.
         """
         original_observed_at = NOW - timedelta(seconds=250)
+        original_observed_iso = snap.local_iso(original_observed_at)
         prior = self._healthy_prior(original_observed_at)
         failing = _ps("Codex", False, error="rate limited")
 
         payload = prior
         hop_at = original_observed_at
-        for _ in range(3):
+        for hop in range(3):
             hop_at = hop_at + timedelta(seconds=120)
             payload = snap.build_snapshot_payload([failing], hop_at, prior=payload)
+            codex = next(p for p in payload["providers"] if p["name"] == "Codex")
+            if hop < 2:
+                self.assertTrue(codex["ok"])
+                self.assertEqual(codex["observed_at"], original_observed_iso)
 
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
-        self.assertTrue(codex["ok"])
-        self.assertEqual(codex["observed_at"], snap.local_iso(original_observed_at))
+        self.assertFalse(codex["ok"])
+        self.assertEqual(codex["error"], "rate limited")
+        self.assertIsNone(codex["observed_at"])
 
         published_gap = (
             datetime.fromisoformat(payload["updated_at"])
-            - datetime.fromisoformat(codex["observed_at"])
+            - datetime.fromisoformat(original_observed_iso)
         ).total_seconds()
         # The publish clock has advanced well past STALE_THRESHOLD_SECONDS
-        # from the true observation, yet the carry keeps renewing because
-        # each individual hop's gap is < 300s -- exactly the bug. observed_at
-        # is what now makes that gap detectable to a consumer.
+        # from the true observation, so the final write must publish the fresh
+        # error entry instead of renewing the carry.
         self.assertGreater(published_gap, snap.STALE_THRESHOLD_SECONDS)
 
     def test_carry_forward_legacy_prior_without_observed_at_falls_back_to_prior_updated_at(
@@ -873,7 +922,7 @@ class TestTransientMerge(unittest.TestCase):
                 self.assertEqual(current["error"], "rate limited")
                 self.assertEqual(current["windows"], [])
 
-    def test_transient_rejects_nonmapping_or_invalid_prior_timestamp(self) -> None:
+    def test_transient_rejects_nonmapping_or_invalid_legacy_prior_timestamp(self) -> None:
         """Malformed prior metadata neither raises nor seeds cached data."""
         failing = _ps("Codex", False, error="rate limited")
         invalid_priors: list[object] = (["not a payload"], "not a payload")
@@ -888,10 +937,29 @@ class TestTransientMerge(unittest.TestCase):
             with self.subTest(timestamp=timestamp):
                 prior = self._healthy_prior(NOW - timedelta(seconds=100))
                 prior["updated_at"] = timestamp
+                codex = next(entry for entry in prior["providers"] if entry["name"] == "Codex")
+                codex.pop("observed_at")
                 payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
                 current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
                 self.assertFalse(current["ok"])
                 self.assertEqual(current["windows"], [])
+
+    def test_transient_prefers_entry_observed_at_over_invalid_top_level_timestamp(self) -> None:
+        """A valid entry observation remains authoritative over legacy metadata."""
+        failing = _ps("Codex", False, error="rate limited")
+        for timestamp in ((NOW - timedelta(seconds=100)).isoformat(), "not an ISO timestamp"):
+            with self.subTest(timestamp=timestamp):
+                prior = self._healthy_prior(NOW - timedelta(seconds=100))
+                prior["updated_at"] = timestamp
+                payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+                self.assertTrue(current["ok"])
+                self.assertEqual(
+                    current["observed_at"],
+                    next(entry for entry in prior["providers"] if entry["name"] == "Codex")[
+                        "observed_at"
+                    ],
+                )
 
     def test_transient_cursor_rejects_legacy_malformed_prior(self) -> None:
         """Cursor must not retain pre-v1-shape windows or raw pool metadata."""
@@ -1294,6 +1362,49 @@ class TestAtomicWrite(unittest.TestCase):
             self.assertTrue(snap.write_snapshot(newer, path))
             self.assertTrue(snap.write_snapshot(older, path))
             self.assertEqual(snap.read_prior_snapshot(path), newer)
+
+    def test_untrusted_incoming_timestamp_preserves_valid_current_snapshot(self) -> None:
+        """Invalid incoming timestamps cannot replace a valid current payload."""
+        current = snap.build_snapshot_payload(
+            [_ps("Codex", True, data={"five_hour_percent_left": 50})], NOW
+        )
+        candidates = (
+            ("missing", {key: value for key, value in current.items() if key != "updated_at"}),
+            ("malformed", {**current, "updated_at": "not-a-timestamp"}),
+            ("naive", {**current, "updated_at": "2026-03-14T08:22:30"}),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "snapshot.json"
+            self.assertTrue(snap.write_snapshot(current, path))
+            original = path.read_bytes()
+
+            for label, candidate in candidates:
+                with self.subTest(label=label):
+                    self.assertFalse(snap.write_snapshot(candidate, path))
+                    self.assertEqual(path.read_bytes(), original)
+
+    def test_untrusted_timestamp_is_allowed_without_valid_current_snapshot(self) -> None:
+        """First-write recovery remains available without a valid current timestamp."""
+        invalid_candidates = (
+            {"updated_at": None, "providers": []},
+            {"updated_at": "not-a-timestamp", "providers": []},
+            {"updated_at": "2026-03-14T08:22:30", "providers": []},
+        )
+        for candidate in invalid_candidates:
+            with (
+                self.subTest(updated_at=candidate["updated_at"]),
+                tempfile.TemporaryDirectory() as tmpdir,
+            ):
+                path = Path(tmpdir) / "snapshot.json"
+                self.assertTrue(snap.write_snapshot(candidate, path))
+                self.assertEqual(snap.read_prior_snapshot(path), candidate)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "snapshot.json"
+            path.write_text(json.dumps({"updated_at": "not-a-timestamp"}), encoding="utf-8")
+            candidate = {"updated_at": None, "providers": []}
+            self.assertTrue(snap.write_snapshot(candidate, path))
+            self.assertEqual(snap.read_prior_snapshot(path), candidate)
 
     def test_project_data_drops_nonfinite_allowlisted_values(self) -> None:
         """Bad source metadata cannot poison an otherwise valid payload."""
