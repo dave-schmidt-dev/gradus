@@ -177,7 +177,32 @@ before relying on unattended refresh.
 - Wrapper: `~/.launchd/scripts/gradus_snapshot.sh`
 - Plist: `~/Library/LaunchAgents/local.gradus-snapshot.plist` (StartInterval 120, RunAtLoad, Background)
 - Logs: `~/Library/Logs/homelab/gradus-snapshot/`
-- Install: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.gradus-snapshot.plist`
+- Render and install from the repository checkout (the wrapper template requires the explicit repository-root replacement):
+
+  ```bash
+  cd /Users/dave/Documents/Projects/gradus
+  GRADUS_REPO="$PWD"
+  GRADUS_PYTHON="$GRADUS_REPO/.venv/bin/python3"
+  GRADUS_WRAPPER="$HOME/.launchd/scripts/gradus_snapshot.sh"
+  GRADUS_PLIST="$HOME/Library/LaunchAgents/local.gradus-snapshot.plist"
+  GRADUS_LOG_DIR="$HOME/Library/Logs/homelab/gradus-snapshot"
+  mkdir -p "$(dirname "$GRADUS_WRAPPER")" "$(dirname "$GRADUS_PLIST")" "$GRADUS_LOG_DIR"
+  sed -e "s|__GRADUS_REPO_ROOT__|$GRADUS_REPO|g" \
+      -e "s|__GRADUS_PYTHON_PATH__|$GRADUS_PYTHON|g" \
+      launchd/gradus_snapshot.sh.in > "$GRADUS_WRAPPER"
+  chmod 755 "$GRADUS_WRAPPER"
+  sed -e "s|__GRADUS_WRAPPER_PATH__|$GRADUS_WRAPPER|g" \
+      -e "s|__GRADUS_STDOUT_PATH__|$GRADUS_LOG_DIR/stdout.log|g" \
+      -e "s|__GRADUS_STDERR_PATH__|$GRADUS_LOG_DIR/stderr.log|g" \
+      launchd/local.gradus-snapshot.plist.in > "$GRADUS_PLIST"
+  plutil -lint "$GRADUS_PLIST"
+  GRADUS_DOMAIN="gui/$(id -u)"
+  if launchctl print "$GRADUS_DOMAIN/local.gradus-snapshot" >/dev/null 2>&1; then
+    launchctl bootout "$GRADUS_DOMAIN/local.gradus-snapshot"
+  fi
+  launchctl bootstrap "$GRADUS_DOMAIN" "$GRADUS_PLIST"
+  gradus --verify-refresh-health --duration 360
+  ```
 - Uninstall: `launchctl bootout gui/$(id -u)/local.gradus-snapshot`
 
 **Schema** (`schema_version: 1`):

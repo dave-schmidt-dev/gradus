@@ -1501,10 +1501,10 @@ class TestCredentialAwareRefresh(unittest.TestCase):
 
         self.assertEqual(
             wrapper.count("exec python3 -m gradus --refresh-snapshot"),
-            1,
+            0,
         )
-        self.assertIn('SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)', wrapper)
-        self.assertIn('REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)', wrapper)
+        self.assertIn('REPO_ROOT="__GRADUS_REPO_ROOT__"', wrapper)
+        self.assertIn('exec "__GRADUS_PYTHON_PATH__" -m gradus --refresh-snapshot', wrapper)
         self.assertIn('cd -- "$REPO_ROOT"', wrapper)
         self.assertNotIn("--write-snapshot", wrapper)
         self.assertNotIn("--write-snapshot", plist_text)
@@ -1526,6 +1526,19 @@ class TestCredentialAwareRefresh(unittest.TestCase):
 
         readme = (repo_root / "README.md").read_text(encoding="utf-8")
         self.assertIn("gradus --verify-refresh-health --duration 360", readme)
+
+        rendered = wrapper.replace(
+            "__GRADUS_REPO_ROOT__", "/Users/dave/Documents/Projects/gradus"
+        ).replace(
+            "__GRADUS_PYTHON_PATH__", "/Users/dave/Documents/Projects/gradus/.venv/bin/python3"
+        )
+        self.assertIn('REPO_ROOT="/Users/dave/Documents/Projects/gradus"', rendered)
+        self.assertIn(
+            'exec "/Users/dave/Documents/Projects/gradus/.venv/bin/python3" '
+            "-m gradus --refresh-snapshot",
+            rendered,
+        )
+        self.assertNotIn("__GRADUS_", rendered)
 
 
 class TestRefreshHealthVerifier(unittest.TestCase):
