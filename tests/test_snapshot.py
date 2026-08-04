@@ -1280,6 +1280,21 @@ class TestAtomicWrite(unittest.TestCase):
         self.assertFalse(snap.write_snapshot({"bad": float("nan")}, path))
         self.assertFalse(path.exists())
 
+    def test_stale_writer_cannot_replace_newer_snapshot(self) -> None:
+        """A slower headless writer cannot erase a newer interactive snapshot."""
+        newer = snap.build_snapshot_payload(
+            [_ps("Antigravity", True, data={"five_hour_percent_left": 5})], NOW
+        )
+        older = snap.build_snapshot_payload(
+            [_ps("Antigravity", False, error="auth required: no cached credentials")],
+            NOW - timedelta(seconds=30),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "snapshot.json"
+            self.assertTrue(snap.write_snapshot(newer, path))
+            self.assertTrue(snap.write_snapshot(older, path))
+            self.assertEqual(snap.read_prior_snapshot(path), newer)
+
     def test_project_data_drops_nonfinite_allowlisted_values(self) -> None:
         """Bad source metadata cannot poison an otherwise valid payload."""
         provider = _ps(

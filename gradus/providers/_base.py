@@ -263,6 +263,7 @@ def fetch_provider_snapshot(
 ) -> ProviderSnapshot:
     try:
         status = fetcher.fetch()
+        data = status.to_dict()
     except ProbeFailure as exc:
         if debug:
             _write_debug_dump(name, exc.raw_text or "")
@@ -276,8 +277,13 @@ def fetch_provider_snapshot(
             name=name, ok=False, source=source, error=error, debug_detail=debug_detail
         )
     except Exception as exc:
-        return ProviderSnapshot(name=name, ok=False, source=source, error=str(exc))
-    data = status.to_dict()
+        return ProviderSnapshot(
+            name=name,
+            ok=False,
+            source=source,
+            error="provider probe failed",
+            debug_detail=str(exc) if debug else None,
+        )
     if debug:
         _write_debug_dump(name, str(data.get("raw_text", "")))
     if not debug:

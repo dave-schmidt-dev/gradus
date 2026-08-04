@@ -3,20 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import os
+import plistlib
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from rich.console import Console
 
+import gradus.snapshot as snapshot_module
 from gradus.__main__ import (
     AUTH_ACTIONS,
     STALE_THRESHOLD_SECONDS,
+    _acquire_refresh_snapshot_lock,
     _build_fix_actions,
     _check_warnings,
     _is_auth_error,
@@ -25,7 +32,12 @@ from gradus.__main__ import (
     _load_config,
     _merge_with_previous,
     _notify_warning,
+    _release_refresh_snapshot_lock,
+    _verify_refresh_health,
+    _write_snapshot_versions,
+    collect_snapshots,
     main,
+    parse_args,
 )
 from gradus.providers import ProviderSnapshot, set_headless
 from gradus.ui import THEME, build_dashboard
@@ -943,6 +955,746 @@ class WriteSnapshotTests(unittest.TestCase):
             for provider in payload["providers"]:
                 for key in ("name", "ok", "error", "windows", "data"):
                     self.assertIn(key, provider)
+
+
+class TestCredentialAwareRefresh(unittest.TestCase):
+    """The explicit refresh command is credential-aware but non-interactive."""
+
+    @staticmethod
+    def _namespace() -> argparse.Namespace:
+        return argparse.Namespace(
+            json=False,
+            write_snapshot=False,
+            refresh_snapshot=True,
+            once=False,
+            debug=False,
+            providers=None,
+            interval=120,
+        )
+
+    def test_command_selection_is_mutually_exclusive(self) -> None:
+        for args in (
+            ("--json", "--refresh-snapshot"),
+            ("--once", "--refresh-snapshot"),
+            ("--write-snapshot", "--refresh-snapshot"),
+        ):
+            with self.subTest(args=args), patch("sys.argv", ["gradus", *args]):
+                with self.assertRaises(SystemExit) as ctx:
+                    parse_args()
+                self.assertEqual(ctx.exception.code, 2)
+
+    def test_legacy_command_flags_remain_combinable(self) -> None:
+        with patch("sys.argv", ["gradus", "--once", "--write-snapshot"]):
+            args = parse_args()
+
+        self.assertTrue(args.once)
+        self.assertTrue(args.write_snapshot)
+
+    def test_refresh_is_non_headless_one_agy_probe_safe_progress_and_sorted_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            providers = [("Codex", MagicMock()), ("Antigravity", MagicMock())]
+            calls: list[str] = []
+            payloads: list[dict] = []
+
+            def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
+                calls.append(name)
+                if name == "Codex":
+                    time.sleep(0.05)
+                    return ProviderSnapshot(
+                        name=name,
+                        ok=True,
+                        source="api",
+                        data={"five_hour_percent_left": 80},
+                    )
+                return ProviderSnapshot(
+                    name=name,
+                    ok=True,
+                    source="api",
+                    data={
+                        "five_hour_percent_left": 90,
+                        "weekly_percent_left": 70,
+                        "third_party_five_hour_percent_left": 42.5,
+                        "third_party_weekly_percent_left": 15.0,
+                    },
+                )
+
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                payloads.append(payload)
+                return True
+
+            set_headless_spy = MagicMock()
+            stderr = StringIO()
+            with (
+                patch("sys.argv", ["gradus", "--refresh-snapshot"]),
+                patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                patch("gradus.__main__.set_headless", set_headless_spy),
+                patch("gradus.__main__.initialize_providers", return_value=(providers, [])) as init,
+                patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch),
+                patch("gradus.__main__.read_prior_snapshot", return_value=None),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
+                patch("gradus.__main__._check_warnings") as check,
+                patch("gradus.__main__._build_fix_actions") as fixes,
+                patch("gradus.__main__._launch_fix") as launch_fix,
+                patch("gradus.__main__.sys.stderr", stderr),
+            ):
+                rc = main()
+
+            self.assertEqual(rc, 0)
+            init.assert_called_once()
+            set_headless_spy.assert_called_once_with(False)
+            self.assertEqual(calls.count("Antigravity"), 1)
+            self.assertEqual(len(payloads), 2)
+            self.assertEqual(
+                [entry["name"] for entry in payloads[0]["providers"]],
+                ["Codex", "Claude", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"],
+            )
+            self.assertIn(
+                "Antigravity (Claude)",
+                [entry["name"] for entry in payloads[1]["providers"]],
+            )
+            status = stderr.getvalue()
+            self.assertIn("refresh: provider Codex started", status)
+            self.assertIn("refresh: provider Antigravity started", status)
+            self.assertLess(
+                status.index("refresh: provider Antigravity complete"),
+                status.index("refresh: provider Codex complete"),
+            )
+            self.assertIn("refresh: schema-v1 persisted", status)
+            self.assertIn("refresh: schema-v2 persisted", status)
+            self.assertIn("refresh: completed", status)
+            self.assertNotIn("account", status.lower())
+            self.assertNotIn("cookie", status.lower())
+            self.assertNotIn("raw", status.lower())
+            self.assertNotIn("token", status.lower())
+            check.assert_not_called()
+            fixes.assert_not_called()
+            launch_fix.assert_not_called()
+            self.assertEqual(state_dir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((state_dir / ".refresh-snapshot.lock").stat().st_mode & 0o777, 0o600)
+
+    def test_refresh_generic_provider_exception_is_absent_from_v1_and_v2_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            sentinel = "provider-secret-sentinel"
+
+            class FakeProvider:
+                def fetch(self) -> None:
+                    raise RuntimeError(sentinel)
+
+            payloads: list[dict] = []
+
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                payloads.append(payload)
+                return True
+
+            with (
+                patch("sys.argv", ["gradus", "--refresh-snapshot"]),
+                patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                patch(
+                    "gradus.__main__.initialize_providers",
+                    return_value=([("Codex", FakeProvider())], []),
+                ),
+                patch("gradus.__main__.read_prior_snapshot", return_value=None),
+                patch("gradus.__main__.write_snapshot", side_effect=fake_write),
+            ):
+                rc = main()
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(len(payloads), 2)
+            for payload in payloads:
+                self.assertNotIn(sentinel, json.dumps(payload))
+                codex = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+                self.assertEqual(codex["error"], "provider probe failed")
+
+    def test_refresh_overlap_is_a_safe_noop_before_provider_initialization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            lock_path = state_dir / ".refresh-snapshot.lock"
+            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                stderr = StringIO()
+                with (
+                    patch("sys.argv", ["gradus", "--refresh-snapshot"]),
+                    patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                    patch("gradus.__main__._setup_logging"),
+                    patch("gradus.__main__._load_config", return_value={}),
+                    patch("gradus.__main__.os.getcwd", return_value=tmp),
+                    patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                    patch("gradus.__main__.initialize_providers") as init,
+                    patch("gradus.__main__.write_snapshot") as write,
+                    patch("gradus.__main__.sys.stderr", stderr),
+                ):
+                    rc = main()
+
+                self.assertEqual(rc, 0)
+                self.assertIn("refresh: already in progress", stderr.getvalue())
+                init.assert_not_called()
+                write.assert_not_called()
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+    def test_refresh_lock_is_shared_across_distinct_invocation_cwds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            other_cwd = Path(tmp) / "other-cwd"
+            other_cwd.mkdir()
+            fd, already_owned = _acquire_refresh_snapshot_lock(state_dir)
+            self.assertIsNotNone(fd)
+            self.assertFalse(already_owned)
+            assert fd is not None
+            try:
+                stderr = StringIO()
+                with (
+                    patch("sys.argv", ["gradus", "--refresh-snapshot"]),
+                    patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                    patch("gradus.__main__._setup_logging"),
+                    patch("gradus.__main__._load_config", return_value={}),
+                    patch("gradus.__main__.os.getcwd", return_value=str(other_cwd)),
+                    patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                    patch("gradus.__main__.initialize_providers") as init,
+                    patch("gradus.__main__.write_snapshot") as write,
+                    patch("gradus.__main__.sys.stderr", stderr),
+                ):
+                    rc = main()
+
+                self.assertEqual(rc, 0)
+                self.assertIn("refresh: already in progress", stderr.getvalue())
+                init.assert_not_called()
+                write.assert_not_called()
+            finally:
+                _release_refresh_snapshot_lock(fd)
+
+    def test_refresh_persistence_lock_wait_is_visible_and_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            v1_path = state_dir / "snapshot.json"
+            v2_path = state_dir / "snapshot-v2.json"
+            lock_path = state_dir / ".snapshot.json.lock"
+            lock = open(lock_path, "a+", encoding="utf-8")
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            statuses: list[str] = []
+
+            def real_write(payload: dict, *args: object, **kwargs: object) -> bool:
+                path = args[0] if args else v1_path
+                assert isinstance(path, Path)
+                return snapshot_module.write_snapshot(payload, path, **kwargs)
+
+            try:
+                with (
+                    patch("gradus.__main__.SNAPSHOT_PATH", v1_path),
+                    patch("gradus.__main__.SNAPSHOT_V2_PATH", v2_path),
+                    patch("gradus.__main__.write_snapshot", side_effect=real_write),
+                ):
+                    result = _write_snapshot_versions(
+                        [
+                            ProviderSnapshot(
+                                name="Codex",
+                                ok=True,
+                                source="api",
+                                data={"five_hour_percent_left": 50},
+                            )
+                        ],
+                        NOW,
+                        on_status=statuses.append,
+                        lock_timeout=0.12,
+                        lock_poll_interval=0.01,
+                    )
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                lock.close()
+
+            self.assertEqual(result, (False, True))
+            self.assertGreaterEqual(
+                statuses.count("schema-v1 waiting for snapshot lock"),
+                2,
+            )
+            self.assertIn("schema-v1 persistence failed", statuses)
+            self.assertIn("schema-v2 persisted", statuses)
+            self.assertFalse(v1_path.exists())
+            self.assertTrue(v2_path.exists())
+
+    def test_refresh_lock_open_failure_is_nonzero_and_does_not_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".state").mkdir()
+            stderr = StringIO()
+            with (
+                patch("sys.argv", ["gradus", "--refresh-snapshot"]),
+                patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=Path(tmp) / ".state"),
+                patch("gradus.__main__.os.open", side_effect=OSError("sensitive details")),
+                patch("gradus.__main__.initialize_providers") as init,
+                patch("gradus.__main__.sys.stderr", stderr),
+            ):
+                rc = main()
+
+            self.assertEqual(rc, 1)
+            self.assertIn("refresh: lock unavailable", stderr.getvalue())
+            self.assertNotIn("sensitive details", stderr.getvalue())
+            init.assert_not_called()
+
+    def test_refresh_fetch_exception_keeps_lock_until_slow_worker_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            slow_started = threading.Event()
+            first_heartbeat_seen = threading.Event()
+            second_heartbeat_seen = threading.Event()
+            release_slow = threading.Event()
+            heartbeat_count = 0
+            providers = [("Antigravity", MagicMock()), ("Codex", MagicMock())]
+
+            def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
+                if name == "Antigravity":
+                    slow_started.set()
+                    self.assertTrue(release_slow.wait(timeout=2))
+                    return ProviderSnapshot(
+                        name=name,
+                        ok=True,
+                        source="api",
+                        data={"five_hour_percent_left": 80},
+                    )
+                raise RuntimeError("raw token details")
+
+            stderr = StringIO()
+            result: list[int] = []
+            ns = self._namespace()
+
+            def progress(message: str) -> None:
+                nonlocal heartbeat_count
+                print(f"refresh: {message}", file=stderr, flush=True)
+                if message.startswith("waiting for "):
+                    heartbeat_count += 1
+                    first_heartbeat_seen.set()
+                    if heartbeat_count >= 2:
+                        second_heartbeat_seen.set()
+
+            with (
+                patch("gradus.__main__.parse_args", return_value=ns),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                patch("gradus.__main__.initialize_providers", return_value=(providers, [])),
+                patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch),
+                patch("gradus.__main__.write_snapshot", return_value=True),
+                patch("gradus.__main__._refresh_progress", side_effect=progress),
+            ):
+                worker = threading.Thread(target=lambda: result.append(main()))
+                worker.start()
+                self.assertTrue(slow_started.wait(timeout=2))
+
+                second_fd, already_owned = _acquire_refresh_snapshot_lock(state_dir)
+                self.assertIsNone(second_fd)
+                self.assertTrue(already_owned)
+                self.assertTrue(first_heartbeat_seen.wait(timeout=2))
+                self.assertTrue(second_heartbeat_seen.wait(timeout=2))
+
+                release_slow.set()
+                worker.join(timeout=2)
+
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(result, [0])
+            status = stderr.getvalue()
+            self.assertIn("refresh: waiting for 1 provider(s)", status)
+            self.assertIn("refresh: provider Codex complete", status)
+            self.assertNotIn("raw token details", status)
+            completed_heartbeat_count = heartbeat_count
+            time.sleep(0.05)
+            self.assertEqual(heartbeat_count, completed_heartbeat_count)
+            self.assertGreaterEqual(completed_heartbeat_count, 2)
+
+    def test_refresh_cleans_up_providers_before_releasing_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            provider = MagicMock()
+            cleanup_lock_attempt: list[tuple[int | None, bool]] = []
+
+            def close() -> None:
+                cleanup_lock_attempt.append(_acquire_refresh_snapshot_lock(Path(tmp) / ".state"))
+
+            provider.close.side_effect = close
+            providers = [("Codex", provider)]
+            with (
+                patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=Path(tmp) / ".state"),
+                patch("gradus.__main__.initialize_providers", return_value=(providers, [provider])),
+                patch(
+                    "gradus.__main__.fetch_provider_snapshot",
+                    return_value=ProviderSnapshot(name="Codex", ok=True, source="api", data={}),
+                ),
+                patch("gradus.__main__.write_snapshot", return_value=True),
+            ):
+                self.assertEqual(main(), 0)
+
+            self.assertEqual(cleanup_lock_attempt, [(None, True)])
+            fd, already_owned = _acquire_refresh_snapshot_lock(Path(tmp) / ".state")
+            self.assertIsNotNone(fd)
+            self.assertFalse(already_owned)
+            assert fd is not None
+            _release_refresh_snapshot_lock(fd)
+
+    def test_collect_snapshots_default_waits_for_all_workers_before_raising(self) -> None:
+        release_slow = threading.Event()
+        slow_started = threading.Event()
+        slow_finished = threading.Event()
+        original_error = RuntimeError("raw provider failure")
+        providers = [("slow", MagicMock()), ("failing", MagicMock())]
+        captured: list[BaseException] = []
+
+        def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
+            if name == "slow":
+                slow_started.set()
+                self.assertTrue(release_slow.wait(timeout=2))
+                slow_finished.set()
+                return ProviderSnapshot(name=name, ok=True, source="api", data={})
+            raise original_error
+
+        def collect() -> None:
+            try:
+                collect_snapshots(providers, False)
+            except BaseException as exc:  # noqa: BLE001 - assert the public exception
+                captured.append(exc)
+
+        stderr = StringIO()
+        with (
+            patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch),
+            patch("gradus.__main__.sys.stderr", stderr),
+        ):
+            worker = threading.Thread(target=collect)
+            worker.start()
+            self.assertTrue(slow_started.wait(timeout=2))
+            time.sleep(0.05)
+            self.assertTrue(worker.is_alive())
+            self.assertEqual(captured, [])
+
+            release_slow.set()
+            worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(captured, [original_error])
+        self.assertTrue(slow_finished.is_set())
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_refresh_rejects_unsafe_state_and_lock_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target"
+            target.mkdir()
+            state_path = Path(tmp) / ".state"
+            state_path.symlink_to(target, target_is_directory=True)
+            self.assertEqual(_acquire_refresh_snapshot_lock(state_path), (None, False))
+
+            state_path.unlink()
+            state_path.write_text("not a directory", encoding="utf-8")
+            self.assertEqual(_acquire_refresh_snapshot_lock(state_path), (None, False))
+
+            state_path.unlink()
+            state_path.mkdir()
+            lock_target = state_path / "real-lock"
+            lock_target.touch()
+            lock_path = state_path / ".refresh-snapshot.lock"
+            lock_path.symlink_to(lock_target)
+            self.assertEqual(_acquire_refresh_snapshot_lock(state_path), (None, False))
+
+            lock_path.unlink()
+            lock_path.mkdir()
+            self.assertEqual(_acquire_refresh_snapshot_lock(state_path), (None, False))
+
+    def test_refresh_reports_static_initialization_failure_immediately_and_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            providers = [
+                ("Codex", RuntimeError("account token details")),
+                ("Antigravity", MagicMock()),
+            ]
+            stderr = StringIO()
+            with (
+                patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                patch("gradus.__main__.initialize_providers", return_value=(providers, [])),
+                patch(
+                    "gradus.__main__.fetch_provider_snapshot",
+                    return_value=ProviderSnapshot(
+                        name="Antigravity",
+                        ok=True,
+                        source="api",
+                        data={"five_hour_percent_left": 75},
+                    ),
+                ),
+                patch("gradus.__main__.write_snapshot", return_value=True),
+                patch("gradus.__main__.sys.stderr", stderr),
+            ):
+                self.assertEqual(main(), 0)
+
+            status = stderr.getvalue()
+            self.assertIn("refresh: provider Codex initialization failed", status)
+            self.assertIn("refresh: provider Antigravity started", status)
+            self.assertLess(
+                status.index("provider Codex initialization failed"),
+                status.index("provider Antigravity started"),
+            )
+            self.assertNotIn("account token details", status)
+
+    def test_refresh_persistence_failure_is_nonzero_without_unsafe_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            providers = [("Codex", MagicMock())]
+            stderr = StringIO()
+            with (
+                patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                patch("gradus.__main__.initialize_providers", return_value=(providers, [])),
+                patch(
+                    "gradus.__main__.fetch_provider_snapshot",
+                    return_value=ProviderSnapshot(name="Codex", ok=True, source="api", data={}),
+                ),
+                patch(
+                    "gradus.__main__.write_snapshot",
+                    side_effect=[False, OSError("raw token details")],
+                ),
+                patch("gradus.__main__.sys.stderr", stderr),
+            ):
+                self.assertEqual(main(), 1)
+
+            status = stderr.getvalue()
+            self.assertIn("refresh: schema-v1 persistence failed", status)
+            self.assertIn("refresh: schema-v2 persistence failed", status)
+            self.assertIn("refresh: failed", status)
+            self.assertNotIn("raw token details", status)
+
+    def test_launchd_template_requires_repeatable_health_verification(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        launchd_root = repo_root / "launchd"
+        wrapper_path = launchd_root / "gradus_snapshot.sh.in"
+        plist_path = launchd_root / "local.gradus-snapshot.plist.in"
+        wrapper = wrapper_path.read_text(encoding="utf-8")
+        plist_text = plist_path.read_text(encoding="utf-8")
+        plist = plistlib.loads(plist_path.read_bytes())
+
+        self.assertEqual(
+            wrapper.count("exec python3 -m gradus --refresh-snapshot"),
+            1,
+        )
+        self.assertIn('SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)', wrapper)
+        self.assertIn('REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)', wrapper)
+        self.assertIn('cd -- "$REPO_ROOT"', wrapper)
+        self.assertNotIn("--write-snapshot", wrapper)
+        self.assertNotIn("--write-snapshot", plist_text)
+
+        self.assertEqual(plist["Label"], "local.gradus-snapshot")
+        self.assertTrue(plist["RunAtLoad"])
+        self.assertEqual(plist["StartInterval"], 120)
+        self.assertEqual(plist["ProcessType"], "Background")
+        self.assertEqual(plist["ProgramArguments"], ["__GRADUS_WRAPPER_PATH__"])
+        self.assertEqual(plist["StandardOutPath"], "__GRADUS_STDOUT_PATH__")
+        self.assertEqual(plist["StandardErrorPath"], "__GRADUS_STDERR_PATH__")
+
+        for content in (wrapper, plist_text):
+            self.assertNotIn("/Users/", content)
+            self.assertNotIn("/home/", content)
+            self.assertNotIn("account", content.lower())
+            self.assertNotIn("credential", content.lower())
+            self.assertNotIn("token", content.lower())
+
+        readme = (repo_root / "README.md").read_text(encoding="utf-8")
+        self.assertIn("gradus --verify-refresh-health --duration 360", readme)
+
+
+class TestRefreshHealthVerifier(unittest.TestCase):
+    """The installed refresh verifier reads state only and proves fresh progress."""
+
+    BASE = datetime(2026, 8, 4, 12, tzinfo=timezone.utc)
+
+    @classmethod
+    def _payload(
+        cls,
+        offset_seconds: float,
+        *,
+        observed_offset_seconds: float | None = None,
+        ok: bool = True,
+        include_claude: bool = True,
+    ) -> dict[str, object]:
+        updated = cls.BASE + timedelta(seconds=offset_seconds)
+        observed = (
+            updated
+            if observed_offset_seconds is None
+            else cls.BASE + timedelta(seconds=observed_offset_seconds)
+        )
+        providers: list[dict[str, object]] = [
+            {"name": "Antigravity", "ok": ok, "observed_at": observed.isoformat()},
+        ]
+        if include_claude:
+            providers.append(
+                {"name": "Antigravity (Claude)", "ok": ok, "observed_at": observed.isoformat()}
+            )
+        return {"schema_version": 2, "updated_at": updated.isoformat(), "providers": providers}
+
+    @staticmethod
+    def _drive(
+        samples: list[object],
+        *,
+        duration: float = 0.3,
+        interval: float = 0.1,
+        wall_clock: datetime | None = None,
+    ) -> tuple[bool, list[str]]:
+        position = 0
+        elapsed = [0.0]
+        statuses: list[str] = []
+        fallback = samples[-1] if samples else None
+
+        def reader() -> object:
+            nonlocal position
+            sample = samples[position] if position < len(samples) else fallback
+            position += 1
+            return sample
+
+        def clock() -> float:
+            return elapsed[0]
+
+        def sleeper(seconds: float) -> None:
+            elapsed[0] += seconds
+
+        result = _verify_refresh_health(
+            duration=duration,
+            interval=interval,
+            reader=reader,
+            clock=clock,
+            sleeper=sleeper,
+            status=statuses.append,
+            wall_clock=lambda: wall_clock or datetime(2026, 8, 5, tzinfo=timezone.utc),
+        )
+        return result, statuses
+
+    def test_three_increasing_fresh_samples_pass_without_wall_clock_sleep(self) -> None:
+        result, statuses = self._drive(
+            [self._payload(0), self._payload(120), self._payload(360)],
+            duration=360,
+            interval=120,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(statuses.count("sample fresh"), 3)
+        self.assertGreaterEqual(statuses.count("waiting 120.0s"), 2)
+        self.assertEqual(statuses[-1], "passed")
+
+    def test_carried_failed_malformed_missing_and_timeout_samples_fail_safely(self) -> None:
+        cases = (
+            ([self._payload(0, observed_offset_seconds=-1)], "sample provider observation carried"),
+            ([self._payload(0, ok=False)], "sample provider not healthy"),
+            (
+                [{"schema_version": 2, "updated_at": "not-a-timestamp", "providers": []}],
+                "sample invalid timestamp",
+            ),
+            (
+                [{"schema_version": 1, "updated_at": self.BASE.isoformat(), "providers": []}],
+                "sample invalid schema",
+            ),
+            ([self._payload(0, include_claude=False)], "sample missing required provider"),
+            ([None], "sample unavailable"),
+        )
+        for samples, expected in cases:
+            with self.subTest(expected=expected):
+                result, statuses = self._drive(samples)
+                self.assertFalse(result)
+                self.assertIn(expected, statuses)
+                self.assertTrue(statuses[-1].startswith("failed:"))
+
+    def test_unchanged_and_non_increasing_samples_never_count_as_fresh(self) -> None:
+        result, statuses = self._drive(
+            [self._payload(120), self._payload(120), self._payload(60)],
+        )
+
+        self.assertFalse(result)
+        self.assertIn("sample unchanged", statuses)
+        self.assertIn("sample non-increasing timestamp", statuses)
+        self.assertNotIn("passed", statuses)
+
+    def test_insufficient_span_and_future_timestamp_fail(self) -> None:
+        result, statuses = self._drive(
+            [self._payload(0), self._payload(100), self._payload(200)],
+            duration=0.3,
+        )
+        self.assertFalse(result)
+        self.assertTrue(statuses[-1].startswith("failed:"))
+
+        result, statuses = self._drive(
+            [self._payload(0)],
+            duration=0.1,
+            wall_clock=self.BASE - timedelta(seconds=1),
+        )
+        self.assertFalse(result)
+        self.assertIn("sample future timestamp", statuses)
+
+    def test_cli_conflicts_and_positive_production_arguments(self) -> None:
+        with patch(
+            "sys.argv",
+            ["gradus", "--verify-refresh-health", "--duration", "360", "--health-interval", "120"],
+        ):
+            args = parse_args()
+        self.assertTrue(args.verify_refresh_health)
+        self.assertEqual(args.duration, 360.0)
+        self.assertEqual(args.health_interval, 120.0)
+
+        for flag in ("--once", "--json", "--write-snapshot", "--refresh-snapshot"):
+            with (
+                self.subTest(flag=flag),
+                patch("sys.argv", ["gradus", "--verify-refresh-health", flag]),
+            ):
+                with self.assertRaises(SystemExit) as ctx:
+                    parse_args()
+                self.assertEqual(ctx.exception.code, 2)
+
+    def test_main_health_branch_does_not_initialize_or_set_up_logging(self) -> None:
+        args = argparse.Namespace(
+            verify_refresh_health=True,
+            duration=360.0,
+            health_interval=120.0,
+        )
+        with (
+            patch("gradus.__main__.parse_args", return_value=args),
+            patch("gradus.__main__._verify_refresh_health_once", return_value=0) as verify,
+            patch("gradus.__main__._setup_logging") as logging_setup,
+            patch("gradus.__main__.initialize_providers") as init,
+            patch("gradus.__main__.subprocess.run") as run,
+            patch("gradus.__main__.subprocess.Popen") as popen,
+            patch("gradus.__main__.write_snapshot") as write,
+        ):
+            self.assertEqual(main(), 0)
+
+        verify.assert_called_once_with(360.0, 120.0)
+        logging_setup.assert_not_called()
+        init.assert_not_called()
+        run.assert_not_called()
+        popen.assert_not_called()
+        write.assert_not_called()
 
 
 class HeadlessGateTests(unittest.TestCase):

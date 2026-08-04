@@ -10,13 +10,16 @@ provider type referenced is :class:`ProviderSnapshot`, imported under
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import logging
 import math
 import os
 import re
 import tempfile
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1095,30 +1098,70 @@ def build_snapshot_v2_payload(
     )
 
 
-def write_snapshot(payload: dict, path: Path = SNAPSHOT_PATH) -> bool:
+def write_snapshot(
+    payload: dict,
+    path: Path = SNAPSHOT_PATH,
+    *,
+    on_progress: Callable[[str], None] | None = None,
+    lock_timeout: float | None = None,
+    lock_poll_interval: float = 0.1,
+) -> bool:
     """Atomically persist a payload to ``path``. Never raises.
 
     Writes to a unique temp file (safe under concurrent writers), fsyncs, then
-    ``os.replace`` for atomicity. On any failure the temp file is unlinked
-    best-effort and False is returned.
+    ``os.replace`` for atomicity. By default, lock acquisition remains blocking
+    for compatibility with existing callers. Callers may provide a finite
+    ``lock_timeout`` and progress callback for bounded, visible waits. On any
+    failure the temp file is unlinked best-effort and False is returned.
 
     Args:
         payload: The JSON-serializable payload to persist.
         path: The destination path (defaults to :data:`SNAPSHOT_PATH`).
+        on_progress: Optional callback receiving the safe message
+            ``"waiting for snapshot lock"`` while a bounded lock wait retries.
+        lock_timeout: Maximum seconds to wait for the per-snapshot lock. None
+            preserves the original unbounded blocking behavior.
+        lock_poll_interval: Maximum seconds between bounded lock attempts.
 
     Returns:
         True on success, False on any error.
     """
     path = Path(path)
     tmp: str | None = None
+    lock_path = path.with_name(f".{path.name}.lock")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="snapshot.", suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, allow_nan=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
+        with open(lock_path, "a+", encoding="utf-8") as lock:
+            os.chmod(lock_path, 0o600)
+            if not _acquire_snapshot_lock(
+                lock,
+                on_progress=on_progress,
+                lock_timeout=lock_timeout,
+                lock_poll_interval=lock_poll_interval,
+            ):
+                return False
+            try:
+                incoming_updated_at = _parse_aware_iso_timestamp(payload.get("updated_at"))
+                current = read_prior_snapshot(path)
+                current_updated_at = _parse_aware_iso_timestamp(
+                    current.get("updated_at") if isinstance(current, Mapping) else None
+                )
+                if (
+                    incoming_updated_at is not None
+                    and current_updated_at is not None
+                    and current_updated_at > incoming_updated_at
+                ):
+                    log.info("skipping stale snapshot write to %s", path)
+                    return True
+
+                fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="snapshot.", suffix=".tmp")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2, allow_nan=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         return True
     except Exception:  # noqa: BLE001 - persistence must never crash the caller
         log.warning("failed to write snapshot to %s", path, exc_info=True)
@@ -1128,6 +1171,37 @@ def write_snapshot(payload: dict, path: Path = SNAPSHOT_PATH) -> bool:
             except OSError:
                 pass
         return False
+
+
+def _acquire_snapshot_lock(
+    lock: object,
+    *,
+    on_progress: Callable[[str], None] | None,
+    lock_timeout: float | None,
+    lock_poll_interval: float,
+) -> bool:
+    """Acquire a snapshot lock, optionally with a bounded visible wait."""
+    fileno = lock.fileno()  # type: ignore[union-attr]
+    if lock_timeout is None:
+        fcntl.flock(fileno, fcntl.LOCK_EX)
+        return True
+
+    deadline = time.monotonic() + max(0.0, lock_timeout)
+    interval = max(0.0, lock_poll_interval)
+    while True:
+        try:
+            fcntl.flock(fileno, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as exc:
+            if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            if on_progress is not None:
+                on_progress("waiting for snapshot lock")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if interval:
+                time.sleep(min(interval, remaining))
 
 
 def read_prior_snapshot(path: Path = SNAPSHOT_PATH) -> dict | None:

@@ -165,9 +165,14 @@ Two events write the snapshot: the TUI on every refresh cycle, and `python3 -m g
 
 **Read-only guarantee.** The `--write-snapshot` path never opens a browser, spawns a subprocess, refreshes a token, evicts a cookie cache, or sends notifications. Providers with missing or expired credentials surface as `ok: false`. It writes v1 first and v2 second; each file is independently atomic, so a partial failure is logged and exits 1 while the successful sibling remains current.
 
-**Headless coverage.** Codex and any provider whose `.cache/` cookie file is still warm run headlessly — reading a cached cookie file is a benign read, allowed. Antigravity is always `ok: false` headless: its only credential is an OAuth token read via a `security` subprocess, which the read-only path forbids. A running TUI covers it.
+**Headless coverage.** Codex and any provider whose `.cache/` cookie file is still warm run headlessly — reading a cached cookie file is a benign read, allowed. Antigravity's only credential is an OAuth token read via a `security` subprocess, which the read-only path forbids, so a headless probe reports `auth required: no cached credentials`. When a recent healthy interactive snapshot exists, headless writes carry it forward, including the schema-v2 `Antigravity (Claude)` synthetic entry. Snapshot writers use a per-file lock and reject an older payload, so a slower background refresh cannot replace newer TUI data. Run the TUI once after a fresh install or when the prior snapshot has expired to seed the shared Agy buckets.
 
 **launchd refresher (manual install).** A ~120 s background job keeps the snapshot current without the TUI running.
+
+The repository-owned templates in `launchd/` invoke the explicit credential-aware
+`--refresh-snapshot` observer. After installing or changing the wrapper or plist,
+run `gradus --verify-refresh-health --duration 360` and require a successful result
+before relying on unattended refresh.
 
 - Wrapper: `~/.launchd/scripts/gradus_snapshot.sh`
 - Plist: `~/Library/LaunchAgents/local.gradus-snapshot.plist` (StartInterval 120, RunAtLoad, Background)

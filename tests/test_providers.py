@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from gradus import providers
+from gradus import snapshot as snapshot_module
 from gradus.__main__ import _is_auth_error
 from gradus.providers import (
     AntigravityProvider,
@@ -44,6 +45,58 @@ class ProviderHelperTests(unittest.TestCase):
         self.assertTrue(label.startswith("Resets "))
         self.assertNotIn("UTC", label)
         self.assertIn(" at ", label)
+
+
+class FetchProviderSnapshotTests(unittest.TestCase):
+    def test_generic_provider_exception_uses_fixed_safe_error_and_debug_detail(self) -> None:
+        sentinel = "provider-secret-sentinel"
+
+        class FakeProvider:
+            def fetch(self) -> None:
+                raise RuntimeError(sentinel)
+
+        snapshot = fetch_provider_snapshot("Codex", FakeProvider(), debug=True)
+
+        self.assertFalse(snapshot.ok)
+        self.assertEqual(snapshot.error, "provider probe failed")
+        self.assertNotIn(sentinel, snapshot.error or "")
+        self.assertIn(sentinel, snapshot.debug_detail or "")
+
+        quiet_snapshot = fetch_provider_snapshot("Codex", FakeProvider(), debug=False)
+        self.assertIsNone(quiet_snapshot.debug_detail)
+        for build_payload in (
+            snapshot_module.build_snapshot_payload,
+            snapshot_module.build_snapshot_v2_payload,
+        ):
+            payload_json = json.dumps(build_payload([snapshot], datetime(2026, 1, 1)))
+            self.assertNotIn(sentinel, payload_json)
+
+    def test_status_serialization_exception_uses_fixed_safe_error_and_debug_detail(self) -> None:
+        sentinel = "status-secret-sentinel"
+
+        class FakeStatus:
+            def to_dict(self) -> dict[str, object]:
+                raise RuntimeError(sentinel)
+
+        class FakeProvider:
+            def fetch(self) -> FakeStatus:
+                return FakeStatus()
+
+        snapshot = fetch_provider_snapshot("Codex", FakeProvider(), debug=True)
+
+        self.assertFalse(snapshot.ok)
+        self.assertEqual(snapshot.error, "provider probe failed")
+        self.assertNotIn(sentinel, snapshot.error or "")
+        self.assertIn(sentinel, snapshot.debug_detail or "")
+
+        quiet_snapshot = fetch_provider_snapshot("Codex", FakeProvider(), debug=False)
+        self.assertIsNone(quiet_snapshot.debug_detail)
+        for build_payload in (
+            snapshot_module.build_snapshot_payload,
+            snapshot_module.build_snapshot_v2_payload,
+        ):
+            payload_json = json.dumps(build_payload([snapshot], datetime(2026, 1, 1)))
+            self.assertNotIn(sentinel, payload_json)
 
 
 class FormatResetTimeTests(unittest.TestCase):

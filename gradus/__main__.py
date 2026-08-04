@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import fcntl
 import inspect
 import json
 import logging
 import os
 import select
+import stat
 import subprocess
 import sys
 import termios
 import time
 import tty
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Mapping
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
@@ -29,6 +33,7 @@ from .providers import (
 )
 from .providers._base import _PROVIDER_REGISTRY
 from .snapshot import (
+    SNAPSHOT_PATH,
     SNAPSHOT_V2_PATH,
     STALE_THRESHOLD_SECONDS,
     _is_transient_probe_error,
@@ -137,6 +142,18 @@ def parse_args() -> argparse.Namespace:
         description="Monitor Codex, Claude, Antigravity, Copilot, Cursor, and Vibe usage in real time."
     )
     parser.add_argument("--interval", type=int, default=120, help="Refresh interval in seconds.")
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=360.0,
+        help="Health-verification duration in seconds (used with --verify-refresh-health).",
+    )
+    parser.add_argument(
+        "--health-interval",
+        type=float,
+        default=120.0,
+        help="Health-verification poll interval in seconds (used with --verify-refresh-health).",
+    )
     parser.add_argument("--once", action="store_true", help="Fetch one snapshot and exit.")
     parser.add_argument(
         "--json",
@@ -165,7 +182,49 @@ def parse_args() -> argparse.Namespace:
             "(no browser, no notifications)."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--refresh-snapshot",
+        action="store_true",
+        dest="refresh_snapshot",
+        help=(
+            "Refresh credential-aware router snapshots once and exit; this command may "
+            "access authenticated provider sessions."
+        ),
+    )
+    parser.add_argument(
+        "--verify-refresh-health",
+        action="store_true",
+        dest="verify_refresh_health",
+        help=(
+            "Read-only verify that refresh snapshots are fresh and advancing, then exit; "
+            "never initializes providers."
+        ),
+    )
+    args = parser.parse_args()
+    if args.refresh_snapshot and (args.once or args.json or args.write_snapshot):
+        parser.error(
+            "argument --refresh-snapshot: not allowed with --once, --json, or --write-snapshot"
+        )
+    if args.verify_refresh_health:
+        conflicts = [
+            flag
+            for flag, enabled in (
+                ("--once", args.once),
+                ("--json", args.json),
+                ("--write-snapshot", args.write_snapshot),
+                ("--refresh-snapshot", args.refresh_snapshot),
+            )
+            if enabled
+        ]
+        if conflicts:
+            parser.error(
+                "argument --verify-refresh-health: not allowed with " + ", ".join(conflicts)
+            )
+        if args.duration <= 0:
+            parser.error("argument --duration: must be greater than zero")
+        if args.health_interval <= 0:
+            parser.error("argument --health-interval: must be greater than zero")
+    return args
 
 
 def _load_config() -> dict[str, object]:
@@ -207,7 +266,15 @@ def initialize_providers(
     return providers, cleanup
 
 
-def collect_snapshots(providers: list[tuple[str, object]], debug: bool) -> list[ProviderSnapshot]:
+def collect_snapshots(
+    providers: list[tuple[str, object]],
+    debug: bool,
+    *,
+    on_start: Callable[[str], None] | None = None,
+    on_complete: Callable[[ProviderSnapshot], None] | None = None,
+    on_waiting: Callable[[int], None] | None = None,
+    safe_errors: bool = False,
+) -> list[ProviderSnapshot]:
     snapshots: list[ProviderSnapshot] = []
     workers: list[tuple[str, object]] = [
         (name, provider) for name, provider in providers if hasattr(provider, "fetch")
@@ -216,22 +283,408 @@ def collect_snapshots(providers: list[tuple[str, object]], debug: bool) -> list[
         (name, provider) for name, provider in providers if not hasattr(provider, "fetch")
     ]
 
+    for name, error in static_errors:
+        snapshot = ProviderSnapshot(
+            name=name,
+            ok=False,
+            source="api",
+            error="provider initialization failed" if safe_errors else str(error),
+        )
+        if safe_errors:
+            log.warning("provider initialization failed")
+        snapshots.append(snapshot)
+        if on_complete is not None:
+            on_complete(snapshot)
+
     executor = ThreadPoolExecutor(max_workers=max(1, len(workers)))
     try:
-        future_map = {
-            executor.submit(fetch_provider_snapshot, name, provider, debug): name
-            for name, provider in workers
-        }
-        for future in future_map:
-            snapshots.append(future.result())
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        future_map = {}
+        for name, provider in workers:
+            if on_start is not None:
+                on_start(name)
+            future_map[executor.submit(fetch_provider_snapshot, name, provider, debug)] = name
 
-    for name, error in static_errors:
-        snapshots.append(ProviderSnapshot(name=name, ok=False, source="api", error=str(error)))
+        def consume(future: object) -> None:
+            """Consume one completed future without exposing provider errors."""
+            name = future_map[future]
+            try:
+                snapshot = future.result()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001 - never leak provider exception text
+                if not safe_errors:
+                    raise
+                log.warning("provider fetch failed")
+                snapshot = ProviderSnapshot(
+                    name=name,
+                    ok=False,
+                    source="api",
+                    error="provider fetch failed",
+                )
+            snapshots.append(snapshot)
+            if on_complete is not None:
+                on_complete(snapshot)
+
+        if on_waiting is None:
+            for future in as_completed(future_map):
+                consume(future)
+        else:
+            pending = set(future_map)
+            while pending:
+                completed, pending = wait(
+                    pending,
+                    timeout=0.25,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not completed:
+                    on_waiting(len(pending))
+                    continue
+                for future in completed:
+                    consume(future)
+    finally:
+        # Every submitted provider must be quiescent before callers can close
+        # providers or release a refresh lock.
+        executor.shutdown(wait=True, cancel_futures=True)
 
     snapshots.sort(key=lambda item: item.name)
     return snapshots
+
+
+def _write_snapshot_versions(
+    snaps: list[ProviderSnapshot],
+    when: datetime,
+    *,
+    on_status: Callable[[str], None] | None = None,
+    lock_timeout: float | None = None,
+    lock_poll_interval: float = 0.1,
+) -> tuple[bool, bool]:
+    """Write v1 then v2 independently, retaining schema-specific priors."""
+
+    def status(message: str) -> None:
+        if on_status is not None:
+            on_status(message)
+
+    def writer_progress(schema: str) -> Callable[[str], None] | None:
+        if on_status is None:
+            return None
+
+        def progress(message: str) -> None:
+            status(f"{schema} {message}")
+
+        return progress
+
+    try:
+        v1_ok = write_snapshot(
+            build_snapshot_payload(snaps, when, prior=read_prior_snapshot(SNAPSHOT_PATH)),
+            on_progress=writer_progress("schema-v1"),
+            lock_timeout=lock_timeout,
+            lock_poll_interval=lock_poll_interval,
+        )
+    except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
+        log.warning("failed to write schema-v1 snapshot")
+        v1_ok = False
+    status(f"schema-v1 {'persisted' if v1_ok else 'persistence failed'}")
+
+    try:
+        v2_ok = write_snapshot(
+            build_snapshot_v2_payload(snaps, when, prior=read_prior_snapshot(SNAPSHOT_V2_PATH)),
+            SNAPSHOT_V2_PATH,
+            on_progress=writer_progress("schema-v2"),
+            lock_timeout=lock_timeout,
+            lock_poll_interval=lock_poll_interval,
+        )
+    except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
+        log.warning("failed to write schema-v2 snapshot")
+        v2_ok = False
+    status(f"schema-v2 {'persisted' if v2_ok else 'persistence failed'}")
+    return v1_ok, v2_ok
+
+
+_REFRESH_LOCK_NAME = ".refresh-snapshot.lock"
+_REFRESH_SNAPSHOT_LOCK_TIMEOUT_SECONDS = 2.0
+_REFRESH_SNAPSHOT_LOCK_POLL_INTERVAL_SECONDS = 0.1
+
+
+def _snapshot_state_dir() -> Path:
+    """Return the resolved state directory for the production snapshot path."""
+    return Path(SNAPSHOT_PATH).resolve().parent
+
+
+def _acquire_refresh_snapshot_lock(
+    state_dir: str | os.PathLike[str],
+) -> tuple[int | None, bool]:
+    """Acquire the refresh lock, returning ``(fd, already_owned)``."""
+    state_fd: int | None = None
+    fd: int | None = None
+    try:
+        try:
+            os.mkdir(state_dir, 0o700)
+        except FileExistsError:
+            pass
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+        state_fd = os.open(state_dir, directory_flags)
+        if not stat.S_ISDIR(os.fstat(state_fd).st_mode):
+            return None, False
+        os.fchmod(state_fd, 0o700)
+        lock_flags = os.O_RDWR | os.O_CREAT | os.O_NONBLOCK
+        lock_flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(_REFRESH_LOCK_NAME, lock_flags, 0o600, dir_fd=state_fd)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            fd = None
+            return None, False
+        os.fchmod(fd, 0o600)
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+            fd = None
+        return None, False
+    finally:
+        if state_fd is not None:
+            try:
+                os.close(state_fd)
+            except OSError:
+                pass
+
+    if fd is None:
+        return None, False
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        already_owned = exc.errno in (errno.EACCES, errno.EAGAIN)
+        os.close(fd)
+        return None, already_owned
+    return fd, False
+
+
+def _release_refresh_snapshot_lock(fd: int) -> None:
+    """Release and close a refresh lock descriptor."""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _refresh_progress(message: str) -> None:
+    """Emit one credential-free refresh status line."""
+    print(f"refresh: {message}", file=sys.stderr, flush=True)
+
+
+def _refresh_snapshot_once(
+    cwd: str,
+    enabled_providers: set[str] | None,
+    debug: bool,
+    *,
+    lock_timeout: float | None = None,
+    lock_poll_interval: float | None = None,
+) -> int:
+    """Run one explicit credential-aware, single-flight snapshot refresh."""
+    lock_fd, already_owned = _acquire_refresh_snapshot_lock(_snapshot_state_dir())
+    if already_owned:
+        _refresh_progress("already in progress")
+        return 0
+    if lock_fd is None:
+        _refresh_progress("lock unavailable")
+        return 1
+
+    cleanup: list[object] = []
+    try:
+        _refresh_progress("started")
+        # This explicit mode is the only command path allowed to retain the
+        # credential-aware provider/session behavior.
+        set_headless(False)
+        providers, cleanup = initialize_providers(cwd, enabled_providers)
+
+        def provider_complete(snapshot: ProviderSnapshot) -> None:
+            # Provider names come from the fixed registry. Do not echo arbitrary
+            # provider/error data to the status surface.
+            name = snapshot.name if snapshot.name in _PROVIDER_REGISTRY else "provider"
+            if snapshot.error == "provider initialization failed":
+                _refresh_progress(f"provider {name} initialization failed")
+            else:
+                _refresh_progress(f"provider {name} complete")
+
+        def provider_start(name: str) -> None:
+            safe_name = name if name in _PROVIDER_REGISTRY else "provider"
+            _refresh_progress(f"provider {safe_name} started")
+
+        snapshots = collect_snapshots(
+            providers,
+            debug,
+            on_start=provider_start,
+            on_complete=provider_complete,
+            on_waiting=lambda pending: _refresh_progress(f"waiting for {pending} provider(s)"),
+            safe_errors=True,
+        )
+        v1_ok, v2_ok = _write_snapshot_versions(
+            snapshots,
+            datetime.now(),
+            on_status=_refresh_progress,
+            lock_timeout=(
+                _REFRESH_SNAPSHOT_LOCK_TIMEOUT_SECONDS if lock_timeout is None else lock_timeout
+            ),
+            lock_poll_interval=(
+                _REFRESH_SNAPSHOT_LOCK_POLL_INTERVAL_SECONDS
+                if lock_poll_interval is None
+                else lock_poll_interval
+            ),
+        )
+        success = v1_ok and v2_ok
+        _refresh_progress("completed" if success else "failed")
+        return 0 if success else 1
+    except Exception:  # noqa: BLE001 - the CLI emits only a safe terminal status
+        log.warning("credential-aware snapshot refresh failed")
+        _refresh_progress("failed")
+        return 1
+    finally:
+        for provider in cleanup:
+            try:
+                provider.close()
+            except Exception:  # noqa: BLE001 - always release the single-flight lock
+                log.warning("provider cleanup failed")
+        _release_refresh_snapshot_lock(lock_fd)
+
+
+_HEALTH_REQUIRED_PROVIDERS = ("Antigravity", "Antigravity (Claude)")
+
+
+def _read_health_snapshot() -> object:
+    """Read the v2 snapshot for health verification without exposing errors."""
+    try:
+        with SNAPSHOT_V2_PATH.open(encoding="utf-8") as snapshot_file:
+            return json.load(snapshot_file)
+    except (OSError, ValueError):
+        return None
+
+
+def _parse_health_timestamp(value: object) -> datetime | None:
+    """Parse one aware ISO timestamp, rejecting naive or malformed values."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
+def _health_sample_reason(
+    payload: object,
+    previous_updated_at: datetime | None,
+    now: datetime,
+) -> tuple[datetime | None, str]:
+    """Return a safe reason for one health sample and its parsed timestamp."""
+    if not isinstance(payload, Mapping):
+        return None, "unavailable"
+    if payload.get("schema_version") != 2:
+        return None, "invalid schema"
+
+    updated_at = _parse_health_timestamp(payload.get("updated_at"))
+    if updated_at is None:
+        return None, "invalid timestamp"
+    if previous_updated_at is not None:
+        if updated_at == previous_updated_at:
+            return updated_at, "unchanged"
+        if updated_at < previous_updated_at:
+            return updated_at, "non-increasing timestamp"
+
+    current_time = now if now.tzinfo is not None else now.astimezone()
+    if updated_at > current_time:
+        return updated_at, "future timestamp"
+
+    entries = payload.get("providers")
+    if not isinstance(entries, list):
+        return updated_at, "missing providers"
+    by_name = {
+        entry.get("name"): entry
+        for entry in entries
+        if isinstance(entry, Mapping) and isinstance(entry.get("name"), str)
+    }
+    selected = [by_name.get(name) for name in _HEALTH_REQUIRED_PROVIDERS]
+    if any(not isinstance(entry, Mapping) for entry in selected):
+        return updated_at, "missing required provider"
+
+    for entry in selected:
+        assert isinstance(entry, Mapping)
+        if entry.get("ok") is not True:
+            return updated_at, "provider not healthy"
+        observed_at = _parse_health_timestamp(entry.get("observed_at"))
+        if observed_at is None:
+            return updated_at, "provider observation unavailable"
+        if observed_at != updated_at:
+            return updated_at, "provider observation carried"
+        if observed_at > current_time:
+            return updated_at, "future observation"
+    return updated_at, "fresh"
+
+
+def _refresh_health_progress(message: str) -> None:
+    """Emit one credential-free health-verification status line."""
+    print(f"refresh-health: {message}", file=sys.stderr, flush=True)
+
+
+def _verify_refresh_health(
+    *,
+    duration: float,
+    interval: float,
+    reader: Callable[[], object] = _read_health_snapshot,
+    clock: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+    status: Callable[[str], None] = _refresh_health_progress,
+    wall_clock: Callable[[], datetime] | None = None,
+) -> bool:
+    """Verify three fresh, advancing Agy samples over the stale threshold."""
+    if duration <= 0 or interval <= 0:
+        status("failed: invalid verifier configuration")
+        return False
+
+    started = clock()
+    deadline = started + duration
+    previous_updated_at: datetime | None = None
+    fresh_samples: list[datetime] = []
+    read_wall_clock = wall_clock or (lambda: datetime.now().astimezone())
+    last_reason = "no sample"
+
+    while True:
+        try:
+            payload = reader()
+            now = read_wall_clock()
+            updated_at, reason = _health_sample_reason(payload, previous_updated_at, now)
+        except Exception:  # noqa: BLE001 - health output must remain safe
+            updated_at, reason = None, "unavailable"
+
+        if updated_at is not None and (
+            previous_updated_at is None or updated_at > previous_updated_at
+        ):
+            previous_updated_at = updated_at
+        last_reason = reason
+        status(f"sample {reason}")
+
+        if reason == "fresh" and updated_at is not None:
+            fresh_samples.append(updated_at)
+            if (
+                len(fresh_samples) >= 3
+                and (fresh_samples[-1] - fresh_samples[0]).total_seconds() > STALE_THRESHOLD_SECONDS
+            ):
+                status("passed")
+                return True
+
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
+        wait_seconds = min(interval, remaining)
+        status(f"waiting {wait_seconds:.1f}s")
+        sleeper(wait_seconds)
+
+    status(f"failed: {last_reason}")
+    return False
+
+
+def _verify_refresh_health_once(duration: float, interval: float) -> int:
+    """Run the read-only health verifier and return a process exit code."""
+    return 0 if _verify_refresh_health(duration=duration, interval=interval) else 1
 
 
 def _merge_with_previous(
@@ -340,6 +793,8 @@ def _setup_logging(debug: bool) -> None:
 
 def main() -> int:
     args = parse_args()
+    if getattr(args, "verify_refresh_health", False):
+        return _verify_refresh_health_once(args.duration, args.health_interval)
     _setup_logging(args.debug)
     config = _load_config()
     enabled_providers: set[str] | None = None
@@ -357,6 +812,8 @@ def main() -> int:
         except (TypeError, ValueError):
             pass
     cwd = os.getcwd()
+    if getattr(args, "refresh_snapshot", False):
+        return _refresh_snapshot_once(cwd, enabled_providers, args.debug)
     if getattr(args, "write_snapshot", False) or getattr(args, "json", False):
         # Engage strictly read-only mode BEFORE constructing providers, so their
         # constructors never spawn a browser, refresh a token, or write a cache
@@ -378,25 +835,6 @@ def main() -> int:
         v1_ok, v2_ok = _write_snapshot_versions(snaps, when)
         if not (v1_ok and v2_ok):
             log.warning("snapshot persist partially failed: v1=%s v2=%s", v1_ok, v2_ok)
-
-    def _write_snapshot_versions(
-        snaps: list[ProviderSnapshot], when: datetime
-    ) -> tuple[bool, bool]:
-        """Write v1 then v2 independently, retaining schema-specific priors."""
-        try:
-            v1_ok = write_snapshot(build_snapshot_payload(snaps, when, prior=read_prior_snapshot()))
-        except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
-            log.warning("failed to write schema-v1 snapshot", exc_info=True)
-            v1_ok = False
-        try:
-            v2_ok = write_snapshot(
-                build_snapshot_v2_payload(snaps, when, prior=read_prior_snapshot(SNAPSHOT_V2_PATH)),
-                SNAPSHOT_V2_PATH,
-            )
-        except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
-            log.warning("failed to write schema-v2 snapshot", exc_info=True)
-            v2_ok = False
-        return v1_ok, v2_ok
 
     def refresh(previous: list[ProviderSnapshot]) -> list[ProviderSnapshot]:
         fresh: list[ProviderSnapshot] = []
