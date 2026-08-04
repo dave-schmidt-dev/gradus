@@ -1695,7 +1695,12 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             0,
         )
         self.assertIn('REPO_ROOT="__GRADUS_REPO_ROOT__"', wrapper)
+        required_path = (
+            'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"'
+        )
+        self.assertIn(required_path, wrapper)
         self.assertIn('exec "__GRADUS_PYTHON_PATH__" -m gradus --refresh-snapshot', wrapper)
+        self.assertLess(wrapper.index(required_path), wrapper.index("exec "))
         self.assertIn('cd -- "$REPO_ROOT"', wrapper)
         self.assertNotIn("--write-snapshot", wrapper)
         self.assertNotIn("--write-snapshot", plist_text)

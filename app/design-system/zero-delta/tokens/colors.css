@@ -1,0 +1,43 @@
+/* Base palette. Terminal values are the exact xterm-256 colors declared in
+   gradus/gradus/ui.py THEME; brand values come from the Zero Delta / zerodave marks. */
+:root{
+  /* Brand -- structural */
+  --zd-terminal-black:#141419;   /* zerodave-logo-dark.svg plate */
+  --zd-navy-deep:#00005f;        /* rich "bg" = color(17) */
+  --zd-slate:#222c30;            /* Zero Delta banner ground */
+  --zd-steel:#5f87af;            /* rich "border" = color(67); logo node blue */
+  --zd-silver:#c9cdd1;           /* logo metal */
+  --zd-paper:#ffffff;
+  --zd-paper-tint:#f4f5f6;
+
+  /* Brand -- signal */
+  --zd-execution-cyan:#00ffff;   /* zerodave.dev accent, exact from logo svg */
+  --zd-status-green:#0f7b3f;     /* zerodelta.dev accent (inferred -- confirm hex) */
+
+  /* Terminal neutrals (xterm-256) */
+  --zd-ink:#e4e4e4;              /* 254 */
+  --zd-ink-muted:#bcbcbc;        /* 250 */
+  --zd-grey-500:#808080;         /* 244 bar.empty -- bars/tracks only, never text */
+  --zd-grey-700:#4e4e4e;         /* 239 shadow */
+  --zd-panel:#303030;            /* 236 */
+  --zd-panel-alt:#1c1c1c;        /* 234 */
+
+  /* Semantic signal ramp (xterm-256) */
+  --zd-green:#87d787;            /* 114 healthy / under pace */
+  --zd-yellow:#ffd75f;           /* 221 on pace / cached */
+  --zd-orange:#ffaf5f;           /* 215 low */
+  --zd-red:#ff5f5f;              /* 203 depleted / over pace / error */
+  --zd-cyan:#87d7ff;             /* 117 reset times, keys */
+  --zd-blue:#87afff;             /* 111 */
+  --zd-teal:#5fd7ff;             /* 80 */
+  --zd-pink:#ffafff;             /* 219 */
+
+  /* Provider accents -- one per tracked AI provider (ui.py ACCENT_STYLES) */
+  --zd-provider-codex:#87afff;
+  --zd-provider-claude:#ffafff;
+  --zd-provider-antigravity:#5fd7ff;
+  --zd-provider-copilot:#87d7ff;
+  --zd-provider-cursor:#ffaf00;
+  --zd-provider-vibe:#ff8700;
+  --zd-provider-opencode:#afd787;
+}

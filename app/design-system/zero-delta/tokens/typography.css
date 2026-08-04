@@ -1,0 +1,32 @@
+/* Typography. IDENTITY_PROTOCOL principle II: split prose (sans) from data (mono).
+   Mono carries dates, provider names, percentages, code, metadata and headers. */
+:root{
+  --font-sans:"Inter","Helvetica Neue",system-ui,-apple-system,sans-serif;
+  --font-mono:"Courier New",Courier,monospace;                       /* brand technical face */
+  --font-mono-ui:ui-monospace,"SF Mono",Menlo,"Courier New",monospace;/* dense app data */
+
+  --text-3xs:10px;
+  --text-2xs:11px;
+  --text-xs:12px;
+  --text-sm:13px;
+  --text-base:15px;
+  --text-md:17px;
+  --text-lg:20px;
+  --text-xl:26px;
+  --text-2xl:34px;
+  --text-3xl:46px;
+
+  --leading-tight:1.15;
+  --leading-snug:1.35;
+  --leading-normal:1.55;
+
+  --weight-regular:400;
+  --weight-medium:500;
+  --weight-semibold:600;
+  --weight-bold:700;
+
+  --tracking-tight:-0.01em;
+  --tracking-normal:0;
+  --tracking-wide:0.06em;
+  --tracking-wider:0.14em;  /* wordmark / eyebrow caps */
+}

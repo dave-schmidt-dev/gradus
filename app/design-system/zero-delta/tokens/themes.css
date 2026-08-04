@@ -1,0 +1,83 @@
+/* Parallel Design (IDENTITY_PROTOCOL principle I): identical structure, flipped
+   variables. [data-theme="terminal"] = zerodave.dev / app surfaces (dark + cyan).
+   [data-theme="paper"] = zerodelta.dev / document surfaces (light + green). */
+:root,
+[data-theme="terminal"]{
+  color-scheme:dark;
+  --surface-page:var(--zd-terminal-black);
+  --surface-card:#1b1b22;
+  --surface-raised:var(--zd-panel);
+  --surface-sunken:var(--zd-panel-alt);
+  --surface-overlay:rgba(20,20,25,.86);
+
+  --text-primary:var(--zd-ink);
+  --text-secondary:var(--zd-ink-muted);
+  --text-muted:#9a9aa2;   /* AA at 11px on --surface-card; --zd-grey-500 is bars only */
+  --text-inverse:var(--zd-terminal-black);
+  --text-data:var(--zd-ink);
+
+  --border-hairline:#2f3440;
+  --border-panel:var(--zd-steel);
+  --border-strong-color:var(--zd-ink-muted);
+
+  --accent:var(--zd-execution-cyan);
+  --accent-text:var(--zd-cyan);
+  --accent-contrast:var(--zd-terminal-black);
+  --accent-ring:rgba(0,255,255,.45);
+  --accent-wash:rgba(0,255,255,.10);
+
+  --status-ok:var(--zd-green);
+  --status-pace:var(--zd-yellow);
+  --status-low:var(--zd-orange);
+  --status-critical:var(--zd-red);
+  --status-info:var(--zd-cyan);
+  --status-stale:var(--zd-yellow);
+
+  --bar-track:var(--zd-grey-700);
+  --bar-empty-glyph:var(--zd-grey-500);
+
+  --shield-label-bg:#3a3a44;
+  --shield-label-text:var(--zd-ink);
+  --link:var(--zd-cyan);
+  --link-hover:var(--zd-execution-cyan);
+}
+
+[data-theme="paper"]{
+  color-scheme:light;
+  --surface-page:var(--zd-paper);
+  --surface-card:var(--zd-paper);
+  --surface-raised:var(--zd-paper-tint);
+  --surface-sunken:#eceef0;
+  --surface-overlay:rgba(255,255,255,.9);
+
+  --text-primary:var(--zd-terminal-black);
+  --text-secondary:#3d444b;
+  --text-muted:#585f66;   /* AA at 11px on paper tints */
+  --text-inverse:var(--zd-paper);
+  --text-data:var(--zd-terminal-black);
+
+  --border-hairline:#d8dcdf;
+  --border-panel:var(--zd-steel);
+  --border-strong-color:var(--zd-terminal-black);
+
+  --accent:var(--zd-status-green);
+  --accent-text:var(--zd-status-green);
+  --accent-contrast:var(--zd-paper);
+  --accent-ring:rgba(15,123,63,.35);
+  --accent-wash:rgba(15,123,63,.08);
+
+  --status-ok:#0f7b3f;
+  --status-pace:#8a6100;
+  --status-low:#b25a00;
+  --status-critical:#b3261e;
+  --status-info:#1f5f8b;
+  --status-stale:#8a6100;
+
+  --bar-track:#dfe3e6;
+  --bar-empty-glyph:#b7bdc2;
+
+  --shield-label-bg:#3d444b;
+  --shield-label-text:var(--zd-paper);
+  --link:#1f5f8b;
+  --link-hover:var(--zd-status-green);
+}

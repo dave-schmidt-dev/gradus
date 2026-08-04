@@ -1,0 +1,87 @@
+<!-- @dsCard group="Gradus CLI" viewport="900x520" name="Terminal dashboard" subtitle="Live dashboard, warmup, auth failure and the sub-79-column compact layout" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Gradus — terminal dashboard</title><link rel="stylesheet" href="../../styles.css">
+<style>*{box-sizing:border-box}body{margin:0;background:var(--surface-page);color:var(--text-primary);font-family:var(--font-sans)}a{color:var(--link)}a:hover{color:var(--link-hover)}button{font:inherit}</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script></head><body data-theme="terminal">
+<div id="root"></div>
+<script src="../providers.js"></script>
+<script type="text/babel" src="Warmup.jsx"></script>
+<script type="text/babel" src="Dashboard.jsx"></script>
+<script type="text/babel">
+const { Button } = window.ZeroDeltaDesignSystem_9449d1;
+
+const jitter = (cards) => cards.map((c) => ({ ...c, windows: (c.windows || []).map((w) => ({ ...w, percent: w.percent === null || w.state ? w.percent : Math.max(0, Math.min(100, w.percent + Math.round((Math.random() - 0.55) * 6))) })) }));
+const stamp = (d) => d.toLocaleString('en-US', { month:'short', day:'2-digit' }).replace(',', '') + ' ' + d.toTimeString().slice(0, 8);
+
+function App() {
+  const [screen, setScreen] = React.useState('live');
+  const [narrow, setNarrow] = React.useState(false);
+  const [cards, setCards] = React.useState(window.GRADUS_FIXTURE);
+  const [count, setCount] = React.useState(57);
+  const [updating, setUpdating] = React.useState(false);
+  const [now, setNow] = React.useState(new Date('2026-03-13T08:30:14'));
+
+  React.useEffect(() => {
+    if (screen !== 'live') return;
+    const t = setInterval(() => setCount((c) => (c > 0 ? c - 1 : 120)), 1000);
+    return () => clearInterval(t);
+  }, [screen]);
+
+  const refresh = React.useCallback(() => {
+    setUpdating(true);
+    setTimeout(() => {
+      setCards((c) => jitter(c));
+      setNow(new Date());
+      setCount(120);
+      setUpdating(false);
+    }, 900);
+  }, []);
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'r') refresh();
+      if (e.key === 'q') setScreen('quit');
+      if (e.key === '1') setScreen('live');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [refresh]);
+
+  const authCards = [{ name:'Claude', error:true, tone:'auth', fixKey:'1' }, ...cards.slice(2)];
+
+  return (
+    <div style={{ minHeight:'100vh', display:'grid', gridTemplateRows:'auto 1fr', gap:'0' }}>
+      <div style={{ display:'flex', gap:'var(--space-4)', alignItems:'center', padding:'var(--space-4) var(--space-6)', borderBottom:'var(--border-hair) solid var(--border-hairline)', flexWrap:'wrap' }}>
+        <span style={{ fontFamily:'var(--font-mono-ui)', fontSize:'var(--text-2xs)', letterSpacing:'var(--tracking-wide)', color:'var(--text-muted)' }}>GRADUS CLI</span>
+        {[['live','Live dashboard'],['warmup','Warming up'],['auth','Auth failure'],['depleted','Depleted providers']].map(([k, label]) => (
+          <Button key={k} size="sm" variant={screen === k ? 'prominent' : 'bordered'} onClick={() => setScreen(k)} title={'Show the ' + label + ' state'}>{label}</Button>
+        ))}
+        <Button size="sm" variant={narrow ? 'prominent' : 'bordered'} onClick={() => setNarrow(!narrow)} title="Simulate a terminal narrower than 79 columns">&lt; 79 cols</Button>
+        <span style={{ fontFamily:'var(--font-mono-ui)', fontSize:'var(--text-2xs)', color:'var(--text-muted)' }}>press r to refresh · q to quit</span>
+      </div>
+
+      <div style={{ padding:'var(--space-6)', maxWidth: narrow ? '520px' : 'none', fontFamily:'var(--font-mono-ui)' }}>
+        {screen === 'warmup' ? <WarmupScreen updatedAt={stamp(now)} elapsed="2.4s" />
+          : screen === 'quit' ? (
+            <div style={{ fontFamily:'var(--font-mono-ui)', fontSize:'var(--text-sm)', color:'var(--text-secondary)', display:'grid', gap:'var(--space-4)' }}>
+              <span>Ctrl-C to exit. Use --json for machine-readable output and --debug for raw capture tails.</span>
+              <span style={{ color:'var(--text-muted)' }}>Press 1 to restart the dashboard.</span>
+            </div>
+          ) : (
+            <CliDashboard
+              cards={screen === 'auth' ? authCards : cards}
+              depleted={screen === 'depleted' ? window.GRADUS_DEPLETED : []}
+              updatedAt={stamp(now)}
+              refresh={count + 's'}
+              updating={updating}
+              narrow={narrow}
+              fixKeys={screen === 'auth' ? [{ key:'1', action:'fix Claude' }] : []} />
+          )}
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script></body></html>

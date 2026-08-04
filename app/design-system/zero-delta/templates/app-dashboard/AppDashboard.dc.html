@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<!-- @template name="Zero Delta app dashboard" description="Terminal-persona app screen: header, packed provider panels, key hints" -->
+<helmet><script src="./ds-base.js"></script><link rel="preconnect" href="https://fonts.gstatic.com"><style>body{margin:0;background:#141419}</style></helmet>
+<div data-theme="terminal" style="min-height:100vh;background:#141419;color:#e4e4e4;font-family:'Inter',system-ui,sans-serif;padding:24px 28px;display:grid;gap:18px;align-content:start">
+<x-import component-from-global-scope="ZeroDeltaDesignSystem_9449d1.HeaderBar" product="Gradus" updated-at="Mar 13 08:30:14" refresh="57s" hint-size="100%,20px"></x-import>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:start">
+<x-import component-from-global-scope="ZeroDeltaDesignSystem_9449d1.ProviderCard" name="Codex" badge="live" dc-props="{{ codex }}" hint-size="100%,86px"></x-import>
+<x-import component-from-global-scope="ZeroDeltaDesignSystem_9449d1.ProviderCard" name="Claude" badge="live" dc-props="{{ claude }}" hint-size="100%,86px"></x-import>
+<x-import component-from-global-scope="ZeroDeltaDesignSystem_9449d1.ProviderCard" name="Antigravity" badge="live" dc-props="{{ antigravity }}" hint-size="100%,86px"></x-import>
+<x-import component-from-global-scope="ZeroDeltaDesignSystem_9449d1.ProviderCard" name="Copilot" badge="cached 12m" dc-props="{{ copilot }}" hint-size="100%,64px"></x-import>
+</div>
+<x-import component-from-global-scope="ZeroDeltaDesignSystem_9449d1.FooterHint" hint-size="100%,18px"></x-import>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const w = (label, percent, reset, pace) => ({ label, percent, reset, pace });
+    return {
+      codex: { cells: 14, windows: [w('5h', 74, '13:16', 'under +38pt'), w('1w', 85, 'Mar 18 09:00', 'on pace')] },
+      claude: { cells: 14, warning: true, windows: [w('5h', 7, '22:00', 'over -23pt'), w('1w', 48, 'Mar 17 15:59', 'over -6pt')] },
+      antigravity: { cells: 14, windows: [w('5h', 100, '18:30', 'under +12pt'), w('1w', 74, 'Mar 18 09:00', 'on pace')] },
+      copilot: { cells: 14, windows: [w('mo', 63, 'Apr 01 00:00', 'on pace')] },
+    };
+  }
+}
+</script>
+</body>
+</html>

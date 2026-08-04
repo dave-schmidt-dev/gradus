@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Gradus app icon">
+<rect width="1024" height="1024" fill="#141419"></rect>
+<g fill="#4E4E4E"><rect x="176" y="292" width="672" height="72" rx="36"></rect><rect x="176" y="476" width="672" height="72" rx="36"></rect><rect x="176" y="660" width="672" height="72" rx="36"></rect></g>
+<g><rect x="176" y="292" width="672" height="72" rx="36" fill="#87D787"></rect><rect x="176" y="476" width="404" height="72" rx="36" fill="#FFD75F"></rect><rect x="176" y="660" width="148" height="72" rx="36" fill="#FF5F5F"></rect></g>
+</svg>

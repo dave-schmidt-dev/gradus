@@ -1,0 +1,5 @@
+/* Zero Delta webfonts.
+   No font binaries were supplied with the brand sources. IDENTITY_PROTOCOL.md names
+   Inter (prose) and Courier New (data/technical). Inter is loaded from Google Fonts;
+   Courier New is a system face on macOS/Windows. Swap this file if real binaries land. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");

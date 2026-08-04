@@ -24,10 +24,20 @@ private final class MockZoneChangesFetcher: ZoneChangesFetcher {
     }
 }
 
-private func makeStatus(_ name: String) -> ProviderStatus {
+@MainActor
+private final class RecordingWarningNotificationScheduler: WarningNotificationScheduling {
+    private(set) var scheduledProviders: [String] = []
+
+    func scheduleWarningNotification(for provider: ProviderStatus) {
+        scheduledProviders.append(provider.providerName)
+    }
+}
+
+private func makeStatus(_ name: String, isWarning: Bool = false) -> ProviderStatus {
     ProviderStatus(
         providerName: name, providerDisplayName: name, ok: true, errorMessage: nil, windows: [], data: [:],
-        observedAt: nil, snapshotUpdatedAt: "2026-08-02T20:00:00-04:00", publishedAt: Date(timeIntervalSince1970: 1_785_000_000))
+        observedAt: nil, snapshotUpdatedAt: "2026-08-02T20:00:00-04:00", publishedAt: Date(timeIntervalSince1970: 1_785_000_000),
+        isWarning: isWarning)
 }
 
 /// A fresh suite per call -- `syncEnabled` persists to `UserDefaults`
@@ -39,8 +49,20 @@ private func isolatedDefaults() -> UserDefaults {
 }
 
 @MainActor
-private func makeViewModel(cache: LocalCacheStore, fetcher: ZoneChangesFetcher) -> DashboardViewModel {
-    let viewModel = DashboardViewModel(cache: cache, zoneChangesFetcher: fetcher, userDefaults: isolatedDefaults())
+private func makeViewModel(
+    cache: LocalCacheStore, fetcher: ZoneChangesFetcher,
+    warningNotificationScheduler: WarningNotificationScheduling? = nil,
+    userDefaults: UserDefaults = isolatedDefaults()
+) -> DashboardViewModel {
+    if userDefaults.object(forKey: DashboardViewModel.syncEnabledKey) == nil {
+        userDefaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
+    }
+    if userDefaults.object(forKey: DashboardViewModel.notificationsEnabledKey) == nil {
+        userDefaults.set(true, forKey: DashboardViewModel.notificationsEnabledKey)
+    }
+    let viewModel = DashboardViewModel(
+        cache: cache, zoneChangesFetcher: fetcher, warningNotificationScheduler: warningNotificationScheduler,
+        userDefaults: userDefaults)
     viewModel.syncEnabled = true
     viewModel.updateAccountStatus(.available)
     return viewModel
@@ -50,6 +72,16 @@ private func tempCache() -> FileLocalCacheStore {
     FileLocalCacheStore(
         directory: FileManager.default.temporaryDirectory.appendingPathComponent(
             "gradus-sync-tests-\(UUID().uuidString)", isDirectory: true))
+}
+
+@Test func cloudKitConfigurationSkipsEntitlementlessSimulator() {
+    #expect(CloudKitRuntimeConfiguration.shouldUseCloudKit(isSimulator: true, hasCloudKitEntitlement: false) == false)
+    #expect(CloudKitRuntimeConfiguration.shouldUseCloudKit(isSimulator: true, hasCloudKitEntitlement: true) == true)
+    #expect(CloudKitRuntimeConfiguration.shouldUseCloudKit(isSimulator: false, hasCloudKitEntitlement: true) == true)
+
+    #if targetEnvironment(simulator)
+    #expect(CloudKitRuntimeConfiguration.currentValue == false)
+    #endif
 }
 
 @MainActor
@@ -144,6 +176,75 @@ private func tempCache() -> FileLocalCacheStore {
 
     #expect(viewModel.providers.map(\.providerName) == ["codex"])
     #expect(cache.loadChangeToken() == Data([7]))
+}
+
+@MainActor
+@Test func firstWarningSchedulesOneLocalNotification() async {
+    let cache = tempCache()
+    let scheduler = RecordingWarningNotificationScheduler()
+    let fetcher = MockZoneChangesFetcher(outcomes: [
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil)
+    ])
+    let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
+
+    await viewModel.handleRemoteNotification()
+
+    #expect(scheduler.scheduledProviders == ["codex"])
+}
+
+@MainActor
+@Test func repeatedWarningUpdateDoesNotScheduleAnotherLocalNotification() async {
+    let cache = tempCache()
+    try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
+    let scheduler = RecordingWarningNotificationScheduler()
+    let warning = makeStatus("codex", isWarning: true)
+    let fetcher = MockZoneChangesFetcher(outcomes: [
+        .success(changed: [warning], deletedProviderNames: [], newToken: nil),
+        .success(changed: [warning], deletedProviderNames: [], newToken: nil),
+    ])
+    let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
+
+    await viewModel.handleRemoteNotification()
+    await viewModel.handleRemoteNotification()
+
+    #expect(scheduler.scheduledProviders == ["codex"])
+}
+
+@MainActor
+@Test func clearThenWarningSchedulesANewLocalNotification() async {
+    let cache = tempCache()
+    try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
+    let scheduler = RecordingWarningNotificationScheduler()
+    let fetcher = MockZoneChangesFetcher(outcomes: [
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
+        .success(changed: [makeStatus("codex")], deletedProviderNames: [], newToken: nil),
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
+    ])
+    let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
+
+    await viewModel.handleRemoteNotification()
+    await viewModel.handleRemoteNotification()
+    await viewModel.handleRemoteNotification()
+
+    #expect(scheduler.scheduledProviders == ["codex", "codex"])
+}
+
+@MainActor
+@Test func warningNotificationIsGatedByNotificationsPreference() async {
+    let defaults = isolatedDefaults()
+    defaults.set(false, forKey: DashboardViewModel.notificationsEnabledKey)
+    let cache = tempCache()
+    try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
+    let scheduler = RecordingWarningNotificationScheduler()
+    let fetcher = MockZoneChangesFetcher(outcomes: [
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil)
+    ])
+    let viewModel = makeViewModel(
+        cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler, userDefaults: defaults)
+
+    await viewModel.handleRemoteNotification()
+
+    #expect(scheduler.scheduledProviders.isEmpty)
 }
 
 @MainActor

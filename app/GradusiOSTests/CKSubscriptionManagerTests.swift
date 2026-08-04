@@ -63,7 +63,7 @@ private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, owner
     #expect(subscription.notificationInfo?.shouldSendContentAvailable == true)
 }
 
-@Test func warningSubscriptionUsesPerProviderLocalizedAlert() async throws {
+@Test func warningSubscriptionUsesSilentContentAvailablePush() async throws {
     let database = MockSubscriptionDatabase()
     let manager = CKSubscriptionManager(database: database, zoneID: zoneID)
     try await manager.subscribeToWarnings()
@@ -74,8 +74,10 @@ private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, owner
     #expect(subscription.zoneID == zoneID)
     #expect(subscription.querySubscriptionOptions.contains(.firesOnRecordCreation))
     #expect(subscription.querySubscriptionOptions.contains(.firesOnRecordUpdate))
-    #expect(subscription.notificationInfo?.alertLocalizationKey == WarningAlertLocalization.key)
-    #expect(subscription.notificationInfo?.alertLocalizationArgs == WarningAlertLocalization.args)
+    #expect(subscription.notificationInfo?.shouldSendContentAvailable == true)
+    #expect(subscription.notificationInfo?.alertLocalizationKey == nil)
+    #expect(subscription.notificationInfo?.alertLocalizationArgs == nil)
+    #expect(subscription.notificationInfo?.shouldBadge == false)
 }
 
 @Test func creatingBothSubscriptionsIsIdempotentAcrossRelaunches() async throws {

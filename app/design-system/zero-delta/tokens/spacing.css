@@ -1,0 +1,26 @@
+/* Spacing. Terminal surfaces sit on a 1-cell grid (8px col / 18px row proxy);
+   Apple surfaces use the literal SwiftUI values from GradusMac + GradusiOS. */
+:root{
+  --space-0:0;
+  --space-1:2px;   /* ProviderRow .padding(.vertical, 2) */
+  --space-2:4px;   /* ProviderCard VStack spacing */
+  --space-3:6px;   /* ProviderCard .padding(.vertical, 6) */
+  --space-4:8px;   /* MenuContentView VStack spacing */
+  --space-5:12px;  /* MenuContentView .padding(12) */
+  --space-6:16px;  /* EmptyState VStack spacing */
+  --space-7:20px;
+  --space-8:24px;
+  --space-9:32px;  /* EmptyState .padding(32) */
+  --space-10:40px;
+  --space-11:48px;
+
+  --cell-x:8px;    /* one terminal column */
+  --cell-y:18px;   /* one terminal row */
+
+  --menu-width:260px;   /* MenuContentView .frame(width: 260) */
+  --bar-height-menu:6px;/* menu ProgressBar height */
+  --bar-height-app:8px;
+  --icon-mini:16px;     /* IDENTITY_PROTOCOL proof-of-work mini-icon */
+  --icon-mini-lg:32px;
+  --icon-empty:44px;    /* EmptyStateView symbol size */
+}

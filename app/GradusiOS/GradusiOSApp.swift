@@ -2,42 +2,70 @@ import CloudKit
 import GradusKit
 import SwiftUI
 
+enum CloudKitRuntimeConfiguration {
+    /// CloudKit is available on a simulator only when that simulator build
+    /// carries the container entitlement. The current generated debug
+    /// simulator app does not, so its launch must stay on the offline path.
+    static func shouldUseCloudKit(isSimulator: Bool, hasCloudKitEntitlement: Bool) -> Bool {
+        !isSimulator || hasCloudKitEntitlement
+    }
+
+    /// Device/release builds are signed with `GradusiOS.entitlements`; the
+    /// generated simulator debug app is intentionally treated as offline.
+    static var currentValue: Bool {
+        #if targetEnvironment(simulator)
+        return shouldUseCloudKit(isSimulator: true, hasCloudKitEntitlement: false)
+        #else
+        return shouldUseCloudKit(isSimulator: false, hasCloudKitEntitlement: true)
+        #endif
+    }
+}
+
 @main
 struct GradusiOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel: DashboardViewModel
-    private let accountMonitor: AccountStatusMonitor
-    private let subscriptionManager: CKSubscriptionManager
+    private let accountMonitor: AccountStatusMonitor?
+    private let subscriptionManager: CKSubscriptionManager?
+
+    private struct CloudKitDependencies {
+        let fetcher: CloudFetcher?
+        let accountSource: AccountStatusSource?
+        let zoneChangesFetcher: ZoneChangesFetcher?
+        let subscriptionManager: CKSubscriptionManager?
+
+        static let offline = CloudKitDependencies(
+            fetcher: nil, accountSource: nil, zoneChangesFetcher: nil, subscriptionManager: nil)
+    }
 
     init() {
-        if CommandLine.arguments.contains("--cloudkit-spike") {
+        if CommandLine.arguments.contains("--cloudkit-spike"), CloudKitRuntimeConfiguration.currentValue {
             Task { await CloudKitSpike.run() }
         }
 
         let cache = FileLocalCacheStore(directory: Self.cacheDirectory())
         Self.seedCacheForUITestsIfRequested(into: cache)
 
-        let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
-        let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
-        let database = container.privateCloudDatabase
-        let fetcher = CKCloudFetcher(database: database, zoneID: zoneID)
-        let zoneChangesFetcher = CKZoneChangesFetcher(database: database, zoneID: zoneID)
-        let accountSource = ContainerAccountStatusSource(containerIdentifier: CloudKitConstants.containerIdentifier)
-        let subscriptionManager = CKSubscriptionManager(
-            database: CKSubscriptionDatabaseAdapter(database: database), zoneID: zoneID)
+        let dependencies = Self.makeCloudKitDependencies()
+        let warningNotificationScheduler = LocalWarningNotificationScheduler()
 
         let viewModel = DashboardViewModel(
-            cache: cache, fetcher: fetcher, accountSource: accountSource, zoneChangesFetcher: zoneChangesFetcher,
-            subscriptionManager: subscriptionManager)
+            cache: cache, fetcher: dependencies.fetcher, accountSource: dependencies.accountSource,
+            zoneChangesFetcher: dependencies.zoneChangesFetcher, subscriptionManager: dependencies.subscriptionManager,
+            warningNotificationScheduler: warningNotificationScheduler)
         _viewModel = StateObject(wrappedValue: viewModel)
 
-        self.subscriptionManager = subscriptionManager
+        self.subscriptionManager = dependencies.subscriptionManager
 
         // PM-16: mid-session account-status reset (sign-out/switch-account
         // while the app is running), reusing the same actor Phase 2a wired
         // on the Mac side (moved to GradusKit in Phase 3 for exactly this).
-        self.accountMonitor = AccountStatusMonitor(source: accountSource) { status in
-            Task { @MainActor in viewModel.updateAccountStatus(status) }
+        if let accountSource = dependencies.accountSource {
+            self.accountMonitor = AccountStatusMonitor(source: accountSource) { status in
+                Task { @MainActor in viewModel.updateAccountStatus(status) }
+            }
+        } else {
+            self.accountMonitor = nil
         }
 
         appDelegate.onRemoteNotification = {
@@ -50,7 +78,7 @@ struct GradusiOSApp: App {
             DashboardView(viewModel: viewModel)
                 .task {
                     guard !Self.isUITesting else { return }
-                    await accountMonitor.start()
+                    await accountMonitor?.start()
                     await viewModel.sync()
                     await subscribeIfEnabled()
                 }
@@ -81,9 +109,26 @@ struct GradusiOSApp: App {
     /// opt-out and still runs whenever sync is on.
     private func subscribeIfEnabled() async {
         guard viewModel.syncEnabled, viewModel.accountStatus == .available else { return }
+        guard let subscriptionManager else { return }
         try? await subscriptionManager.subscribeToZoneChanges()
         guard viewModel.notificationsEnabled else { return }
         try? await subscriptionManager.subscribeToWarnings()
+    }
+
+    private static func makeCloudKitDependencies() -> CloudKitDependencies {
+        guard CloudKitRuntimeConfiguration.currentValue else { return .offline }
+
+        let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
+        let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
+        let database = container.privateCloudDatabase
+        let fetcher = CKCloudFetcher(database: database, zoneID: zoneID)
+        let zoneChangesFetcher = CKZoneChangesFetcher(database: database, zoneID: zoneID)
+        let accountSource = ContainerAccountStatusSource(containerIdentifier: CloudKitConstants.containerIdentifier)
+        let subscriptionManager = CKSubscriptionManager(
+            database: CKSubscriptionDatabaseAdapter(database: database), zoneID: zoneID)
+        return CloudKitDependencies(
+            fetcher: fetcher, accountSource: accountSource, zoneChangesFetcher: zoneChangesFetcher,
+            subscriptionManager: subscriptionManager)
     }
 
     private static func cacheDirectory() -> URL {

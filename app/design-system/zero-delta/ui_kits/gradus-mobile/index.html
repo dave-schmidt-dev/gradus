@@ -1,0 +1,63 @@
+<!-- @dsCard group="Gradus for iPhone" viewport="1000x820" name="iPhone app" subtitle="Now, provider detail, settings, empty states and the warning banner" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Gradus for iPhone</title><link rel="stylesheet" href="../../styles.css">
+<style>*{box-sizing:border-box}body{margin:0;background:#0b0b10;color:var(--text-primary);font-family:var(--font-sans)}a{color:var(--link)}a:hover{color:var(--link-hover)}button{font:inherit}</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script></head><body data-theme="terminal">
+<div id="root"></div>
+<script src="./data.js"></script>
+<script type="text/babel" src="./ios-frame.jsx"></script>
+<script type="text/babel" src="./Screens.jsx"></script>
+<script type="text/babel">
+const { Button } = window.ZeroDeltaDesignSystem_9449d1;
+
+function Phone({ children, banner, onDismiss }) {
+  return (
+    <div style={{ position:'relative' }}>
+      <IOSDevice dark width={402} height={812}>
+        <div data-theme="terminal" style={{ minHeight:'100%', background:'var(--surface-page)', color:'var(--text-primary)', fontFamily:'var(--font-sans)' }}>
+          {children}
+        </div>
+      </IOSDevice>
+      {banner ? <WarningBanner text={banner} onDismiss={onDismiss} /> : null}
+    </div>
+  );
+}
+
+function App() {
+  const [route, setRoute] = React.useState({ name:'now' });
+  const [sync, setSync] = React.useState(true);
+  const [notify, setNotify] = React.useState(true);
+  const [banner, setBanner] = React.useState(false);
+  const providers = window.GRADUS_MOBILE;
+  const current = providers.find((p) => p.name === route.provider);
+
+  const screen = !sync ? <EmptyScreen state="syncDisabled" onEnableSync={() => setSync(true)} />
+    : route.name === 'provider' && current ? <ProviderScreen provider={current} onBack={() => setRoute({ name:'now' })} />
+    : route.name === 'settings' ? <SettingsScreen onBack={() => setRoute({ name:'now' })} sync={sync} setSync={setSync} notify={notify} setNotify={setNotify} />
+    : route.name === 'waiting' ? <EmptyScreen state="waiting" />
+    : route.name === 'notSignedIn' ? <EmptyScreen state="notSignedIn" />
+    : <NowScreen providers={providers} sync={sync} setSync={setSync} published="PUBLISHED 41S AGO · MACBOOK PRO" onOpen={(name) => setRoute({ name:'provider', provider:name })} onSettings={() => setRoute({ name:'settings' })} />;
+
+  return (
+    <div style={{ minHeight:'100vh', display:'flex', gap:'var(--space-11)', padding:'var(--space-9)', alignItems:'flex-start', flexWrap:'wrap' }}>
+      <Phone banner={banner ? 'Claude 5h depleted — resets 22:00' : null} onDismiss={() => setBanner(false)}>{screen}</Phone>
+      <div style={{ display:'grid', gap:'var(--space-4)', maxWidth:'330px', alignContent:'start' }}>
+        <span style={{ fontFamily:'var(--font-mono-ui)', fontSize:'var(--text-2xs)', letterSpacing:'var(--tracking-wide)', color:'var(--text-muted)' }}>SCREENS</span>
+        {[['now','Now'],['settings','Settings'],['waiting','Waiting for first publish'],['notSignedIn','Not signed in']].map(([k, label]) => (
+          <Button key={k} size="sm" variant={route.name === k ? 'prominent' : 'bordered'} onClick={() => setRoute({ name:k })} title={'Show the ' + label + ' screen'}>{label}</Button>
+        ))}
+        <Button size="sm" variant="bordered" onClick={() => setRoute({ name:'provider', provider:'Antigravity' })} title="Open the Antigravity provider detail screen">Provider detail</Button>
+        <Button size="sm" variant={banner ? 'prominent' : 'bordered'} onClick={() => setBanner(!banner)} title="Preview the local warning notification">Warning notification</Button>
+        <Button size="sm" onClick={() => setSync(!sync)} title="Toggle iCloud sync to see the empty state">{sync ? 'Turn sync off' : 'Turn sync on'}</Button>
+        <p style={{ margin:0, fontSize:'var(--text-sm)', lineHeight:'var(--leading-normal)', color:'var(--text-secondary)', textWrap:'pretty' }}>
+          Tap any tile to open its provider. The phone is consumer-only: it renders what the Mac last
+          published, so every screen is one number, its bar, and when it resets.
+        </p>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script></body></html>

@@ -1,0 +1,54 @@
+<!-- @dsCard group="Components" viewport="700x230" name="Core" subtitle="Button, Toggle, Shield, MiniIcon, DeepLink" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<style>*{box-sizing:border-box}body{margin:0;padding:16px 18px;background:var(--surface-page);color:var(--text-primary);font-family:var(--font-sans);font-size:var(--text-sm)}.lbl{font-family:var(--font-mono-ui);font-size:var(--text-2xs);color:var(--text-muted);letter-spacing:var(--tracking-wide)}a{color:var(--link)}a:hover{color:var(--link-hover)}</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script></head><body data-theme="terminal"><div id="root"></div>
+<script type="text/babel">
+const { Button, Toggle, Shield, MiniIcon, DeepLink } = window.ZeroDeltaDesignSystem_9449d1;
+const Row = ({ label, children }) => (
+  <div style={{ display:'grid', gridTemplateColumns:'92px 1fr', gap:'14px', alignItems:'center' }}>
+    <span className="lbl">{label}</span>
+    <div style={{ display:'flex', gap:'10px', alignItems:'center', flexWrap:'wrap' }}>{children}</div>
+  </div>
+);
+function Demo() {
+  const [sync, setSync] = React.useState(true);
+  const [launch, setLaunch] = React.useState(false);
+  return (
+    <div style={{ display:'grid', gap:'14px' }}>
+      <Row label="BUTTON">
+        <Button variant="prominent" title="Turn on iCloud sync for this Mac">Enable iCloud Sync</Button>
+        <Button title="Open the Gradus settings pane">Open Settings</Button>
+        <Button variant="plain" title="Refresh all providers now">Refresh now</Button>
+        <Button disabled title="Publishing is unavailable while offline">Publish</Button>
+        <Button size="sm" title="Quit the Gradus menu bar app">Quit</Button>
+      </Row>
+      <Row label="TOGGLE">
+        <div style={{ width:'220px', display:'grid', gap:'6px' }}>
+          <Toggle label="Enable iCloud Sync" checked={sync} onChange={setSync} />
+          <Toggle label="Launch at Login" checked={launch} onChange={setLaunch} />
+        </div>
+      </Row>
+      <Row label="SHIELD">
+        <Shield label="schema" value="v2" />
+        <Shield label="providers" value="7" tone="ok" />
+        <Shield label="refresh" value="120s" tone="accent" />
+        <Shield label="cursor" value="auth required" tone="critical" />
+        <Shield label="python" value="3.10+" />
+      </Row>
+      <Row label="MINIICON">
+        <MiniIcon src="../../assets/icons/usmc.png" alt="United States Marine Corps emblem" />
+        <MiniIcon src="../../assets/icons/usmc-ega.svg" alt="Marine Corps eagle, globe and anchor mark" size={32} fallback="../../assets/icons/usmc.png" />
+        <span className="lbl">16px inline · 32px list rows · object-fit contain</span>
+      </Row>
+      <Row label="DEEPLINK">
+        <DeepLink href="https://zerodelta.dev" title="View Zero Delta LLC consulting services">View Services</DeepLink>
+        <DeepLink href="https://zerodave.dev" title="Open the zerodave.dev technical sandbox">Project Documentation</DeepLink>
+      </Row>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+</script></body></html>

@@ -31,20 +31,9 @@ public enum GradusSubscriptionID {
     public static let warning = "gradus-warning"
 }
 
-/// Localization key/args for the Plan A warning banner (§6.4/B-3/T4.2):
-/// `alertLocalizationArgs` substitutes *top-level* `ProviderStatus` record
-/// field values into the format string bundled at this key in
-/// `Localizable.strings` -- confirmed against the real `CKSubscription.h`
-/// (`alertLocalizationKey`/`alertLocalizationArgs: [CKRecord.FieldKey]`),
-/// not guessed.
-public enum WarningAlertLocalization {
-    public static let key = "WARN_FMT"
-    public static let args: [CKRecord.FieldKey] = ["providerDisplayName"]
-}
-
 /// Two distinct subscriptions (CR-3): a zone subscription drives dashboard
-/// sync on *any* `GradusZone` change; a query subscription is the
-/// user-visible warning banner. A `CKRecordZoneSubscription` on the single
+/// sync on *any* `GradusZone` change; a query subscription drives the same
+/// app-side sync for warning records. A `CKRecordZoneSubscription` on the single
 /// fixed `GradusZone` is used instead of the plan's literal
 /// `CKDatabaseSubscription` wording -- deliberately: a database subscription
 /// only reports "the database changed" and needs a second
@@ -80,9 +69,7 @@ public struct CKSubscriptionManager: Sendable {
             options: [.firesOnRecordCreation, .firesOnRecordUpdate])
         subscription.zoneID = zoneID
         let info = CKSubscription.NotificationInfo()
-        info.alertLocalizationKey = WarningAlertLocalization.key
-        info.alertLocalizationArgs = WarningAlertLocalization.args
-        info.shouldBadge = true
+        info.shouldSendContentAvailable = true
         subscription.notificationInfo = info
         try await database.saveSubscription(subscription)
     }

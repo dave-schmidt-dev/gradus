@@ -1,4 +1,2 @@
-/* Plan A warning push (§6.4/B-3/T4.2): %@ substitutes the changed
-   ProviderStatus record's `providerDisplayName` field via
-   CKSubscription.NotificationInfo.alertLocalizationArgs. */
+/* Local warning notification: %@ substitutes the provider display name. */
 "WARN_FMT" = "Gradus: %@ hit a warning";

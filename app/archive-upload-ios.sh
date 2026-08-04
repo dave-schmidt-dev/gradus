@@ -2,7 +2,8 @@
 # Bumps the build number, archives, and uploads GradusiOS straight to App
 # Store Connect for TestFlight (T6.1 continuation). Requires
 # APP_STORE_CONNECT_API_KEY (.p8 contents), APP_STORE_CONNECT_KEY_ID,
-# APP_STORE_CONNECT_ISSUER_ID in the environment (inject via bws-run) --
+# APP_STORE_CONNECT_ISSUER_ID in the environment. The legacy bws-run path
+# below is human-terminal-only; agents must use a reviewed fixed BWS consumer.
 # same key already used by testflight-setup.py / create-ios-distribution-profile.py.
 #
 # Packages and uploads manually (codesign + ditto + altool) instead of
@@ -16,7 +17,7 @@
 # every time and the resulting .ipa validates cleanly against ASC's real
 # servers via `altool --validate-app`, so that's the reliable path.
 #
-# Run via:
+# Human-terminal operator path:
 #   bws-run -- app/archive-upload-ios.sh
 set -euo pipefail
 
@@ -112,4 +113,4 @@ xcrun altool --upload-package "$IPA_PATH" \
   --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
 
 echo "==> Done. Build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."
-echo "    Run: bws-run -- uv run --with pyjwt --with cryptography testflight-setup.py $NEXT_BUILD"
+echo "    Run the human-terminal TestFlight setup command for build $NEXT_BUILD."

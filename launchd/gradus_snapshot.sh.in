@@ -2,6 +2,7 @@
 set -eu
 
 REPO_ROOT="__GRADUS_REPO_ROOT__"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 cd -- "$REPO_ROOT"
 exec "__GRADUS_PYTHON_PATH__" -m gradus --refresh-snapshot

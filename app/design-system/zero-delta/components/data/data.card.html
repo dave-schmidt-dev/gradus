@@ -1,0 +1,47 @@
+<!-- @dsCard group="Components" viewport="700x300" name="Data" subtitle="ProviderCard, UsageRow, UsageBar, PaceIndicator, StatusBadge" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<style>*{box-sizing:border-box}body{margin:0;padding:16px 18px;background:var(--surface-page);color:var(--text-primary);font-family:var(--font-sans);font-size:var(--text-sm)}.lbl{font-family:var(--font-mono-ui);font-size:var(--text-2xs);color:var(--text-muted);letter-spacing:var(--tracking-wide)}a{color:var(--link)}a:hover{color:var(--link-hover)}</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script></head><body data-theme="terminal"><div id="root"></div>
+<script type="text/babel">
+const { ProviderCard, UsageRow, UsageBar, PaceIndicator, StatusBadge } = window.ZeroDeltaDesignSystem_9449d1;
+function Demo() {
+  return (
+    <div style={{ display:'grid', gap:'14px' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+        <ProviderCard name="Codex" badge="live" windows={[
+          { label:'5h', percent:74, reset:'13:16', pace:'under +38pt' },
+          { label:'1w', percent:85, reset:'Mar 18 09:00', pace:'on pace' }]} cells={12} />
+        <ProviderCard name="Claude" warning badge="cached 12m" badgeTone="cached" windows={[
+          { label:'5h', percent:7, reset:'22:00', pace:'over -23pt' },
+          { label:'1w', percent:48, reset:'Mar 17 15:59', pace:'over -6pt' }]} cells={12} />
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+        <ProviderCard name="Cursor" offline="3m" windows={[
+          { label:'ac', percent:31, reset:'Apr 01 00:00', pace:'on pace' },
+          { label:'ap', percent:0, reset:'Apr 01 00:00', state:'depleted' }]} cells={12} />
+        <ProviderCard name="OpenCode Go" windows={[
+          { label:'5h', percent:100, reset:'18:30', pace:'under +12pt' },
+          { label:'mo', percent:null, state:'na' }]} cells={12} />
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'170px 1fr', gap:'14px', alignItems:'center' }}>
+        <span className="lbl">USAGEBAR</span>
+        <div style={{ display:'flex', gap:'16px', alignItems:'center' }}>
+          <UsageBar percent={88} cells={10} /><UsageBar percent={44} cells={10} /><UsageBar percent={9} cells={10} /><UsageBar percent={null} cells={10} />
+          <span style={{ width:'80px' }}><UsageBar percent={62} variant="capsule" /></span>
+          <span style={{ width:'80px' }}><UsageBar percent={14} variant="capsule" height="var(--bar-height-app)" /></span>
+        </div>
+        <span className="lbl">PACE / BADGE</span>
+        <div style={{ display:'flex', gap:'12px', alignItems:'center', flexWrap:'wrap' }}>
+          <PaceIndicator label="under +38pt" /><PaceIndicator label="on pace" /><PaceIndicator label="over -23pt" /><PaceIndicator label="n/a" />
+          <PaceIndicator label="under +38pt" compact /><PaceIndicator label="over -23pt" compact />
+          <StatusBadge tone="live">live</StatusBadge><StatusBadge tone="cached">cached 12m</StatusBadge><StatusBadge tone="stale">stale 7m</StatusBadge><StatusBadge tone="warning" boxed={false}>[!]</StatusBadge>
+        </div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+</script></body></html>

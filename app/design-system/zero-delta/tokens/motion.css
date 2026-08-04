@@ -1,0 +1,12 @@
+/* Motion. The TUI redraws on a 120s cycle; the only animation in the product is
+   a rich "dots" spinner and the countdown flip. Keep UI motion short and linear-ish. */
+:root{
+  --duration-instant:60ms; /* @kind other */
+  --duration-fast:120ms; /* @kind other */
+  --duration-base:180ms; /* @kind other */
+  --duration-slow:320ms; /* @kind other */
+  --ease-standard:cubic-bezier(.2,0,.2,1); /* @kind other */
+  --ease-out:cubic-bezier(0,0,.2,1); /* @kind other */
+  --spinner-frame:80ms; /* @kind other */   /* rich dots spinner cadence */
+  --refresh-interval:120s; /* @kind other */
+}

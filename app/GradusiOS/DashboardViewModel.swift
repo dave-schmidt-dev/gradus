@@ -61,6 +61,7 @@ public final class DashboardViewModel: ObservableObject {
     private let accountSource: AccountStatusSource?
     private let zoneChangesFetcher: ZoneChangesFetcher?
     private let subscriptionManager: CKSubscriptionManager?
+    private let warningNotificationScheduler: WarningNotificationScheduling?
     private let userDefaults: UserDefaults
 
     /// `userDefaults` defaults to `.standard` for production; tests inject
@@ -72,6 +73,7 @@ public final class DashboardViewModel: ObservableObject {
         accountSource: AccountStatusSource? = nil,
         zoneChangesFetcher: ZoneChangesFetcher? = nil,
         subscriptionManager: CKSubscriptionManager? = nil,
+        warningNotificationScheduler: WarningNotificationScheduling? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.cache = cache
@@ -79,6 +81,7 @@ public final class DashboardViewModel: ObservableObject {
         self.accountSource = accountSource
         self.zoneChangesFetcher = zoneChangesFetcher
         self.subscriptionManager = subscriptionManager
+        self.warningNotificationScheduler = warningNotificationScheduler
         self.userDefaults = userDefaults
         // Default OFF: usage data leaves the device only on explicit opt-in.
         let syncEnabledValue = userDefaults.bool(forKey: Self.syncEnabledKey)
@@ -218,9 +221,25 @@ public final class DashboardViewModel: ObservableObject {
 
     private func reconcile(changed: [ProviderStatus], deletedProviderNames: [String]) {
         var byName = Dictionary(uniqueKeysWithValues: providers.map { ($0.providerName, $0) })
-        for status in changed { byName[status.providerName] = status }
+        for status in changed {
+            if status.isWarning && !(byName[status.providerName]?.isWarning ?? false), notificationsEnabled {
+                warningNotificationScheduler?.scheduleWarningNotification(for: status)
+            }
+            byName[status.providerName] = status
+        }
         for name in deletedProviderNames { byName.removeValue(forKey: name) }
         providers = rankProviders(Array(byName.values), localThreshold: localWarningThresholdPercent)
+    }
+
+    private func notifyForWarningTransitions(from previous: [ProviderStatus], to current: [ProviderStatus]) {
+        guard notificationsEnabled else { return }
+        var previousByName = Dictionary(uniqueKeysWithValues: previous.map { ($0.providerName, $0) })
+        for status in current {
+            if status.isWarning && !(previousByName[status.providerName]?.isWarning ?? false) {
+                warningNotificationScheduler?.scheduleWarningNotification(for: status)
+            }
+            previousByName[status.providerName] = status
+        }
     }
 
     /// Fetches the current CloudKit state and refreshes the offline cache.
@@ -233,6 +252,7 @@ public final class DashboardViewModel: ObservableObject {
         isSyncing = true
         defer { isSyncing = false }
         guard let fetched = try? await fetcher.fetchAll() else { return }
+        notifyForWarningTransitions(from: providers, to: fetched)
         providers = rankProviders(fetched, localThreshold: localWarningThresholdPercent)
         let syncedAt = Date()
         lastSyncedAt = syncedAt

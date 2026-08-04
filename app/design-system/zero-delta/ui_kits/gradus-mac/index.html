@@ -1,0 +1,48 @@
+<!-- @dsCard group="Gradus for Mac" viewport="900x560" name="Menu bar app" subtitle="Status item and dropdown: provider rows, sync toggles, quit" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Gradus for Mac — menu bar</title><link rel="stylesheet" href="../../styles.css">
+<style>*{box-sizing:border-box}body{margin:0;background:var(--surface-page);color:var(--text-primary);font-family:var(--font-sans)}a{color:var(--link)}a:hover{color:var(--link-hover)}button{font:inherit}</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script></head><body data-theme="terminal">
+<div id="root"></div>
+<script src="../providers.js"></script>
+<script type="text/babel" src="MenuPopover.jsx"></script>
+<script type="text/babel">
+const { Button } = window.ZeroDeltaDesignSystem_9449d1;
+
+function App() {
+  const [sync, setSync] = React.useState(true);
+  const [launch, setLaunch] = React.useState(false);
+  const [open, setOpen] = React.useState(true);
+  const providers = sync ? window.GRADUS_FIXTURE.slice(0, 4).concat([{ name:'Vibe', error:'auth required' }]) : [];
+  return (
+    <div style={{ minHeight:'100vh', background:'linear-gradient(180deg,#0f1418,#141419)' }}>
+      <div style={{ height:'28px', display:'flex', alignItems:'center', justifyContent:'flex-end', gap:'var(--space-6)', padding:'0 var(--space-6)', background:'rgba(255,255,255,.06)', backdropFilter:'blur(12px)', borderBottom:'var(--border-hair) solid rgba(255,255,255,.08)' }}>
+        <span onClick={() => setOpen(!open)} title="Open the Gradus status item"
+          style={{ display:'flex', alignItems:'center', gap:'6px', fontFamily:'var(--font-mono-ui)', fontSize:'var(--text-2xs)', color:'var(--text-primary)', cursor:'pointer', padding:'2px 6px', borderRadius:'var(--radius-sm)', background: open ? 'rgba(255,255,255,.12)' : 'transparent' }}>
+          <span style={{ color:'var(--status-critical)' }}>[!]</span>
+          <span>7%</span>
+        </span>
+        <span style={{ fontFamily:'var(--font-mono-ui)', fontSize:'var(--text-2xs)', color:'var(--text-secondary)' }}>Fri Mar 13  8:30 AM</span>
+      </div>
+      <div style={{ display:'flex', justifyContent:'flex-end', padding:'var(--space-4) 96px 0 0' }}>
+        {open ? <MenuPopover providers={providers} sync={sync} setSync={setSync} launch={launch} setLaunch={setLaunch} published="published 41s ago" /> : null}
+      </div>
+      <div style={{ padding:'var(--space-9) var(--space-6)', display:'grid', gap:'var(--space-3)', maxWidth:'620px' }}>
+        <span style={{ fontFamily:'var(--font-mono-ui)', fontSize:'var(--text-2xs)', letterSpacing:'var(--tracking-wide)', color:'var(--text-muted)' }}>ABOUT THIS SURFACE</span>
+        <p style={{ margin:0, fontSize:'var(--text-sm)', lineHeight:'var(--leading-normal)', color:'var(--text-secondary)', textWrap:'pretty' }}>
+          GradusMac reads the credential-free snapshot the CLI writes and publishes one record per
+          provider to a private CloudKit database. The status item shows the window closest to
+          depletion; the dropdown is 260px wide and never scrolls.
+        </p>
+        <div style={{ display:'flex', gap:'var(--space-4)' }}>
+          <Button size="sm" variant={open ? 'prominent' : 'bordered'} onClick={() => setOpen(!open)} title="Toggle the menu bar dropdown">{open ? 'Close dropdown' : 'Open dropdown'}</Button>
+          <Button size="sm" onClick={() => setSync(!sync)} title="Toggle iCloud sync to see the no-data state">{sync ? 'Turn sync off' : 'Turn sync on'}</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script></body></html>

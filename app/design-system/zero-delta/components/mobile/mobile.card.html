@@ -1,0 +1,43 @@
+<!-- @dsCard group="Components" viewport="700x420" name="Mobile" subtitle="MobileNavBar, StatTile, ListRow, Icon, IconButton" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="../../styles.css">
+<style>*{box-sizing:border-box}body{margin:0;padding:16px 18px;background:var(--surface-page);color:var(--text-primary);font-family:var(--font-sans);font-size:var(--text-sm)}.lbl{font-family:var(--font-mono-ui);font-size:var(--text-2xs);color:var(--text-muted);letter-spacing:var(--tracking-wide)}a{color:var(--link)}a:hover{color:var(--link-hover)}</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script></head><body data-theme="terminal"><div id="root"></div>
+<script type="text/babel">
+const { MobileNavBar, StatTile, ListRow, Icon, IconButton, Toggle } = window.ZeroDeltaDesignSystem_9449d1;
+function Demo() {
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'18px' }}>
+      <div style={{ display:'grid', gap:'12px', alignContent:'start' }}>
+        <MobileNavBar title="Now" eyebrow="PUBLISHED 41S AGO" style={{ padding:0 }}
+          trailing={<IconButton name="settings" label="Open Gradus settings" />} />
+        <StatTile hero title="Claude" dotColor="var(--zd-provider-claude)" value={7} pace="over -23pt" warning
+          meta="5h window · resets 22:00 · in 1h 29m" />
+        <StatTile title="Codex" dotColor="var(--zd-provider-codex)" value={74} pace="under +38pt"
+          chips={[{label:'1w',percent:85}]} meta="5h · resets 13:16" onPress={() => {}} />
+      </div>
+      <div style={{ display:'grid', gap:'12px', alignContent:'start' }}>
+        <span className="lbl">LISTROW</span>
+        <div style={{ background:'var(--surface-card)', border:'var(--border-hair) solid var(--border-hairline)', borderRadius:'var(--radius-lg)', overflow:'hidden' }}>
+          <ListRow title="iCloud Sync" subtitle="opt-in per device" accessory={<Toggle label="iCloud Sync" checked onChange={() => {}} labelsHidden />} />
+          <ListRow title="Warning Threshold" value="20%" chevron />
+          <ListRow title="Publishing Mac" value="MacBook Pro" chevron isLast />
+        </div>
+        <span className="lbl">ICON · CHROME ONLY, 20PX DEFAULT</span>
+        <div style={{ display:'flex', gap:'14px', flexWrap:'wrap', color:'var(--text-secondary)' }}>
+          {['cloud-off','wifi-off','hourglass','bell','settings','refresh-cw','triangle-alert','laptop','smartphone','chevron-right','info','circle-check'].map(n => <Icon key={n} name={n} size={20} label={n} />)}
+        </div>
+        <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+          <IconButton name="refresh-cw" label="Refresh all providers now" />
+          <IconButton name="bell" label="Open notification settings" tone="muted" />
+          <IconButton name="triangle-alert" label="View the depleted provider" tone="critical" />
+          <span className="lbl">44PX TAP TARGETS</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo />);
+</script></body></html>

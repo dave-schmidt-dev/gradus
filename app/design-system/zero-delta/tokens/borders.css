@@ -1,0 +1,10 @@
+/* Borders + radii. Terminal panels are hairline and square; Apple surfaces round. */
+:root{
+  --border-hair:1px;
+  --border-strong:2px;
+  --radius-none:0;
+  --radius-sm:4px;
+  --radius-md:8px;
+  --radius-lg:10px;
+  --radius-pill:999px;
+}
