@@ -21,16 +21,16 @@ rationale: The snapshot files are read by a separate repo (review-plugin router)
   by the companion gate test_payload_error_carries_no_raw_payload. Hence area now includes providers/*.py,
   where that error string is constructed.
 
-### INV-2 — The headless (--write-snapshot / launchd) path is strictly read-only with zero side effects
+### INV-2 — The machine-safe (--json / --write-snapshot) paths have zero credential side effects
 area: ["gradus/providers/*.py", "gradus/__main__.py"]
 gate_test: tests/test_main.py::test_write_snapshot_is_read_only_no_side_effects
 threshold: 3
-rationale: A router checkpoint / background refresher must never spawn a browser, fire a notification,
-  run a cookie-extraction subprocess (Keychain/TCC prompt = a block), refresh a token (rotating a
-  refresh-token out from under the user's interactive codex/agy session), or evict a cookie cache the
-  GUI TUI relies on. Missing/expired/rejected creds → ok:false. The gate asserts neither
-  subprocess.Popen nor subprocess.run runs and no cred/cache file is written, INCLUDING on the
-  cached-cred→HTTP-401 recovery path. Prevents the Gap-5 failure and background auth-state churn.
+rationale: Machine-readable --json and headless --write-snapshot surfaces must never spawn a browser,
+  fire a notification, run a cookie-extraction subprocess (Keychain/TCC prompt = a block), refresh a
+  token, or evict a cookie cache the GUI TUI relies on. Missing/expired/rejected creds → ok:false.
+  The gate asserts neither subprocess.Popen nor subprocess.run runs and no cred/cache file is written,
+  INCLUDING on the cached-cred→HTTP-401 recovery path. --write-snapshot writes only its declared v1/v2
+  snapshot outputs; --json is read-only. Credential-aware launchd refresh is governed by INV-8.
 
 ### INV-3 — percent_left is always *remaining*, 0–100, normalized exactly once
 area: ["gradus/snapshot.py"]
@@ -88,3 +88,14 @@ rationale: The Mac app runs on the same machine holding live credentials in `.ca
   (`PublishPipeline.defaultSnapshotPath` in GradusMacApp.swift) and threaded through `start(snapshotPath:)` —
   not a proof that every filesystem read in GradusMac is confined to that one path. PM-15's fs_usage
   runtime canary check is deferred beta-hardening, not this gate.
+
+### INV-8 — Credential-aware background refresh is explicit, single-flight, and progress-visible
+area: ["gradus/__main__.py", "gradus/providers/*.py", "launchd/*"]
+gate_test: tests/test_main.py::TestCredentialAwareRefresh::test_refresh_is_explicit_single_flight_progress_visible_and_one_probe
+threshold: 3
+rationale: Only the explicit --refresh-snapshot command may use non-headless provider behavior for
+  unattended observation. It acquires one private single-flight lock before provider initialization,
+  reports safe progress through provider and persistence waits, and never routes --json or
+  --write-snapshot through credential-aware behavior. One Antigravity probe supplies both the direct
+  entry and the schema-v2 Antigravity (Claude) synthetic projection; no second credential request is
+  implied. Overlap, lock failure, safe status, and one-probe behavior are binary-tested.

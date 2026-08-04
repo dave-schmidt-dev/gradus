@@ -990,7 +990,7 @@ class TestCredentialAwareRefresh(unittest.TestCase):
         self.assertTrue(args.once)
         self.assertTrue(args.write_snapshot)
 
-    def test_refresh_is_non_headless_one_agy_probe_safe_progress_and_sorted_payload(self) -> None:
+    def test_refresh_is_explicit_single_flight_progress_visible_and_one_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".state"
             state_dir.mkdir()
