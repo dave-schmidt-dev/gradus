@@ -118,3 +118,23 @@ rationale: GradusiOS is a consumer of the Mac publisher, not an independent data
   makes the dependency decision explicit, requires both sides to pass their gates, and records the
   producer-publish evidence alongside the consumer upload evidence. A Mac-only local republish does
   not require notarization; a Mac artifact distributed to users still follows the notarization gate.
+
+### INV-10 — Product versions are semantic and Apple build numbers are independent
+area: ["VERSIONING.md", "app/project.yml", "app/archive-upload-ios.sh", "CHANGELOG.md", "HISTORY.md"]
+gate_test: app/test-gate.sh
+threshold: 3
+rationale: MARKETING_VERSION is the user-facing MAJOR.MINOR.PATCH product version, while
+  CURRENT_PROJECT_VERSION/CFBundleVersion is Apple's monotonically increasing upload identifier.
+  One semantic version gets one user-facing changelog entry; superseded candidate builds belong in
+  local HISTORY.md. This prevents internal TestFlight retries from becoming misleading product
+  releases and prevents small fixes from appearing as large version jumps.
+
+### INV-11 — New features and user-facing UI ship with automated regression coverage
+area: ["app/GradusKit/**", "app/GradusMac/**", "app/GradusiOS/**", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/GradusMacUITests/**", "app/GradusiOSUITests/**", "gradus/**", "tests/**", "TESTING.md"]
+gate_test: app/test-gate.sh
+threshold: 3
+rationale: Every new behavior has a test at the lowest layer that proves it; new SwiftUI appearance has
+  snapshot coverage, new interactive workflows have XCUITest/XCUIAutomation coverage, and shared
+  producer/consumer behavior has tests on both sides. Tests must be wired into the runner and gate.
+  Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
+  or other automation boundaries and must be recorded with exact steps and a follow-up.

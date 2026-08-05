@@ -314,6 +314,12 @@ cd app
 bash test-gate.sh   # boots the pinned simulator, runs GradusMac + GradusiOS unit/UI tests
 ```
 
+Gradus follows [`TESTING.md`](TESTING.md): every new feature and user-facing
+UI element needs automated regression coverage in the same change. Swift
+Testing/XCTest cover logic and integration, snapshot tests cover important
+visual states, and XCUITest covers interactive iOS workflows. The full gate
+must discover and pass the new tests.
+
 Project docs for the Swift side live at the repo root alongside the Python ones (`INVARIANTS.md`, `ledger.yaml`) — INV-7 covers the CloudKit publisher's credential isolation.
 
 Cross-platform changes follow [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)
@@ -325,23 +331,27 @@ distributed to users still requires the notarization workflow.
 
 ### Deploying GradusiOS
 
-**Policy: ship major GradusiOS changes to TestFlight as soon as they land on `main`, not on a batched/periodic schedule.** A "major change" is a completed plan phase, a full plan (design-system work, a new screen, a sync/notification behavior change) — not every commit. Deploy once the change is gate-green and committed; don't wait to be asked.
+Release versioning follows [`VERSIONING.md`](VERSIONING.md): use
+`MAJOR.MINOR.PATCH` for product releases, and keep Apple's build number as a
+separate upload counter. A new TestFlight build is reserved for a completed,
+gate-green release candidate or a release-blocking correction; small
+non-blocking tweaks are batched into the next patch release.
 
 ```bash
 cd app
 ./test-gate.sh                                    # must be green first
-# bump MARKETING_VERSION in project.yml if this is a user-visible release
-# (Apple won't surface a lower/equal MARKETING_VERSION as an update to
-# existing testers no matter how CURRENT_PROJECT_VERSION compares)
+# set the next semantic MARKETING_VERSION before the release gate when the
+# product release changes; archive-upload-ios.sh owns the build counter
 bws-secret-exec app-store-connect-upload --        # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
 # Human-terminal compatibility path remains available:
 # bws-run -- ./archive-upload-ios.sh
 bws-secret-exec app-store-connect-testflight-setup -- <build>  # waits for processing and assigns the build to Internal Testers
 ```
 
-Every TestFlight build also gets a concise entry in `CHANGELOG.md`. Copy its
-release summary and test-focus text into App Store Connect's “What to Test”
-field; keep detailed implementation history in `HISTORY.md`.
+Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
+its release summary and test-focus text into App Store Connect's “What to
+Test” field; keep individual candidate-build details and re-upload reasons in
+`HISTORY.md`.
 
 `archive-upload-ios.sh` prints the exact fixed-consumer follow-up command (with the build number it just uploaded) as its last line.
 

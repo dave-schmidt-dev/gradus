@@ -1,8 +1,13 @@
 # Changelog
 
-User-facing release notes for Gradus. Each TestFlight build gets one entry
-here, and its concise test-focus text is copied into App Store Connect's
-“What to Test” field. Internal implementation details stay in `HISTORY.md`.
+User-facing release notes for Gradus. Each semantic product version gets one
+entry here, and its concise test-focus text is copied into App Store Connect's
+“What to Test” field. Individual TestFlight candidate builds and re-upload
+reasons stay in `HISTORY.md`.
+
+The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
+history from the overnight release train. New releases use
+`MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
 ## Unreleased
 
