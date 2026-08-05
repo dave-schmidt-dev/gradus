@@ -17,42 +17,106 @@
 # every time and the resulting .ipa validates cleanly against ASC's real
 # servers via `altool --validate-app`, so that's the reliable path.
 #
-# Human-terminal operator path:
+# Agent-safe upload path:
+#   bws-secret-exec app-store-connect-upload --
+# Human-terminal compatibility path:
 #   bws-run -- app/archive-upload-ios.sh
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")"
+resolve_user_home() {
+  if [[ -n "${HOME:-}" ]]; then
+    printf '%s\n' "$HOME"
+    return 0
+  fi
 
-: "${APP_STORE_CONNECT_API_KEY:?required}"
-: "${APP_STORE_CONNECT_KEY_ID:?required}"
-: "${APP_STORE_CONNECT_ISSUER_ID:?required}"
+  local username discovered_home
+  username="$(/usr/bin/id -un)"
+  discovered_home="$(
+    /usr/bin/dscl . -read "/Users/${username}" NFSHomeDirectory 2>/dev/null \
+      | /usr/bin/awk '/^NFSHomeDirectory:/ {print $2; exit}' \
+      || true
+  )"
+  if [[ -z "$discovered_home" ]]; then
+    discovered_home="$(/usr/bin/id -P | /usr/bin/awk -F: 'NF >= 9 {print $9; exit}')"
+  fi
+  if [[ -z "$discovered_home" ]]; then
+    echo "FAIL: HOME is unset and the macOS home directory could not be determined" >&2
+    return 1
+  fi
+  printf '%s\n' "$discovered_home"
+}
 
-SIGNING_IDENTITY="Apple Distribution"
-PROFILE_PATH="${HOME}/Library/MobileDevice/Provisioning Profiles/gradus-ios-app-store.provisionprofile"
-ARCHIVE_PATH="build/GradusiOS.xcarchive"
-PACKAGE_DIR="build/package-ios"
+resolve_uv() {
+  local candidate
+  candidate="$(command -v uv 2>/dev/null || true)"
+  if [[ -z "$candidate" ]]; then
+    for candidate in "$HOME/.local/bin/uv" "/opt/homebrew/bin/uv"; do
+      if [[ -x "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  else
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  echo "FAIL: uv is not installed in PATH, HOME/.local/bin, or /opt/homebrew/bin" >&2
+  return 1
+}
 
-echo "==> Determining next build number from App Store Connect"
-NEXT_BUILD="$(uv run --with pyjwt --with cryptography next-ios-build-number.py)"
-echo "    Next CURRENT_PROJECT_VERSION: $NEXT_BUILD"
-sed -i '' -E "s/(CURRENT_PROJECT_VERSION: )\"[0-9]+\"/\1\"${NEXT_BUILD}\"/" project.yml
+resolve_user_name() {
+  /usr/bin/id -un
+}
 
-echo "==> Regenerating Xcode project from project.yml"
-xcodegen generate
+bump_ios_build_number() {
+  local next_build="$1"
+  local ios_build_pattern
+  ios_build_pattern="/^  GradusiOS:/,/^  [A-Za-z0-9_]+:/ s/(CURRENT_PROJECT_VERSION: )\"[0-9]+\"/\\1\"$next_build\"/"
+  sed -i '' -E "$ios_build_pattern" project.yml
+}
 
-rm -rf "$ARCHIVE_PATH" "$PACKAGE_DIR"
+main() {
+  cd "$(dirname "${BASH_SOURCE[0]}")"
 
-echo "==> Archiving GradusiOS (build $NEXT_BUILD)"
-xcodebuild archive \
-  -project Gradus.xcodeproj \
-  -scheme GradusiOS \
-  -archivePath "$ARCHIVE_PATH" \
-  -destination "generic/platform=iOS"
+  # bws-run and bws-secret-exec intentionally start children with a minimal
+  # environment. Restore HOME from the local account record before uv,
+  # xcodebuild, and the provisioning-profile lookup need it.
+  export HOME="$(resolve_user_home)"
+  export USER="$(resolve_user_name)"
+  export LOGNAME="$USER"
+  local uv_bin
+  uv_bin="$(resolve_uv)"
 
-echo "==> Repackaging for App Store distribution (manual codesign)"
-mkdir -p "$PACKAGE_DIR/Payload"
-cp -R "$ARCHIVE_PATH/Products/Applications/GradusiOS.app" "$PACKAGE_DIR/Payload/GradusiOS.app"
-cp "$PROFILE_PATH" "$PACKAGE_DIR/Payload/GradusiOS.app/embedded.mobileprovision"
+  : "${APP_STORE_CONNECT_API_KEY:?required}"
+  : "${APP_STORE_CONNECT_KEY_ID:?required}"
+  : "${APP_STORE_CONNECT_ISSUER_ID:?required}"
+
+  SIGNING_IDENTITY="Apple Distribution"
+  PROFILE_PATH="${HOME}/Library/MobileDevice/Provisioning Profiles/gradus-ios-app-store.provisionprofile"
+  ARCHIVE_PATH="build/GradusiOS.xcarchive"
+  PACKAGE_DIR="build/package-ios"
+
+  echo "==> Determining next build number from App Store Connect"
+  NEXT_BUILD="$("$uv_bin" run --with pyjwt --with cryptography next-ios-build-number.py)"
+  echo "    Next CURRENT_PROJECT_VERSION: $NEXT_BUILD"
+  bump_ios_build_number "$NEXT_BUILD"
+
+  echo "==> Regenerating Xcode project from project.yml"
+  xcodegen generate
+
+  rm -rf "$ARCHIVE_PATH" "$PACKAGE_DIR"
+
+  echo "==> Archiving GradusiOS (build $NEXT_BUILD)"
+  xcodebuild archive \
+    -project Gradus.xcodeproj \
+    -scheme GradusiOS \
+    -archivePath "$ARCHIVE_PATH" \
+    -destination "generic/platform=iOS"
+
+  echo "==> Repackaging for App Store distribution (manual codesign)"
+  mkdir -p "$PACKAGE_DIR/Payload"
+  cp -R "$ARCHIVE_PATH/Products/Applications/GradusiOS.app" "$PACKAGE_DIR/Payload/GradusiOS.app"
+  cp "$PROFILE_PATH" "$PACKAGE_DIR/Payload/GradusiOS.app/embedded.mobileprovision"
 
 # Entitlements to sign with come from the app's OWN archived entitlements,
 # not the provisioning profile's `Entitlements` dict -- that dict is the
@@ -64,21 +128,21 @@ cp "$PROFILE_PATH" "$PACKAGE_DIR/Payload/GradusiOS.app/embedded.mobileprovision"
 # get-task-allow (debug-only) and grant aps-environment=production (the
 # archive's dev-signed entitlements have neither aps-environment nor
 # get-task-allow=false, since the wildcard dev profile doesn't declare push).
-codesign -d --entitlements :- "$PACKAGE_DIR/Payload/GradusiOS.app" 2>/dev/null \
-  | plutil -convert xml1 -o "$PACKAGE_DIR/entitlements.plist" -
-/usr/libexec/PlistBuddy -c "Set :get-task-allow false" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null \
-  || /usr/libexec/PlistBuddy -c "Add :get-task-allow bool false" "$PACKAGE_DIR/entitlements.plist"
-/usr/libexec/PlistBuddy -c "Add :aps-environment string production" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null || true
+  codesign -d --entitlements :- "$PACKAGE_DIR/Payload/GradusiOS.app" 2>/dev/null \
+    | plutil -convert xml1 -o "$PACKAGE_DIR/entitlements.plist" -
+  /usr/libexec/PlistBuddy -c "Set :get-task-allow false" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :get-task-allow bool false" "$PACKAGE_DIR/entitlements.plist"
+  /usr/libexec/PlistBuddy -c "Add :aps-environment string production" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null || true
 # Without an explicit value here, `--generate-entitlement-der` tries to derive
 # this key from the embedded profile's own (multi-valued: Production AND
 # Development) icloud-container-environment grant, can't resolve a single
 # value, and silently emits an empty string -- which ASC's upload validator
 # rejects outright ("this value should be a string value of 'Production'").
-/usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-environment string Production" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-environment string Production" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null || true
 
-codesign --force --sign "$SIGNING_IDENTITY" \
-  --entitlements "$PACKAGE_DIR/entitlements.plist" --generate-entitlement-der --timestamp \
-  "$PACKAGE_DIR/Payload/GradusiOS.app"
+  codesign --force --sign "$SIGNING_IDENTITY" \
+    --entitlements "$PACKAGE_DIR/entitlements.plist" --generate-entitlement-der --timestamp \
+    "$PACKAGE_DIR/Payload/GradusiOS.app"
 
 # Every file in the bundle -- including ones codesign itself just wrote/
 # touched -- carries a com.apple.provenance extended attribute (macOS
@@ -87,30 +151,35 @@ codesign --force --sign "$SIGNING_IDENTITY" \
 # rejects it ("resource fork, Finder information, or similar detritus not
 # allowed"); stripping post-signature doesn't invalidate the signature
 # (confirmed: verify passes clean afterward with no re-sign needed).
-xattr -cr "$PACKAGE_DIR/Payload/GradusiOS.app"
+  xattr -cr "$PACKAGE_DIR/Payload/GradusiOS.app"
 
-echo "==> Verifying signature"
-codesign --verify --deep --strict "$PACKAGE_DIR/Payload/GradusiOS.app"
+  echo "==> Verifying signature"
+  codesign --verify --deep --strict "$PACKAGE_DIR/Payload/GradusiOS.app"
 
-IPA_PATH="$PACKAGE_DIR/GradusiOS.ipa"
-echo "==> Building .ipa"
-( cd "$PACKAGE_DIR" && /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload "$(basename "$IPA_PATH")" )
+  IPA_PATH="$PACKAGE_DIR/GradusiOS.ipa"
+  echo "==> Building .ipa"
+  ( cd "$PACKAGE_DIR" && /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload "$(basename "$IPA_PATH")" )
 
 # altool's --api-key auth looks for AuthKey_<key-id>.p8 in a fixed set of
 # directories (or $API_PRIVATE_KEYS_DIR); write it to a private temp file
 # for this process only and shred it on exit (success or failure) so the
 # plaintext key never lingers on disk or appears in any log.
-KEY_DIR="$(mktemp -d)"
-trap 'rm -rf "$KEY_DIR"' EXIT
-umask 077
-printf '%s' "$APP_STORE_CONNECT_API_KEY" > "${KEY_DIR}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
-export API_PRIVATE_KEYS_DIR="$KEY_DIR"
+  KEY_DIR="$(mktemp -d)"
+  trap 'rm -rf "$KEY_DIR"' EXIT
+  umask 077
+  printf '%s' "$APP_STORE_CONNECT_API_KEY" > "${KEY_DIR}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+  export API_PRIVATE_KEYS_DIR="$KEY_DIR"
 
-echo "==> Uploading to App Store Connect"
-xcrun altool --upload-package "$IPA_PATH" \
-  -t ios \
-  --api-key "$APP_STORE_CONNECT_KEY_ID" \
-  --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
+  echo "==> Uploading to App Store Connect"
+  xcrun altool --upload-package "$IPA_PATH" \
+    -t ios \
+    --api-key "$APP_STORE_CONNECT_KEY_ID" \
+    --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
 
-echo "==> Done. Build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."
-echo "    Run the human-terminal TestFlight setup command for build $NEXT_BUILD."
+  echo "==> Done. Build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."
+  echo "    Run the human-terminal TestFlight setup command for build $NEXT_BUILD."
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

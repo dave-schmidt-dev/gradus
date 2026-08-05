@@ -324,7 +324,9 @@ cd app
 # bump MARKETING_VERSION in project.yml if this is a user-visible release
 # (Apple won't surface a lower/equal MARKETING_VERSION as an update to
 # existing testers no matter how CURRENT_PROJECT_VERSION compares)
-bws-run -- ./archive-upload-ios.sh                 # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
+bws-secret-exec app-store-connect-upload --        # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
+# Human-terminal compatibility path remains available:
+# bws-run -- ./archive-upload-ios.sh
 bws-run -- uv run --with pyjwt --with cryptography testflight-setup.py <build>  # assigns the build to Internal Testers
 ```
 

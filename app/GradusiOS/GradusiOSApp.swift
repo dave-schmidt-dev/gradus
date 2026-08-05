@@ -39,9 +39,11 @@ struct GradusiOSApp: App {
     }
 
     init() {
+        #if DEBUG
         if CommandLine.arguments.contains("--cloudkit-spike"), CloudKitRuntimeConfiguration.currentValue {
             Task { await CloudKitSpike.run() }
         }
+        #endif
 
         let cache = FileLocalCacheStore(directory: Self.cacheDirectory())
         Self.seedCacheForUITestsIfRequested(into: cache)
