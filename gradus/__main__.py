@@ -38,7 +38,9 @@ from .snapshot import (
     SNAPSHOT_PATH,
     SNAPSHOT_V2_PATH,
     STALE_THRESHOLD_SECONDS,
+    SnapshotWrite,
     _is_transient_probe_error,
+    _parse_aware_iso_timestamp,
     build_snapshot_payload,
     build_snapshot_v2_payload,
     read_prior_snapshot,
@@ -393,6 +395,38 @@ def collect_snapshots(
     return snapshots
 
 
+def _committed_is_newer(committed: object, payload: Mapping[str, object]) -> bool:
+    """Whether ``committed`` carries a strictly newer ``updated_at`` than ``payload``.
+
+    Used to tell a lost write-race (benign: another writer put a fresher
+    snapshot on disk and owns its history entry) apart from a readback that is
+    simply wrong (not benign: nothing journals that cycle). Anything that does
+    not parse cleanly as a newer timestamp is treated as not-newer, so an
+    unreadable readback fails loudly rather than silently.
+    """
+    if not isinstance(committed, Mapping):
+        return False
+    committed_at = _parse_aware_iso_timestamp(committed.get("updated_at"))
+    payload_at = _parse_aware_iso_timestamp(payload.get("updated_at"))
+    if committed_at is None or payload_at is None:
+        return False
+    return committed_at > payload_at
+
+
+def _write_status(result: SnapshotWrite) -> str:
+    """Render a write outcome for the INV-1 progress channel.
+
+    A stale skip gets its own wording: "persisted" would claim this payload is
+    on disk when a newer one is, and "persistence failed" would report a
+    correct no-op as an error.
+    """
+    if result is SnapshotWrite.WRITTEN:
+        return "persisted"
+    if result is SnapshotWrite.SKIPPED_STALE:
+        return "superseded by newer snapshot"
+    return "persistence failed"
+
+
 def _write_snapshot_versions(
     snaps: list[ProviderSnapshot],
     when: datetime,
@@ -402,7 +436,21 @@ def _write_snapshot_versions(
     lock_poll_interval: float = 0.1,
     journal_history: bool = False,
 ) -> tuple[bool, bool] | tuple[bool, bool, bool]:
-    """Write v1 and v2 independently, optionally journaling committed v2."""
+    """Write v1 and v2 independently, optionally journaling committed v2.
+
+    Each returned flag means "this destination is healthy", which is true both
+    when this call committed the payload and when it correctly declined to
+    because a concurrent writer had already put a *newer* one there. Gradus
+    runs two writers on overlapping 120s cycles (the TUI and the launchd
+    ``local.gradus-snapshot`` job), so one of them loses the race every cycle;
+    losing is a correct no-op, not a failure, and must not be reported as one.
+    Only :attr:`SnapshotWrite.FAILED` -- a lock, serialization, or IO error --
+    is a failure.
+
+    History is journaled only for a payload this call actually wrote. When the
+    v2 write is skipped as stale, the writer that won owns that payload's
+    journal entry and appending here would duplicate it.
+    """
 
     def status(message: str) -> None:
         if on_status is not None:
@@ -418,23 +466,30 @@ def _write_snapshot_versions(
         return progress
 
     try:
-        v1_ok = write_snapshot(
+        v1_result = write_snapshot(
             build_snapshot_payload(snaps, when, prior=read_prior_snapshot(SNAPSHOT_PATH)),
+            # Passed explicitly. `write_snapshot`'s default binds `snapshot.py`'s
+            # module-level SNAPSHOT_PATH at import, so omitting it made the read
+            # above honor a patched `__main__.SNAPSHOT_PATH` while this write
+            # ignored it -- a caller that believed it was redirected to a temp
+            # dir would silently write the real one. v2 already passes its path.
+            SNAPSHOT_PATH,
             on_progress=writer_progress("schema-v1"),
             lock_timeout=lock_timeout,
             lock_poll_interval=lock_poll_interval,
         )
     except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
         log.warning("failed to write schema-v1 snapshot")
-        v1_ok = False
-    status(f"schema-v1 {'persisted' if v1_ok else 'persistence failed'}")
+        v1_result = SnapshotWrite.FAILED
+    v1_ok = v1_result.persisted
+    status(f"schema-v1 {_write_status(v1_result)}")
 
     v2_payload: dict | None = None
     try:
         v2_payload = build_snapshot_v2_payload(
             snaps, when, prior=read_prior_snapshot(SNAPSHOT_V2_PATH)
         )
-        v2_ok = write_snapshot(
+        v2_result = write_snapshot(
             v2_payload,
             SNAPSHOT_V2_PATH,
             on_progress=writer_progress("schema-v2"),
@@ -443,14 +498,24 @@ def _write_snapshot_versions(
         )
     except Exception:  # noqa: BLE001 - persistence must not crash the dashboard
         log.warning("failed to write schema-v2 snapshot")
-        v2_ok = False
-    status(f"schema-v2 {'persisted' if v2_ok else 'persistence failed'}")
+        v2_result = SnapshotWrite.FAILED
+    v2_ok = v2_result.persisted
+    status(f"schema-v2 {_write_status(v2_result)}")
 
     if not journal_history:
         return v1_ok, v2_ok
 
+    if v2_result is SnapshotWrite.SKIPPED_STALE:
+        # A concurrent writer committed a newer payload; it journals that one.
+        # Appending ours here would either duplicate its record or write a
+        # superseded one, so deferring is the correct outcome -- report it as
+        # healthy rather than as a lost history entry.
+        log.info("deferring history append: newer snapshot already committed by another writer")
+        status("history deferred to concurrent writer")
+        return v1_ok, v2_ok, True
+
     history_ok = False
-    if v2_ok and v2_payload is not None:
+    if v2_result is SnapshotWrite.WRITTEN and v2_payload is not None:
         committed_v2 = read_prior_snapshot(SNAPSHOT_V2_PATH)
         if committed_v2 == v2_payload:
             try:
@@ -462,6 +527,21 @@ def _write_snapshot_versions(
                 )
             except Exception:  # noqa: BLE001 - history must not crash persistence callers
                 log.warning("failed to append snapshot history")
+        elif _committed_is_newer(committed_v2, v2_payload):
+            # We committed, then a concurrent writer replaced the file with a
+            # newer payload before this read. That writer journals its own.
+            log.info("deferring history append: snapshot superseded after write")
+            status("history deferred to concurrent writer")
+            return v1_ok, v2_ok, True
+        else:
+            # The readback is neither our payload nor a newer one, so the write
+            # did not take effect the way it was reported. Nobody journals this
+            # cycle -- that is a real failure and must not be filed under the
+            # benign concurrent-writer case above.
+            log.warning(
+                "history append skipped: committed snapshot is neither the payload "
+                "just written nor a newer one"
+            )
     status(f"history {'persisted' if history_ok else 'persistence failed'}")
     return v1_ok, v2_ok, history_ok
 

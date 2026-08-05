@@ -1180,7 +1180,10 @@ class TestTransientMerge(unittest.TestCase):
         current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
         self.assertFalse(current["ok"])
         with tempfile.TemporaryDirectory() as tmpdir:
-            self.assertTrue(snap.write_snapshot(payload, Path(tmpdir) / "snapshot.json"))
+            self.assertIs(
+                snap.write_snapshot(payload, Path(tmpdir) / "snapshot.json"),
+                snap.SnapshotWrite.WRITTEN,
+            )
 
     def test_transient_rejects_prior_with_unhashable_window_id(self) -> None:
         """An unhashable prior ID is rejected instead of raising during membership."""
@@ -1333,7 +1336,7 @@ class TestAtomicWrite(unittest.TestCase):
         )
         tmpdir = tempfile.mkdtemp()
         path = Path(tmpdir) / "sub" / "snapshot.json"
-        self.assertTrue(snap.write_snapshot(payload, path))
+        self.assertIs(snap.write_snapshot(payload, path), snap.SnapshotWrite.WRITTEN)
         self.assertTrue(path.exists())
         self.assertEqual(snap.read_prior_snapshot(path), payload)
         # On-disk JSON matches the payload too.
@@ -1349,7 +1352,7 @@ class TestAtomicWrite(unittest.TestCase):
         """The persistence boundary never writes JSON NaN tokens."""
         tmpdir = tempfile.mkdtemp()
         path = Path(tmpdir) / "snapshot.json"
-        self.assertFalse(snap.write_snapshot({"bad": float("nan")}, path))
+        self.assertIs(snap.write_snapshot({"bad": float("nan")}, path), snap.SnapshotWrite.FAILED)
         self.assertFalse(path.exists())
 
     def test_stale_writer_cannot_replace_newer_snapshot(self) -> None:
@@ -1363,8 +1366,8 @@ class TestAtomicWrite(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "snapshot.json"
-            self.assertTrue(snap.write_snapshot(newer, path))
-            self.assertTrue(snap.write_snapshot(older, path))
+            self.assertIs(snap.write_snapshot(newer, path), snap.SnapshotWrite.WRITTEN)
+            self.assertIs(snap.write_snapshot(older, path), snap.SnapshotWrite.SKIPPED_STALE)
             self.assertEqual(snap.read_prior_snapshot(path), newer)
 
     def test_untrusted_incoming_timestamp_preserves_valid_current_snapshot(self) -> None:
@@ -1379,12 +1382,12 @@ class TestAtomicWrite(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "snapshot.json"
-            self.assertTrue(snap.write_snapshot(current, path))
+            self.assertIs(snap.write_snapshot(current, path), snap.SnapshotWrite.WRITTEN)
             original = path.read_bytes()
 
             for label, candidate in candidates:
                 with self.subTest(label=label):
-                    self.assertFalse(snap.write_snapshot(candidate, path))
+                    self.assertIs(snap.write_snapshot(candidate, path), snap.SnapshotWrite.FAILED)
                     self.assertEqual(path.read_bytes(), original)
 
     def test_untrusted_timestamp_is_allowed_without_valid_current_snapshot(self) -> None:
@@ -1400,14 +1403,14 @@ class TestAtomicWrite(unittest.TestCase):
                 tempfile.TemporaryDirectory() as tmpdir,
             ):
                 path = Path(tmpdir) / "snapshot.json"
-                self.assertTrue(snap.write_snapshot(candidate, path))
+                self.assertIs(snap.write_snapshot(candidate, path), snap.SnapshotWrite.WRITTEN)
                 self.assertEqual(snap.read_prior_snapshot(path), candidate)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "snapshot.json"
             path.write_text(json.dumps({"updated_at": "not-a-timestamp"}), encoding="utf-8")
             candidate = {"updated_at": None, "providers": []}
-            self.assertTrue(snap.write_snapshot(candidate, path))
+            self.assertIs(snap.write_snapshot(candidate, path), snap.SnapshotWrite.WRITTEN)
             self.assertEqual(snap.read_prior_snapshot(path), candidate)
 
     def test_project_data_drops_nonfinite_allowlisted_values(self) -> None:

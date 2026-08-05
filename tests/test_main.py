@@ -40,6 +40,7 @@ from gradus.__main__ import (
     parse_args,
 )
 from gradus.providers import ProviderSnapshot, set_headless
+from gradus.snapshot import SnapshotWrite
 from gradus.ui import THEME, build_dashboard
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
@@ -810,14 +811,17 @@ class WriteSnapshotTests(unittest.TestCase):
         snapshots: list[ProviderSnapshot],
         *,
         providers: str | None = None,
-        write_ok: bool | list[bool] = True,
+        write_ok: bool | SnapshotWrite | list[bool | SnapshotWrite] = True,
     ):
         """Drive ``main()`` down the ``--write-snapshot`` branch under full spying.
 
         Args:
             snapshots: What ``collect_snapshots`` should return.
             providers: Optional ``--providers`` filter value.
-            write_ok: What the patched ``write_snapshot`` returns per call.
+            write_ok: What the patched ``write_snapshot`` returns per call. A
+                bool is a shorthand for ``WRITTEN``/``FAILED``; pass a
+                :class:`SnapshotWrite` directly to exercise ``SKIPPED_STALE``,
+                which is neither a success nor a failure.
 
         Returns:
             A ``SimpleNamespace`` of the return code, captured payload, and mocks.
@@ -834,7 +838,11 @@ class WriteSnapshotTests(unittest.TestCase):
                 result = write_ok[len(captured) - 1]
             else:
                 result = write_ok
-            if result and payload["schema_version"] == 2:
+            if not isinstance(result, SnapshotWrite):
+                result = SnapshotWrite.WRITTEN if result else SnapshotWrite.FAILED
+            # Only a real write changes what a subsequent read sees; a stale
+            # skip leaves whatever the winning writer already committed.
+            if result is SnapshotWrite.WRITTEN and payload["schema_version"] == 2:
                 committed_v2 = payload
             return result
 
@@ -955,7 +963,11 @@ class WriteSnapshotTests(unittest.TestCase):
 
         res = self._drive(self._snapshots())
         self.assertEqual([payload["schema_version"] for payload in res.payloads], [1, 2])
-        self.assertEqual(len(res.write_args[0]), 0)
+        # Both writes name their destination. v1 used to rely on
+        # `write_snapshot`'s default, which binds `snapshot.py`'s SNAPSHOT_PATH
+        # at import time -- so a caller patching `__main__.SNAPSHOT_PATH` got a
+        # redirected read and an unredirected write.
+        self.assertEqual(len(res.write_args[0]), 1)
         self.assertEqual(len(res.write_args[1]), 1)
         for payload in res.payloads:
             updated = datetime.fromisoformat(payload["updated_at"])
@@ -995,11 +1007,11 @@ class HistoryPersistenceIntegrationTests(unittest.TestCase):
             v2_path = state_dir / "snapshot-v2.json"
             statuses: list[str] = []
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 path = args[0] if args else v1_path
                 assert isinstance(path, Path)
                 path.write_text(json.dumps(payload), encoding="utf-8")
-                return True
+                return SnapshotWrite.WRITTEN
 
             with (
                 patch("gradus.__main__.SNAPSHOT_PATH", v1_path),
@@ -1040,11 +1052,11 @@ class HistoryPersistenceIntegrationTests(unittest.TestCase):
             def fake_read(path: Path) -> dict | None:
                 return current_v2 if path == v2_path else None
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 nonlocal current_v2
                 if args and args[0] == v2_path:
                     current_v2 = stale
-                return True
+                return SnapshotWrite.WRITTEN
 
             with (
                 patch("gradus.__main__.SNAPSHOT_PATH", v1_path),
@@ -1065,11 +1077,11 @@ class HistoryPersistenceIntegrationTests(unittest.TestCase):
             v1_path = state_dir / "snapshot.json"
             v2_path = state_dir / "snapshot-v2.json"
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 path = args[0] if args else v1_path
                 assert isinstance(path, Path)
                 path.write_text(json.dumps(payload), encoding="utf-8")
-                return True
+                return SnapshotWrite.WRITTEN
 
             with (
                 patch("gradus.__main__.SNAPSHOT_PATH", v1_path),
@@ -1082,6 +1094,81 @@ class HistoryPersistenceIntegrationTests(unittest.TestCase):
             self.assertEqual(result, (True, True, False))
             self.assertTrue(v2_path.exists())
             self.assertEqual(json.loads(v2_path.read_text(encoding="utf-8"))["schema_version"], 2)
+
+    def test_losing_a_write_race_is_not_reported_as_a_persistence_failure(self) -> None:
+        """A stale skip defers journaling to the winner instead of failing.
+
+        Gradus runs two writers on overlapping 120s cycles (the TUI and the
+        launchd job), so one loses every cycle. Before this was fixed,
+        ``write_snapshot`` returned True for the skip, the caller's readback
+        check then failed, and a correct no-op was logged as
+        ``v1=True v2=True history=False`` every two minutes for over a day.
+        """
+        statuses: list[str] = []
+        with (
+            patch("gradus.__main__.SNAPSHOT_PATH", Path("/nonexistent/snapshot.json")),
+            patch("gradus.__main__.SNAPSHOT_V2_PATH", Path("/nonexistent/snapshot-v2.json")),
+            patch("gradus.__main__.read_prior_snapshot", return_value=None),
+            patch("gradus.__main__.write_snapshot", return_value=SnapshotWrite.SKIPPED_STALE),
+            patch("gradus.__main__.append_history_record") as journal,
+        ):
+            result = _write_snapshot_versions(
+                self._snapshots(), NOW, on_status=statuses.append, journal_history=True
+            )
+
+        self.assertEqual(result, (True, True, True))
+        # The winner already journaled this cycle; appending here would either
+        # duplicate its record or write a superseded one.
+        journal.assert_not_called()
+        self.assertIn("schema-v2 superseded by newer snapshot", statuses)
+        self.assertIn("history deferred to concurrent writer", statuses)
+        self.assertNotIn("history persistence failed", statuses)
+
+    def test_readback_of_a_newer_payload_defers_rather_than_failing(self) -> None:
+        """Being overtaken between the write and the readback is also benign.
+
+        Distinct from the stale-skip path: here the write did land, and a
+        concurrent writer replaced it a moment later. That writer journals its
+        own payload, so there is nothing lost -- but the readback no longer
+        matches, which is the same signal a genuinely broken write produces.
+        """
+        newer = {
+            "schema_version": 2,
+            "updated_at": (NOW + timedelta(seconds=30)).astimezone().isoformat(),
+            "providers": [],
+        }
+        statuses: list[str] = []
+        with (
+            patch("gradus.__main__.SNAPSHOT_PATH", Path("/nonexistent/snapshot.json")),
+            patch("gradus.__main__.SNAPSHOT_V2_PATH", Path("/nonexistent/snapshot-v2.json")),
+            patch("gradus.__main__.read_prior_snapshot", return_value=newer),
+            patch("gradus.__main__.write_snapshot", return_value=SnapshotWrite.WRITTEN),
+            patch("gradus.__main__.append_history_record") as journal,
+        ):
+            result = _write_snapshot_versions(
+                self._snapshots(), NOW, on_status=statuses.append, journal_history=True
+            )
+
+        self.assertEqual(result, (True, True, True))
+        journal.assert_not_called()
+        self.assertIn("history deferred to concurrent writer", statuses)
+
+    def test_stale_skip_still_reports_a_real_write_failure(self) -> None:
+        """Deferring must not become a way for genuine IO failures to read green."""
+        with (
+            patch("gradus.__main__.SNAPSHOT_PATH", Path("/nonexistent/snapshot.json")),
+            patch("gradus.__main__.SNAPSHOT_V2_PATH", Path("/nonexistent/snapshot-v2.json")),
+            patch("gradus.__main__.read_prior_snapshot", return_value=None),
+            patch(
+                "gradus.__main__.write_snapshot",
+                side_effect=[SnapshotWrite.SKIPPED_STALE, SnapshotWrite.FAILED],
+            ),
+            patch("gradus.__main__.append_history_record") as journal,
+        ):
+            result = _write_snapshot_versions(self._snapshots(), NOW, journal_history=True)
+
+        self.assertEqual(result, (True, False, False))
+        journal.assert_not_called()
 
 
 class TestCredentialAwareRefresh(unittest.TestCase):
@@ -1148,12 +1235,12 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                     },
                 )
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 nonlocal committed_v2
                 payloads.append(payload)
                 if payload["schema_version"] == 2:
                     committed_v2 = payload
-                return True
+                return SnapshotWrite.WRITTEN
 
             def fake_read(path: Path | None = None) -> dict | None:
                 if path is not None and path.name == "snapshot-v2.json":
@@ -1228,12 +1315,12 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             payloads: list[dict] = []
             committed_v2: dict | None = None
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 nonlocal committed_v2
                 payloads.append(payload)
                 if payload["schema_version"] == 2:
                     committed_v2 = payload
-                return True
+                return SnapshotWrite.WRITTEN
 
             def fake_read(path: Path | None = None) -> dict | None:
                 if path is not None and path.name == "snapshot-v2.json":
@@ -1337,7 +1424,7 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             statuses: list[str] = []
 
-            def real_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def real_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 path = args[0] if args else v1_path
                 assert isinstance(path, Path)
                 return snapshot_module.write_snapshot(payload, path, **kwargs)
@@ -1435,11 +1522,11 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                     if heartbeat_count >= 2:
                         second_heartbeat_seen.set()
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 nonlocal committed_v2
                 if payload["schema_version"] == 2:
                     committed_v2 = payload
-                return True
+                return SnapshotWrite.WRITTEN
 
             def fake_read(path: Path | None = None) -> dict | None:
                 if path is not None and path.name == "snapshot-v2.json":
@@ -1495,11 +1582,11 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             providers = [("Codex", provider)]
             committed_v2: dict | None = None
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 nonlocal committed_v2
                 if payload["schema_version"] == 2:
                     committed_v2 = payload
-                return True
+                return SnapshotWrite.WRITTEN
 
             def fake_read(path: Path | None = None) -> dict | None:
                 if path is not None and path.name == "snapshot-v2.json":
@@ -1596,6 +1683,54 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             lock_path.mkdir()
             self.assertEqual(_acquire_refresh_snapshot_lock(state_path), (None, False))
 
+    def test_refresh_exits_zero_when_it_loses_the_write_race(self) -> None:
+        """Losing to a concurrent writer is a successful run, not a failed job.
+
+        ``~/.launchd/scripts/gradus_snapshot.sh`` ``exec``s this command, so the
+        exit code goes straight to launchd. While ``write_snapshot`` reported a
+        stale skip as a plain success, the readback check downstream failed and
+        this path returned 1 -- launchd recorded a failure for a job that had
+        correctly declined to overwrite newer data with older.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            stderr = StringIO()
+
+            with (
+                patch("gradus.__main__.parse_args", return_value=self._namespace()),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch("gradus.__main__.os.getcwd", return_value=tmp),
+                patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                patch(
+                    "gradus.__main__.initialize_providers",
+                    return_value=([("Codex", MagicMock())], []),
+                ),
+                patch(
+                    "gradus.__main__.fetch_provider_snapshot",
+                    return_value=ProviderSnapshot(
+                        name="Codex",
+                        ok=True,
+                        source="api",
+                        data={"five_hour_percent_left": 50},
+                    ),
+                ),
+                patch("gradus.__main__.read_prior_snapshot", return_value=None),
+                patch(
+                    "gradus.__main__.write_snapshot",
+                    return_value=SnapshotWrite.SKIPPED_STALE,
+                ),
+                patch("gradus.__main__.append_history_record") as journal,
+                patch("gradus.__main__.sys.stderr", stderr),
+            ):
+                self.assertEqual(main(), 0)
+
+            journal.assert_not_called()
+            status = stderr.getvalue()
+            self.assertIn("refresh: completed", status)
+            self.assertNotIn("refresh: failed", status)
+
     def test_refresh_reports_static_initialization_failure_immediately_and_safely(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".state"
@@ -1607,11 +1742,11 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             committed_v2: dict | None = None
             stderr = StringIO()
 
-            def fake_write(payload: dict, *args: object, **kwargs: object) -> bool:
+            def fake_write(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
                 nonlocal committed_v2
                 if payload["schema_version"] == 2:
                     committed_v2 = payload
-                return True
+                return SnapshotWrite.WRITTEN
 
             def fake_read(path: Path | None = None) -> dict | None:
                 if path is not None and path.name == "snapshot-v2.json":
@@ -1669,7 +1804,7 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 ),
                 patch(
                     "gradus.__main__.write_snapshot",
-                    side_effect=[False, OSError("raw token details")],
+                    side_effect=[SnapshotWrite.FAILED, OSError("raw token details")],
                 ),
                 patch("gradus.__main__.sys.stderr", stderr),
             ):
@@ -1989,12 +2124,12 @@ class HeadlessGateTests(unittest.TestCase):
         captured_payloads: list[dict[str, object]] = []
         committed_v2: dict[str, object] | None = None
 
-        def fake_write(payload: object, *args: object, **kwargs: object) -> bool:
+        def fake_write(payload: object, *args: object, **kwargs: object) -> SnapshotWrite:
             nonlocal committed_v2
             captured_payloads.append(payload)  # type: ignore[arg-type]
             if isinstance(payload, dict) and payload.get("schema_version") == 2:
                 committed_v2 = payload
-            return True
+            return SnapshotWrite.WRITTEN
 
         def fake_read(path: Path | None = None) -> dict[str, object] | None:
             if path is not None and path.name == "snapshot-v2.json":

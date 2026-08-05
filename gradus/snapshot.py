@@ -22,6 +22,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -41,6 +42,43 @@ SNAPSHOT_V2_PATH = Path(__file__).resolve().parent.parent / ".state" / "snapshot
 
 # Stop serving cached data after this many seconds (moved from __main__.py).
 STALE_THRESHOLD_SECONDS = 300  # 5 minutes
+
+
+class SnapshotWrite(Enum):
+    """The outcome of a :func:`write_snapshot` call.
+
+    This is deliberately not a ``bool``. ``write_snapshot`` has two distinct
+    non-error outcomes -- it wrote the caller's payload, or it declined to
+    because the file on disk is already newer -- and a caller that needs to
+    know which one happened (for example, to decide whether it owns this
+    cycle's history journal) cannot recover that from a single flag. Returning
+    ``True`` for both is what made a correct no-op read as a persistence
+    failure on every cycle of a two-writer race.
+    """
+
+    WRITTEN = "written"
+    """The payload was atomically committed to the path."""
+
+    SKIPPED_STALE = "skipped_stale"
+    """A newer payload is already on disk; the write was correctly declined.
+
+    Not an error. The file is fresher than what this caller offered, so
+    whichever writer put it there owns any downstream work for that payload.
+    """
+
+    FAILED = "failed"
+    """The payload was not committed: lock, serialization, or IO failure."""
+
+    @property
+    def persisted(self) -> bool:
+        """Whether the path holds this payload or a newer one.
+
+        True for both :attr:`WRITTEN` and :attr:`SKIPPED_STALE`. This is the
+        right question for "is the destination healthy"; it is the wrong
+        question for "should I do the follow-up work for my payload" -- use
+        ``is SnapshotWrite.WRITTEN`` for that.
+        """
+        return self is not SnapshotWrite.FAILED
 
 
 def percent_is_valid(percent_left: object) -> bool:
@@ -1129,7 +1167,7 @@ def write_snapshot(
     on_progress: Callable[[str], None] | None = None,
     lock_timeout: float | None = None,
     lock_poll_interval: float = 0.1,
-) -> bool:
+) -> SnapshotWrite:
     """Atomically persist a payload to ``path``. Never raises.
 
     Writes to a unique temp file (safe under concurrent writers), fsyncs, then
@@ -1151,7 +1189,12 @@ def write_snapshot(
         lock_poll_interval: Maximum seconds between bounded lock attempts.
 
     Returns:
-        True on success, False on any error.
+        :class:`SnapshotWrite` -- ``WRITTEN`` if this payload was committed,
+        ``SKIPPED_STALE`` if a newer payload was already on disk and the write
+        was correctly declined, ``FAILED`` on any error. Callers deciding
+        whether to do follow-up work for *their* payload (history journaling,
+        publishing) must check for ``WRITTEN`` specifically; ``SKIPPED_STALE``
+        means another writer owns that payload and its follow-up work.
     """
     path = Path(path)
     tmp: str | None = None
@@ -1166,7 +1209,7 @@ def write_snapshot(
                 lock_timeout=lock_timeout,
                 lock_poll_interval=lock_poll_interval,
             ):
-                return False
+                return SnapshotWrite.FAILED
             try:
                 incoming_updated_at = _parse_aware_iso_timestamp(payload.get("updated_at"))
                 current = read_prior_snapshot(path)
@@ -1175,14 +1218,14 @@ def write_snapshot(
                 )
                 if incoming_updated_at is None and current_updated_at is not None:
                     log.warning("refusing snapshot write with invalid updated_at to %s", path)
-                    return False
+                    return SnapshotWrite.FAILED
                 if (
                     incoming_updated_at is not None
                     and current_updated_at is not None
                     and current_updated_at > incoming_updated_at
                 ):
                     log.info("skipping stale snapshot write to %s", path)
-                    return True
+                    return SnapshotWrite.SKIPPED_STALE
 
                 fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="snapshot.", suffix=".tmp")
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1192,7 +1235,7 @@ def write_snapshot(
                 os.replace(tmp, path)
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        return True
+        return SnapshotWrite.WRITTEN
     except Exception:  # noqa: BLE001 - persistence must never crash the caller
         log.warning("failed to write snapshot to %s", path, exc_info=True)
         if tmp is not None:
@@ -1200,7 +1243,7 @@ def write_snapshot(
                 os.unlink(tmp)
             except OSError:
                 pass
-        return False
+        return SnapshotWrite.FAILED
 
 
 def _acquire_snapshot_lock(
