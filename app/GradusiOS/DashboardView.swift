@@ -64,9 +64,9 @@ struct DashboardContent: View {
     /// `nil` means "follow the size class". Tests pass an explicit value.
     private let layoutOverride: DashboardLayout?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    /// Row-tap navigation target (P4/T4.2): set on tap of either the hero
-    /// `StatTile` or a compact ranked-row `StatTile`, pushing
-    /// `ProviderDetailView` for that provider. Tracked by `providerName`
+    /// Row-tap navigation target (P4/T4.2): set on tap of any
+    /// `ProviderDensityCard`, pushing `ProviderDetailView` for that provider.
+    /// Same behavior in both layouts (INV-12). Tracked by `providerName`
     /// (not the `ProviderStatus` value itself) since `ProviderStatus` isn't
     /// `Hashable` and `.navigationDestination(item:)` requires that --
     /// looking the provider back up from `viewModel.providers` by name

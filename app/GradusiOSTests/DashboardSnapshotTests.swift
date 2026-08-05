@@ -147,9 +147,12 @@ private func paceDivergentProviders() -> [ProviderStatus] {
 }
 
 // P3/T3.3 gate: under the corrected ranking (Key decision #6), `cursor`
-// (errored, tier 1) is the hero -- not `codex` (62%, the highest percent) --
-// so these snapshots assert the error-variant `StatTile` renders as the
-// hero, with the rest of `sampleProviders()` following in ranked order.
+// (errored, tier 1) sorts first -- not `codex` (62%, the highest percent) --
+// so these snapshots assert the errored provider's card renders first, with
+// the rest of `sampleProviders()` following in ranked order. The hero tile
+// these were written against is gone (INV-12 dense layout); the ranking
+// assertion survives it because ordering, not tile size, is what P3/T3.3
+// gates.
 // Supersedes the old pre-ranking `dashboardRendersPopulatedCards*` pair
 // (deleted here, along with their baselines): same view model, same
 // fixture, now covered by these two under the rewritten `DashboardView`.

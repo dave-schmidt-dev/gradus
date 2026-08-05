@@ -35,10 +35,11 @@ SIM_OS_VERSION="26.5"
 SIM_RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 
-# iPad Option B renders only at the regular horizontal size class, which the
-# iPhone destination never reaches -- so the dense grid's routing and its
-# tap-to-detail wiring had no destination that could execute them. Pinned to
-# the 11-inch (834x1194 points) because that is exactly the geometry
+# The iPad destination exists because it is the only one where the adaptive
+# grid resolves to more than one column -- the iPhone now runs the same dense
+# cards in a single column (INV-12), so both destinations execute
+# `DensityLayoutXCUITests` for real and neither is proven by the other.
+# Pinned to the 11-inch (834x1194 points) because that is exactly the geometry
 # `DensityLayoutSnapshotTests` records its baselines at; a different iPad
 # would still be "regular width" but would no longer describe the same layout
 # the snapshots do. Only `GradusiOSUITests` runs here -- rerunning the whole
@@ -126,10 +127,11 @@ xcodebuild test \
   -destination "platform=iOS Simulator,id=$sim_udid" \
   -allowProvisioningUpdates
 
-# `DensityLayoutXCUITests` self-skips on the iPhone destination above, so this
-# step is the only place iPad Option B's routing and tap-to-detail wiring are
-# executed at all. If this step is ever removed, that file goes silently green
-# rather than failing -- which is why it is a named, separate gate line.
+# `DensityLayoutXCUITests` runs on the iPhone destination above too, but only
+# here does the adaptive grid resolve to multiple columns. The test carries no
+# idiom skip, so removing this step would not make it go silently green -- it
+# would just stop covering the multi-column geometry. Kept as a named,
+# separate gate line so that loss is visible if anyone deletes it.
 echo "==> xcodebuild test — GradusiOS UI tests ($IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION simulator)"
 xcodebuild test \
   -project Gradus.xcodeproj \

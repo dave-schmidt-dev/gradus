@@ -74,17 +74,22 @@ final class DashboardXCUITests: XCTestCase {
         }
 
         // P3/T3.3: under `rankProviders`' corrected ranking (Key decision
-        // #6), the errored provider (`cursor`, tier 1) is always the hero --
-        // never the highest-percent `ok` provider (`codex`, tier 3 here,
-        // since it has neither `isWarning` nor a locally-urgent window). The
-        // original assertions here waited on "Codex" first with no ordering
-        // check at all; that happened to still pass under the old
-        // alphabetical/no-sort behavior but asserted nothing about which
-        // provider is hero. Wait on "Cursor" first (it's the hero, so it's
-        // guaranteed to render on the very first frame, once nothing is
-        // covering it) and assert its error-variant `StatTile` body
-        // ("transient fetch failure") renders, then assert `codex`'s
-        // compact row renders in the rest-of-list.
+        // #6), the errored provider (`cursor`, tier 1) sorts first -- never
+        // the highest-percent `ok` provider (`codex`, tier 3 here, since it
+        // has neither `isWarning` nor a locally-urgent window). The original
+        // assertions here waited on "Codex" first with no ordering check at
+        // all; that happened to still pass under the old alphabetical/no-sort
+        // behavior but asserted nothing about ordering. Wait on "Cursor"
+        // first (it sorts first, so it renders on the very first frame once
+        // nothing is covering it) and assert its error body ("transient fetch
+        // failure") renders, then assert `codex` renders too.
+        //
+        // The error text came from `StatTile`'s error variant when this was
+        // written; since the dense layout (INV-12) it comes from
+        // `ProviderDensityCard.swift:48`. The assertion is unchanged because
+        // both render `provider.errorMessage` verbatim -- what is being
+        // checked is that an errored provider still shows its reason, not
+        // which view draws it.
         let deadline = Date().addingTimeInterval(20)
         var foundCursor = false
         repeat {
