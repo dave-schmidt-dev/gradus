@@ -1,16 +1,9 @@
 # Changelog
 
 User-facing release notes for Gradus. Each semantic product version gets one
-entry here, including a concise `### TestFlight focus` list. Individual
-TestFlight candidate builds and re-upload reasons stay in `HISTORY.md`.
-
-This file is the tester-facing source. It previously claimed the focus text
-“is copied into App Store Connect's ‘What to Test’ field”, which nothing ever
-did — `testflight-setup.py` has no `betaBuildLocalizations` call. The
-sole tester reads this file directly, so the claim was removed rather than
-automated: a documented step no tool performs and no gate checks is worse
-than an absent one. If the tester list ever grows beyond people with repo
-access, the automation becomes worth building.
+entry here, including a concise `### TestFlight focus` list. This file is the
+tester-facing source for that list. Individual TestFlight candidate builds and
+re-upload reasons stay in `HISTORY.md`.
 
 The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use

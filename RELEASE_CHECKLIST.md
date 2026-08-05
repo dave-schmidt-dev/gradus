@@ -20,6 +20,23 @@ Before the TestFlight upload:
 3. Build GradusMac with the entitlements for the CloudKit environment being
    exercised, launch that binary locally, and confirm it publishes the new
    contract/data. A local republish does not require notarization.
+
+   GradusMac emits no log of its own, so read `cloudd`'s:
+
+   ```
+   /usr/bin/log show --predicate 'process == "cloudd"' --last 30m \
+     --info --debug --style compact | grep -i gradus
+   ```
+
+   Expect `environment=Production`, `zoneName=GradusZone`, and one
+   `was successfully saved to the server` line per provider record. Three
+   details are not optional: `/usr/bin/log` (in zsh, bare `log` is a shell
+   builtin that fails with `too many arguments`), `--info --debug` (CloudKit
+   logs at `info`; the default level filters it out), and **not** redirecting
+   stderr to `/dev/null` — that combination silently produced "the app emits
+   nothing" twice, and the wrong conclusion reached the docs both times.
+   This proves successful publishes only; a failed one is still invisible
+   until the app does its own logging.
 4. Upload the iOS artifact only after the Mac publish evidence is present.
 5. If the Mac artifact itself is being distributed, run the notarization gate
    too; local publisher verification alone is not a distribution artifact.
