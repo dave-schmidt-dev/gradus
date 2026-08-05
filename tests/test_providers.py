@@ -217,6 +217,191 @@ class FetchProviderSnapshotTests(unittest.TestCase):
         self.assertFalse(_is_transient_probe_error(snapshot))
 
 
+class NetworkFailureClassificationTests(unittest.TestCase):
+    """Every provider must classify an unreachable network as *transient*.
+
+    The contract this locks: a provider's failure message is not free prose,
+    it is the input to ``snapshot._is_transient_probe_error``, which decides
+    whether ``_merge_with_previous`` serves the last-known-good reading or
+    publishes a failure card to iPhone and iPad. Classification has to run off
+    the string because it also runs against snapshots read back from disk,
+    where the original exception is long gone -- so provider wording is a de
+    facto API, and this is the test that says so.
+
+    It existed because nothing did. OpenCode Go and Vibe both caught
+    ``URLError`` correctly and then described it in accurate English that
+    matched no marker ("Could not reach opencode.ai"), so a DNS blip read as a
+    hard failure on both devices. Cursor is included even though it has always
+    been correct -- an untested correct case is one refactor from being an
+    untested broken one.
+    """
+
+    def _dns_failure(self):
+        import socket
+        import urllib.error
+
+        # A real resolver failure, not a synthetic string: gaierror is what
+        # macOS actually raises when the network drops mid-probe.
+        return urllib.error.URLError(socket.gaierror(8, "nodename nor servname provided"))
+
+    def _assert_transient(self, snapshot: ProviderSnapshot, *, provider: str) -> None:
+        self.assertFalse(snapshot.ok, f"{provider}: probe should have failed")
+        self.assertTrue(
+            _is_transient_probe_error(snapshot),
+            f"{provider}: {snapshot.error!r} matches no transient marker, so a "
+            f"network blip would publish a failure card instead of serving cache",
+        )
+        # A network error must not be mistaken for an auth problem: that would
+        # offer the user a `login` fix action for a failure logging in cannot fix.
+        self.assertFalse(_is_auth_error(snapshot), f"{provider}: misread as an auth error")
+
+    def test_opencode_go_dns_failure_is_transient(self) -> None:
+        provider = OpenCodeGoProvider()
+        provider._auth_cookie = "cookie-value"  # skips _acquire's disk path
+        opener = MagicMock()
+        opener.open.side_effect = self._dns_failure()
+
+        with patch("urllib.request.build_opener", return_value=opener):
+            snapshot = fetch_provider_snapshot("OpenCode Go", provider, debug=False)
+
+        self._assert_transient(snapshot, provider="OpenCode Go")
+
+    def test_vibe_dns_failure_is_transient(self) -> None:
+        provider = VibeProvider(project_root="/nonexistent")
+        provider._ory_name = "ory_session"
+        provider._ory_value = "value"
+        provider._csrf = "csrf"
+
+        with patch("urllib.request.urlopen", side_effect=self._dns_failure()):
+            snapshot = fetch_provider_snapshot("Vibe", provider, debug=False)
+
+        self._assert_transient(snapshot, provider="Vibe")
+
+    def test_cursor_dns_failure_is_transient(self) -> None:
+        """Cursor is already correct; this pins it.
+
+        `cursor.fetch` catches ``(OSError, URLError)`` together, which works
+        because ``URLError`` derives from ``OSError``. Narrowing that handler
+        later would silently reopen the same bug.
+        """
+        provider = CursorProvider()
+        provider._access_token = "token"
+
+        with patch("urllib.request.urlopen", side_effect=self._dns_failure()):
+            snapshot = fetch_provider_snapshot("Cursor", provider, debug=False)
+
+        self._assert_transient(snapshot, provider="Cursor")
+
+    def test_cursor_network_blip_on_the_post_refresh_retry_is_transient(self) -> None:
+        """401 → refresh → blip. The retry sits inside the HTTPError block.
+
+        Its sibling ``except (OSError, URLError)`` cannot catch it, so before
+        this the blip escaped to the catch-all and read as a hard failure.
+        """
+        import urllib.error
+
+        provider = CursorProvider()
+        provider._access_token = "token"
+        provider._refresh_token = "refresh"
+
+        responses = [
+            urllib.error.HTTPError("https://api.cursor.com", 401, "Unauthorized", {}, None),
+            self._dns_failure(),
+        ]
+        with (
+            patch.object(CursorProvider, "_do_token_refresh"),
+            patch.object(CursorProvider, "_can_refresh", True),
+            patch.object(CursorProvider, "_api_post", side_effect=responses),
+        ):
+            snapshot = fetch_provider_snapshot("Cursor", provider, debug=False)
+
+        self._assert_transient(snapshot, provider="Cursor retry")
+        # Two layers now cover this, and they are not equivalent. Without the
+        # retry's own handler the exception still escapes to the catch-all,
+        # where `_safe_probe_error`'s URLError backstop maps it to the generic
+        # "provider probe network error" -- transient, so the merge behavior is
+        # already correct. Asserting the provider-specific wording is what
+        # distinguishes the two, and it is the reason to keep both: the
+        # backstop cannot name the provider or the cause.
+        self.assertIn("Cursor API network error", snapshot.error)
+
+    def test_cursor_401_surviving_the_refresh_is_actionable_not_generic(self) -> None:
+        """A dead session must say so, not collapse to "provider probe failed".
+
+        This is the same escape as above with the opposite required outcome:
+        the user can fix it by signing in, so the message has to reach
+        ``_is_auth_error`` and light up the fix action.
+        """
+        import urllib.error
+
+        provider = CursorProvider()
+        provider._access_token = "token"
+        provider._refresh_token = "refresh"
+
+        unauthorized = lambda: urllib.error.HTTPError(  # noqa: E731
+            "https://api.cursor.com", 401, "Unauthorized", {}, None
+        )
+        with (
+            patch.object(CursorProvider, "_do_token_refresh"),
+            patch.object(CursorProvider, "_can_refresh", True),
+            patch.object(CursorProvider, "_api_post", side_effect=[unauthorized(), unauthorized()]),
+            patch.object(CursorProvider, "_clear_cache"),
+        ):
+            snapshot = fetch_provider_snapshot("Cursor", provider, debug=False)
+
+        self.assertFalse(snapshot.ok)
+        self.assertIn("session expired", snapshot.error.lower())
+        self.assertTrue(_is_auth_error(snapshot), "should offer the sign-in fix action")
+
+    def test_catch_all_backstop_maps_urlerror_but_not_httperror(self) -> None:
+        """Ordering guard inside ``_safe_probe_error``.
+
+        ``HTTPError`` subclasses ``URLError``. If the URLError branch ran
+        first, a 401 reaching the catch-all would classify as transient and
+        ``_merge_with_previous`` would serve stale data forever while hiding a
+        dead session -- silent staleness, worse than the failure card the
+        transient mapping exists to prevent.
+        """
+        import urllib.error
+
+        class Unreachable:
+            def fetch(self_inner):
+                raise self._dns_failure()
+
+        class Unauthorized:
+            def fetch(self_inner):
+                raise urllib.error.HTTPError(
+                    "https://example.invalid", 401, "Unauthorized", {}, None
+                )
+
+        transient = fetch_provider_snapshot("Codex", Unreachable(), debug=False)
+        self.assertEqual(transient.error, "provider probe network error")
+        self.assertTrue(_is_transient_probe_error(transient))
+
+        opaque = fetch_provider_snapshot("Codex", Unauthorized(), debug=False)
+        self.assertEqual(opaque.error, "provider probe failed")
+        self.assertFalse(
+            _is_transient_probe_error(opaque),
+            "a 401 must not be served from cache -- that hides a dead session",
+        )
+
+    def test_shared_http_helper_dns_failure_is_transient(self) -> None:
+        """Covers every provider that probes through ``_http_json``.
+
+        Claude, Codex, Antigravity and Copilot share this one branch, so
+        classifying it here classifies it for all four.
+        """
+
+        class FakeProvider:
+            def fetch(self_inner):
+                return _http_json("https://example.invalid/usage")
+
+        with patch("urllib.request.urlopen", side_effect=self._dns_failure()):
+            snapshot = fetch_provider_snapshot("Claude", FakeProvider(), debug=False)
+
+        self._assert_transient(snapshot, provider="_http_json")
+
+
 class FormatResetTimeTests(unittest.TestCase):
     def test_iso_string_with_z(self) -> None:
         result = _format_reset_time("2026-05-01T12:00:00Z")

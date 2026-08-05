@@ -155,7 +155,30 @@ class CursorProvider:
         except _ue.HTTPError as exc:
             if exc.code == 401 and self._can_refresh:
                 self._do_token_refresh(_ur, _ue)
-                usage_data = self._api_post(_ur, _ue, self._USAGE_URL)
+                # The retry needs its own handlers. It runs *inside* this
+                # `except HTTPError` block, so the sibling `except (OSError,
+                # URLError)` below cannot catch anything it raises -- an
+                # exception here escapes `fetch` entirely and lands in
+                # `fetch_provider_snapshot`'s catch-all, which flattens it to
+                # the opaque "provider probe failed". That cost two things: a
+                # network blip on the retry classified as a hard failure, and a
+                # 401 that survived the refresh (a genuinely dead session)
+                # reported as a generic error instead of an actionable one.
+                try:
+                    usage_data = self._api_post(_ur, _ue, self._USAGE_URL)
+                except _ue.HTTPError as retry_exc:
+                    if retry_exc.code == 401:
+                        self._access_token = None
+                        self._clear_cache()
+                        raise ProbeFailure(
+                            "Cursor session expired. Log into cursor.com to refresh.",
+                            f"HTTP {retry_exc.code}",
+                        ) from retry_exc
+                    raise ProbeFailure(
+                        f"Cursor API error: HTTP {retry_exc.code}", ""
+                    ) from retry_exc
+                except (OSError, _ue.URLError) as retry_exc:
+                    raise ProbeFailure(f"Cursor API network error: {retry_exc}", "") from retry_exc
             elif exc.code == 401:
                 self._access_token = None
                 self._clear_cache()

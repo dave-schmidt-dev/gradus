@@ -273,7 +273,11 @@ class VibeProvider:
                 ) from exc
             raise ProbeFailure(f"Mistral API returned HTTP {exc.code}", str(exc)) from exc
         except urllib.error.URLError as exc:
-            raise ProbeFailure(f"Could not reach Mistral API: {exc.reason}", str(exc)) from exc
+            # Speaks the `_is_transient_probe_error` vocabulary deliberately --
+            # see the same fix in `opencode_go._call_server_fn`. `exc.reason` is
+            # a socket-level errno, not vendor text, so it carries no credential
+            # material and is safe on the published surface.
+            raise ProbeFailure(f"Mistral API network error: {exc.reason}", str(exc)) from exc
 
         try:
             payload = json.loads(body)

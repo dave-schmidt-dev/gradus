@@ -131,8 +131,15 @@ class OpenCodeGoProvider:
                 f"HTTP {exc.code}",
             ) from exc
         except urllib.error.URLError as exc:
+            # "network error" is not decoration: `snapshot._is_transient_probe_error`
+            # matches on it, and that is what lets `_merge_with_previous` serve the
+            # last-known-good reading through a DNS blip instead of publishing a
+            # failure card. The previous wording ("Could not reach opencode.ai")
+            # was accurate English that matched no marker, so a momentary network
+            # hiccup read as a hard failure on iPhone and iPad. Follow Cursor's
+            # precedent and speak the classifier's vocabulary.
             raise ProbeFailure(
-                f"Could not reach opencode.ai: {exc.reason}", f"POST {self._SERVER_URL}"
+                f"OpenCode Go network error: {exc.reason}", f"POST {self._SERVER_URL}"
             ) from exc
         return _seroval_decode(raw)
 

@@ -280,12 +280,26 @@ def _safe_probe_error(exc: BaseException) -> str:
         A message safe to publish, chosen so retryable failures classify as
         transient. Anything unrecognized stays the opaque generic string.
     """
+    import urllib.error
+
     if isinstance(exc, TimeoutError):
         # A urllib *read* timeout is a bare TimeoutError, not a URLError, so
         # `_http_json`'s URLError branch never sees it and it lands here. This
         # is the Antigravity "The read operation timed out" case.
         return "provider probe timed out"
-    if isinstance(exc, ConnectionError):
+    if isinstance(exc, urllib.error.HTTPError):
+        # MUST precede the URLError branch: HTTPError is a *subclass* of
+        # URLError, so netting URLError first would classify a 401/403 as
+        # transient. `_merge_with_previous` would then serve stale data
+        # indefinitely and hide a genuine "you need to log in" state -- a
+        # silent-staleness failure strictly worse than the failure card this
+        # function exists to avoid. A server that answered is not a network
+        # problem, so it stays opaque.
+        return "provider probe failed"
+    if isinstance(exc, (ConnectionError, urllib.error.URLError)):
+        # Backstop for any provider that lets a URLError reach the catch-all.
+        # Every provider currently handles its own, but this is one `except`
+        # clause away from being untrue again, and the failure mode is silent.
         return "provider probe network error"
     return "provider probe failed"
 
