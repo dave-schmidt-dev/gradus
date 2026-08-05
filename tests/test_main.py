@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import logging
 import os
 import plistlib
 import subprocess
@@ -26,6 +27,7 @@ from gradus.__main__ import (
     _acquire_refresh_snapshot_lock,
     _build_fix_actions,
     _check_warnings,
+    _emit_debug_details,
     _is_auth_error,
     _is_transient_probe_error,
     _launch_fix,
@@ -33,6 +35,8 @@ from gradus.__main__ import (
     _merge_with_previous,
     _notify_warning,
     _release_refresh_snapshot_lock,
+    _resolve_log_path,
+    _setup_logging,
     _verify_refresh_health,
     _write_snapshot_versions,
     collect_snapshots,
@@ -2199,6 +2203,143 @@ class HeadlessGateTests(unittest.TestCase):
         self.assertGreaterEqual(len(captured_payloads), 1)
         copilot_entry = next(p for p in captured_payloads[0]["providers"] if p["name"] == "Copilot")
         self.assertIn(copilot_entry["ok"], (True, False))
+
+
+class LoggingSetupTests(unittest.TestCase):
+    """The log must be project-anchored, overridable, and safe to re-init."""
+
+    def test_default_log_path_is_project_anchored_not_cwd_relative(self) -> None:
+        """`local.gradus-snapshot` runs from launchd with an uncontrolled cwd.
+
+        A relative `.logs/gradus.log` would land wherever the job happened to
+        start, which is both a self-containment violation and the one place
+        nobody would look. Anchor to the package like SNAPSHOT_PATH does.
+        """
+        from gradus.__main__ import _LOG_PATH
+        from gradus.snapshot import SNAPSHOT_PATH
+
+        self.assertTrue(_LOG_PATH.is_absolute())
+        self.assertEqual(_LOG_PATH.name, "gradus.log")
+        self.assertEqual(_LOG_PATH.parent.name, ".logs")
+        # Same project root the snapshot uses, so both follow the checkout.
+        self.assertEqual(_LOG_PATH.parent.parent, SNAPSHOT_PATH.parent.parent)
+        self.assertNotIn("/tmp/", str(_LOG_PATH))
+
+    def test_env_override_is_honored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "nested" / "override.log"
+            with patch.dict(os.environ, {"GRADUS_LOG_PATH": str(target)}):
+                self.assertEqual(_resolve_log_path(), target)
+
+    def test_blank_env_override_falls_back_to_default(self) -> None:
+        from gradus.__main__ import _LOG_PATH
+
+        with patch.dict(os.environ, {"GRADUS_LOG_PATH": "   "}):
+            self.assertEqual(_resolve_log_path(), _LOG_PATH)
+
+    def test_setup_logging_does_not_stack_handlers(self) -> None:
+        """Repeat calls in one process used to duplicate every log line.
+
+        `_setup_logging` appended unconditionally, so a second call produced
+        two handlers, a third produced three, and each line was written once
+        per handler.
+        """
+        root = logging.getLogger()
+        preexisting = list(root.handlers)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "stack.log"
+            with patch.dict(os.environ, {"GRADUS_LOG_PATH": str(target)}):
+                try:
+                    for _ in range(3):
+                        _setup_logging(False)
+                        ours = [h for h in root.handlers if getattr(h, "_gradus_handler", False)]
+                        self.assertEqual(len(ours), 1)
+                    # A handler gradus did not install must survive untouched.
+                    self.assertTrue(all(h in root.handlers for h in preexisting))
+                finally:
+                    for handler in [
+                        h for h in root.handlers if getattr(h, "_gradus_handler", False)
+                    ]:
+                        root.removeHandler(handler)
+                        handler.close()
+
+    def test_setup_logging_creates_the_parent_directory(self) -> None:
+        root = logging.getLogger()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "made" / "up" / "gradus.log"
+            with patch.dict(os.environ, {"GRADUS_LOG_PATH": str(target)}):
+                try:
+                    _setup_logging(False)
+                    self.assertTrue(target.parent.is_dir())
+                finally:
+                    for handler in [
+                        h for h in root.handlers if getattr(h, "_gradus_handler", False)
+                    ]:
+                        root.removeHandler(handler)
+                        handler.close()
+
+
+class EmitDebugDetailsTests(unittest.TestCase):
+    """--debug must surface probe detail without polluting the JSON contract."""
+
+    def _snapshots(self) -> list[ProviderSnapshot]:
+        return [
+            ProviderSnapshot(name="Codex", ok=True, source="api", data={}),
+            ProviderSnapshot(
+                name="Antigravity",
+                ok=False,
+                source="api",
+                error="provider probe timed out",
+                debug_detail="The read operation timed out",
+            ),
+        ]
+
+    def test_debug_detail_goes_to_stderr_not_stdout(self) -> None:
+        """stdout is the router's parseable surface; detail belongs on stderr.
+
+        Anything written to stdout here would land inside or beside the JSON
+        document that review-plugin consumes.
+        """
+        err = StringIO()
+        out = StringIO()
+        with patch("sys.stderr", err), patch("sys.stdout", out):
+            _emit_debug_details(self._snapshots(), True)
+
+        self.assertIn("Antigravity", err.getvalue())
+        self.assertIn("The read operation timed out", err.getvalue())
+        self.assertEqual(out.getvalue(), "")
+        # Healthy providers have nothing to report.
+        self.assertNotIn("Codex", err.getvalue())
+
+    def test_no_output_without_the_debug_flag(self) -> None:
+        err = StringIO()
+        with patch("sys.stderr", err):
+            _emit_debug_details(self._snapshots(), False)
+        self.assertEqual(err.getvalue(), "")
+
+    def test_debug_detail_never_reaches_the_json_payload(self) -> None:
+        """INV-1 guard, asserted from the caller's side.
+
+        `test_render_json_data_is_safe_allowlist` covers the renderer; this
+        covers the decision to route detail around it. `debug_detail` on the
+        ProbeFailure branch carries up to 1600 chars of raw HTTP error body,
+        which is exactly what INV-1 keeps off the router-facing surface.
+        """
+        from gradus.ui import render_json
+
+        sentinel = "SENTINEL-RAW-BODY-TAIL"
+        snaps = [
+            ProviderSnapshot(
+                name="Antigravity",
+                ok=False,
+                source="api",
+                error="provider probe timed out",
+                debug_detail=f"detail with {sentinel}",
+            )
+        ]
+        rendered = render_json(snaps, datetime(2026, 8, 5, 12, 0, 0))
+        self.assertNotIn(sentinel, rendered)
+        self.assertNotIn("debug_detail", rendered)
 
 
 if __name__ == "__main__":

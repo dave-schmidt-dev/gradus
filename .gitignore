@@ -31,3 +31,7 @@ tasks.md
 # the publishing machine's hostname) must not reach a public remote either.
 # Kept on disk as durable design material, deliberately untracked.
 app/design-system/mocks/
+
+# Runtime logs (AGENTS.md: gitignored .logs/<project>.log, never scattered
+# outside the project and never committed).
+.logs/

@@ -917,25 +917,92 @@ def _cbreak_mode():
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
-_LOG_PATH = Path("/tmp/gradus.log")
+# Anchored to the package's own directory, exactly like SNAPSHOT_PATH, NOT to
+# the cwd. `local.gradus-snapshot` runs from launchd with a working directory
+# gradus does not control, so a relative `.logs/gradus.log` would scatter log
+# files wherever the job happened to start -- and the one place it would never
+# be is where someone would look for it.
+_LOG_PATH = Path(__file__).resolve().parent.parent / ".logs" / "gradus.log"
+
+# Set by the test suite so pytest's own WARNING traffic cannot rotate real
+# production evidence out of the log. An env var rather than an "am I running
+# under pytest?" sniff: the override is a behavior a test can assert on, and
+# a detection branch is not.
+_LOG_PATH_ENV_VAR = "GRADUS_LOG_PATH"
+
+
+def _resolve_log_path() -> Path:
+    """The log file to write, honoring the test-suite override.
+
+    Returns:
+        ``$GRADUS_LOG_PATH`` when set and non-empty, else the project-anchored
+        default.
+    """
+    override = os.environ.get(_LOG_PATH_ENV_VAR, "").strip()
+    return Path(override) if override else _LOG_PATH
+
+
+def _emit_debug_details(snapshots: list[ProviderSnapshot], debug: bool) -> None:
+    """Write probe failure detail to stderr and the DEBUG log under ``--debug``.
+
+    ``--debug``'s help text promises "Show full exception strings from probes",
+    and until now nothing read ``ProviderSnapshot.debug_detail`` at all --
+    recovering the Antigravity read-timeout required calling the internal
+    wrapper by hand from a Python one-liner.
+
+    Deliberately **stderr, not the JSON payload**. ``--json`` on stdout is a
+    machine contract consumed by the review-plugin router, and INV-1 keeps
+    credential material and raw HTTP bodies off it;
+    ``test_render_json_data_is_safe_allowlist`` enforces that ``debug_detail``
+    never appears there. ``debug_detail`` on the ``ProbeFailure`` branch
+    carries the last 1600 chars of the raw error body, which is precisely what
+    that invariant exists to exclude. Writing to stderr keeps stdout parseable
+    and gives the human the detail on the same terminal.
+
+    Args:
+        snapshots: The cycle's snapshots; only failed ones carry detail.
+        debug: The ``--debug`` flag. No output at all when False.
+    """
+    if not debug:
+        return
+    for snap in snapshots:
+        if snap.ok or not snap.debug_detail:
+            continue
+        log.debug("provider %s debug detail: %s", snap.name, snap.debug_detail)
+        sys.stderr.write(f"[debug] {snap.name}: {snap.debug_detail}\n")
+    sys.stderr.flush()
 
 
 def _setup_logging(debug: bool) -> None:
-    """Configure file logging with rotation. Always logs WARNING+; --debug adds DEBUG."""
+    """Configure file logging with rotation. Always logs WARNING+; --debug adds DEBUG.
+
+    Idempotent per destination: calling this twice in one process replaces the
+    gradus handler rather than stacking a second one. It previously appended
+    unconditionally, so every repeat call in a process silently doubled each
+    log line.
+    """
     from logging.handlers import RotatingFileHandler
 
+    path = _resolve_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    root = logging.getLogger()
+    for existing in [h for h in root.handlers if getattr(h, "_gradus_handler", False)]:
+        root.removeHandler(existing)
+        existing.close()
+
     handler = RotatingFileHandler(
-        _LOG_PATH,
+        path,
         maxBytes=1_000_000,  # 1 MB
         backupCount=2,  # keep .log, .log.1, .log.2
     )
+    handler._gradus_handler = True  # type: ignore[attr-defined]
     handler.setFormatter(
         logging.Formatter(
             "%(asctime)s %(levelname)s %(name)s: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
-    root = logging.getLogger()
     root.setLevel(logging.DEBUG if debug else logging.WARNING)
     root.addHandler(handler)
 
@@ -1059,6 +1126,7 @@ def main() -> int:
             snapshots = collect_snapshots(providers, args.debug)
             sys.stdout.write(render_json(snapshots, updated_at) + "\n")
             sys.stdout.flush()
+            _emit_debug_details(snapshots, args.debug)
             return 0
 
         # --once: block on initial fetch, print dashboard, exit (no alt-screen)

@@ -172,6 +172,34 @@ class FetchProviderSnapshotTests(unittest.TestCase):
             payload_json = json.dumps(build_payload([snapshot], datetime(2026, 1, 1)))
             self.assertNotIn(sentinel, payload_json)
 
+    def test_headless_debug_detail_omits_the_dump_hint_it_cannot_honor(self) -> None:
+        """Don't name a dump file that was never written.
+
+        `_write_debug_dump` is a no-op under headless (INV-2: `--json` and
+        `--write-snapshot` must have zero side effects), but `debug_detail`
+        used to embed `raw dump: <path>` unconditionally -- so the two paths a
+        human is most likely to be debugging pointed at a nonexistent file.
+        """
+        import gradus.providers as providers
+
+        class FakeProvider:
+            def fetch(self) -> None:
+                raise ProbeFailure("HTTP 500", "raw body text")
+
+        try:
+            providers.set_headless(True)
+            headless = fetch_provider_snapshot("Codex", FakeProvider(), debug=True)
+        finally:
+            providers.set_headless(False)
+
+        self.assertNotIn("raw dump:", headless.debug_detail or "")
+        # The real content still survives; only the false pointer is dropped.
+        self.assertIn("HTTP 500", headless.debug_detail or "")
+        self.assertIn("raw body text", headless.debug_detail or "")
+
+        interactive = fetch_provider_snapshot("Codex", FakeProvider(), debug=True)
+        self.assertIn("raw dump:", interactive.debug_detail or "")
+
     def test_unrecognized_exception_type_stays_opaque(self) -> None:
         """Only the two known-retryable families get a specific message.
 

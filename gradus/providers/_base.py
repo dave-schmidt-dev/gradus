@@ -303,8 +303,13 @@ def fetch_provider_snapshot(
         debug_detail = None
         if debug:
             tail = exc.raw_text[-1600:] if exc.raw_text else ""
-            dump_hint = f"raw dump: {_debug_dump_path(name)}"
-            debug_detail = f"{error}\n\n{dump_hint}\n\n{tail}".strip()
+            # Only name the dump file when one was actually written.
+            # `_write_debug_dump` is a no-op under headless (INV-2: --json and
+            # --write-snapshot must have zero side effects), so the hint used
+            # to point at a path that does not exist on exactly the paths
+            # where a human is most likely to go looking for it.
+            dump_hint = "" if _is_headless() else f"raw dump: {_debug_dump_path(name)}"
+            debug_detail = "\n\n".join(part for part in (error, dump_hint, tail) if part).strip()
         return ProviderSnapshot(
             name=name, ok=False, source=source, error=error, debug_detail=debug_detail
         )

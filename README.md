@@ -73,7 +73,15 @@ python3 -m gradus --history-at 2026-08-04T12:00:00Z --history-provider Antigravi
 ./monitor --once
 ```
 
-When `--debug` is enabled, raw captures are written to `/tmp/gradus_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches). The raw payload is **not** written into the router-facing `.state/snapshot.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free), while the debug-augmented detail is surfaced separately as `debug_detail` in `--json` output for local scripting.
+When `--debug` is enabled, raw captures are written to `/tmp/gradus_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches) — except under headless (`--json`, `--write-snapshot`), where INV-2 forbids the side effect and no capture file is written.
+
+The raw payload is **not** written into the router-facing `.state/snapshot.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free). The debug-augmented `debug_detail` goes to **stderr** under `--debug`, never into the JSON document — `--json` on stdout is a machine contract consumed by the review-plugin router, and INV-1 keeps raw HTTP bodies and credential material off it (enforced by `test_render_json_data_is_safe_allowlist`). So `gradus --json --debug > out.json` leaves `out.json` parseable while the detail lands on your terminal.
+
+Error strings published to the devices are classified by exception **type**, not message content (`providers/_base._safe_probe_error`): a `TimeoutError` becomes `"provider probe timed out"` and a `ConnectionError` becomes `"provider probe network error"`, both of which the transient classifier recognizes so the last-known-good reading is served instead of a failure card. Exception text itself is never published, because a provider exception can embed subprocess output or a signed URL.
+
+### Logs
+
+Runtime logs go to `.logs/gradus.log` (gitignored, rotating at 1 MB with two backups), anchored to the package directory rather than the working directory — `local.gradus-snapshot` runs from launchd with a cwd gradus does not control. WARNING and above are always recorded; `--debug` adds DEBUG. Set `GRADUS_LOG_PATH` to redirect; the test suite sets it (see `tests/conftest.py`) so pytest's own warnings cannot rotate real production evidence out of the log.
 
 Optional config file (`.gradus.json` in your current working directory; legacy `.ai_monitor.json` also read as a fallback):
 
