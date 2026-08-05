@@ -9,7 +9,10 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
-## Unreleased
+## 1.6.0 — 2026-08-05
+
+The iPhone half of the layout 1.5.0 shipped on iPad. Same artifact, same
+version: an iPhone-only or iPad-only release is not a thing (INV-12).
 
 ### Changed
 
