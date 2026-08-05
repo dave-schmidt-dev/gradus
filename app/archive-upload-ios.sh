@@ -177,7 +177,8 @@ main() {
     --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"
 
   echo "==> Done. Build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."
-  echo "    Run the human-terminal TestFlight setup command for build $NEXT_BUILD."
+  echo "    To wait for processing and assign it to Internal Testers:"
+  echo "    bws-secret-exec app-store-connect-testflight-setup -- $NEXT_BUILD"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

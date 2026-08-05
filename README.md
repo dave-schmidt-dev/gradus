@@ -327,10 +327,10 @@ cd app
 bws-secret-exec app-store-connect-upload --        # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
 # Human-terminal compatibility path remains available:
 # bws-run -- ./archive-upload-ios.sh
-bws-run -- uv run --with pyjwt --with cryptography testflight-setup.py <build>  # assigns the build to Internal Testers
+bws-secret-exec app-store-connect-testflight-setup -- <build>  # waits for processing and assigns the build to Internal Testers
 ```
 
-`archive-upload-ios.sh` prints the exact `testflight-setup.py` follow-up command (with the build number it just uploaded) as its last line.
+`archive-upload-ios.sh` prints the exact fixed-consumer follow-up command (with the build number it just uploaded) as its last line.
 
 ### Notarizing GradusMac
 
