@@ -33,6 +33,19 @@ public func freshness(observedAt: String?, now: Date) -> ObservationFreshness {
     return .stale(ageDisplay: formattedAge(age))
 }
 
+/// Bucketed age of a known timestamp, in the same `<1m`/`Xm`/`Xh` format
+/// `freshness` uses.
+///
+/// Unlike `freshness` this applies no threshold — it labels any age, including
+/// a fresh one. That is what a persistent "synced Xm ago" header needs, where
+/// `freshness` would collapse everything under `staleThresholdSeconds` into a
+/// single `.fresh` case and lose the number. Shares `formattedAge` with
+/// `freshness` rather than restating the buckets, so the header and the stale
+/// badge cannot disagree about what "5m" means.
+public func ageLabel(since date: Date, now: Date) -> String {
+    formattedAge(max(0, now.timeIntervalSince(date)))
+}
+
 /// Mirrors the TUI's `(offline Xm)` bucket format (`gradus/ui.py`) so the
 /// dashboard reads the same way as the terminal.
 private func formattedAge(_ seconds: TimeInterval) -> String {

@@ -31,9 +31,25 @@ struct DashboardView: View {
 /// reusable. Factored out specifically to sidestep a distinct
 /// navigation shell. `DashboardSnapshotTests` snapshots this type directly so
 /// content ordering stays independently testable from navigation chrome.
+/// Which dashboard presentation to use. Derived from the horizontal size
+/// class, but expressible directly so tests can assert the dense layout
+/// without depending on how an offscreen snapshot host propagates traits.
+enum DashboardLayout {
+    /// iPhone and any compact width: ranked list, one `StatTile` per provider,
+    /// remaining windows behind badges.
+    case compactList
+    /// iPad and any regular width (Option B): a grid of `ProviderDensityCard`s
+    /// showing every provider *and* every window at once, no drill-in needed.
+    case denseGrid
+}
+
 struct DashboardContent: View {
     @ObservedObject var viewModel: DashboardViewModel
     let now: Date
+
+    /// `nil` means "follow the size class". Tests pass an explicit value.
+    private let layoutOverride: DashboardLayout?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// Row-tap navigation target (P4/T4.2): set on tap of either the hero
     /// `StatTile` or a compact ranked-row `StatTile`, pushing
     /// `ProviderDetailView` for that provider. Tracked by `providerName`
@@ -51,20 +67,36 @@ struct DashboardContent: View {
     /// detail drill-in.
     @State private var showingSettings = false
 
-    init(viewModel: DashboardViewModel, now: Date = Date()) {
+    init(viewModel: DashboardViewModel, now: Date = Date(), layout: DashboardLayout? = nil) {
         self.viewModel = viewModel
         self.now = now
+        self.layoutOverride = layout
+    }
+
+    var layout: DashboardLayout {
+        layoutOverride ?? (horizontalSizeClass == .regular ? .denseGrid : .compactList)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             MobileNavBar(title: "Gradus") {
-                IconButton(Icon.settings) {
-                    showingSettings = true
+                HStack(spacing: 12) {
+                    // The dense layout trades ConnectionInfoCard for this, so
+                    // the provenance it drops has somewhere to go.
+                    if layout == .denseGrid {
+                        SyncStatusLine(
+                            source: viewModel.connectedSource,
+                            publishedAt: viewModel.connectedSourcePublishedAt,
+                            now: now
+                        )
+                    }
+                    IconButton(Icon.settings) {
+                        showingSettings = true
+                    }
                 }
             }
 
-            if let source = viewModel.connectedSource {
+            if layout == .compactList, let source = viewModel.connectedSource {
                 ConnectionInfoCard(
                     source: source,
                     publishedAt: viewModel.connectedSourcePublishedAt,
@@ -79,6 +111,8 @@ struct DashboardContent: View {
                     EmptyStateView(state: emptyState) {
                         viewModel.syncEnabled = true
                     }
+                } else if layout == .denseGrid {
+                    denseGrid
                 } else {
                     nowList
                 }
@@ -91,6 +125,40 @@ struct DashboardContent: View {
         }
         .sheet(isPresented: $showingSettings) {
             SettingsView(dashboardViewModel: viewModel)
+        }
+    }
+
+    /// iPad Option B: every provider and every window at once.
+    ///
+    /// Columns are adaptive rather than a fixed two. The mock was drawn at
+    /// portrait width, where this resolves to two — but the whole point is to
+    /// use the screen, and landscape has room for three. A fixed count would
+    /// stretch cards across 1366pt and reintroduce the wasted horizontal space
+    /// this layout exists to remove.
+    ///
+    /// Renders `viewModel.providers` in rank order without splitting exhausted
+    /// providers into their own section: at this density an exhausted provider
+    /// is legible inline as a card whose rows are all red, and the ranking
+    /// already sorts it last. The `showExhausted` preference still applies —
+    /// it filters the source array.
+    @ViewBuilder
+    private var denseGrid: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 320), spacing: 12, alignment: .top)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(viewModel.providers, id: \.providerName) { provider in
+                    ProviderDensityCard(provider: provider, now: now)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            selectedProviderName = provider.providerName
+                        }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
         }
     }
 
