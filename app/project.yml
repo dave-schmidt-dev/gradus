@@ -71,7 +71,7 @@ targets:
         # allocates the build number from App Store Connect, so the value
         # checked in here is history, not the next upload's identifier.
         MARKETING_VERSION: "1.5.0"
-        CURRENT_PROJECT_VERSION: "10"
+        CURRENT_PROJECT_VERSION: "11"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Background Modes > Remote notifications (T4.1/T4.2): required for the

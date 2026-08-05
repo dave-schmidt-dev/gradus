@@ -59,3 +59,21 @@ Mac producer and iOS consumer share one semantic release train. Build and test
 both, verify the Mac publish in the matching CloudKit environment, and upload
 the iOS artifact only after that evidence exists. A local Mac republish does
 not require notarization; a distributed Mac artifact does.
+
+**GradusMac carries the same `MARKETING_VERSION` as GradusiOS.** Sharing a
+release train means sharing its number: when a train ships coupled behavior,
+bump both targets in `app/project.yml` to the same semantic version in the same
+change. The two `CURRENT_PROJECT_VERSION` values stay independent — they are
+per-target Apple build identifiers, and only the iOS one is allocated from App
+Store Connect.
+
+The Mac is not exempt because it is undistributed. It sat at `0.1.0` through
+the `1.5.0` train while containing that train's pace-ramp behavior, which made
+its version string useless for the one question it exists to answer: whether an
+installed copy has the coupled change. A producer whose version cannot be
+compared to the consumer's defeats the point of a coupled release train.
+
+Because the Mac is installed by local republish rather than by Apple, a bump
+only reaches the running app when the bundle is rebuilt and swapped into
+`/Applications`. Bump and rebuild together, or the repo and the menu bar
+disagree.
