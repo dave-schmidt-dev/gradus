@@ -98,6 +98,96 @@ class FetchProviderSnapshotTests(unittest.TestCase):
             payload_json = json.dumps(build_payload([snapshot], datetime(2026, 1, 1)))
             self.assertNotIn(sentinel, payload_json)
 
+    def test_read_timeout_classifies_as_transient_not_a_hard_failure(self) -> None:
+        """A urllib read timeout must reach the device as a retryable error.
+
+        ``socket.timeout`` is ``TimeoutError`` on 3.10+, and ``TimeoutError``
+        is NOT a subclass of ``urllib.error.URLError`` -- it is an ``OSError``.
+        So ``_http_json``'s URLError branch never sees a *read* timeout and it
+        lands in the generic catch-all, which used to flatten every exception
+        to "provider probe failed". That string matches no transient marker, so
+        `_merge_with_previous` declined to serve the last-known-good reading
+        and a two-second network blip published a failure card to iPhone and
+        iPad while the TUI, on its own cycle, looked fine.
+        """
+        import socket
+        import urllib.error
+
+        # The two facts the bug rests on, asserted rather than assumed. If a
+        # future Python decouples these, raising `TimeoutError` below would
+        # stop resembling what urllib actually raises and this test would
+        # quietly stop testing the real path.
+        self.assertIs(socket.timeout, TimeoutError)
+        self.assertFalse(issubclass(TimeoutError, urllib.error.URLError))
+
+        class FakeProvider:
+            def fetch(self) -> None:
+                raise TimeoutError("The read operation timed out")
+
+        snapshot = fetch_provider_snapshot("Antigravity", FakeProvider(), debug=False)
+
+        self.assertFalse(snapshot.ok)
+        self.assertEqual(snapshot.error, "provider probe timed out")
+        # The payoff: the classifier must accept what the catch-all emits.
+        # Asserting the string alone would re-create the original gap, where
+        # both halves were correct and only the seam between them was wrong.
+        self.assertTrue(_is_transient_probe_error(snapshot))
+
+    def test_connection_error_classifies_as_transient(self) -> None:
+        class FakeProvider:
+            def fetch(self) -> None:
+                raise ConnectionResetError("Connection reset by peer")
+
+        snapshot = fetch_provider_snapshot("Antigravity", FakeProvider(), debug=False)
+
+        self.assertEqual(snapshot.error, "provider probe network error")
+        self.assertTrue(_is_transient_probe_error(snapshot))
+
+    def test_transient_mapping_still_withholds_the_exception_text(self) -> None:
+        """Classifying by type must not become an excuse to publish the message.
+
+        ``AntigravityProvider._load_keychain_token`` embeds `security`
+        subprocess output in its exception, so raw text on ``error`` would push
+        credential-adjacent strings through CloudKit to both devices. Type is
+        safe to branch on; the message stays on the ``--debug`` channel.
+        """
+        sentinel = "timeout-secret-sentinel"
+
+        class FakeProvider:
+            def fetch(self) -> None:
+                raise TimeoutError(sentinel)
+
+        snapshot = fetch_provider_snapshot("Antigravity", FakeProvider(), debug=True)
+
+        self.assertEqual(snapshot.error, "provider probe timed out")
+        self.assertNotIn(sentinel, snapshot.error or "")
+        self.assertIn(sentinel, snapshot.debug_detail or "")
+
+        quiet = fetch_provider_snapshot("Antigravity", FakeProvider(), debug=False)
+        self.assertIsNone(quiet.debug_detail)
+        for build_payload in (
+            snapshot_module.build_snapshot_payload,
+            snapshot_module.build_snapshot_v2_payload,
+        ):
+            payload_json = json.dumps(build_payload([snapshot], datetime(2026, 1, 1)))
+            self.assertNotIn(sentinel, payload_json)
+
+    def test_unrecognized_exception_type_stays_opaque(self) -> None:
+        """Only the two known-retryable families get a specific message.
+
+        Anything else keeps the opaque generic string, so a new failure mode
+        cannot accidentally inherit "retry me" semantics it has not earned.
+        """
+
+        class FakeProvider:
+            def fetch(self) -> None:
+                raise ValueError("something structural is wrong")
+
+        snapshot = fetch_provider_snapshot("Antigravity", FakeProvider(), debug=False)
+
+        self.assertEqual(snapshot.error, "provider probe failed")
+        self.assertFalse(_is_transient_probe_error(snapshot))
+
 
 class FormatResetTimeTests(unittest.TestCase):
     def test_iso_string_with_z(self) -> None:

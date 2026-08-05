@@ -712,6 +712,39 @@ class MergeWithPreviousTests(unittest.TestCase):
         self.assertIn("cached", merged[0].source)
         self.assertIsNotNone(merged[0].cached_since)
 
+    def test_real_read_timeout_serves_cached_data_end_to_end(self) -> None:
+        """The whole chain, with no hand-authored error string in it.
+
+        Every other test in this class types its own error text, which is how
+        the original defect survived: the classifier was correct on strings a
+        human wrote, and the catch-all's actual output was never fed to it. The
+        four links are: catch-all maps the exception -> classifier accepts the
+        message -> merge serves the prior -> the device shows a reading instead
+        of a failure card. This drives all four with the real functions, so the
+        seam is covered rather than the two ends.
+        """
+        from gradus.providers import fetch_provider_snapshot
+
+        class TimingOutProvider:
+            # `socket.timeout` IS `TimeoutError` on 3.10+; the identity is
+            # asserted in test_providers.FetchProviderSnapshotTests.
+            def fetch(self) -> None:
+                raise TimeoutError("The read operation timed out")
+
+        fresh = [fetch_provider_snapshot("Antigravity", TimingOutProvider(), debug=False)]
+        previous = [
+            ProviderSnapshot(
+                name="Antigravity", ok=True, source="api", data={"session_percent_left": 62}
+            ),
+        ]
+
+        merged = _merge_with_previous(previous, fresh)
+
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(merged[0].ok, "a transient timeout must not surface as a failed provider")
+        self.assertEqual(merged[0].data, {"session_percent_left": 62})
+        self.assertIn("cached", merged[0].source)
+
     def test_stale_data_replaced_after_threshold(self) -> None:
         from datetime import datetime, timedelta
 

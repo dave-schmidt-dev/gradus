@@ -258,6 +258,38 @@ def _canonical_providers() -> tuple[str, ...]:
     return tuple(name for name in _REGISTRATION_ORDER if name in _PROVIDER_REGISTRY)
 
 
+def _safe_probe_error(exc: BaseException) -> str:
+    """Map an unexpected probe exception to a surface-safe message.
+
+    Classified by exception **type**, never by message content. The returned
+    string is published to CloudKit and rendered verbatim on iPhone and iPad,
+    and an exception message can carry a bearer token, a signed URL, or
+    subprocess output -- ``AntigravityProvider._load_keychain_token`` embeds
+    `security` output directly in a ``FileNotFoundError``. Type names carry no
+    such payload. Full text stays on the ``--debug`` channel.
+
+    The wording is deliberate: ``snapshot._is_transient_probe_error`` matches
+    the markers ``"timed out"`` and ``"network error"``, so these messages let
+    ``_merge_with_previous`` serve the last-known-good reading instead of
+    publishing a failure card for a blip that succeeds on the next cycle.
+
+    Args:
+        exc: The exception raised by a provider's ``fetch()``/``to_dict()``.
+
+    Returns:
+        A message safe to publish, chosen so retryable failures classify as
+        transient. Anything unrecognized stays the opaque generic string.
+    """
+    if isinstance(exc, TimeoutError):
+        # A urllib *read* timeout is a bare TimeoutError, not a URLError, so
+        # `_http_json`'s URLError branch never sees it and it lands here. This
+        # is the Antigravity "The read operation timed out" case.
+        return "provider probe timed out"
+    if isinstance(exc, ConnectionError):
+        return "provider probe network error"
+    return "provider probe failed"
+
+
 def fetch_provider_snapshot(
     name: str, fetcher: Any, debug: bool = False, source: str = "api"
 ) -> ProviderSnapshot:
@@ -277,11 +309,19 @@ def fetch_provider_snapshot(
             name=name, ok=False, source=source, error=error, debug_detail=debug_detail
         )
     except Exception as exc:
+        # Log the type unconditionally. Until now this branch swallowed the
+        # exception entirely, so a probe that failed here left no trace at all
+        # -- the only signal was a generic card on the phone. The message is
+        # withheld because AGENTS.md forbids secrets in logs as firmly as on
+        # screen; it goes to the --debug channel instead.
+        log.warning("provider %s probe raised %s", name, type(exc).__name__)
+        if debug:
+            log.debug("provider %s probe exception detail", name, exc_info=True)
         return ProviderSnapshot(
             name=name,
             ok=False,
             source=source,
-            error="provider probe failed",
+            error=_safe_probe_error(exc),
             debug_detail=str(exc) if debug else None,
         )
     if debug:
