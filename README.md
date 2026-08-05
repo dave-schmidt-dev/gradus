@@ -77,6 +77,8 @@ When `--debug` is enabled, raw captures are written to `/tmp/gradus_*_capture.tx
 
 The raw payload is **not** written into the router-facing `.state/snapshot.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free). The debug-augmented `debug_detail` goes to **stderr** under `--debug`, never into the JSON document — `--json` on stdout is a machine contract consumed by the review-plugin router, and INV-1 keeps raw HTTP bodies and credential material off it (enforced by `test_render_json_data_is_safe_allowlist`). So `gradus --json --debug > out.json` leaves `out.json` parseable while the detail lands on your terminal.
 
+The stderr channel is wired on all three non-interactive paths — `--json`, `--write-snapshot`, and `--once` — so `2>/dev/null` always gives you the clean surface and `2>&1` always gives you the diagnosis. On `--write-snapshot` the detail is emitted *before* the persist step, so a run that both probes badly and fails to write still reports why. The live TUI is deliberately excluded: Rich holds the alt-screen there and a stderr write would corrupt the frame, so that path reports through `.logs/gradus.log` only.
+
 Error strings published to the devices are classified by exception **type**, not message content (`providers/_base._safe_probe_error`): a `TimeoutError` becomes `"provider probe timed out"` and a `ConnectionError` becomes `"provider probe network error"`, both of which the transient classifier recognizes so the last-known-good reading is served instead of a failure card. Exception text itself is never published, because a provider exception can embed subprocess output or a signed URL.
 
 ### Logs

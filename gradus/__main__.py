@@ -1105,6 +1105,12 @@ def main() -> int:
             # checks (no notifications). Providers are already headless; the
             # outer `finally` closes them.
             snapshots = collect_snapshots(providers, args.debug)
+            # Before the write, so a probe failure is reported even when the
+            # persist step then fails and returns 1. stderr only: stdout must
+            # stay empty on this path, and INV-2 governs *credential* side
+            # effects (subprocess, notification, cred file) -- none of which a
+            # --debug-gated diagnostic write is.
+            _emit_debug_details(snapshots, args.debug)
             v1_ok, v2_ok, history_ok = _write_snapshot_versions(
                 snapshots, datetime.now(), journal_history=True
             )
@@ -1136,6 +1142,12 @@ def main() -> int:
             _check_warnings(snapshots, notified_providers, updated_at)
             fix_actions = _build_fix_actions(snapshots)
             console.print(build_dashboard(snapshots, updated_at, 0, fix_actions=fix_actions))
+            # After the dashboard, so the detail reads as a footnote to the
+            # cards above it rather than scrolling off ahead of them. Flush
+            # stdout first: without it the two streams interleave by buffer
+            # timing and the debug lines can surface above the table.
+            sys.stdout.flush()
+            _emit_debug_details(snapshots, args.debug)
             return 0
 
         # Live interactive mode

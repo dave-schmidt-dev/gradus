@@ -2341,6 +2341,85 @@ class EmitDebugDetailsTests(unittest.TestCase):
         self.assertNotIn(sentinel, rendered)
         self.assertNotIn("debug_detail", rendered)
 
+    def _drive_main(self, *, write_ok: bool = True, **flags):
+        """Run ``main()`` on one headless branch with streams captured.
+
+        ``_drive`` in :class:`WriteSnapshotTests` hardcodes ``debug=False``, and
+        widening it would touch eight passing INV-2 tests to serve three new
+        ones. This builds its own namespace instead.
+        """
+        from types import SimpleNamespace
+
+        defaults = {
+            "write_snapshot": False,
+            "debug": True,
+            "json": False,
+            "once": False,
+            "providers": None,
+            "interval": 120,
+        }
+        ns = argparse.Namespace(**{**defaults, **flags})
+        out, err = StringIO(), StringIO()
+        with (
+            patch("gradus.__main__.parse_args", return_value=ns),
+            patch(
+                "gradus.__main__.initialize_providers",
+                return_value=([("Antigravity", object())], []),
+            ),
+            patch("gradus.__main__.set_headless"),
+            patch("gradus.__main__.collect_snapshots", return_value=self._snapshots()),
+            patch(
+                "gradus.__main__._write_snapshot_versions",
+                return_value=(write_ok, write_ok, write_ok),
+            ),
+            patch("gradus.__main__._check_warnings"),
+            patch("sys.stdout", out),
+            patch("sys.stderr", err),
+        ):
+            rc = main()
+        return SimpleNamespace(rc=rc, out=out.getvalue(), err=err.getvalue())
+
+    def test_write_snapshot_debug_surfaces_detail_on_stderr(self) -> None:
+        """``--write-snapshot --debug`` is a primary developer path.
+
+        It reached the same dead end ``--json`` did: a failing probe produced a
+        generic card and no way to see why. stdout stays empty here -- this
+        branch prints nothing, so anything on it is contamination.
+        """
+        res = self._drive_main(write_snapshot=True)
+
+        self.assertEqual(res.rc, 0)
+        self.assertIn("Antigravity", res.err)
+        self.assertIn("The read operation timed out", res.err)
+        self.assertEqual(res.out, "")
+
+    def test_write_snapshot_debug_reports_even_when_the_persist_step_fails(self) -> None:
+        """Emit before the write, not after.
+
+        A failed persist returns 1 from the middle of the branch. If the
+        emit sat after the write, the probe detail would vanish on exactly the
+        run that failed twice over -- the one worth debugging most.
+        """
+        res = self._drive_main(write_snapshot=True, write_ok=False)
+
+        self.assertEqual(res.rc, 1)
+        self.assertIn("The read operation timed out", res.err)
+
+    def test_once_debug_surfaces_detail_alongside_the_dashboard(self) -> None:
+        """``--once --debug`` renders cards on stdout and detail on stderr.
+
+        Split by stream so `gradus --once --debug 2>/dev/null` still gives a
+        clean dashboard. The live TUI is deliberately excluded from this
+        wiring: Rich holds the alt-screen there and a stderr write would
+        corrupt the frame, so that path keeps the `log.debug` channel only.
+        """
+        res = self._drive_main(once=True)
+
+        self.assertEqual(res.rc, 0)
+        self.assertIn("Antigravity", res.out)  # the dashboard rendered
+        self.assertIn("The read operation timed out", res.err)
+        self.assertNotIn("The read operation timed out", res.out)
+
 
 if __name__ == "__main__":
     unittest.main()
