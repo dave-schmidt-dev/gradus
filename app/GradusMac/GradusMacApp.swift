@@ -31,18 +31,25 @@ struct GradusMacApp: App {
         // real records during one 2026-08-05 test session. Tests must not
         // mutate the live zone. Verified by `cloudd` log and by decoding the
         // TCC `csreq` before and after a run; see `HISTORY.md`.
-        guard !Self.isRunningTests else { return }
+        guard !Self.pipelineDisabled else { return }
         PublishPipeline.shared.start()
     }
 
-    /// True when a test bundle is hosted in this process. Both signals are
-    /// checked because they fail in different directions: the environment
-    /// variable is absent for UI-test *targets* (which drive a separate app
-    /// process and legitimately want the real pipeline), while the class probe
-    /// catches any XCTest-injected bundle regardless of how it was launched.
-    static var isRunningTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
-            || NSClassFromString("XCTestCase") != nil
+    /// True when this launch must not run the live pipeline.
+    ///
+    /// The primary signal is `GRADUS_DISABLE_PIPELINE`, set by the GradusMac
+    /// scheme's test action (see `project.yml`). It is deliberately explicit:
+    /// runtime test-detection does **not** work here. `App.init()` runs before
+    /// XCTest injects the test bundle, so `NSClassFromString("XCTestCase")` is
+    /// still nil at the only moment this is consulted — an earlier version of
+    /// this guard relied on exactly that and silently did nothing, which was
+    /// caught by deleting the persisted sync timestamp and watching a test run
+    /// rewrite it with a live `Date()`. `XCTestConfigurationFilePath` is kept
+    /// only as a secondary signal for launches outside the scheme.
+    static var pipelineDisabled: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["GRADUS_DISABLE_PIPELINE"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil
     }
 
     var body: some Scene {

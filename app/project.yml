@@ -229,6 +229,17 @@ schemes:
       targets:
         - GradusMacTests
         - GradusMacUITests
+      # `GradusMacTests` is a hosted bundle, so every test run launches the
+      # real app. Without this it starts the live pipeline: it publishes to
+      # CloudKit Production and reads the snapshot out of `~/Documents`, which
+      # fires a TCC prompt at whoever is at the machine. Set explicitly rather
+      # than sniffed at runtime -- an `NSClassFromString("XCTestCase")` probe
+      # in `GradusMacApp.init()` does NOT work, because the app's `init()` runs
+      # before XCTest injects the test bundle, so the probe is still nil at the
+      # only moment it is consulted. Proven by deleting `iCloudLastSyncedAt`
+      # and watching a test run rewrite it with a live `Date()`.
+      environmentVariables:
+        GRADUS_DISABLE_PIPELINE: "1"
   GradusiOS:
     build:
       targets:

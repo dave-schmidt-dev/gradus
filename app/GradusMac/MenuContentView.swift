@@ -49,24 +49,41 @@ struct MenuContentView: View {
         .frame(width: 280)
     }
 
+    /// "iCloud sync complete" answered the wrong question -- it reported the
+    /// outcome of an event the user did not see and could not date. The
+    /// timestamp answers "is what I'm looking at current", which is the only
+    /// reason to read this line. `.idle` shows it too: the state enum resets
+    /// on launch, so a long-running agent would otherwise show nothing at all
+    /// despite having synced minutes earlier.
     @ViewBuilder
     private var cloudSyncStatus: some View {
         switch viewModel.syncState {
-        case .idle:
-            EmptyView()
         case .publishing:
             Text("Syncing with iCloud…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        case .synced:
-            Text("iCloud sync complete")
+        case .failed:
+            VStack(alignment: .leading, spacing: 1) {
+                Text("iCloud sync failed. Will retry with the next update.")
+                    .foregroundStyle(SignalColor.forLevel(.red))
+                // A failure is only actionable next to how stale it left you.
+                if let label = Self.lastSyncLabel(viewModel.lastSyncedAt) {
+                    Text(label).foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption)
+        case .idle, .synced:
+            Text(Self.lastSyncLabel(viewModel.lastSyncedAt) ?? "Not synced yet")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        case .failed:
-            Text("iCloud sync failed. Will retry with the next update.")
-                .font(.caption)
-                .foregroundStyle(.red)
         }
+    }
+
+    /// Uses `friendlyDateLabel` -- the same helper behind the "resets …" copy
+    /// on each row -- so the menu never shows two date vocabularies at once.
+    static func lastSyncLabel(_ date: Date?, now: Date = Date()) -> String? {
+        guard let date else { return nil }
+        return "Last sync \(friendlyDateLabel(date, now: now))"
     }
 }
 
@@ -187,6 +204,12 @@ struct ProviderListView: View {
 /// seven that didn't. Reset time and pace answer "when" and "how fast", which
 /// are only worth screen space once "how much is left" is alarming.
 private struct ProviderRow: View {
+    /// Declared here rather than inline because the metadata line below has to
+    /// clear the expected-remaining marker, which is deliberately taller than
+    /// the bar so it reads as a tick rather than a segment. Without reserving
+    /// that overhang the "resets …" text visually touches the marker.
+    private static let barHeight: CGFloat = 8
+
     let provider: ProviderEntry
     let now: Date
 
@@ -211,9 +234,10 @@ private struct ProviderRow: View {
                     ),
                     tint: tint
                 )
-                .frame(height: 8)
+                .frame(height: Self.barHeight)
                 if ProviderTriage.needsAttention(provider) {
                     metadata(for: window)
+                        .padding(.top, ProgressBar.markerOverhang(barHeight: Self.barHeight))
                 }
             } else {
                 header(value: "—", tint: .secondary)
@@ -275,6 +299,15 @@ struct ProgressBar: View {
     let fraction: Double
     let markerFraction: Double?
     let tint: Color
+
+    /// How far the marker sticks out past each edge of a bar of the given
+    /// height. Callers stacking content directly under a bar need this as
+    /// padding, otherwise the marker collides with whatever follows -- the
+    /// marker is drawn from the bar's center line and is intentionally taller
+    /// than the bar itself.
+    static func markerOverhang(barHeight: CGFloat) -> CGFloat {
+        max(0, (markerHeight - barHeight) / 2)
+    }
 
     /// The expected-remaining marker uses the shared kit calculation so the
     /// compact Mac row stays aligned with the other Gradus surfaces.

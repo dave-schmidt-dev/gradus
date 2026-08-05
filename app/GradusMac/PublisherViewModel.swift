@@ -18,7 +18,7 @@ public final class PublisherViewModel: ObservableObject {
     @Published public private(set) var updatedAt: String?
     @Published public var syncEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(syncEnabled, forKey: Self.syncEnabledKey)
+            defaults.set(syncEnabled, forKey: Self.syncEnabledKey)
             if !syncEnabled {
                 syncOperationID &+= 1
                 syncState = .idle
@@ -27,14 +27,32 @@ public final class PublisherViewModel: ObservableObject {
     }
     @Published public var launchAtLoginEnabled: Bool
     @Published public private(set) var syncState: CloudSyncState = .idle
+    /// When the last publish actually succeeded. Persisted, because the state
+    /// enum above resets to `.idle` on every launch: a menu-bar agent that has
+    /// been running for a week would otherwise claim it had never synced until
+    /// the next snapshot changed, which is exactly when a user checks.
+    @Published public private(set) var lastSyncedAt: Date?
     private var syncOperationID: UInt64 = 0
 
     static let syncEnabledKey = "iCloudSyncEnabled"
+    static let lastSyncedAtKey = "iCloudLastSyncedAt"
 
-    public init() {
+    /// Injectable so tests do not write to the shipping app's own preference
+    /// domain. That is not hypothetical: this bundle is hosted, so
+    /// `UserDefaults.standard` in a test *is* GradusMac's real preferences, and
+    /// an existing sync test silently began stamping a live timestamp into them
+    /// the moment `cloudSyncDidSucceed` started persisting one.
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         // Default OFF: usage data leaves the device only on explicit opt-in.
-        self.syncEnabled = UserDefaults.standard.bool(forKey: Self.syncEnabledKey)
+        self.syncEnabled = defaults.bool(forKey: Self.syncEnabledKey)
         self.launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
+        // `object(forKey:)` rather than `double(forKey:)` -- the latter returns
+        // 0 for a missing key, which would render as 1970 instead of "never".
+        self.lastSyncedAt = (defaults.object(forKey: Self.lastSyncedAtKey) as? Double)
+            .map { Date(timeIntervalSince1970: $0) }
     }
 
     public func apply(_ payload: SnapshotPayload) {
@@ -50,9 +68,13 @@ public final class PublisherViewModel: ObservableObject {
         return syncOperationID
     }
 
-    public func cloudSyncDidSucceed(operationID: UInt64) {
+    /// - Parameter at: Injectable so tests assert a known timestamp rather
+    ///   than racing the clock.
+    public func cloudSyncDidSucceed(operationID: UInt64, at date: Date = Date()) {
         guard syncEnabled, operationID == syncOperationID else { return }
         syncState = .synced
+        lastSyncedAt = date
+        defaults.set(date.timeIntervalSince1970, forKey: Self.lastSyncedAtKey)
     }
 
     public func cloudSyncDidFail(operationID: UInt64) {

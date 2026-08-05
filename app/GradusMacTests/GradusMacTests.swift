@@ -187,17 +187,14 @@ private func recordID(_ name: String) -> CKRecord.ID {
 }
 
 @Test @MainActor func cloudSyncFailureIsVisibleAndClearsWhenDisabled() throws {
-    let defaults = UserDefaults.standard
-    let priorValue = defaults.object(forKey: PublisherViewModel.syncEnabledKey)
-    defer {
-        if let priorValue {
-            defaults.set(priorValue, forKey: PublisherViewModel.syncEnabledKey)
-        } else {
-            defaults.removeObject(forKey: PublisherViewModel.syncEnabledKey)
-        }
-    }
+    // Scratch suite: this bundle is hosted, so `.standard` is the shipping
+    // app's own preference domain. Isolating the store keeps a test from
+    // writing state the real menu then reports as fact.
+    let suite = "com.zerodelta.gradus.mac.tests.cloudSyncFailure"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
 
-    let viewModel = PublisherViewModel()
+    let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = true
     let operationID = try #require(viewModel.cloudSyncDidStart())
     #expect(viewModel.syncState == .publishing)
@@ -208,17 +205,18 @@ private func recordID(_ name: String) -> CKRecord.ID {
 }
 
 @Test @MainActor func staleCloudSyncCompletionsCannotOverwriteCurrentOrDisabledState() throws {
-    let defaults = UserDefaults.standard
-    let priorValue = defaults.object(forKey: PublisherViewModel.syncEnabledKey)
-    defer {
-        if let priorValue {
-            defaults.set(priorValue, forKey: PublisherViewModel.syncEnabledKey)
-        } else {
-            defaults.removeObject(forKey: PublisherViewModel.syncEnabledKey)
-        }
-    }
+    // Scratch suite rather than save/restore against `.standard`. This bundle
+    // is hosted, so `.standard` is the shipping app's own preference domain --
+    // and the save/restore this replaced only covered `syncEnabledKey`, so the
+    // moment `cloudSyncDidSucceed` began persisting a timestamp, this test
+    // started stamping a live `Date()` into the real menu's state. Isolating
+    // the store removes the whole class instead of adding a second key to a
+    // list someone has to remember to extend.
+    let suite = "com.zerodelta.gradus.mac.tests.staleCloudSync"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
 
-    let viewModel = PublisherViewModel()
+    let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = true
     let olderOperation = try #require(viewModel.cloudSyncDidStart())
     let currentOperation = try #require(viewModel.cloudSyncDidStart())
@@ -234,18 +232,15 @@ private func recordID(_ name: String) -> CKRecord.ID {
     #expect(viewModel.syncState == .idle)
 }
 
-@Test @MainActor func cloudSyncCannotStartAfterSyncWasDisabled() {
-    let defaults = UserDefaults.standard
-    let priorValue = defaults.object(forKey: PublisherViewModel.syncEnabledKey)
-    defer {
-        if let priorValue {
-            defaults.set(priorValue, forKey: PublisherViewModel.syncEnabledKey)
-        } else {
-            defaults.removeObject(forKey: PublisherViewModel.syncEnabledKey)
-        }
-    }
+@Test @MainActor func cloudSyncCannotStartAfterSyncWasDisabled() throws {
+    // Scratch suite: this bundle is hosted, so `.standard` is the shipping
+    // app's own preference domain. Isolating the store keeps a test from
+    // writing state the real menu then reports as fact.
+    let suite = "com.zerodelta.gradus.mac.tests.syncDisabled"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
 
-    let viewModel = PublisherViewModel()
+    let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = false
 
     #expect(viewModel.cloudSyncDidStart() == nil)
