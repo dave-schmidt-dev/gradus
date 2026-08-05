@@ -481,6 +481,10 @@ class TestBuildWindows(unittest.TestCase):
         self.assertIsNotNone(delta)
         self.assertFalse(snap.window_warns({"percent_left": 5.0, "pace_delta": delta}))
 
+    def test_relative_reset_overflow_is_unparseable(self) -> None:
+        reset = "Resets in 999999999999999999999999999999999999d"
+        self.assertIsNone(snap.parse_reset_target(reset, NOW))
+
     def test_build_windows_empty_when_not_ok(self) -> None:
         """A not-ok or unknown snapshot yields no windows."""
         self.assertEqual(snap.build_windows(_ps("Codex", False), NOW), [])

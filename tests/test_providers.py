@@ -2697,6 +2697,10 @@ class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
         with (
             patch("gradus.providers.urllib.request.build_opener") as build,
             patch("gradus.providers.urllib.request.urlopen") as urlopen_mock,
+            patch(
+                "gradus.providers._base._read_safari_cookies",
+                return_value={"auth": "cookie-value"},
+            ),
         ):
             opener = MagicMock()
             opener.open.side_effect = responses

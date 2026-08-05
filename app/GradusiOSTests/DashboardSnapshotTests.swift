@@ -1,7 +1,7 @@
 import GradusKit
 import SnapshotTesting
 import SwiftUI
-import Testing
+import XCTest
 
 @testable import GradusiOS
 
@@ -31,7 +31,8 @@ private func sampleProviders() -> [ProviderStatus] {
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-30)),
             snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
+            publishedAt: fixedNow,
+            syncSource: SyncSource(computerName: "Dave's MacBook Pro", userName: "dave")
         ),
         ProviderStatus(
             providerName: "antigravity-claude",
@@ -64,12 +65,32 @@ private func sampleProviders() -> [ProviderStatus] {
 }
 
 @MainActor
-private func makeViewModel(providers: [ProviderStatus]) -> DashboardViewModel {
+private func makeViewModel(providers: [ProviderStatus], showExhausted: Bool = true) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
     let cache = FileLocalCacheStore(directory: directory)
+    let defaults = UserDefaults(suiteName: "gradus-dashboard-snapshots-\(UUID().uuidString)")!
+    defaults.set(showExhausted, forKey: DashboardViewModel.showExhaustedKey)
     try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
-    return DashboardViewModel(cache: cache)
+    return DashboardViewModel(cache: cache, userDefaults: defaults)
+}
+
+private func exhaustedProvider(named name: String) -> ProviderStatus {
+    ProviderStatus(
+        providerName: name,
+        providerDisplayName: name.capitalized,
+        ok: true,
+        errorMessage: nil,
+        windows: [
+            ProviderWindow(
+                id: "weekly", percentLeft: 0, resetISO: "2026-08-05T00:00:00-04:00", windowHours: 168,
+                paceDelta: -0.30)
+        ],
+        data: [:],
+        observedAt: ISO8601DateFormatter().string(from: fixedNow),
+        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+        publishedAt: fixedNow
+    )
 }
 
 // P3/T3.3 gate: under the corrected ranking (Key decision #6), `cursor`
@@ -86,38 +107,111 @@ private func makeViewModel(providers: [ProviderStatus]) -> DashboardViewModel {
 // offscreen hosting is what caused a SIGSEGV earlier this session (see
 // `DashboardContent`'s doc comment in DashboardView.swift) -- this keeps
 // these tests independent of `DashboardView`'s outer shell entirely.
+final class DashboardSnapshotTests: XCTestCase {
 @MainActor
-@Test func dashboardRendersRankedHeroAndListLight() {
+func testDashboardRendersRankedHeroAndListLight() {
     let viewModel = makeViewModel(providers: sampleProviders())
-    #expect(viewModel.heroProvider?.providerName == "cursor")
-    let view = DashboardContent(viewModel: viewModel)
+    XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
+    let view = DashboardContent(viewModel: viewModel, now: fixedNow)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "dashboardRendersRankedHeroAndListLight")
 }
 
 @MainActor
-@Test func dashboardRendersRankedHeroAndListDark() {
+func testDashboardRendersRankedHeroAndListDark() {
     let viewModel = makeViewModel(providers: sampleProviders())
-    #expect(viewModel.heroProvider?.providerName == "cursor")
-    let view = DashboardContent(viewModel: viewModel)
+    XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
+    let view = DashboardContent(viewModel: viewModel, now: fixedNow)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        testName: "dashboardRendersRankedHeroAndListDark")
 }
 
 @MainActor
-@Test func emptyStateNotSignedIn() {
+func testDashboardSeparatesActiveProvidersBeforeCompactExhaustedSection() {
+    let viewModel = makeViewModel(providers: sampleProviders() + [
+        exhaustedProvider(named: "vibe"),
+        exhaustedProvider(named: "copilot"),
+    ])
+
+    for sortOption in ProviderSortOption.allCases {
+        viewModel.providerSortOption = sortOption
+        let active = viewModel.providers.filter { !$0.isDepleted }
+        let exhausted = viewModel.providers.filter(\.isDepleted)
+        XCTAssertEqual(active.count, 3)
+        XCTAssertEqual(exhausted.count, 2)
+        XCTAssertEqual(viewModel.providers, active + exhausted)
+    }
+}
+
+@MainActor
+func testDashboardHidesExhaustedCellsWhenPreferenceIsOff() {
+    let viewModel = makeViewModel(
+        providers: sampleProviders() + [exhaustedProvider(named: "vibe")],
+        showExhausted: false)
+
+    XCTAssertTrue(viewModel.providers.allSatisfy { !$0.isDepleted })
+    XCTAssertFalse(viewModel.providers.contains { $0.providerName == "vibe" })
+}
+
+@MainActor
+func testWindowBadgeSelectionChangesOnlySelectedProviderWindow() {
+    let selectable = ProviderStatus(
+        providerName: "codex",
+        providerDisplayName: "Codex",
+        ok: true,
+        errorMessage: nil,
+        windows: [
+            ProviderWindow(id: "five_hour", percentLeft: 82, resetISO: "2026-08-03T01:00:00-04:00", windowHours: 5, paceDelta: 0.02),
+            ProviderWindow(id: "weekly", percentLeft: 47, resetISO: "2026-08-08T05:00:00-04:00", windowHours: 168, paceDelta: -0.08),
+        ],
+        data: [:],
+        observedAt: ISO8601DateFormatter().string(from: fixedNow),
+        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+        publishedAt: fixedNow)
+    let unaffected = ProviderStatus(
+        providerName: "claude",
+        providerDisplayName: "Claude",
+        ok: true,
+        errorMessage: nil,
+        windows: [
+            ProviderWindow(id: "monthly", percentLeft: 31, resetISO: "2026-08-30T05:00:00-04:00", windowHours: 720, paceDelta: -0.04),
+        ],
+        data: [:],
+        observedAt: ISO8601DateFormatter().string(from: fixedNow),
+        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+        publishedAt: fixedNow)
+    let viewModel = makeViewModel(providers: [selectable, unaffected])
+
+    XCTAssertEqual(viewModel.selectedWindow(for: selectable)?.id, "weekly")
+    XCTAssertEqual(viewModel.selectedWindow(for: unaffected)?.id, "monthly")
+
+    viewModel.selectWindow(providerName: selectable.providerName, windowID: "five_hour")
+
+    XCTAssertEqual(viewModel.selectedWindow(for: selectable)?.id, "five_hour")
+    XCTAssertEqual(viewModel.selectedWindow(for: selectable)?.percentLeft, 82)
+    XCTAssertEqual(viewModel.selectedWindow(for: unaffected)?.id, "monthly")
+    XCTAssertEqual(viewModel.selectedWindow(for: unaffected)?.percentLeft, 31)
+}
+
+@MainActor
+func testEmptyStateNotSignedIn() {
     let view = EmptyStateView(state: .notSignedIn)
-    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)))
+    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)), testName: "emptyStateNotSignedIn")
 }
 
 @MainActor
-@Test func emptyStateSyncDisabled() {
+func testEmptyStateSyncDisabled() {
     let view = EmptyStateView(state: .syncDisabled)
-    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)))
+    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)), testName: "emptyStateSyncDisabled")
 }
 
 @MainActor
-@Test func emptyStateWaitingForFirstPublish() {
+func testEmptyStateWaitingForFirstPublish() {
     let view = EmptyStateView(state: .waitingForFirstPublish)
-    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)))
+    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)), testName: "emptyStateWaitingForFirstPublish")
+}
 }

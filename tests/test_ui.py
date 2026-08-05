@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import math
 import unittest
 from datetime import datetime
 from io import StringIO
 
 from rich.console import Console
+from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
 from gradus.snapshot import SAFE_DATA_KEYS
@@ -20,6 +22,7 @@ from gradus.ui import (
     _build_compact_lines,
     _compact_pace,
     _compact_window_parts,
+    _expected_remaining,
     _extract_depleted_reset_str,
     _format_percent_value,
     _format_reset_display,
@@ -43,6 +46,7 @@ def _capture(renderable, *, width: int = 80) -> str:
         force_terminal=True,
         width=width,
         no_color=True,
+        _environ={"TERM": "xterm-256color"},
     )
     console.print(renderable)
     return console.file.getvalue()
@@ -90,6 +94,91 @@ class PercentageBarTests(unittest.TestCase):
         output = _capture(PercentageBar(100.0, "bar.green"), width=20)
         self.assertNotIn("░", output)
         self.assertIn("█", output)
+
+    def test_expected_remaining_draws_one_marker_without_changing_bar_width(self) -> None:
+        output = _capture(PercentageBar(72.0, "bar.green", expected_remaining=60.0), width=80)
+        bar = output.rstrip("\n")
+        self.assertEqual(len(bar), 80)
+        self.assertEqual(bar.count("┃"), 1)
+        self.assertEqual(bar.index("┃"), 48)
+
+    def test_expected_remaining_preserves_fill_and_marker_styles(self) -> None:
+        for expected_remaining in (60.0, 84.0):
+            console = Console(
+                file=StringIO(),
+                theme=THEME,
+                force_terminal=True,
+                width=80,
+                no_color=True,
+                _environ={"TERM": "xterm-256color"},
+            )
+            rendered = next(
+                PercentageBar(
+                    72.0, "bar.green", expected_remaining=expected_remaining
+                ).__rich_console__(console, console.options)
+            )
+            self.assertIsInstance(rendered, Text)
+            assert isinstance(rendered, Text)
+            self.assertTrue(any(span.style == "bar.green" for span in rendered.spans))
+            self.assertTrue(any(span.style == "bar.red" for span in rendered.spans))
+
+    def test_missing_expected_remaining_keeps_existing_bar_output(self) -> None:
+        original = _capture(PercentageBar(72.0, "bar.green"), width=80)
+        without_marker = _capture(PercentageBar(72.0, "bar.green", None), width=80)
+        self.assertEqual(without_marker, original)
+
+    def test_nonfinite_expected_remaining_is_omitted(self) -> None:
+        self.assertIsNone(_expected_remaining(72.0, float("nan")))
+        self.assertIsNone(_expected_remaining(math.nan, 0.0))
+        self.assertIsNone(_expected_remaining(math.inf, 0.0))
+        self.assertIsNone(_expected_remaining(-math.inf, 0.0))
+        self.assertIsNone(_expected_remaining(72.0, math.inf))
+        self.assertIsNone(_expected_remaining(72.0, -math.inf))
+
+    def test_expected_remaining_clamps_to_bar_bounds(self) -> None:
+        self.assertEqual(_expected_remaining(80.0, -1.0), 100.0)
+        self.assertEqual(_expected_remaining(20.0, 1.0), 0.0)
+
+
+class UsageRowMarkerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 3, 14, 8, 22, 30)
+
+    def test_valid_session_pace_renders_one_expected_remaining_marker(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={
+                "five_hour_percent_left": 60.0,
+                "five_hour_reset": "Resets in 2h 30m",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=80)
+        self.assertEqual(output.count("┃"), 1)
+
+    def test_missing_session_pace_renders_no_marker(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={"five_hour_percent_left": 60.0},
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=80)
+        self.assertNotIn("┃", output)
+
+    def test_malformed_session_reset_renders_no_marker(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={
+                "five_hour_percent_left": 60.0,
+                "five_hour_reset": "Resets in 999999999999999999999999999999999999d",
+            },
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=80)
+        self.assertNotIn("┃", output)
 
 
 class PaceLabelTests(unittest.TestCase):

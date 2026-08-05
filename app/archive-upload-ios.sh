@@ -118,6 +118,13 @@ main() {
   cp -R "$ARCHIVE_PATH/Products/Applications/GradusiOS.app" "$PACKAGE_DIR/Payload/GradusiOS.app"
   cp "$PROFILE_PATH" "$PACKAGE_DIR/Payload/GradusiOS.app/embedded.mobileprovision"
 
+# Xcode/archive tooling can attach Finder/provenance metadata to the copied
+# bundle.  codesign rejects that metadata before it can replace the archive's
+# development signature, so clear it before extracting entitlements and
+# signing.  codesign can add provenance metadata again; the second cleanup
+# below remains necessary before packaging the IPA.
+  xattr -cr "$PACKAGE_DIR/Payload/GradusiOS.app"
+
 # Entitlements to sign with come from the app's OWN archived entitlements,
 # not the provisioning profile's `Entitlements` dict -- that dict is the
 # profile's maximal *permitted* grant (often wildcards like icloud-services
@@ -145,11 +152,10 @@ main() {
     "$PACKAGE_DIR/Payload/GradusiOS.app"
 
 # Every file in the bundle -- including ones codesign itself just wrote/
-# touched -- carries a com.apple.provenance extended attribute (macOS
-# re-tags files as a side effect of codesign running, so stripping before
-# signing doesn't help; it has to happen after). A strict codesign verify
-# rejects it ("resource fork, Finder information, or similar detritus not
-# allowed"); stripping post-signature doesn't invalidate the signature
+# touched -- can carry a com.apple.provenance extended attribute (macOS
+# re-tags files as a side effect of codesign running). A strict codesign
+# verify rejects it ("resource fork, Finder information, or similar detritus
+# not allowed"); stripping post-signature doesn't invalidate the signature
 # (confirmed: verify passes clean afterward with no re-sign needed).
   xattr -cr "$PACKAGE_DIR/Payload/GradusiOS.app"
 

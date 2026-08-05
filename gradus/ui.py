@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -327,6 +328,63 @@ def _pace_label(
     return f"over -{diff_points}pt"
 
 
+def _expected_remaining(percent_left: float | None, delta: float | None) -> float | None:
+    """Return the expected remaining percentage for a valid pace calculation."""
+    if not percent_is_valid(percent_left) or delta is None or not math.isfinite(delta):
+        return None
+    return max(0.0, min(100.0, float(percent_left) - (delta * 100.0)))
+
+
+def _expected_session_remaining(
+    percent_left: float | None,
+    reset_text: str | None,
+    now: datetime,
+    window_hours: float | None,
+) -> float | None:
+    """Return a session window's expected remaining percentage, if computable."""
+    try:
+        if window_hours is None or not math.isfinite(window_hours) or window_hours <= 0:
+            return None
+        target = _parse_reset_target(reset_text, now)
+        return _expected_remaining(
+            percent_left,
+            pace_delta(percent_left, target, window_hours * 3600.0, now),
+        )
+    except (OverflowError, TypeError, ValueError):
+        # Malformed provider reset metadata must not take down dashboard
+        # rendering; the row simply omits its expected-pace marker.
+        return None
+
+
+def _expected_billing_remaining(
+    percent_left: float | None,
+    start_iso: str | None,
+    end_iso: str | None,
+    now: datetime,
+) -> float | None:
+    """Return a billing window's expected remaining percentage, if computable."""
+    if (
+        not isinstance(start_iso, str)
+        or not isinstance(end_iso, str)
+        or not start_iso
+        or not end_iso
+    ):
+        return None
+    try:
+        start = datetime.fromisoformat(start_iso)
+        end = datetime.fromisoformat(end_iso)
+    except ValueError:
+        return None
+    try:
+        start, end = reconcile(start, end)
+        total_seconds = max(1.0, (end - start).total_seconds())
+        return _expected_remaining(percent_left, pace_delta(percent_left, end, total_seconds, now))
+    except (OverflowError, TypeError, ValueError):
+        # Mixed or malformed datetime metadata must not take down dashboard
+        # rendering; the row simply omits its expected-pace marker.
+        return None
+
+
 def _percent_str(percent: float) -> str:
     if percent < 10:
         return f"{percent:.1f}"
@@ -480,9 +538,12 @@ DISPLAY_TITLES: dict[str, str] = {}
 class PercentageBar:
     """Custom Rich renderable: a static percentage bar using block characters."""
 
-    def __init__(self, percent: float | None, style: str) -> None:
+    def __init__(
+        self, percent: float | None, style: str, expected_remaining: float | None = None
+    ) -> None:
         self.percent = percent
         self.style = style
+        self.expected_remaining = expected_remaining
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         width = options.max_width
@@ -490,14 +551,20 @@ class PercentageBar:
             yield Text("·" * width, style="shadow")
             return
         filled = max(0, min(width, round(width * self.percent / 100)))
-        empty = max(0, width - filled)
         bar = Text()
-        if filled > 1:
-            bar.append("▓" * (filled - 1), style=self.style)
-        if filled > 0:
-            bar.append("█", style=self.style)
-        if empty > 0:
-            bar.append("░" * empty, style="bar.empty")
+        marker_index: int | None = None
+        if self.expected_remaining is not None and width > 0:
+            marker_index = min(width - 1, max(0, round(width * self.expected_remaining / 100)))
+        for index in range(width):
+            if index == marker_index:
+                # A full-height box-drawing stroke remains legible at narrow
+                # terminal widths, where a thin left fragment disappears into
+                # the filled bar. The marker still occupies exactly one cell.
+                bar.append("┃", style="bar.red")
+            elif index < filled:
+                bar.append("▓" if index < filled - 1 else "█", style=self.style)
+            else:
+                bar.append("░", style="bar.empty")
         yield bar
 
 
@@ -532,7 +599,7 @@ class PaceLabel:
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
         text = self.pace
-        if console.width < _NARROW_CONSOLE_WIDTH or options.max_width < len(text):
+        if console.width < _NARROW_CONSOLE_WIDTH:
             text = _compact_pace(self.pace)
         yield Text(text, style=self.style)
 
@@ -801,7 +868,11 @@ def _add_usage_rows(
         table.add_row(
             Text(window.session_label, style="text.muted"),
             Text(_format_percent_value(percent), style=style),
-            PercentageBar(percent, style),
+            PercentageBar(
+                percent,
+                style,
+                _expected_session_remaining(percent, reset_str, now, window.window_hours),
+            ),
             Text(reset_display, style="text.cyan"),
             PaceLabel(pace),
         )
@@ -937,7 +1008,11 @@ def _add_copilot_rows(table: Table, data: dict[str, object], now: datetime) -> N
     table.add_row(
         Text("mo", style="text.muted"),
         Text(value_text, style=style),
-        PercentageBar(percent_left, style),
+        PercentageBar(
+            percent_left,
+            style,
+            _expected_billing_remaining(percent_left, start.isoformat(), end.isoformat(), utc_now),
+        ),
         Text(reset_display, style="text.cyan"),
         PaceLabel(pace_text),
     )
@@ -981,7 +1056,9 @@ def _add_cursor_rows(table: Table, data: dict[str, object], now: datetime) -> No
         table.add_row(
             Text(label, style="text.muted"),
             Text(_format_percent_value(percent_left), style=style),
-            PercentageBar(percent_left, style),
+            PercentageBar(
+                percent_left, style, _expected_billing_remaining(percent_left, start, end, now)
+            ),
             Text(reset_display, style="text.cyan"),
             PaceLabel(pace_text),
         )
@@ -1011,7 +1088,16 @@ def _add_vibe_rows(table: Table, data: dict[str, object], now: datetime) -> None
     table.add_row(
         Text("mo", style="text.muted"),
         Text(value_text, style=style),
-        PercentageBar(percent_left, style),
+        PercentageBar(
+            percent_left,
+            style,
+            _expected_billing_remaining(
+                percent_left,
+                str(start_iso) if isinstance(start_iso, str) else None,
+                str(end_iso) if isinstance(end_iso, str) else None,
+                now,
+            ),
+        ),
         Text(reset_display, style="text.cyan"),
         PaceLabel(pace_text),
     )
@@ -1210,9 +1296,10 @@ def build_micro_depleted_panel(
     reset_str = _extract_depleted_reset_str(snapshot, now)
     reset_disp = _format_reset_display(reset_str, now)
     body = Text(f"0% until {reset_disp}", style="text.red", justify="center")
+    title = Text(f"{name} [!]", style="text.red")
     return Panel(
         body,
-        title=f"[bold text.red]{name} [!][/]",
+        title=title,
         border_style="text.red",
         width=width,
         subtitle_align="left",
@@ -1229,7 +1316,7 @@ class DynamicMicroDepletedPair:
         self.now = now
 
     def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
-        w1 = (options.max_width - 1) // 2
+        w1 = options.max_width // 2
         w2 = options.max_width - 1 - w1
         p1 = build_micro_depleted_panel(self.snap1, self.now, width=w1)
         p2 = build_micro_depleted_panel(self.snap2, self.now, width=w2)

@@ -9,7 +9,7 @@ import SwiftUI
 /// the design system's own component rule ("colour comes from the signal
 /// ramp, not the provider accent").
 ///
-/// `worstWindow == nil` is a real, reachable state -- an errored or
+/// `selectedWindow == nil` is a real, reachable state -- an errored or
 /// no-window-data provider can legitimately be ranked as the hero (Phase
 /// 3's OW-1 ranking fix) -- and renders an error variant in both sizes.
 /// This is a superset of `ProviderCard.swift`'s existing three-way
@@ -19,59 +19,93 @@ import SwiftUI
 /// data renders the same "no window data" secondary-style copy.
 struct StatTile: View {
     let provider: ProviderStatus
-    let worstWindow: ProviderWindow?
+    let selectedWindow: ProviderWindow?
+    let badgeWindows: [ProviderWindow]
+    let onSelectWindow: (ProviderWindow) -> Void
+    let now: Date
     var isHero: Bool = false
-    /// P5/T5.2: "your local setting flagged this" cue -- true when
-    /// `localIsUrgent` holds for `worstWindow` against the caller's current
-    /// `localWarningThresholdPercent`. Purely visual; never affects layout
-    /// sizing or gates rendering of anything else, so existing callers that
-    /// don't pass it (default `false`) are pixel-identical to before.
-    var isLocallyUrgent: Bool = false
+
+    init(
+        provider: ProviderStatus,
+        selectedWindow: ProviderWindow?,
+        badgeWindows: [ProviderWindow] = [],
+        isHero: Bool = false,
+        now: Date = Date(),
+        onSelectWindow: @escaping (ProviderWindow) -> Void = { _ in }
+    ) {
+        self.provider = provider
+        self.selectedWindow = selectedWindow
+        self.badgeWindows = badgeWindows
+        self.isHero = isHero
+        self.now = now
+        self.onSelectWindow = onSelectWindow
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: isHero ? 8 : 4) {
+        VStack(alignment: .leading, spacing: isHero ? 6 : 2) {
             Text(provider.providerDisplayName)
                 .font(isHero ? .title2.bold() : .headline)
 
-            if let worstWindow {
-                windowBody(worstWindow)
+            if let selectedWindow {
+                windowBody(selectedWindow)
             } else {
                 errorBody
             }
         }
-        .padding(.vertical, isHero ? 12 : 6)
-        .padding(.horizontal, isLocallyUrgent ? 8 : 0)
-        .overlay {
-            if isLocallyUrgent {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(LocalUrgentAccent.ring, lineWidth: 2)
-            }
-        }
+        .padding(.vertical, isHero ? 10 : 3)
     }
 
     @ViewBuilder
     private func windowBody(_ window: ProviderWindow) -> some View {
-        let percent = max(0, min(100, window.percentLeft))
         let color = SignalColor.forPercent(window.percentLeft)
 
         if isHero {
-            Text("\(Int(window.percentLeft))%")
-                .font(.system(size: 48, weight: .bold).monospacedDigit())
-                .foregroundStyle(color)
-            ProgressView(value: percent / 100)
-                .tint(color)
+            HStack(alignment: .firstTextBaseline) {
+                Text(ProviderWindowLabel.label(for: window.id))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text("\(Int(window.percentLeft))%")
+                    .font(.system(size: 48, weight: .bold).monospacedDigit())
+                    .foregroundStyle(color)
+            }
+            UsageBar(window: window, color: color)
         } else {
-            HStack {
-                ProgressView(value: percent / 100)
-                    .tint(color)
+            Text(ProviderWindowLabel.label(for: window.id))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                UsageBar(window: window, color: color)
                 Text("\(Int(window.percentLeft))%")
                     .font(.subheadline.monospacedDigit())
             }
         }
 
+        if !badgeWindows.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(badgeWindows, id: \.id) { badgeWindow in
+                    Button {
+                        onSelectWindow(badgeWindow)
+                    } label: {
+                        Text("\(ProviderWindowLabel.label(for: badgeWindow.id)) \(Int(badgeWindow.percentLeft))%")
+                            .font(.caption.weight(.semibold).monospacedDigit())
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel(
+                        "Select \(ProviderWindowLabel.label(for: badgeWindow.id)), \(Int(badgeWindow.percentLeft)) percent remaining"
+                    )
+                }
+            }
+            // UsageBar's red pace marker intentionally extends beyond its
+            // four-point layout height. Keep the alternate-window controls
+            // clear of that marker without restoring the larger provider-row
+            // padding that was removed for the dense dashboard.
+            .padding(.top, 8)
+        }
+
         HStack(spacing: 12) {
             if let resetISO = window.resetISO {
-                Text("reset \(resetISO)")
+                Text("reset \(friendlyResetDate(resetISO, now: now) ?? resetISO)")
             }
             if let pace = window.paceDelta {
                 Text(String(format: "pace %+.0f%%", pace * 100))

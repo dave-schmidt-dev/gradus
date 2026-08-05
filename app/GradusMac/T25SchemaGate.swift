@@ -59,7 +59,8 @@ enum T25SchemaGate {
             snapshotUpdatedAt: "2026-08-02T00:00:00Z",
             publishedAt: publishedAt,
             isWarning: true,
-            isDepleted: false
+            isDepleted: false,
+            syncSource: SyncSource(computerName: "Schema Gate Mac", userName: "schema-gate")
         )
 
         let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
@@ -100,6 +101,7 @@ enum T25SchemaGate {
             if abs(fetched.publishedAt.timeIntervalSince(status.publishedAt)) > 0.01 { mismatches.append("publishedAt") }
             if fetched.isWarning != status.isWarning { mismatches.append("isWarning") }
             if fetched.isDepleted != status.isDepleted { mismatches.append("isDepleted") }
+            if fetched.syncSource != status.syncSource { mismatches.append("syncSource") }
 
             guard mismatches.isEmpty else {
                 print("FAIL: fetched ProviderStatus mismatches on: \(mismatches.joined(separator: ", "))")
@@ -107,7 +109,7 @@ enum T25SchemaGate {
                 print("  fetched: \(fetched)")
                 exit(1)
             }
-            print("PASS: fetched record decodes back to an equivalent ProviderStatus (all 11 fields checked)")
+            print("PASS: fetched record decodes back to an equivalent ProviderStatus (all 13 fields checked)")
         } catch {
             print("FAIL: fetch/decode threw: \(error)")
             exit(1)

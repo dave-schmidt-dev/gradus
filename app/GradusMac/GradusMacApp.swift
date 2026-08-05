@@ -89,8 +89,14 @@ final class PublishPipeline {
                 guard let operationID = await viewModel.cloudSyncDidStart() else { return }
                 do {
                     let publishedAt = Date()
+                    let syncSource = LocalSyncSource.current
                     let statuses = try payload.providers.map {
-                        try makeProviderStatus(from: $0, snapshotUpdatedAt: payload.updatedAt, publishedAt: publishedAt)
+                        try makeProviderStatus(
+                            from: $0,
+                            snapshotUpdatedAt: payload.updatedAt,
+                            publishedAt: publishedAt,
+                            syncSource: syncSource
+                        )
                     }
                     try await coordinator.upsert(statuses)
                     await viewModel.cloudSyncDidSucceed(operationID: operationID)

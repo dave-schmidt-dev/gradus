@@ -8,7 +8,8 @@ private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, owner
 
 private func sampleStatus(
     ok: Bool = true,
-    windows: [ProviderWindow] = [ProviderWindow(id: "weekly", percentLeft: 58.0, resetISO: nil, windowHours: 168.0, paceDelta: -0.2)]
+    windows: [ProviderWindow] = [ProviderWindow(id: "weekly", percentLeft: 58.0, resetISO: nil, windowHours: 168.0, paceDelta: -0.2)],
+    syncSource: SyncSource? = SyncSource(computerName: "Dave's MacBook Pro", userName: "dave")
 ) -> ProviderStatus {
     ProviderStatus(
         providerName: "Codex",
@@ -19,7 +20,8 @@ private func sampleStatus(
         data: ["weekly_percent_left": .double(58.0)],
         observedAt: "2026-08-02T20:00:00-04:00",
         snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-        publishedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        publishedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        syncSource: syncSource
     )
 }
 
@@ -28,9 +30,61 @@ private func sampleStatus(
     let record = try original.toCKRecord(zoneID: zoneID)
     #expect(record.recordType == CloudKitConstants.recordType)
     #expect(record.recordID.recordName == "Codex")
+    #expect(record["sourceComputerName"] as? String == "Dave's MacBook Pro")
+    #expect(record["sourceUserName"] as? String == "dave")
 
     let decoded = try ProviderStatus(record: record)
     #expect(decoded == original)
+}
+
+@Test func omitsSyncSourceKeysWhenSyncSourceIsNil() throws {
+    let record = try sampleStatus(syncSource: nil).toCKRecord(zoneID: zoneID)
+
+    #expect(record["sourceComputerName"] == nil)
+    #expect(record["sourceUserName"] == nil)
+    #expect(try ProviderStatus(record: record).syncSource == nil)
+}
+
+@Test func decodesLegacyRecordWithoutSyncSource() throws {
+    let record = CKRecord(
+        recordType: CloudKitConstants.recordType,
+        recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
+    )
+    record["providerName"] = "Codex" as CKRecordValue
+    record["providerDisplayName"] = "Codex" as CKRecordValue
+    record["ok"] = NSNumber(value: true)
+    record["snapshotUpdatedAt"] = "2026-08-02T20:00:00-04:00" as CKRecordValue
+    record["publishedAt"] = Date(timeIntervalSince1970: 1_700_000_000) as CKRecordValue
+
+    #expect(try ProviderStatus(record: record).syncSource == nil)
+}
+
+@Test func ignoresPartialSyncSourceMetadata() throws {
+    let record = CKRecord(
+        recordType: CloudKitConstants.recordType,
+        recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
+    )
+    record["providerName"] = "Codex" as CKRecordValue
+    record["ok"] = NSNumber(value: true)
+    record["snapshotUpdatedAt"] = "2026-08-02T20:00:00-04:00" as CKRecordValue
+    record["publishedAt"] = Date(timeIntervalSince1970: 1_700_000_000) as CKRecordValue
+    record["sourceComputerName"] = "Dave's MacBook Pro" as CKRecordValue
+
+    #expect(try ProviderStatus(record: record).syncSource == nil)
+}
+
+@Test func ignoresPartialSyncSourceMetadataWhenComputerNameIsMissing() throws {
+    let record = CKRecord(
+        recordType: CloudKitConstants.recordType,
+        recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
+    )
+    record["providerName"] = "Codex" as CKRecordValue
+    record["ok"] = NSNumber(value: true)
+    record["snapshotUpdatedAt"] = "2026-08-02T20:00:00-04:00" as CKRecordValue
+    record["publishedAt"] = Date(timeIntervalSince1970: 1_700_000_000) as CKRecordValue
+    record["sourceUserName"] = "dave" as CKRecordValue
+
+    #expect(try ProviderStatus(record: record).syncSource == nil)
 }
 
 @Test func derivesIsWarningFromWindowsWhenNotExplicitlySet() throws {

@@ -11,8 +11,12 @@ import Testing
 
 private let fixedDate = Date(timeIntervalSince1970: 1_785_000_000)
 
-private func makeWindow(percentLeft: Double, paceDelta: Double? = nil) -> ProviderWindow {
-    ProviderWindow(id: "weekly", percentLeft: percentLeft, resetISO: nil, windowHours: 168, paceDelta: paceDelta)
+private func makeWindow(
+    percentLeft: Double,
+    resetISO: String? = nil,
+    paceDelta: Double? = nil
+) -> ProviderWindow {
+    ProviderWindow(id: "weekly", percentLeft: percentLeft, resetISO: resetISO, windowHours: 168, paceDelta: paceDelta)
 }
 
 private func makeProvider(
@@ -137,4 +141,49 @@ private func makeProvider(
         let ranked = rankProviders([providerZ, providerA], localThreshold: 20)
         #expect(ranked.map(\.providerName) == ["alpha", "zeta"])
     }
+}
+
+// MARK: - device-local presentation sorts
+
+@Test func sortModesApplyWithinTheActivePartitionBeforeExhaustedProviders() {
+    let error = makeProvider(name: "error", ok: false, errorMessage: "offline")
+    let urgent = makeProvider(
+        name: "urgent",
+        windows: [makeWindow(percentLeft: 10, resetISO: "2026-08-06T12:00:00Z")],
+        isWarning: true)
+    let resetSoon = makeProvider(
+        name: "reset",
+        windows: [makeWindow(percentLeft: 80, resetISO: "2026-08-05T12:00:00Z")],
+        isWarning: true)
+    let noData = makeProvider(name: "no-data", windows: [], isWarning: true)
+    let normal = makeProvider(
+        name: "normal",
+        windows: [makeWindow(percentLeft: 50, resetISO: "2026-08-07T12:00:00Z")])
+    let exhausted = makeProvider(
+        name: "aardvark-exhausted",
+        windows: [makeWindow(percentLeft: 0, resetISO: "2026-08-04T12:00:00Z")])
+    let providers = [normal, exhausted, resetSoon, noData, urgent, error]
+
+    #expect(rankProviders(providers, localThreshold: 20, sortOption: .mostUrgent).map(\.providerName) == [
+        "error", "urgent", "reset", "no-data", "normal", "aardvark-exhausted",
+    ])
+    #expect(rankProviders(providers, localThreshold: 20, sortOption: .resetSoonest).map(\.providerName) == [
+        "error", "reset", "urgent", "no-data", "normal", "aardvark-exhausted",
+    ])
+    #expect(rankProviders(providers, localThreshold: 20, sortOption: .nameAZ).map(\.providerName) == [
+        "error", "reset", "urgent", "no-data", "normal", "aardvark-exhausted",
+    ])
+}
+
+@Test func nameSortRetainsProviderNameTieBreakerAndNoWindowFallback() {
+    let noWindow = makeProvider(name: "zeta", windows: [], isWarning: true)
+    let alpha = makeProvider(name: "alpha", windows: [makeWindow(percentLeft: 40)], isWarning: true)
+    let beta = makeProvider(name: "beta", windows: [makeWindow(percentLeft: 60)], isWarning: true)
+
+    let ranked = rankProviders([noWindow, beta, alpha], localThreshold: 20, sortOption: .nameAZ)
+
+    #expect(ranked.map(\.providerName) == ["alpha", "beta", "zeta"])
+    #expect(noWindow.windows.isEmpty)
+    #expect(noWindow.windows.first?.percentLeft == nil)
+    #expect(noWindow.windows.first?.resetISO == nil)
 }

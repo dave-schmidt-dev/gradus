@@ -23,19 +23,28 @@ EXIT_DEPENDENCY=69
 EXIT_TOOL=70
 
 watch=false
+monitor=false
 interval="${NOTARY_POLL_INTERVAL:-30}"
 record=false
 record_id=""
 record_name=""
 record_artifact=""
 declare -a requested_ids=()
+declare -a monitor_explicit_ids=()
+declare -a monitor_ids=()
 
 tmp_dir=""
 lock_dir=""
 lock_owned=false
 ledger_tmp=""
+request_pid=""
 
 cleanup() {
+  if [[ -n "$request_pid" ]]; then
+    kill -TERM "$request_pid" 2>/dev/null || true
+    wait "$request_pid" 2>/dev/null || true
+    request_pid=""
+  fi
   if $lock_owned && [[ -n "$lock_dir" ]]; then
     rmdir "$lock_dir" 2>/dev/null || true
   fi
@@ -43,17 +52,25 @@ cleanup() {
     rm -f "$ledger_tmp" 2>/dev/null || true
   fi
   if [[ -n "$tmp_dir" ]]; then
-    rm -f "$tmp_dir/response.json" "$tmp_dir/records.tsv" "$tmp_dir/all-records.tsv" 2>/dev/null || true
+    rm -f "$tmp_dir/response.json" "$tmp_dir/records.tsv" "$tmp_dir/all-records.tsv" "$tmp_dir/history-records.tsv" "$tmp_dir/monitor-display.txt" 2>/dev/null || true
     rmdir "$tmp_dir" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+interrupt_handler() {
+  if [[ -n "$request_pid" ]]; then
+    kill -TERM "$request_pid" 2>/dev/null || true
+    wait "$request_pid" 2>/dev/null || true
+    request_pid=""
+  fi
+  exit 130
+}
+trap interrupt_handler INT TERM
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./notary-status.sh [--watch] [--interval SECONDS] [--id SUBMISSION_ID ...]
+  ./notary-status.sh [--watch|--monitor] [--interval SECONDS] [--id SUBMISSION_ID ...]
   ./notary-status.sh --record SUBMISSION_ID --name NAME --artifact ZIP_PATH
 
 Exit status:
@@ -68,7 +85,10 @@ Exit status:
 With no --id, the command checks every ID in the local submission ledger. If
 the ledger is empty, it falls back to GradusMac.app.zip entries from Apple's
 notary history. --watch polls while submissions remain pending, then exits when
-all are accepted or as soon as any terminal failure appears.
+all are accepted or as soon as any terminal failure appears. --monitor stays
+running until Ctrl-C/TERM, refreshes history every cycle to discover new
+GradusMac.app.zip submissions, and tolerates empty, terminal, accepted, and
+transient Apple-request states.
 EOF
 }
 
@@ -90,6 +110,10 @@ while (($#)); do
   case "$1" in
     --watch)
       watch=true
+      shift
+      ;;
+    --monitor)
+      monitor=true
       shift
       ;;
     --interval)
@@ -132,7 +156,7 @@ done
 [[ "$interval" =~ ^[1-9][0-9]*$ ]] || fail_usage "--interval must be a positive integer"
 
 if $record; then
-  $watch && fail_usage "--record cannot be combined with --watch"
+  ($watch || $monitor) && fail_usage "--record cannot be combined with --watch or --monitor"
   ((${#requested_ids[@]} == 0)) || fail_usage "--record cannot be combined with --id"
   valid_id "$record_id" || fail_usage "invalid submission ID: $record_id"
   [[ -n "$record_name" ]] || fail_usage "--record requires --name"
@@ -192,6 +216,15 @@ if $record; then
   exit 0
 fi
 
+$watch && $monitor && fail_usage "--watch cannot be combined with --monitor"
+
+if $monitor; then
+  monitor_explicit_ids=()
+  if ((${#requested_ids[@]})); then
+    monitor_explicit_ids=("${requested_ids[@]}")
+  fi
+fi
+
 for dependency in "$XCRUN" "$PYTHON" mktemp date sleep cat mv rm rmdir; do
   command -v "$dependency" >/dev/null 2>&1 || {
     echo "FAIL: required tool is missing: $dependency" >&2
@@ -204,8 +237,13 @@ if ((${#requested_ids[@]})); then
 else
   status_source="Apple notarization history"
 fi
-if ((${#requested_ids[@]} == 0)) && [[ -s "$STATE_FILE" ]]; then
-  while IFS=$'\t' read -r _submitted id _name _artifact _hash; do
+if $monitor; then
+  # Monitor mode retains explicit IDs and rebuilds ledger fallback IDs on every
+  # cycle so a recorder can add or replace rows while we run.
+  monitor_ids=()
+  requested_ids=()
+elif ((${#requested_ids[@]} == 0)) && [[ -s "$STATE_FILE" ]]; then
+  while IFS=$'\t' read -r _submitted id _name _artifact _hash || [[ -n "$id" ]]; do
     [[ -n "$id" ]] || continue
     if ! valid_id "$id"; then
       echo "FAIL: local notarization ledger contains an invalid submission ID." >&2
@@ -220,6 +258,9 @@ fi
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-notary-status.XXXXXX")"
 response_file="$tmp_dir/response.json"
 records_file="$tmp_dir/records.tsv"
+history_records_file="$tmp_dir/history-records.tsv"
+display_file="$tmp_dir/monitor-display.txt"
+monitor_fetch_error=false
 
 progress() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$1" >&2
@@ -263,13 +304,71 @@ for record in records:
 PY
 }
 
+append_unique_id() {
+  local candidate="$1" existing
+  valid_id "$candidate" || return 0
+  if ((${#monitor_ids[@]})); then
+    for existing in "${monitor_ids[@]}"; do
+      [[ "$existing" != "$candidate" ]] || return 0
+    done
+  fi
+  monitor_ids+=("$candidate")
+}
+
+contains_id() {
+  local candidate="$1" existing
+  shift
+  for existing in "$@"; do
+    [[ "$existing" != "$candidate" ]] || return 0
+  done
+  return 1
+}
+
+refresh_monitor_ledger() {
+  local id
+  monitor_ids=()
+  if ((${#monitor_explicit_ids[@]})); then
+    monitor_ids=("${monitor_explicit_ids[@]}")
+  fi
+  requested_ids=()
+  if ((${#monitor_ids[@]})); then
+    requested_ids=("${monitor_ids[@]}")
+  fi
+  if [[ ! -s "$STATE_FILE" ]]; then
+    return 0
+  fi
+  while IFS=$'\t' read -r _submitted id _name _artifact _hash || [[ -n "$id" ]]; do
+    [[ -n "$id" ]] || continue
+    if ! valid_id "$id"; then
+      echo "WARN: ignoring invalid submission ID in the local ledger: $id" >&2
+      continue
+    fi
+    append_unique_id "$id"
+  done <"$STATE_FILE"
+  requested_ids=()
+  if ((${#monitor_ids[@]})); then
+    requested_ids=("${monitor_ids[@]}")
+  fi
+}
+
+run_notary_request() {
+  request_pid=""
+  "$XCRUN" "$@" >"$response_file" 2>/dev/null &
+  request_pid=$!
+  local request_status
+  wait "$request_pid"
+  request_status=$?
+  request_pid=""
+  return "$request_status"
+}
+
 fetch_records() {
   : >"$records_file"
   if ((${#requested_ids[@]})); then
     local id
     for id in "${requested_ids[@]}"; do
       progress "Requesting live Apple notarization info for submission $id"
-      if ! "$XCRUN" notarytool info "$id" --keychain-profile "$PROFILE" --output-format json >"$response_file" 2>/dev/null; then
+      if ! run_notary_request notarytool info "$id" --keychain-profile "$PROFILE" --output-format json; then
         explain_request_failure "info for submission $id"
         return "$EXIT_TOOL"
       fi
@@ -282,7 +381,7 @@ fetch_records() {
     mv "$tmp_dir/all-records.tsv" "$records_file"
   else
     progress "Requesting live Apple notarization history"
-    if ! "$XCRUN" notarytool history --keychain-profile "$PROFILE" --output-format json >"$response_file" 2>/dev/null; then
+    if ! run_notary_request notarytool history --keychain-profile "$PROFILE" --output-format json; then
       explain_request_failure "history"
       return "$EXIT_TOOL"
     fi
@@ -293,15 +392,92 @@ fetch_records() {
   fi
 }
 
+fetch_monitor_records() {
+  local id
+  local history_failed=false
+  local info_failed=false
+  local -a history_ids=()
+  monitor_fetch_error=false
+  : >"$records_file"
+  : >"$history_records_file"
+
+  # History is fetched on every monitor cycle, even when the ledger has IDs.
+  # That is what makes a long-lived monitor notice a newly submitted archive.
+  progress "Requesting live Apple notarization history"
+  if ! run_notary_request notarytool history --keychain-profile "$PROFILE" --output-format json; then
+    explain_request_failure "history"
+    history_failed=true
+  elif ! parse_response history 2>/dev/null; then
+    echo "WARN: notarytool returned unreadable history data; retrying." >&2
+    history_failed=true
+  else
+    cp "$records_file" "$history_records_file"
+  fi
+
+  if ! $history_failed; then
+    while IFS=$'\t' read -r _name id _created _status; do
+      [[ -n "$id" ]] || continue
+      valid_id "$id" || continue
+      history_ids+=("$id")
+    done <"$history_records_file"
+  fi
+  requested_ids=()
+  if ((${#monitor_ids[@]})); then
+    requested_ids=("${monitor_ids[@]}")
+  fi
+
+  : >"$tmp_dir/all-records.tsv"
+  if ! $history_failed && [[ -s "$history_records_file" ]]; then
+    cat "$history_records_file" >>"$tmp_dir/all-records.tsv"
+  fi
+  if ((${#requested_ids[@]})); then
+    for id in "${requested_ids[@]}"; do
+      if ! $history_failed && ((${#history_ids[@]})) && contains_id "$id" "${history_ids[@]}"; then
+        continue
+      fi
+      progress "Requesting live Apple notarization info for submission $id"
+      if ! run_notary_request notarytool info "$id" --keychain-profile "$PROFILE" --output-format json; then
+        explain_request_failure "info for submission $id"
+        info_failed=true
+        continue
+      fi
+      if ! parse_response info 2>/dev/null; then
+        echo "WARN: notarytool returned unreadable status data for $id; retrying." >&2
+        info_failed=true
+        continue
+      fi
+      cat "$records_file" >>"$tmp_dir/all-records.tsv"
+    done
+  fi
+  mv "$tmp_dir/all-records.tsv" "$records_file"
+  if $history_failed || $info_failed; then
+    monitor_fetch_error=true
+  fi
+}
+
 check_once() {
   local checked_at pending_count=0 terminal_count=0
-  if ! fetch_records; then
+  if $monitor; then
+    refresh_monitor_ledger
+    fetch_monitor_records
+    if $monitor_fetch_error && [[ ! -s "$records_file" ]]; then
+      checked_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+      echo "Notary queue checked: $checked_at"
+      echo "Status source: Apple history and tracked submissions"
+      echo "Apple status unavailable; retrying on the next refresh."
+      return "$EXIT_TOOL"
+    fi
+  elif ! fetch_records; then
     return "$EXIT_TOOL"
   fi
 
   checked_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   echo "Notary queue checked: $checked_at"
-  echo "Status source: $status_source"
+  if $monitor; then
+    echo "Status source: Apple history discovery + live submission info"
+  else
+    echo "Status source: $status_source"
+  fi
   if [[ ! -s "$records_file" ]]; then
     echo "No GradusMac.app.zip submissions were returned."
     [[ ! -f "$STATE_FILE" ]] || echo "Local submission ledger: $STATE_FILE"
@@ -331,6 +507,27 @@ check_once() {
   fi
   return "$EXIT_ACCEPTED"
 }
+
+if $monitor; then
+  monitor_cycle=0
+  while true; do
+    set +e
+    # Keep the last completed dashboard visible while Apple is responding.
+    # Progress remains live on stderr; only the completed snapshot is buffered.
+    check_once >"$display_file"
+    result=$?
+    set -e
+    if ((monitor_cycle > 0)) && [[ -t 1 ]]; then
+      # Keep scrollback clean in Terminal while avoiding ANSI escapes in pipes,
+      # logs, and hermetic tests.
+      printf '\033[2J\033[H'
+    fi
+    cat "$display_file"
+    echo "Next refresh: in ${interval}s (Ctrl-C to stop)."
+    ((monitor_cycle += 1))
+    sleep "$interval"
+  done
+fi
 
 while true; do
   set +e

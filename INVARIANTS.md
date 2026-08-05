@@ -105,3 +105,16 @@ rationale: Only the explicit --refresh-snapshot command may use non-headless pro
   --write-snapshot through credential-aware behavior. One Antigravity probe supplies both the direct
   entry and the schema-v2 Antigravity (Claude) synthetic projection; no second credential request is
   implied. Overlap, lock failure, safe status, and one-probe behavior are binary-tested.
+
+### INV-9 — A cross-platform feature ships its producer and consumer as one compatibility unit
+area: ["app/GradusMac/**", "app/GradusiOS/**", "app/GradusKit/**", "app/project.yml", "app/test-gate.sh", "app/archive-upload-ios.sh", "RELEASE_CHECKLIST.md"]
+gate_test: app/test-gate.sh
+threshold: 3
+rationale: GradusiOS is a consumer of the Mac publisher, not an independent data source. If an iOS
+  feature reads a new field, record, behavior, or contract produced by GradusMac, the Mac producer
+  must be built, launched, and verified in the matching CloudKit environment before the iOS artifact
+  is uploaded. A consumer-only TestFlight release can otherwise look healthy while rendering stale
+  records, missing required context, or silently dropping the new feature. The release checklist
+  makes the dependency decision explicit, requires both sides to pass their gates, and records the
+  producer-publish evidence alongside the consumer upload evidence. A Mac-only local republish does
+  not require notarization; a Mac artifact distributed to users still follows the notarization gate.

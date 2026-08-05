@@ -35,17 +35,21 @@ import Foundation
 /// entry), so it keeps `WINDOW_SPECS["Vibe"]`'s id unchanged: `"billing_cycle"`.
 enum ProviderWindowLabel {
     private static let labels: [String: String] = [
-        // The plan's 6 confirmed ids.
+        // Shared schema-v2 windows.
         "five_hour": "5 Hour",
         "weekly": "Weekly",
         "monthly": "Monthly",
         "premium": "Premium",
-        "cg_five_hour": "5 Hour (CG)",
-        "cg_weekly": "Weekly (CG)",
-        // Cursor/Vibe, confirmed against `gradus/snapshot.py` (see doc
-        // comment above) -- source-verified, not live-API-verified.
+        // Cursor's schema-v2 capacity pools.
         "ac": "Auto",
         "ap": "API",
+        // Antigravity's Claude+GPT alert windows. Keep longer aliases for
+        // older payloads while matching the current data contract.
+        "cg5": "5 Hour (CG)",
+        "cg1w": "Weekly (CG)",
+        "cg_five_hour": "5 Hour (CG)",
+        "cg_weekly": "Weekly (CG)",
+        // Vibe's billing window remains present in the v1-compatible model.
         "billing_cycle": "Billing Cycle",
     ]
 

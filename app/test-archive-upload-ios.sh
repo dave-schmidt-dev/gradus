@@ -77,4 +77,11 @@ set -e
   exit 1
 }
 
+first_xattr_cleanup_line="$(awk '/xattr -cr "\$PACKAGE_DIR\/Payload\/GradusiOS\.app"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+codesign_line="$(awk '/codesign --force --sign/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+[[ -n "$first_xattr_cleanup_line" && -n "$codesign_line" && "$first_xattr_cleanup_line" -lt "$codesign_line" ]] || {
+  echo "FAIL: upload wrapper must clear bundle metadata before codesign" >&2
+  exit 1
+}
+
 echo "archive-upload-ios.sh HOME fallback and credential guard passed"

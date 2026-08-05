@@ -5,8 +5,8 @@ import Testing
 
 @testable import GradusiOS
 
-// P5/T5.3 gate: three-group `SettingsView` layout (Sync & Notifications,
-// Warning Threshold, About), toggle-on/off states, light+dark -- following
+// P5/T5.3 gate: four-group `SettingsView` layout (Sync & Notifications,
+// Local Display, Warning Threshold, About), toggle-on/off states, light+dark -- following
 // `DashboardSnapshotTests.swift`'s exact `.image(layout: .fixed)` pattern.
 // No live CloudKit: `DashboardViewModel` is built without a
 // `subscriptionManager`, so the toggles render straight from seeded
@@ -62,6 +62,25 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
     defaults.set(syncEnabled, forKey: DashboardViewModel.syncEnabledKey)
     defaults.set(notificationsEnabled, forKey: DashboardViewModel.notificationsEnabledKey)
     return DashboardViewModel(cache: cache, userDefaults: defaults)
+}
+
+@MainActor
+@Test func settingsControlsBindToLiveLocalPreferencesAndPersist() {
+    let defaults = isolatedDefaults()
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gradus-settings-local-controls-\(UUID().uuidString)", isDirectory: true)
+    let viewModel = DashboardViewModel(cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+
+    #expect(ProviderSortOption.allCases.map(\.title) == ["Most urgent", "Reset soonest", "Name A-Z"])
+    for option in ProviderSortOption.allCases {
+        viewModel.providerSortOption = option
+        #expect(defaults.string(forKey: DashboardViewModel.providerSortOptionKey) == option.rawValue)
+        #expect(viewModel.providerSortOption == option)
+    }
+    viewModel.showExhausted = false
+
+    #expect(defaults.bool(forKey: DashboardViewModel.showExhaustedKey) == false)
+    #expect(viewModel.showExhausted == false)
 }
 
 @MainActor

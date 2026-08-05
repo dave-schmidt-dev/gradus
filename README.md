@@ -291,17 +291,19 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 The canonical Zero Delta design-system source package is preserved at
 [`app/design-system/zero-delta/`](app/design-system/zero-delta/). It includes
 the shared brand rules, tokens, component references, Gradus UI kits, and the
-Gradus app icon assets. The next UI version will use this package to replace
-the current placeholder icon and to finish the provider-card layout work.
+Gradus app icon assets. GradusiOS 1.4 applies the supplied signal-ramp icon,
+active-first provider sorting, compact exhausted grouping, selectable bucket
+badges, Settings controls for sorting/visibility, and the shared expected-pace
+redline across the TUI, Mac, and iOS surfaces.
 
-- **GradusMac** — a menu-bar app that reads the same `.state/snapshot.json`/`snapshot-v2.json` this CLI writes and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/` or any credential path (INV-7) — its only input is the credential-free snapshot file, threaded through a single injected path dependency.
-- **GradusiOS** — a fully-featured mobile dashboard (iOS 17+). Implements the "Zero Delta Design System": a hero-ranked "Now" screen, a Provider Detail drill-in showing all windows per provider, and a functional Settings screen with per-device warning-threshold override and notification toggle. No independent data source — renders whatever the Mac last published, kept current via a `CKRecordZoneSubscription` (silent push, delta sync with `CKFetchRecordZoneChangesOperation`) plus a silent `CKQuerySubscription`; the app compares cached warning state and emits one local notification when a provider enters a warning episode. Uses a unified `rankProviders()` function (shared with the Now screen ranking logic) to prioritize attention-needed providers (errored, CloudKit-warned, or locally-flagged) above healthy ones, descending by urgency.
+- **GradusMac** — a menu-bar app that reads the same `.state/snapshot.json`/`snapshot-v2.json` this CLI writes and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/` or any credential path (INV-7) — its only input is the credential-free snapshot file, threaded through a single injected path dependency. Each publish also carries the Mac's user-visible computer name, short local username, and publish timestamp so iOS can show the connected computer and when it last reported; it never sends an email, serial number, path, or credential.
+- **GradusiOS** — a fully-featured mobile dashboard (iOS 17+). Implements the "Zero Delta Design System": a hero-ranked "Now" screen, a Provider Detail drill-in showing all windows per provider, and a functional Settings screen with per-device warning-threshold override and notification toggle. No independent data source — renders whatever the Mac last published, kept current via a `CKRecordZoneSubscription` (silent push, delta sync with `CKFetchRecordZoneChangesOperation`) plus a silent `CKQuerySubscription`; the app compares cached warning state and emits one local notification when a provider enters a warning episode. Uses `rankProviders()` to keep active providers ahead of exhausted providers, then applies the device-local Most urgent, Reset soonest, or Name A-Z sort within each partition while preserving deterministic attention and name tie-breakers.
   - **Design system components** (Phase 2): `StatTile` (hero tile + compact ranked-list variant), `ListRow` (generic row with single trailing accessory), `MobileNavBar` (replaces ad-hoc toolbar), `IconButton` (44pt minimum tap target).
   - **Design tokens** (Phase 1): `Colors.swift` with `SignalColor.forPercent()` (4-tier urgency ramp: `#87D787`/`#FFD75F`/`#FFAF5F`/`#FF5F5F` at ≥70/≥40/≥20/<20) and provider-accent constants; `Icon.swift` bridges SF Symbols to semantic names (offline, syncing, warning, settings, etc.).
-  - **Now screen** (Phase 3): hero provider (worst-case first, including errored providers) + ranked list of remaining providers, `NavigationSplitView`-based for future iPad dense-layout seam.
+  - **Now screen** (Phase 3): hero provider (worst-case first, including errored providers) + ranked list of remaining providers, with active providers before a compact exhausted section and a populated `NavigationStack` root for compact iPhone navigation.
   - **Provider Detail** (Phase 4): all windows per provider rendered at full size, with age metadata.
-  - **Settings** (Phase 5): Sync toggle (moved from toolbar), Notifications toggle (independent of sync, unsubscribes from CloudKit on toggle-off with success-gated UI update), local warning-threshold slider (device-only, union-combined with CloudKit's `isWarning` for local ranking), provider count, app version.
-  - **Window ID labels** (Phase 4): verified against `gradus/snapshot.py`'s `V2_WINDOW_SPECS` (the schema-v2 window specs that actually flow to CloudKit/iOS), with safe fallback (raw id string) for unverified ids (ships fully mapped for confirmed 9 ids: `five_hour`/`weekly`/`monthly`/`premium`/`cg_five_hour`/`cg_weekly`/`ac`/`ap`/`billing_cycle`; Antigravity's third-party window ids and Vibe's schema covered but initially fell to fallback due to plan-vs-implementation verification gap resolved in-code comments, logged as follow-up in TASKS.md).
+  - **Settings** (Phase 5): Sync toggle (moved from toolbar), Notifications toggle (independent of sync, unsubscribes from CloudKit on toggle-off with success-gated UI update), local warning-threshold slider, provider sorting, Show exhausted, connected-computer details, provider count, and app version. Display preferences are device-local.
+  - **Window ID labels** (Phase 4): verified against `gradus/snapshot.py`'s `V2_WINDOW_SPECS` (the schema-v2 window specs that actually flow to CloudKit/iOS), with explicit labels for the nine confirmed ids (`five_hour`/`weekly`/`monthly`/`premium`/`cg_five_hour`/`cg_weekly`/`ac`/`ap`/`billing_cycle`) plus legacy `cg5`/`cg1w` aliases, and raw-ID fallback for unknown ids.
 - Both apps share `GradusKit`, a CloudKit-free Swift package holding the reconciliation logic and the fixed `windowWarns` threshold, so it can be unit-tested against mocks instead of live CloudKit. GradusiOS's device-local warning threshold is kept iOS-only (not in GradusKit) per INV-7 scope.
 - Sync is opt-in per device (off by default) and independent per device — pairing two devices doesn't couple them beyond both reading the same published snapshot.
 
@@ -313,6 +315,13 @@ bash test-gate.sh   # boots the pinned simulator, runs GradusMac + GradusiOS uni
 ```
 
 Project docs for the Swift side live at the repo root alongside the Python ones (`INVARIANTS.md`, `ledger.yaml`) — INV-7 covers the CloudKit publisher's credential isolation.
+
+Cross-platform changes follow [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)
+and INV-9: when GradusiOS depends on a new GradusMac-published field or
+behavior, both sides are built and tested together, the matching Mac binary is
+launched locally to verify the publish, and only then is the iOS build uploaded.
+The Mac does not need notarization for that local republish; a Mac artifact
+distributed to users still requires the notarization workflow.
 
 ### Deploying GradusiOS
 
@@ -330,6 +339,10 @@ bws-secret-exec app-store-connect-upload --        # archives, codesigns, upload
 bws-secret-exec app-store-connect-testflight-setup -- <build>  # waits for processing and assigns the build to Internal Testers
 ```
 
+Every TestFlight build also gets a concise entry in `CHANGELOG.md`. Copy its
+release summary and test-focus text into App Store Connect's “What to Test”
+field; keep detailed implementation history in `HISTORY.md`.
+
 `archive-upload-ios.sh` prints the exact fixed-consumer follow-up command (with the build number it just uploaded) as its last line.
 
 ### Notarizing GradusMac
@@ -341,6 +354,7 @@ cd app
 ./test-notary-scripts.sh   # hermetic; fake Apple/Xcode tools, never submits
 ./notary-status.sh         # one live check of every locally tracked submission
 ./notary-status.sh --watch # poll while pending; stop on acceptance or terminal failure
+./notary-status.sh --monitor --interval 30  # leave a live dashboard running until Ctrl-C
 ./notarize-mac.sh          # creates and submits a new build; run only after review
 ```
 
@@ -351,6 +365,14 @@ If polling is interrupted, resume the existing submission without uploading agai
 ```bash
 ./notary-status.sh --watch --id SUBMISSION_UUID
 ```
+
+For a dashboard that should stay open while Apple processes the queue, use
+`--monitor`. It refreshes Apple history every cycle, discovers newly submitted
+`GradusMac.app.zip` jobs even when the local ledger is absent or changing, and
+keeps running through empty, accepted, pending, terminal, and transient request
+failures. `--interval SECONDS` controls the delay. Interactive Terminal output
+redraws in place; redirected stdout emits complete ANSI-free snapshots. Press
+Ctrl-C (or send TERM) to stop.
 
 A sandboxed agent may not see the login-Keychain profile even when it exists. `notary-status.sh` reports that case explicitly; run it in Terminal or approve an outside-sandbox, read-only check rather than recreating `gradus-notary`.
 

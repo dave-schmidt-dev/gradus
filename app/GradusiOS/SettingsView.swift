@@ -1,8 +1,8 @@
 import GradusKit
 import SwiftUI
 
-/// The Settings screen (P5/T5.3): three groups -- Sync + Notifications,
-/// Warning threshold, Providers + about. Takes the live `DashboardViewModel`
+/// The Settings screen (P5/T5.3): Sync + Notifications, connected computer,
+/// local display, warning threshold, and About. Takes the live `DashboardViewModel`
 /// instance directly, `@ObservedObject`, **not** a separate
 /// `SettingsViewModel` -- per the plan's explicit reversal
 /// (`ios-design-system-2026-08-03.md`, Phase 5 section): a standalone view
@@ -13,9 +13,6 @@ import SwiftUI
 /// until next relaunch. This is the exact same `DashboardViewModel`
 /// instance `GradusiOSApp` already holds as `@StateObject`.
 ///
-/// No "Publishing Mac" row: `sourceDevice` is deliberately never written to
-/// CloudKit (`CloudKitMapping.swift`) -- an intentional omission, not a gap
-/// this screen should paper over with an invented value.
 struct SettingsView: View {
     @ObservedObject var dashboardViewModel: DashboardViewModel
     @Environment(\.dismiss) private var dismiss
@@ -44,10 +41,47 @@ struct SettingsView: View {
 
             List {
                 syncAndNotificationsSection
+                connectedComputerSection
+                localDisplaySection
                 warningThresholdSection
                 aboutSection
             }
             .listStyle(.plain)
+        }
+    }
+
+    @ViewBuilder
+    private var connectedComputerSection: some View {
+        if let source = dashboardViewModel.connectedSource {
+            Section("Connected Computer") {
+                ListRow.value(icon: Icon.laptop, label: "Mac", value: source.computerName)
+                ListRow.value(icon: Icon.accountWarning, label: "User", value: source.userName)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var localDisplaySection: some View {
+        Section("Local Display") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sort providers")
+                    .font(.headline)
+                Picker("Sort providers", selection: $dashboardViewModel.providerSortOption) {
+                    ForEach(ProviderSortOption.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text("Sorting and exhausted-provider visibility are local display choices on this device only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+
+            ListRow.toggle(
+                icon: Icon.listBullet,
+                label: "Show exhausted",
+                isOn: $dashboardViewModel.showExhausted)
         }
     }
 

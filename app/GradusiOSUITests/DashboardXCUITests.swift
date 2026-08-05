@@ -97,5 +97,13 @@ final class DashboardXCUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["transient fetch failure"].exists)
         XCTAssertTrue(app.staticTexts["Codex"].exists)
         XCTAssertTrue(app.staticTexts["62%"].exists)
+
+        app.staticTexts["Cursor"].tap()
+        XCTAssertTrue(app.staticTexts["transient fetch failure"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
+        app.navigationBars.buttons.firstMatch.tap()
+
+        XCTAssertTrue(app.staticTexts["Gradus"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Codex"].exists)
     }
 }

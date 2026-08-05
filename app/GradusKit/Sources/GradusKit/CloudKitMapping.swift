@@ -9,8 +9,11 @@ public enum CloudKitConstants {
     public static let recordType = "ProviderStatus"
 }
 
-/// One record per provider (§5.1) — `sourceDevice` deliberately omitted
-/// (CR-10/INV-1: no device-identifying value enters CloudKit).
+/// One record per provider (§5.1). Optional source metadata identifies the
+/// local Mac that published the record so the iOS dashboard can show which
+/// computer it is connected to. It is deliberately limited to a display
+/// name and short local username; no account email, serial, path, or secret
+/// enters CloudKit. Older records decode with `syncSource == nil`.
 public struct ProviderStatus: Codable, Equatable, Sendable {
     public let providerName: String
     public let providerDisplayName: String
@@ -23,6 +26,7 @@ public struct ProviderStatus: Codable, Equatable, Sendable {
     public let publishedAt: Date
     public let isWarning: Bool
     public let isDepleted: Bool
+    public let syncSource: SyncSource?
 
     public init(
         providerName: String,
@@ -35,7 +39,8 @@ public struct ProviderStatus: Codable, Equatable, Sendable {
         snapshotUpdatedAt: String,
         publishedAt: Date,
         isWarning: Bool? = nil,
-        isDepleted: Bool? = nil
+        isDepleted: Bool? = nil,
+        syncSource: SyncSource? = nil
     ) {
         self.providerName = providerName
         self.providerDisplayName = providerDisplayName
@@ -48,6 +53,7 @@ public struct ProviderStatus: Codable, Equatable, Sendable {
         self.publishedAt = publishedAt
         self.isWarning = isWarning ?? windows.contains(where: windowWarns)
         self.isDepleted = isDepleted ?? windows.contains { percentIsDepleted($0.percentLeft) }
+        self.syncSource = syncSource
     }
 }
 
@@ -72,6 +78,8 @@ extension ProviderStatus {
         record["publishedAt"] = publishedAt as CKRecordValue
         record["isWarning"] = NSNumber(value: isWarning)
         record["isDepleted"] = NSNumber(value: isDepleted)
+        record["sourceComputerName"] = syncSource?.computerName as CKRecordValue?
+        record["sourceUserName"] = syncSource?.userName as CKRecordValue?
         return record
     }
 
@@ -107,6 +115,14 @@ extension ProviderStatus {
             ?? windows.contains(where: windowWarns)
         self.isDepleted = (record["isDepleted"] as? NSNumber)?.boolValue
             ?? windows.contains { percentIsDepleted($0.percentLeft) }
+        if let computerName = record["sourceComputerName"] as? String,
+           let userName = record["sourceUserName"] as? String,
+           !computerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.syncSource = SyncSource(computerName: computerName, userName: userName)
+        } else {
+            self.syncSource = nil
+        }
     }
 
     private static func decodeWindows(from json: String?) -> [ProviderWindow] {

@@ -188,6 +188,7 @@ public actor PublishCoordinator: CloudPublisher {
             let isWarning: Bool
             let isDepleted: Bool
             let observedAt: String?
+            let syncSource: SyncSource?
         }
         let fingerprint = Fingerprint(
             providerName: status.providerName,
@@ -198,7 +199,8 @@ public actor PublishCoordinator: CloudPublisher {
             data: status.data,
             isWarning: status.isWarning,
             isDepleted: status.isDepleted,
-            observedAt: status.observedAt
+            observedAt: status.observedAt,
+            syncSource: status.syncSource
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -280,7 +282,12 @@ func validatedSnapshotData(_ data: [String: JSONValue]) throws -> [String: JSONV
     return data
 }
 
-func makeProviderStatus(from entry: ProviderEntry, snapshotUpdatedAt: String, publishedAt: Date) throws -> ProviderStatus {
+func makeProviderStatus(
+    from entry: ProviderEntry,
+    snapshotUpdatedAt: String,
+    publishedAt: Date,
+    syncSource: SyncSource? = nil
+) throws -> ProviderStatus {
     if let error = entry.error, error.utf8.count > snapshotErrorMaxBytes {
         throw SnapshotDataValidationError.errorMessageTooLarge
     }
@@ -293,6 +300,7 @@ func makeProviderStatus(from entry: ProviderEntry, snapshotUpdatedAt: String, pu
         data: try validatedSnapshotData(entry.data),
         observedAt: entry.observedAt,
         snapshotUpdatedAt: snapshotUpdatedAt,
-        publishedAt: publishedAt
+        publishedAt: publishedAt,
+        syncSource: syncSource
     )
 }

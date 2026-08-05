@@ -25,6 +25,8 @@ public enum DashboardEmptyState: Equatable {
 public final class DashboardViewModel: ObservableObject {
     @Published public private(set) var providers: [ProviderStatus] = []
     @Published public private(set) var lastSyncedAt: Date?
+    @Published public private(set) var connectedSource: SyncSource?
+    @Published public private(set) var connectedSourcePublishedAt: Date?
     @Published public var syncEnabled: Bool {
         didSet { userDefaults.set(syncEnabled, forKey: Self.syncEnabledKey) }
     }
@@ -48,12 +50,38 @@ public final class DashboardViewModel: ObservableObject {
     /// `syncEnabled`: unlike notifications, there's no network call to
     /// gate on.
     @Published public var localWarningThresholdPercent: Double {
-        didSet { userDefaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey) }
+        didSet {
+            userDefaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
+            applyPresentationPreferences()
+        }
     }
+
+    /// Device-local dashboard presentation controls. Neither value is part of
+    /// `ProviderStatus`, the cached provider payload, or any CloudKit record.
+    @Published public var providerSortOption: ProviderSortOption {
+        didSet {
+            userDefaults.set(providerSortOption.rawValue, forKey: Self.providerSortOptionKey)
+            applyPresentationPreferences()
+        }
+    }
+    @Published public var showExhausted: Bool {
+        didSet {
+            userDefaults.set(showExhausted, forKey: Self.showExhaustedKey)
+            applyPresentationPreferences()
+        }
+    }
+
+    /// Transient, explicit per-provider window choices keyed by the provider's
+    /// exact name and the window's exact schema-v2 `id`. It is deliberately not
+    /// persisted: when this map has no entry, the headline follows the current
+    /// worst valid window; a refreshed payload reconciles only explicit choices.
+    @Published public private(set) var selectedWindowIDs: [String: String] = [:]
 
     static let syncEnabledKey = "iCloudSyncEnabled"
     static let notificationsEnabledKey = "warningNotificationsEnabled"
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
+    static let providerSortOptionKey = "providerSortOption"
+    static let showExhaustedKey = "showExhausted"
     private static let defaultLocalWarningThresholdPercent: Double = 20.0
 
     private let cache: LocalCacheStore
@@ -63,6 +91,7 @@ public final class DashboardViewModel: ObservableObject {
     private let subscriptionManager: CKSubscriptionManager?
     private let warningNotificationScheduler: WarningNotificationScheduling?
     private let userDefaults: UserDefaults
+    private var allProviders: [ProviderStatus] = []
 
     /// `userDefaults` defaults to `.standard` for production; tests inject
     /// a fresh per-test suite so `syncEnabled` (persisted here) can't leak
@@ -102,8 +131,21 @@ public final class DashboardViewModel: ObservableObject {
         } else {
             self.localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
         }
-        self.providers = rankProviders(cache.loadCachedStatuses(), localThreshold: self.localWarningThresholdPercent)
+        self.providerSortOption = ProviderSortOption(rawValue: userDefaults.string(forKey: Self.providerSortOptionKey) ?? "") ?? .mostUrgent
+        if userDefaults.object(forKey: Self.showExhaustedKey) != nil {
+            self.showExhausted = userDefaults.bool(forKey: Self.showExhaustedKey)
+        } else {
+            self.showExhausted = true
+        }
+        self.allProviders = cache.loadCachedStatuses()
+        self.providers = Self.presentedProviders(
+            allProviders,
+            localThreshold: self.localWarningThresholdPercent,
+            sortOption: self.providerSortOption,
+            showExhausted: self.showExhausted)
         self.lastSyncedAt = cache.lastSyncedAt()
+        updateConnectedSource()
+        reconcileWindowSelections()
     }
 
     /// P5/T5.1: toggle-on is best-effort/optimistic (mirrors the existing
@@ -161,6 +203,46 @@ public final class DashboardViewModel: ObservableObject {
     /// All providers other than the hero, still in ranked order.
     public var restProviders: [ProviderStatus] { Array(providers.dropFirst()) }
 
+    /// Returns the explicitly selected valid window for a provider, or its
+    /// current worst valid window when no explicit choice exists. Matching is
+    /// exact; ids are never trimmed, lowercased, or otherwise normalized.
+    public func selectedWindow(for provider: ProviderStatus) -> ProviderWindow? {
+        let selected = selectedWindowIDs[provider.providerName].flatMap { selectedID in
+            provider.windows.first { $0.id == selectedID && percentIsValid($0.percentLeft) }
+        }
+        return selected ?? Self.worstValidWindow(in: provider.windows)
+    }
+
+    /// Provider-name convenience for tile/detail callers.
+    public func selectedWindow(forProviderName providerName: String) -> ProviderWindow? {
+        guard let provider = allProviders.first(where: { $0.providerName == providerName }) else { return nil }
+        return selectedWindow(for: provider)
+    }
+
+    /// Alternate label for callers that prefer an unlabeled provider-name
+    /// argument; both APIs retain the same exact-name semantics.
+    public func selectedWindow(for providerName: String) -> ProviderWindow? {
+        selectedWindow(forProviderName: providerName)
+    }
+
+    /// Selects a valid window by its exact schema-v2 id. Invalid or unknown
+    /// selections are ignored so the exposed selection never becomes nil when
+    /// a provider still has a valid fallback window.
+    public func selectWindow(providerName: String, windowID: String) {
+        guard let provider = allProviders.first(where: { $0.providerName == providerName }),
+              provider.windows.contains(where: { $0.id == windowID && percentIsValid($0.percentLeft) }) else { return }
+        selectedWindowIDs[providerName] = windowID
+    }
+
+    public func setSelectedWindow(providerName: String, windowID: String) {
+        selectWindow(providerName: providerName, windowID: windowID)
+    }
+
+    public func clearSelectedWindow(forProviderName providerName: String) {
+        selectedWindowIDs.removeValue(forKey: providerName)
+        reconcileWindowSelections()
+    }
+
     public func refreshAccountStatus() async {
         guard let accountSource else { return }
         if let status = try? await accountSource.currentAccountStatus() {
@@ -194,7 +276,7 @@ public final class DashboardViewModel: ObservableObject {
             try? cache.saveChangeToken(newToken)
             let syncedAt = Date()
             lastSyncedAt = syncedAt
-            try? cache.saveCachedStatuses(providers, syncedAt: syncedAt)
+            try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
         case .changeTokenExpired:
             // PM-3: drop the stale token and do one full refetch from
             // scratch (nil token). Bounded to one retry -- a fetcher that
@@ -209,7 +291,11 @@ public final class DashboardViewModel: ObservableObject {
             // resets to "waiting for first publish" rather than erroring,
             // and self-heals once the Mac republishes and the next
             // subscription notification arrives.
+            allProviders = []
             providers = []
+            connectedSource = nil
+            connectedSourcePublishedAt = nil
+            selectedWindowIDs.removeAll()
             lastSyncedAt = nil
             try? cache.saveChangeToken(nil)
             try? cache.clear()
@@ -220,7 +306,7 @@ public final class DashboardViewModel: ObservableObject {
     }
 
     private func reconcile(changed: [ProviderStatus], deletedProviderNames: [String]) {
-        var byName = Dictionary(uniqueKeysWithValues: providers.map { ($0.providerName, $0) })
+        var byName = Dictionary(uniqueKeysWithValues: allProviders.map { ($0.providerName, $0) })
         for status in changed {
             if status.isWarning && !(byName[status.providerName]?.isWarning ?? false), notificationsEnabled {
                 warningNotificationScheduler?.scheduleWarningNotification(for: status)
@@ -228,7 +314,9 @@ public final class DashboardViewModel: ObservableObject {
             byName[status.providerName] = status
         }
         for name in deletedProviderNames { byName.removeValue(forKey: name) }
-        providers = rankProviders(Array(byName.values), localThreshold: localWarningThresholdPercent)
+        allProviders = Array(byName.values)
+        applyPresentationPreferences()
+        reconcileWindowSelections()
     }
 
     private func notifyForWarningTransitions(from previous: [ProviderStatus], to current: [ProviderStatus]) {
@@ -252,10 +340,79 @@ public final class DashboardViewModel: ObservableObject {
         isSyncing = true
         defer { isSyncing = false }
         guard let fetched = try? await fetcher.fetchAll() else { return }
-        notifyForWarningTransitions(from: providers, to: fetched)
-        providers = rankProviders(fetched, localThreshold: localWarningThresholdPercent)
+        // Compare the complete cached set, not the filtered presentation set,
+        // so hiding exhausted providers cannot turn an unchanged warning into
+        // a fresh notification on the next full sync.
+        notifyForWarningTransitions(from: allProviders, to: fetched)
+        allProviders = fetched
+        applyPresentationPreferences()
+        reconcileWindowSelections()
         let syncedAt = Date()
         lastSyncedAt = syncedAt
-        try? cache.saveCachedStatuses(fetched, syncedAt: syncedAt)
+        try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
+    }
+
+    private func applyPresentationPreferences() {
+        providers = Self.presentedProviders(
+            allProviders,
+            localThreshold: localWarningThresholdPercent,
+            sortOption: providerSortOption,
+            showExhausted: showExhausted)
+        updateConnectedSource()
+    }
+
+    /// Select the newest source metadata across the complete cached provider
+    /// set, not only the filtered presentation set. This keeps the connection
+    /// card stable when exhausted providers are hidden locally.
+    private func updateConnectedSource() {
+        let latest = allProviders
+            .filter { $0.syncSource != nil }
+            .max {
+                if $0.publishedAt != $1.publishedAt {
+                    return $0.publishedAt < $1.publishedAt
+                }
+                return $0.providerName < $1.providerName
+            }
+        connectedSource = latest?.syncSource
+        connectedSourcePublishedAt = latest?.publishedAt
+    }
+
+    /// Reconciles explicit transient ids after an initial load, full sync, or
+    /// delta reconciliation. Missing selections are intentionally omitted so
+    /// `selectedWindow(for:)` can keep following the current worst window.
+    private func reconcileWindowSelections() {
+        var reconciled: [String: String] = [:]
+        for provider in allProviders {
+            if let selectedID = selectedWindowIDs[provider.providerName],
+               provider.windows.contains(where: { $0.id == selectedID && percentIsValid($0.percentLeft) }) {
+                reconciled[provider.providerName] = selectedID
+            }
+        }
+        selectedWindowIDs = reconciled
+    }
+
+    private static func worstValidWindow(in windows: [ProviderWindow]) -> ProviderWindow? {
+        windows.enumerated()
+            .filter { percentIsValid($0.element.percentLeft) }
+            .min { lhs, rhs in
+                if lhs.element.percentLeft != rhs.element.percentLeft {
+                    return lhs.element.percentLeft < rhs.element.percentLeft
+                }
+                if lhs.element.id != rhs.element.id {
+                    return lhs.element.id < rhs.element.id
+                }
+                return lhs.offset < rhs.offset
+            }?
+            .element
+    }
+
+    private static func presentedProviders(
+        _ providers: [ProviderStatus],
+        localThreshold: Double,
+        sortOption: ProviderSortOption,
+        showExhausted: Bool
+    ) -> [ProviderStatus] {
+        rankProviders(providers, localThreshold: localThreshold, sortOption: sortOption)
+            .filter { showExhausted || !$0.isDepleted }
     }
 }

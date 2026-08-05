@@ -23,6 +23,7 @@ set -euo pipefail
 
 scenario="${FAKE_NOTARY_SCENARIO:-accepted}"
 runtime="${FAKE_NOTARY_RUNTIME:?}"
+trap 'exit 143' INT TERM
 
 if [[ "${1:-}" == "stapler" ]]; then
   : >"$runtime/stapled"
@@ -39,6 +40,35 @@ case "${2:-}" in
     if [[ -n "${FAKE_BLOCK_DIR:-}" ]]; then
       : >"$FAKE_BLOCK_DIR/entered"
       while [[ ! -e "$FAKE_BLOCK_DIR/continue" ]]; do sleep 0.01; done
+    fi
+    if [[ "$scenario" == "monitor-sequence" ]]; then
+      count_file="$runtime/history-count"
+      count=0
+      [[ ! -f "$count_file" ]] || count="$(<"$count_file")"
+      ((count += 1))
+      printf '%s\n' "$count" >"$count_file"
+      case "$count" in
+        1)
+          printf '{"history":[]}\n'
+          exit 0
+          ;;
+        2)
+          printf '{"history":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"GradusMac.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"In Progress"}]}\n'
+          exit 0
+          ;;
+        3)
+          printf '{"history":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"GradusMac.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"Invalid"},{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","name":"GradusMac.app.zip","createdDate":"2026-08-04T13:00:00Z","status":"Accepted"}]}\n'
+          exit 0
+          ;;
+        4)
+          echo "simulated transient history failure" >&2
+          exit 1
+          ;;
+        *)
+          printf '{"history":[{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","name":"GradusMac.app.zip","createdDate":"2026-08-04T13:00:00Z","status":"Accepted"}]}\n'
+          exit 0
+          ;;
+      esac
     fi
     case "$scenario" in
       empty)
@@ -61,6 +91,7 @@ case "${2:-}" in
       while [[ ! -e "$FAKE_BLOCK_DIR/continue" ]]; do sleep 0.01; done
     fi
     count_file="$runtime/info-count"
+    printf '%s\n' "$3" >>"$runtime/info-ids"
     if [[ -n "${FAKE_EXPECT_LEDGER:-}" ]]; then
       grep -q "$3" "$FAKE_EXPECT_LEDGER" || {
         echo "submission was queried before it was recorded" >&2
@@ -257,6 +288,275 @@ echo "  ✓ every watched info request emits ID-specific progress"
   exit 1
 }
 echo "  ✓ watch queried twice"
+((tests_run += 1))
+
+# --monitor is deliberately persistent: it discovers IDs from fresh history,
+# survives empty and transient history responses, and only stops on TERM.
+rm -f "$FAKE_RUNTIME/history-count" "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/info-ids"
+: >"$TEST_ROOT/monitor.stdout"
+: >"$TEST_ROOT/monitor.stderr"
+set +e
+PATH="$FAKE_BIN:/usr/bin:/bin" \
+FAKE_NOTARY_SCENARIO=monitor-sequence \
+FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
+GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/monitor.tsv" \
+NOTARY_POLL_INTERVAL=1 \
+TMPDIR="$TEST_ROOT/tmp" \
+"$STATUS_SCRIPT" --monitor >"$TEST_ROOT/monitor.stdout" 2>"$TEST_ROOT/monitor.stderr" &
+monitor_pid=$!
+set -e
+attempt=1
+while [[ ! -f "$FAKE_RUNTIME/history-count" || "$(<"$FAKE_RUNTIME/history-count")" -lt 5 ]]; do
+  sleep 0.05
+  ((attempt += 1))
+  if ((attempt > 200)); then
+    echo "FAIL: monitor did not complete four refresh cycles" >&2
+    kill -TERM "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+attempt=1
+while ! grep -q "Apple notarytool history request failed" "$TEST_ROOT/monitor.stderr"; do
+  sleep 0.05
+  ((attempt += 1))
+  if ((attempt > 100)); then
+    echo "FAIL: monitor did not surface the transient history failure" >&2
+    kill -TERM "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+kill -TERM "$monitor_pid"
+set +e
+wait "$monitor_pid"
+monitor_status=$?
+set -e
+[[ "$monitor_status" -eq 130 ]] || {
+  echo "FAIL: monitor exits 130 on TERM, got $monitor_status" >&2
+  exit 1
+}
+if find "$TEST_ROOT/tmp" -maxdepth 1 -name 'gradus-notary-status.*' -print -quit | grep -q .; then
+  echo "FAIL: monitor leaked its temporary directory after TERM" >&2
+  exit 1
+fi
+monitor_stdout="$(<"$TEST_ROOT/monitor.stdout")"
+monitor_stderr="$(<"$TEST_ROOT/monitor.stderr")"
+[[ "$monitor_stdout" == *"No GradusMac.app.zip submissions were returned"* ]] || {
+  echo "FAIL: monitor did not report the empty first history cycle" >&2
+  exit 1
+}
+[[ "$monitor_stdout" == *"Submission ID: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"* &&
+   "$monitor_stdout" == *"Submission ID: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"* ]] || {
+  echo "FAIL: monitor did not discover IDs across history cycles" >&2
+  exit 1
+}
+[[ "$monitor_stdout" == *"Status:        Invalid"* ]] || {
+  echo "FAIL: monitor did not persist a terminal status snapshot" >&2
+  exit 1
+}
+[[ "$monitor_stdout" == *"Next refresh: in 1s"* ]] || {
+  echo "FAIL: monitor did not print the next-refresh countdown" >&2
+  exit 1
+}
+[[ "$monitor_stderr" == *"Apple notarytool history request failed"* ]] || {
+  echo "FAIL: monitor did not survive/report the transient history failure" >&2
+  exit 1
+}
+[[ ! -e "$FAKE_RUNTIME/info-ids" ]] || {
+  echo "FAIL: monitor queried a history-discovered ID after it disappeared" >&2
+  exit 1
+}
+if grep -q $'\033' "$TEST_ROOT/monitor.stdout"; then
+  echo "FAIL: non-TTY monitor output contains ANSI redraw escapes" >&2
+  exit 1
+fi
+echo "  ✓ monitor discovers across cycles, persists through empty/transient states, and stops on TERM"
+((tests_run += 1))
+
+# TERM must cancel an in-flight Apple request rather than waiting for the
+# request to return. The fake request remains blocked until explicitly released;
+# this test intentionally never releases it.
+blocked_monitor_dir="$TEST_ROOT/blocked-monitor"
+mkdir -p "$blocked_monitor_dir"
+: >"$TEST_ROOT/blocked-monitor.stdout"
+: >"$TEST_ROOT/blocked-monitor.stderr"
+set +e
+PATH="$FAKE_BIN:/usr/bin:/bin" \
+FAKE_NOTARY_SCENARIO=accepted \
+FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
+FAKE_BLOCK_DIR="$blocked_monitor_dir" \
+GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/blocked-monitor.tsv" \
+NOTARY_POLL_INTERVAL=1 \
+TMPDIR="$TEST_ROOT/tmp" \
+"$STATUS_SCRIPT" --monitor >"$TEST_ROOT/blocked-monitor.stdout" 2>"$TEST_ROOT/blocked-monitor.stderr" &
+blocked_monitor_pid=$!
+set -e
+attempt=1
+while [[ ! -e "$blocked_monitor_dir/entered" ]]; do
+  sleep 0.05
+  ((attempt += 1))
+  if ((attempt > 100)); then
+    echo "FAIL: blocked monitor request did not start" >&2
+    kill -KILL "$blocked_monitor_pid" 2>/dev/null || true
+    wait "$blocked_monitor_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+kill -TERM "$blocked_monitor_pid"
+attempt=1
+while kill -0 "$blocked_monitor_pid" 2>/dev/null; do
+  sleep 0.05
+  ((attempt += 1))
+  if ((attempt > 100)); then
+    echo "FAIL: TERM did not promptly cancel the blocked monitor request" >&2
+    kill -KILL "$blocked_monitor_pid" 2>/dev/null || true
+    wait "$blocked_monitor_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+set +e
+wait "$blocked_monitor_pid"
+blocked_monitor_status=$?
+set -e
+[[ "$blocked_monitor_status" -eq 130 && ! -e "$blocked_monitor_dir/continue" ]] || {
+  echo "FAIL: blocked monitor did not exit 130 without releasing the fake request" >&2
+  exit 1
+}
+if find "$TEST_ROOT/tmp" -maxdepth 1 -name 'gradus-notary-status.*' -print -quit | grep -q .; then
+  echo "FAIL: blocked monitor leaked its temporary directory" >&2
+  exit 1
+fi
+echo "  ✓ TERM promptly cancels an in-flight monitor request and cleans up"
+((tests_run += 1))
+
+# A history row is already a fresh Apple status; monitor mode must not issue a
+# redundant info request for every row on every cycle.
+rm -f "$FAKE_RUNTIME/history-count" "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/info-ids"
+: >"$TEST_ROOT/monitor-known.stdout"
+: >"$TEST_ROOT/monitor-known.stderr"
+set +e
+PATH="$FAKE_BIN:/usr/bin:/bin" \
+FAKE_NOTARY_SCENARIO=accepted \
+FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
+GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/monitor-known.tsv" \
+NOTARY_POLL_INTERVAL=1 \
+TMPDIR="$TEST_ROOT/tmp" \
+"$STATUS_SCRIPT" --monitor >"$TEST_ROOT/monitor-known.stdout" 2>"$TEST_ROOT/monitor-known.stderr" &
+known_pid=$!
+set -e
+attempt=1
+while ! grep -q "Submission ID: 11111111-1111-1111-1111-111111111111" "$TEST_ROOT/monitor-known.stdout"; do
+  sleep 0.05
+  ((attempt += 1))
+  if ((attempt > 100)); then
+    echo "FAIL: known-history monitor did not complete a display cycle" >&2
+    kill -TERM "$known_pid" 2>/dev/null || true
+    wait "$known_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+kill -TERM "$known_pid"
+set +e
+wait "$known_pid"
+known_status=$?
+set -e
+[[ "$known_status" -eq 130 && ! -e "$FAKE_RUNTIME/info-count" ]] || {
+  echo "FAIL: monitor redundantly queried known history IDs via info" >&2
+  exit 1
+}
+echo "  ✓ monitor uses fresh history rows without redundant info requests"
+((tests_run += 1))
+
+# A tracked submission omitted from the current history still gets an info
+# lookup, so a temporarily incomplete history response does not hide it.
+fallback_ledger="$TEST_ROOT/monitor-fallback.tsv"
+printf '2026-08-04T12:00:00Z\tcccccccc-cccc-cccc-cccc-cccccccccccc\tGradusMac.app.zip\tfixture.zip\tdeadbeef\n' >"$fallback_ledger"
+rm -f "$FAKE_RUNTIME/history-count" "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/info-ids"
+: >"$TEST_ROOT/monitor-fallback.stdout"
+: >"$TEST_ROOT/monitor-fallback.stderr"
+set +e
+PATH="$FAKE_BIN:/usr/bin:/bin" \
+FAKE_NOTARY_SCENARIO=empty \
+FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
+GRADUS_NOTARY_STATE_FILE="$fallback_ledger" \
+NOTARY_POLL_INTERVAL=1 \
+TMPDIR="$TEST_ROOT/tmp" \
+"$STATUS_SCRIPT" --monitor >"$TEST_ROOT/monitor-fallback.stdout" 2>"$TEST_ROOT/monitor-fallback.stderr" &
+fallback_pid=$!
+set -e
+attempt=1
+while ! grep -q "Submission ID: cccccccc-cccc-cccc-cccc-cccccccccccc" "$TEST_ROOT/monitor-fallback.stdout"; do
+  sleep 0.05
+  ((attempt += 1))
+  if ((attempt > 100)); then
+    echo "FAIL: monitor did not display a tracked ID omitted from history" >&2
+    kill -TERM "$fallback_pid" 2>/dev/null || true
+    wait "$fallback_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+kill -TERM "$fallback_pid"
+set +e
+wait "$fallback_pid"
+fallback_status=$?
+set -e
+[[ "$fallback_status" -eq 130 && "$(<"$FAKE_RUNTIME/info-count")" -ge 1 ]] || {
+  echo "FAIL: monitor fallback info query did not complete cleanly" >&2
+  exit 1
+}
+[[ "$(<"$TEST_ROOT/monitor-fallback.stdout")" == *"Submission ID: cccccccc-cccc-cccc-cccc-cccccccccccc"* ]] || {
+  echo "FAIL: monitor did not display the fallback info status" >&2
+  exit 1
+}
+echo "  ✓ monitor falls back to live info for tracked IDs missing from history"
+((tests_run += 1))
+
+# Explicit IDs are also retained independently of history and must fall back to
+# notarytool info when Apple history omits them.
+explicit_id="dddddddd-dddd-dddd-dddd-dddddddddddd"
+rm -f "$FAKE_RUNTIME/history-count" "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/info-ids"
+: >"$TEST_ROOT/monitor-explicit.stdout"
+: >"$TEST_ROOT/monitor-explicit.stderr"
+set +e
+PATH="$FAKE_BIN:/usr/bin:/bin" \
+FAKE_NOTARY_SCENARIO=empty \
+FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
+GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/monitor-explicit.tsv" \
+NOTARY_POLL_INTERVAL=1 \
+TMPDIR="$TEST_ROOT/tmp" \
+"$STATUS_SCRIPT" --monitor --id "$explicit_id" >"$TEST_ROOT/monitor-explicit.stdout" 2>"$TEST_ROOT/monitor-explicit.stderr" &
+explicit_pid=$!
+set -e
+attempt=1
+while ! grep -q "Submission ID: $explicit_id" "$TEST_ROOT/monitor-explicit.stdout"; do
+  sleep 0.05
+  ((attempt += 1))
+  if ((attempt > 100)); then
+    echo "FAIL: monitor did not display an explicit ID omitted from history" >&2
+    kill -TERM "$explicit_pid" 2>/dev/null || true
+    wait "$explicit_pid" 2>/dev/null || true
+    exit 1
+  fi
+done
+kill -TERM "$explicit_pid"
+set +e
+wait "$explicit_pid"
+explicit_status=$?
+set -e
+[[ "$explicit_status" -eq 130 && "$(<"$FAKE_RUNTIME/info-count")" -ge 1 ]] || {
+  echo "FAIL: explicit monitor ID was not queried via info or did not exit 130" >&2
+  exit 1
+}
+grep -qx "$explicit_id" "$FAKE_RUNTIME/info-ids" || {
+  echo "FAIL: explicit monitor ID was not the info query target" >&2
+  exit 1
+}
+if find "$TEST_ROOT/tmp" -maxdepth 1 -name 'gradus-notary-status.*' -print -quit | grep -q .; then
+  echo "FAIL: explicit monitor ID leaked its temporary directory" >&2
+  exit 1
+fi
+echo "  ✓ monitor falls back to live info for an explicit ID missing from history"
 ((tests_run += 1))
 
 rm -f "$FAKE_RUNTIME/info-count"

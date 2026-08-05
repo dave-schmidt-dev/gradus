@@ -63,8 +63,8 @@ targets:
         # had already seen -- Apple won't surface a lower marketing version
         # as an "update" no matter the build number, so build 2 never
         # appeared for testers. Must stay >= 1.0 from here on.
-        MARKETING_VERSION: "1.3"
-        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "1.4"
+        CURRENT_PROJECT_VERSION: "10"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # Background Modes > Remote notifications (T4.1/T4.2): required for the

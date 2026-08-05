@@ -68,6 +68,12 @@ struct MenuContentView: View {
 /// real app and are covered by the plan's manual status-item check instead.
 struct ProviderListView: View {
     let providers: [ProviderEntry]
+    let now: Date
+
+    init(providers: [ProviderEntry], now: Date = Date()) {
+        self.providers = providers
+        self.now = now
+    }
 
     var body: some View {
         if providers.isEmpty {
@@ -76,7 +82,7 @@ struct ProviderListView: View {
                 .foregroundStyle(.secondary)
         } else {
             ForEach(providers, id: \.name) { provider in
-                ProviderRow(provider: provider)
+                ProviderRow(provider: provider, now: now)
             }
         }
     }
@@ -84,6 +90,7 @@ struct ProviderListView: View {
 
 private struct ProviderRow: View {
     let provider: ProviderEntry
+    let now: Date
 
     /// The window closest to depletion -- the one worth surfacing at a
     /// glance in a compact menu row.
@@ -104,6 +111,10 @@ private struct ProviderRow: View {
                 HStack {
                     ProgressBar(
                         fraction: max(0, min(100, window.percentLeft)) / 100,
+                        markerFraction: ProgressBar.expectedRemainingMarkerFraction(
+                            percentLeft: window.percentLeft,
+                            paceDelta: window.paceDelta
+                        ),
                         tint: windowWarns(window) ? .orange : .green
                     )
                     .frame(height: 6)
@@ -112,7 +123,7 @@ private struct ProviderRow: View {
                 }
                 HStack(spacing: 8) {
                     if let resetISO = window.resetISO {
-                        Text("reset \(resetISO)")
+                        Text("reset \(friendlyResetDate(resetISO, now: now) ?? resetISO)")
                     }
                     if let pace = window.paceDelta {
                         Text(String(format: "pace %+.0f%%", pace * 100))
@@ -134,9 +145,22 @@ private struct ProviderRow: View {
 /// representable-backed and doesn't rasterize under `ImageRenderer`
 /// offscreen. A plain `Capsule` fill renders identically in the live app
 /// and under the snapshot gate.
-private struct ProgressBar: View {
+struct ProgressBar: View {
+    private static let markerWidth: CGFloat = 3
+    private static let markerHeight: CGFloat = 14
+
     let fraction: Double
+    let markerFraction: Double?
     let tint: Color
+
+    /// The expected-remaining marker uses the shared kit calculation so the
+    /// compact Mac row stays aligned with the other Gradus surfaces.
+    static func expectedRemainingMarkerFraction(
+        percentLeft: Double?,
+        paceDelta: Double?
+    ) -> Double? {
+        expectedRemaining(percentLeft: percentLeft, paceDelta: paceDelta).map { $0 / 100 }
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -144,6 +168,17 @@ private struct ProgressBar: View {
                 Capsule().fill(Color.secondary.opacity(0.25))
                 Capsule().fill(tint)
                     .frame(width: geometry.size.width * max(0, min(1, fraction)))
+                if let markerFraction {
+                    Rectangle()
+                        .fill(Color.red)
+                        .frame(width: Self.markerWidth, height: Self.markerHeight)
+                        .offset(
+                            x: geometry.size.width * max(0, min(1, markerFraction))
+                                - Self.markerWidth / 2
+                        )
+                        .zIndex(1)
+                        .accessibilityLabel("Expected remaining")
+                }
             }
         }
     }

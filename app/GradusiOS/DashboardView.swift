@@ -6,32 +6,13 @@ import SwiftUI
 /// followed by compact `StatTile` rows for the rest, or one of the three
 /// distinct empty states (CV-5) when there's nothing to show yet.
 ///
-/// Root is `NavigationSplitView`, per Key decision #3
-/// (`ios-design-system-2026-08-03.md`) -- preserving the future iPad
-/// dense-layout seam (an eventual populated sidebar column).
-///
-/// `preferredCompactColumn` is required: it's the parameter that controls
-/// which column a `NavigationSplitView` shows once it collapses to one
-/// column on a compact-width device (iPhone). Without it, a collapsed split
-/// view defaults to showing the *sidebar* -- which is empty here -- so the
-/// app renders a blank screen. This was originally misdiagnosed (during
-/// T3.3/T3.5 verification) as `NavigationSplitView` itself being broken on
-/// real devices, because every configuration tried at the time only varied
-/// `columnVisibility`, which governs *regular-width* (iPad) column layout
-/// and has no effect on compact collapse -- so every "configuration" was
-/// the same experiment repeated. Confirmed via `xcrun simctl io screenshot`
-/// on a manually-launched build: `NavigationSplitView(preferredCompactColumn:
-/// $preferredColumn)` with `preferredColumn = .detail` renders correctly on
-/// the first frame.
-///
-/// `preferredCompactColumn` requires iOS 17+, which is why `GradusiOS`'s
-/// deployment target was bumped from 16.0 to 17.0 (`project.yml`) alongside
-/// this change -- David's call, since dropping iOS 16 device support is a
-/// product decision, not an engineering default.
+/// Root is a populated `NavigationStack`: the dashboard is always the first
+/// screen, including on compact iPhone widths. Provider detail remains a
+/// normal push destination, so its back affordance returns to this populated
+/// root rather than an empty split-view sidebar.
 struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
     let now: Date
-    @State private var preferredColumn = NavigationSplitViewColumn.detail
 
     init(viewModel: DashboardViewModel, now: Date = Date()) {
         self.viewModel = viewModel
@@ -39,9 +20,7 @@ struct DashboardView: View {
     }
 
     var body: some View {
-        NavigationSplitView(preferredCompactColumn: $preferredColumn) {
-            EmptyView()
-        } detail: {
+        NavigationStack {
             DashboardContent(viewModel: viewModel, now: now)
         }
     }
@@ -50,18 +29,8 @@ struct DashboardView: View {
 /// The "Now" screen's actual content, factored out of `DashboardView.body`
 /// (T3.3 gate) so it's directly snapshot-testable and independently
 /// reusable. Factored out specifically to sidestep a distinct
-/// `NavigationSplitView` incompatibility: snapshotting `DashboardView`
-/// directly through swift-snapshot-testing's offscreen, synthetic
-/// `UIHostingController` (no real `UIWindow`/scene) let
-/// `NavigationSplitView`'s internal collapse-column negotiation produce a
-/// degenerate rendered image, which crashed swift-snapshot-testing's
-/// image-diffing code (`SIGSEGV`, seen in a `dashboardRendersPopulatedCards*`
-/// run this session) rather than failing gracefully. `DashboardSnapshotTests`
-/// snapshots this type instead of `DashboardView`, sidestepping the
-/// `NavigationSplitView` wrapper entirely -- unrelated to the separate
-/// on-device `preferredCompactColumn` issue documented on `DashboardView`
-/// above; that one's about real launches, this one's about the offscreen
-/// snapshot-testing harness.
+/// navigation shell. `DashboardSnapshotTests` snapshots this type directly so
+/// content ordering stays independently testable from navigation chrome.
 struct DashboardContent: View {
     @ObservedObject var viewModel: DashboardViewModel
     let now: Date
@@ -95,6 +64,16 @@ struct DashboardContent: View {
                 }
             }
 
+            if let source = viewModel.connectedSource {
+                ConnectionInfoCard(
+                    source: source,
+                    publishedAt: viewModel.connectedSourcePublishedAt,
+                    now: now
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 4)
+            }
+
             Group {
                 if let emptyState = viewModel.emptyState {
                     EmptyStateView(state: emptyState) {
@@ -118,10 +97,16 @@ struct DashboardContent: View {
     @ViewBuilder
     private var nowList: some View {
         List {
-            if let hero = viewModel.heroProvider {
+            if let hero = activeProviders.first {
                 StatTile(
-                    provider: hero, worstWindow: worstWindow(for: hero), isHero: true,
-                    isLocallyUrgent: isLocallyUrgent(for: hero)
+                    provider: hero,
+                    selectedWindow: selectedWindow(for: hero),
+                    badgeWindows: badgeWindows(for: hero),
+                    isHero: true,
+                    now: now,
+                    onSelectWindow: { window in
+                        viewModel.selectWindow(providerName: hero.providerName, windowID: window.id)
+                    }
                 )
                 .listRowSeparator(.hidden)
                 .contentShape(Rectangle())
@@ -129,33 +114,85 @@ struct DashboardContent: View {
                     selectedProviderName = hero.providerName
                 }
             }
-            ForEach(viewModel.restProviders, id: \.providerName) { provider in
+
+            ForEach(activeProviders.dropFirst(), id: \.providerName) { provider in
                 StatTile(
-                    provider: provider, worstWindow: worstWindow(for: provider), isHero: false,
-                    isLocallyUrgent: isLocallyUrgent(for: provider)
+                    provider: provider,
+                    selectedWindow: selectedWindow(for: provider),
+                    badgeWindows: badgeWindows(for: provider),
+                    now: now,
+                    onSelectWindow: { window in
+                        viewModel.selectWindow(providerName: provider.providerName, windowID: window.id)
+                    }
                 )
                 .contentShape(Rectangle())
                 .onTapGesture {
                     selectedProviderName = provider.providerName
                 }
             }
+
+            if !exhaustedProviders.isEmpty {
+                Section("Exhausted") {
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible())],
+                        spacing: 8
+                    ) {
+                        ForEach(exhaustedProviders, id: \.providerName) { provider in
+                            exhaustedCell(for: provider)
+                            .accessibilityIdentifier("exhausted-provider-\(provider.providerName)")
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedProviderName = provider.providerName
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .listRowSeparator(.hidden)
+            }
         }
         .listStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowSpacing(0)
     }
 
-    /// Mirrors `ProviderCard.swift`'s existing `worstWindow` computation
-    /// (lowest `percentLeft`), the same definition `rankProviders` uses.
-    private func worstWindow(for provider: ProviderStatus) -> ProviderWindow? {
-        provider.windows.min { $0.percentLeft < $1.percentLeft }
+    /// `rankProviders` guarantees active providers precede exhausted ones;
+    /// keep the presentation split explicit so the hero can never be an
+    /// exhausted provider, regardless of the selected local sort mode.
+    private var activeProviders: [ProviderStatus] {
+        viewModel.providers.filter { !$0.isDepleted }
     }
 
-    /// P5/T5.2: whether this provider's `StatTile` gets the local-urgent
-    /// ring, evaluated against the live `localWarningThresholdPercent`
-    /// (not a hardcoded default) -- `false` when there's no window to
-    /// evaluate (errored/no-data providers), matching `localIsUrgent`'s own
-    /// guard on `worstWindow == nil`.
-    private func isLocallyUrgent(for provider: ProviderStatus) -> Bool {
-        guard let worst = worstWindow(for: provider) else { return false }
-        return localIsUrgent(worst, threshold: viewModel.localWarningThresholdPercent)
+    /// `DashboardViewModel.showExhausted` filters this source array. When it
+    /// is off, this is empty and no compact exhausted cells are rendered.
+    private var exhaustedProviders: [ProviderStatus] {
+        viewModel.providers.filter(\.isDepleted)
+    }
+
+    private func exhaustedCell(for provider: ProviderStatus) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(provider.providerDisplayName)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Text("Exhausted")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func selectedWindow(for provider: ProviderStatus) -> ProviderWindow? {
+        viewModel.selectedWindow(for: provider)
+    }
+
+    /// All valid non-selected windows become compact selection badges. The
+    /// provider name and id are passed unchanged to the view-model API.
+    private func badgeWindows(for provider: ProviderStatus) -> [ProviderWindow] {
+        guard let selected = selectedWindow(for: provider) else { return [] }
+        return provider.windows.filter {
+            percentIsValid($0.percentLeft) && $0.id != selected.id
+        }
     }
 }

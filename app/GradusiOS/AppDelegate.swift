@@ -9,9 +9,30 @@ import UserNotifications
 final class AppDelegate: NSObject, UIApplicationDelegate {
     var onRemoteNotification: (() async -> Void)?
 
+    private let clearBadge: (UIApplication) -> Void
+
+    override init() {
+        self.clearBadge = { application in
+            // `setBadgeCount` is the modern notification-center API, while
+            // `applicationIconBadgeNumber` clears a stale badge left by an
+            // earlier app version immediately. Both are needed because a
+            // foreground transition can otherwise leave the SpringBoard
+            // icon out of sync with UserNotifications' count.
+            application.applicationIconBadgeNumber = 0
+            UNUserNotificationCenter.current().setBadgeCount(0) { _ in }
+        }
+        super.init()
+    }
+
+    init(clearBadge: @escaping () -> Void) {
+        self.clearBadge = { _ in clearBadge() }
+        super.init()
+    }
+
     func application(
         _ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        clearBadge(application)
         // The app-side warning notification is visible only after this local
         // authorization succeeds. Both CloudKit subscriptions are silent
         // content-available pushes and never display alerts themselves.
@@ -21,6 +42,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             }
         }
         return true
+    }
+
+    func applicationWillEnterForeground(_ application: UIApplication) {
+        clearBadge(application)
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        clearBadge(application)
     }
 
     nonisolated func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async

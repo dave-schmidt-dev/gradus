@@ -183,11 +183,14 @@ def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None
         fragments,
     )
     if relative and any(relative.group(name) for name in ("days", "hours", "minutes")):
-        return now + timedelta(
-            days=int(relative.group("days") or 0),
-            hours=int(relative.group("hours") or 0),
-            minutes=int(relative.group("minutes") or 0),
-        )
+        try:
+            return now + timedelta(
+                days=int(relative.group("days") or 0),
+                hours=int(relative.group("hours") or 0),
+                minutes=int(relative.group("minutes") or 0),
+            )
+        except (OverflowError, ValueError):
+            return None
 
     if " on " in lower:
         candidates = [fragments]

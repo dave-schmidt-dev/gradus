@@ -1,4 +1,24 @@
+import Foundation
 import GradusKit
+
+/// Device-local presentation order for dashboard providers. Raw values are
+/// persisted only in `UserDefaults`; this type is intentionally separate from
+/// `ProviderStatus`, which is encoded into CloudKit records.
+public enum ProviderSortOption: String, CaseIterable, Identifiable {
+    case mostUrgent
+    case resetSoonest
+    case nameAZ
+
+    public var id: Self { self }
+
+    public var title: String {
+        switch self {
+        case .mostUrgent: "Most urgent"
+        case .resetSoonest: "Reset soonest"
+        case .nameAZ: "Name A-Z"
+        }
+    }
+}
 
 /// iOS-local "locally urgent" predicate (P3/T3.1; the real `@Published`
 /// `localWarningThresholdPercent` control that drives `threshold` shipped in
@@ -46,15 +66,57 @@ func localIsUrgent(_ window: ProviderWindow, threshold: Double) -> Bool {
 /// -- the same fallback key `reconcile()` already used before this function
 /// existed, so this is a strict superset of prior behavior, not a new
 /// sorting philosophy.
-func rankProviders(_ providers: [ProviderStatus], localThreshold: Double) -> [ProviderStatus] {
+func rankProviders(
+    _ providers: [ProviderStatus],
+    localThreshold: Double,
+    sortOption: ProviderSortOption = .mostUrgent
+) -> [ProviderStatus] {
+    // Keep the active/exhausted split independent of every presentation
+    // comparator. This avoids a mode change moving depleted providers back
+    // into the active group, while preserving each provider's payload intact.
+    let active = providers.filter { !$0.isDepleted }
+    let exhausted = providers.filter(\.isDepleted)
+    return sortPartition(active, localThreshold: localThreshold, sortOption: sortOption)
+        + sortPartition(exhausted, localThreshold: localThreshold, sortOption: sortOption)
+}
+
+private func sortPartition(
+    _ providers: [ProviderStatus],
+    localThreshold: Double,
+    sortOption: ProviderSortOption
+) -> [ProviderStatus] {
     providers.sorted { lhs, rhs in
         let lhsTier = attentionTier(for: lhs, localThreshold: localThreshold)
         let rhsTier = attentionTier(for: rhs, localThreshold: localThreshold)
         if lhsTier != rhsTier { return lhsTier < rhsTier }
 
-        let lhsPercent = worstPercentForRanking(lhs)
-        let rhsPercent = worstPercentForRanking(rhs)
-        if lhsPercent != rhsPercent { return lhsPercent < rhsPercent }
+        // No-window providers retain their existing last-within-tier behavior
+        // for every local sort mode. There is no invented percent or reset.
+        let lhsHasWindows = !lhs.windows.isEmpty
+        let rhsHasWindows = !rhs.windows.isEmpty
+        if lhsHasWindows != rhsHasWindows { return lhsHasWindows }
+
+        switch sortOption {
+        case .mostUrgent:
+            let lhsPercent = worstPercentForRanking(lhs)
+            let rhsPercent = worstPercentForRanking(rhs)
+            if lhsPercent != rhsPercent { return lhsPercent < rhsPercent }
+        case .resetSoonest:
+            let lhsReset = earliestResetForRanking(lhs)
+            let rhsReset = earliestResetForRanking(rhs)
+            switch (lhsReset, rhsReset) {
+            case let (lhsReset?, rhsReset?) where lhsReset != rhsReset:
+                return lhsReset < rhsReset
+            case (nil, .some):
+                return false
+            case (.some, nil):
+                return true
+            default:
+                break
+            }
+        case .nameAZ:
+            break
+        }
 
         return lhs.providerName < rhs.providerName
     }
@@ -74,4 +136,14 @@ private func attentionTier(for provider: ProviderStatus, localThreshold: Double)
 /// without a separate nil-handling branch.
 private func worstPercentForRanking(_ provider: ProviderStatus) -> Double {
     provider.windows.map(\.percentLeft).min() ?? .infinity
+}
+
+/// The earliest parseable provider reset. Missing or malformed timestamps stay
+/// absent so presentation code can sort deterministically without inventing a
+/// reset date.
+private func earliestResetForRanking(_ provider: ProviderStatus) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    return provider.windows.compactMap { window in
+        window.resetISO.flatMap(formatter.date(from:))
+    }.min()
 }

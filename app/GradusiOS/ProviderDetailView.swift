@@ -62,7 +62,6 @@ struct ProviderDetailView: View {
 
     @ViewBuilder
     private func windowCard(_ window: ProviderWindow) -> some View {
-        let percent = max(0, min(100, window.percentLeft))
         let color = SignalColor.forPercent(window.percentLeft)
 
         VStack(alignment: .leading, spacing: 6) {
@@ -70,8 +69,7 @@ struct ProviderDetailView: View {
                 .font(.headline)
 
             HStack {
-                ProgressView(value: percent / 100)
-                    .tint(color)
+                UsageBar(window: window, color: color)
                 Text("\(Int(window.percentLeft))%")
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(color)
@@ -79,7 +77,7 @@ struct ProviderDetailView: View {
 
             HStack(spacing: 12) {
                 if let resetISO = window.resetISO {
-                    Text("reset \(resetISO)")
+                    Text("reset \(friendlyResetDate(resetISO, now: now) ?? resetISO)")
                 }
                 if let pace = window.paceDelta {
                     Text(String(format: "pace %+.0f%%", pace * 100))

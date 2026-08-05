@@ -50,20 +50,6 @@ enum SignalColor {
 /// - cursor -> `accent.cursor` (color 214)
 /// - vibe -> `accent.vibe` (color 208)
 /// - opencode -> `accent.opencode` (color 150)
-/// `antigravityClaude` has no TUI counterpart (schema v2's synthesized
-/// "Antigravity (Claude)" entry, `gradus/snapshot.py`) so it's a fully
-/// invented placeholder hue, picked only to stay visually distinct from
-/// both `claude` and `antigravity`.
-/// Local-urgent visual cue (P5/T5.2): a ring drawn around a `StatTile` when
-/// `localIsUrgent` is true for the provider's worst window -- independent
-/// of `SignalColor`'s percent-based fill, per Key decision #6 ("your local
-/// setting flagged this" indicator, not a ranking mechanism). Deliberately
-/// a hue outside both the urgency ramp and every `ProviderAccent` value so
-/// it reads as a distinct signal layer, never confusable with either.
-enum LocalUrgentAccent {
-    static let ring = Color(hex: 0x00D7FF)
-}
-
 enum ProviderAccent {
     static let codex = Color(hex: 0x87AFFF)
     static let claude = Color(hex: 0xFFAFFF)
