@@ -21,6 +21,31 @@ private func publisherSourceFiles() -> [URL] {
     return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
 }
 
+/// Dot-prefixed terms name *files*, so a following letter means the match is
+/// part of a longer identifier rather than a filename: `.environment` is not
+/// `.env`, and `.sshString` would not be `.ssh`. Matching these as bare
+/// substrings produced a false positive the first time any source touched
+/// `ProcessInfo.processInfo.environment`, and would fire on SwiftUI's very
+/// common `.environment(_:)` modifier too.
+///
+/// The bare-substring rule is kept for every other term on purpose --
+/// `mySecret` and `apiKeyPath` must still trip the wire. Narrowing applies
+/// only where the term is a filename by construction.
+private let filenameTerms: Set<String> = [".env", ".ssh", ".netrc"]
+
+private func referencesForbiddenTerm(_ term: String, in lowered: String) -> Bool {
+    guard filenameTerms.contains(term) else { return lowered.contains(term) }
+    var searchStart = lowered.startIndex
+    while let range = lowered.range(of: term, range: searchStart..<lowered.endIndex) {
+        let next = range.upperBound
+        if next == lowered.endIndex || !lowered[next].isLetter {
+            return true
+        }
+        searchStart = range.upperBound
+    }
+    return false
+}
+
 @Test func publisherSourceReferencesNoCredentialPath() throws {
     let forbidden = [
         ".env", "credentials", "secret", "password", "api_key", "apikey",
@@ -34,11 +59,29 @@ private func publisherSourceFiles() -> [URL] {
         let lowered = contents.lowercased()
         for term in forbidden {
             #expect(
-                !lowered.contains(term),
+                !referencesForbiddenTerm(term, in: lowered),
                 "\(file.lastPathComponent) references forbidden term '\(term)' (INV-7)"
             )
         }
     }
+}
+
+/// The narrowing above must not become a hole: a real `.env` reference still
+/// has to trip the wire in every position a filename can appear.
+@Test func filenameTermNarrowingStillCatchesRealReferences() {
+    #expect(referencesForbiddenTerm(".env", in: "let path = \"~/.env\""))
+    #expect(referencesForbiddenTerm(".env", in: "open(\".env\")"))
+    #expect(referencesForbiddenTerm(".env", in: "read .env"))
+    #expect(referencesForbiddenTerm(".env", in: "a/.env/b"))
+    #expect(referencesForbiddenTerm(".env", in: "trailing .env"))
+    #expect(referencesForbiddenTerm(".ssh", in: "~/.ssh/id"))
+    #expect(referencesForbiddenTerm(".netrc", in: "~/.netrc"))
+    // ...and must not fire on identifiers that merely start the same way.
+    #expect(!referencesForbiddenTerm(".env", in: "processinfo.environment"))
+    #expect(!referencesForbiddenTerm(".env", in: "view.environmentobject(x)"))
+    // Non-filename terms keep the original bare-substring behavior.
+    #expect(referencesForbiddenTerm("secret", in: "let mysecretvalue = 1"))
+    #expect(referencesForbiddenTerm("keychain", in: "keychainaccess"))
 }
 
 @Test func snapshotPathHasExactlyOneInjectionPoint() throws {

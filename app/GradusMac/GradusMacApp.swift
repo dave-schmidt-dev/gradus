@@ -19,13 +19,48 @@ struct GradusMacApp: App {
             return
         }
         #endif
+        // `GradusMacTests` is a hosted unit-test bundle, so every
+        // `xcodebuild test` run launches this app for real. Without this
+        // guard the test host started the live pipeline, which did two things
+        // no test should: it read the snapshot out of `~/Documents`, firing a
+        // TCC consent prompt at whoever was sitting at the machine (and,
+        // because the test host is Development-signed while the installed app
+        // is Developer ID, *overwriting* the single TCC grant those two share
+        // -- so the installed app then prompted on its next launch, forever
+        // alternating), and it published to CloudKit **Production**, writing 9
+        // real records during one 2026-08-05 test session. Tests must not
+        // mutate the live zone. Verified by `cloudd` log and by decoding the
+        // TCC `csreq` before and after a run; see `HISTORY.md`.
+        guard !Self.isRunningTests else { return }
         PublishPipeline.shared.start()
+    }
+
+    /// True when a test bundle is hosted in this process. Both signals are
+    /// checked because they fail in different directions: the environment
+    /// variable is absent for UI-test *targets* (which drive a separate app
+    /// process and legitimately want the real pipeline), while the class probe
+    /// catches any XCTest-injected bundle regardless of how it was launched.
+    static var isRunningTests: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
     }
 
     var body: some Scene {
         MenuBarExtra("Gradus", systemImage: "gauge") {
             MenuContentView(viewModel: PublishPipeline.shared.viewModel)
         }
+        // REQUIRED, not cosmetic. `MenuBarExtra` defaults to `.menu`, which
+        // does not render SwiftUI: it translates the content into `NSMenu`
+        // items, flattening every stack into one item per `Text`, dropping
+        // custom shapes, and replacing colors with menu text styling. The
+        // dropdown shipped that way until 2026-08-05, so `MenuContentView`'s
+        // usage bars and four-tier ramp had never been drawn once -- the
+        // giveaway in a screenshot is the sync toggle rendering as an NSMenu
+        // checkmark rather than a switch. The snapshot gate could not catch
+        // it: `ProviderListViewSnapshotTests` renders the subview through
+        // `ImageRenderer`, where SwiftUI draws normally, so the baselines were
+        // correct and green against a path the user never saw.
+        .menuBarExtraStyle(.window)
     }
 }
 

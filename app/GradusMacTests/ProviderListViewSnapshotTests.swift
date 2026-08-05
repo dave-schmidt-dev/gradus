@@ -88,15 +88,18 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
         )
     )
 
+    // 256 = MenuContentView's 280pt frame minus its 12pt padding on each
+    // side, so the baseline is rendered at the width the row actually gets in
+    // the live menu rather than an arbitrary one.
     let image = snapshotImage(
         ProviderListView(providers: viewModel.providers, now: fixedNow),
-        size: CGSize(width: 260, height: 220)
+        size: CGSize(width: 256, height: 200)
     )
     assertSnapshot(of: image, as: .image)
 }
 
 @MainActor
 @Test func providerListViewRendersEmptyState() {
-    let image = snapshotImage(ProviderListView(providers: []), size: CGSize(width: 260, height: 40))
+    let image = snapshotImage(ProviderListView(providers: []), size: CGSize(width: 256, height: 40))
     assertSnapshot(of: image, as: .image)
 }
