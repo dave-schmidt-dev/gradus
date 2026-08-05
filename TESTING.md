@@ -44,10 +44,28 @@ is the authoritative local gate. It runs, in order:
 1. the hermetic notarization and iOS-upload script tests,
 2. `swift test` over the **GradusKit** package,
 3. `pytest` over the **Python producer** suite,
-4. `xcodebuild test` for **GradusMac** (macOS) and **GradusiOS** (pinned simulator).
+4. `xcodebuild test` for **GradusMac** (macOS) and **GradusiOS** (pinned iPhone
+   simulator),
+5. `xcodebuild test -only-testing:GradusiOSUITests` on the pinned **iPad**
+   simulator.
 
 Steps 2 and 3 are ordered before the simulator work so the gate fails fast, and
 they cost ~8s cold / <1s warm against several minutes for the simulator half.
+
+Step 5 exists because a size-class-dependent layout has no coverage on a
+destination that cannot reach its size class. The iPad dense layout renders
+only at the regular horizontal size class, so before this step the iPhone
+destination could not execute its routing or its tap-to-detail wiring no matter
+what tests were written. Only the UI-test bundle runs there; rerunning the full
+iOS suite on a second simulator would roughly double the gate's slowest phase
+to re-prove device-independent behavior.
+
+The cost of a size-class-gated test is that it must skip on the destination it
+cannot run on, and a skipped test is green. `DensityLayoutXCUITests` self-skips
+on iPhone, so deleting step 5 would leave it passing everywhere while executing
+nothing. That is why step 5 is a separately named line in the gate output
+rather than an extra destination folded into step 4 — the failure mode is a
+missing step, so the step has to be visible when present.
 
 GradusKit needs its own step because it is consumed as a SwiftPM package
 *dependency*: `xcodebuild test -scheme GradusMac|GradusiOS` builds its library

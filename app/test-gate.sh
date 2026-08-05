@@ -35,6 +35,18 @@ SIM_OS_VERSION="26.5"
 SIM_RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 
+# iPad Option B renders only at the regular horizontal size class, which the
+# iPhone destination never reaches -- so the dense grid's routing and its
+# tap-to-detail wiring had no destination that could execute them. Pinned to
+# the 11-inch (834x1194 points) because that is exactly the geometry
+# `DensityLayoutSnapshotTests` records its baselines at; a different iPad
+# would still be "regular width" but would no longer describe the same layout
+# the snapshots do. Only `GradusiOSUITests` runs here -- rerunning the whole
+# iOS suite on a second simulator would roughly double the gate's slowest
+# phase to re-prove device-independent behavior.
+IPAD_DEVICE_NAME="iPad Pro 11-inch (M5)"
+IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
+
 echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
 active_xcode_version="$(xcodebuild -version | head -1 | awk '{print $2}')"
 if [[ "$active_xcode_version" != "$PINNED_XCODE_VERSION" ]]; then
@@ -60,6 +72,17 @@ if [[ -z "$sim_udid" ]]; then
 fi
 echo "    Simulator UDID: $sim_udid"
 
+echo "==> Ensuring the pinned iPad exists: $IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION"
+# -F: the device name contains literal parentheses. The trailing " (" anchors
+# the match to the UDID column so a same-prefix variant (e.g. the "(16GB)"
+# device type) can't be picked up by accident.
+ipad_udid="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep -F "$IPAD_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)"
+if [[ -z "$ipad_udid" ]]; then
+  echo "    Creating $IPAD_DEVICE_NAME (iOS $SIM_OS_VERSION) simulator..."
+  ipad_udid="$(xcrun simctl create "$IPAD_DEVICE_NAME" "$IPAD_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
+fi
+echo "    iPad UDID: $ipad_udid"
+
 # A crashing test (e.g. a segfault inside a snapshot-diffing dependency)
 # still produces a valid, useful .ips in ~/Library/Logs/DiagnosticReports --
 # only the interactive "GradusiOS quit unexpectedly" dialog is suppressed,
@@ -75,8 +98,9 @@ defaults write com.apple.CrashReporter DialogType none
 # them. Shut the simulator down on every exit path so a gate run never
 # leaves runaway processes behind.
 trap '
-  echo "==> Shutting down simulator to release its background processes"
+  echo "==> Shutting down simulators to release their background processes"
   xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true
+  xcrun simctl shutdown "$ipad_udid" >/dev/null 2>&1 || true
   if [[ -z "$prior_dialog_type" ]]; then
     defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
   else
@@ -84,8 +108,9 @@ trap '
   fi
 ' EXIT
 
-echo "==> Booting simulator"
+echo "==> Booting simulators"
 xcrun simctl bootstatus "$sim_udid" -b || true
+xcrun simctl bootstatus "$ipad_udid" -b || true
 
 echo "==> xcodebuild test — GradusMac (platform=macOS)"
 xcodebuild test \
@@ -99,6 +124,18 @@ xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$sim_udid" \
+  -allowProvisioningUpdates
+
+# `DensityLayoutXCUITests` self-skips on the iPhone destination above, so this
+# step is the only place iPad Option B's routing and tap-to-detail wiring are
+# executed at all. If this step is ever removed, that file goes silently green
+# rather than failing -- which is why it is a named, separate gate line.
+echo "==> xcodebuild test — GradusiOS UI tests ($IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION simulator)"
+xcodebuild test \
+  -project Gradus.xcodeproj \
+  -scheme GradusiOS \
+  -destination "platform=iOS Simulator,id=$ipad_udid" \
+  -only-testing:GradusiOSUITests \
   -allowProvisioningUpdates
 
 echo "==> test-gate.sh: all destinations green"
