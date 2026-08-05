@@ -13,6 +13,42 @@ history from the overnight release train. New releases use
 
 No changes yet.
 
+## 1.5.0 — 2026-08-05
+
+First three-component version on this train. The build number is allocated at
+upload time and recorded in `HISTORY.md`, not here.
+
+### Added
+
+- iPad now uses a dense two- or three-column layout that shows every provider
+  and every usage window at once, with a bar per window. Previously the iPad
+  reused the iPhone list, so seeing a provider's other windows meant opening
+  each provider in turn and scrolling.
+- The iPad header carries a one-line sync status ("synced 5m ago · dm5mbp") in
+  place of the four-line connected-computer card.
+
+### Changed
+
+- Usage colors now reflect **pace** rather than percentage remaining, on both
+  the Mac and iOS. A window that is 72% full but being spent far faster than
+  its reset window now reads red, and a window down to 3% but comfortably
+  ahead of pace reads green. Windows with no pace data keep the old
+  percentage-based coloring.
+
+### Fixed
+
+- A window sitting at exactly 0.5% is no longer reported as depleted; it
+  displays as 1% remaining and is still counted as spendable.
+
+### TestFlight focus
+
+- On iPad, confirm all providers and all of their windows are visible without
+  scrolling, in both portrait and landscape.
+- Tap a provider card on iPad and confirm it opens that provider's detail view.
+- Confirm a nearly-empty provider that is ahead of pace is not colored red, and
+  that a fuller provider being spent too fast is.
+- Confirm the iPhone layout is unchanged by this release.
+
 ## 1.4 (10) — 2026-08-04
 
 ### Fixed
