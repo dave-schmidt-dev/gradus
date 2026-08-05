@@ -324,6 +324,44 @@ cd app
 bash test-gate.sh   # boots the pinned simulator, runs GradusMac + GradusiOS unit/UI tests
 ```
 
+### App icons
+
+The two platforms need **different artwork for the same design**, and the Mac
+icon is generated rather than hand-maintained:
+
+```bash
+swift app/make-mac-appicon.swift   # idempotent; rewrites only what changed
+```
+
+iOS masks a square 1024 image into the app shape at render time, so
+`GradusiOS/…/icon-1024.png` is full-bleed and opaque to its corners. macOS does
+no masking — the artwork must supply its own rounded shape and margin, or it
+renders as a hard-cornered tile beside every other app. The generator draws the
+same design (geometry mirrored from `design-system/…/gradus-app-icon.svg`) into
+the centre 824 of a 1024 canvas behind a continuous-corner rounded rect.
+
+Both the grid and the corner radius were measured against macOS 26.5.2's own
+icons rather than taken from documentation: Calculator, Notes, Reminders and
+Safari agree exactly on 824-in-1024, and a curve fit against Notes at 1024 puts
+the radius at **214.5** (RMS 0.30px, max deviation 1px). The widely-quoted
+185.4 is pre-Big Sur and scores RMS ~13px against the current shape. Re-fit
+before assuming these hold on a future macOS.
+
+Two macOS-specific traps, both silent:
+
+- **The single-1024 entry that works for iOS compiles to nothing on macOS** —
+  no `Assets.car`, no `CFBundleIconName`, and no build error. macOS needs the
+  full `idiom: mac` ladder (16→512 at 1x/2x), which is why the two
+  `Contents.json` files differ.
+- **A target with no `ASSETCATALOG_COMPILER_APPICON_NAME` builds clean with no
+  icon at all.** GradusMac shipped that way until 2026-08-05; `LSUIElement`
+  hides it (a menu-bar agent has no Dock icon) but Finder, Login Items,
+  notifications, and TCC permission prompts all showed the generic placeholder.
+
+`GradusMacTests/AppIconTests.swift` locks all three properties against the built
+bundle — plist keys, a decodable `AppIcon.icns`, and a transparent corner (the
+assertion that fails if anyone copies the iOS square across).
+
 Gradus follows [`TESTING.md`](TESTING.md): every new feature and user-facing
 UI element needs automated regression coverage in the same change. Swift
 Testing/XCTest cover logic and integration, snapshot tests cover important
