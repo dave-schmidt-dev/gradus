@@ -13,6 +13,22 @@ echo "==> Hermetic notarization script behavior tests"
 echo "==> Hermetic iOS upload wrapper behavior tests"
 ./test-archive-upload-ios.sh
 
+# INV-11 declares `area:` over app/GradusKit/**, gradus/**, and tests/** with
+# this script as its gate_test -- but the two `xcodebuild test` invocations
+# below cover none of those three. GradusKit is consumed as a SwiftPM package
+# *dependency*, so `xcodebuild test -scheme ...` builds its library product and
+# never its test targets; XcodeGen can't add them to a scheme's `test:` block
+# either, since they aren't project targets. Result (found 2026-08-05): 47
+# passing GradusKit tests -- the reconciliation core both apps import -- sat
+# entirely outside the release gate, and the Python suite only ran via
+# pre-push. Both run here now, ordered before the slow simulator work so the
+# gate fails fast.
+echo "==> swift test — GradusKit package (SwiftPM; not reachable via either app scheme)"
+swift test --package-path GradusKit
+
+echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
+(cd .. && uv run pytest -q)
+
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
 SIM_DEVICE_NAME="iPhone 16"
 SIM_OS_VERSION="26.5"

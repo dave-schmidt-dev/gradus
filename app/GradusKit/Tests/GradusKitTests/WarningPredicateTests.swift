@@ -51,6 +51,20 @@ func windowWarnsMatchesGeneratedTruthTable(
     #expect(percentIsDepleted(0.6) == false)
 }
 
+/// The boundary is exclusive, and both languages must agree on it.
+///
+/// This was the one input where they didn't: `round(0.5) == 0` in Python
+/// (banker's rounding) but `(0.5).rounded() == 1` in Swift, so a provider at
+/// exactly 0.5% was depleted-and-warning on the TUI and neither here. Both
+/// sides now compare against `depletedPercentCeiling` / the Python
+/// `DEPLETED_PERCENT_CEILING` instead of rounding at all.
+@Test func depletionCeilingIsExclusiveAndRoundingModeFree() {
+    #expect(percentIsDepleted(0.5) == false)
+    #expect(windowWarns(window(percentLeft: 0.5, paceDelta: nil)) == false)
+    #expect(percentIsDepleted(depletedPercentCeiling.nextDown) == true)
+    #expect(percentIsDepleted(0.0) == true)
+}
+
 @Test func percentIsValidRejectsOutOfBounds() {
     #expect(percentIsValid(0.0) == true)
     #expect(percentIsValid(100.0) == true)

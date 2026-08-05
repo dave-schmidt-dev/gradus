@@ -1447,6 +1447,22 @@ class TestCopilotParity(unittest.TestCase):
         self.assertTrue(snap.percent_is_depleted(0.4))
         self.assertTrue(snap.percent_is_depleted(0.001))
 
+    def test_depletion_ceiling_is_exclusive_and_rounding_mode_free(self) -> None:
+        """Exactly 0.5% is not depleted, and Swift must agree.
+
+        This was the one input where the two disagreed: ``round(0.5) == 0``
+        here (banker's rounding) but ``(0.5).rounded() == 1`` in Swift, so a
+        provider sitting at exactly 0.5% was depleted-and-warning on the TUI
+        and neither on Mac/iOS. Both sides now compare against a 0.5 bound
+        rather than rounding, so no rounding mode is involved.
+        """
+        self.assertEqual(snap.DEPLETED_PERCENT_CEILING, 0.5)
+        self.assertFalse(snap.percent_is_depleted(0.5))
+        self.assertFalse(snap.window_warns({"percent_left": 0.5, "pace_delta": None}))
+        self.assertTrue(snap.percent_is_depleted(0.49999))
+        # The old spelling; kept as an explicit record of what changed.
+        self.assertEqual(round(0.5), 0)
+
     def test_snapshot_payload_normalizes_http_suffix(self) -> None:
         """build_snapshot_payload matches snapshots carrying the [HTTP] suffix."""
         http_snap = _ps(

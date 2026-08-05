@@ -62,7 +62,7 @@ struct ProviderDetailView: View {
 
     @ViewBuilder
     private func windowCard(_ window: ProviderWindow) -> some View {
-        let color = SignalColor.forPercent(window.percentLeft)
+        let color = SignalColor.forWindow(window)
 
         VStack(alignment: .leading, spacing: 6) {
             Text(ProviderWindowLabel.label(for: window.id))

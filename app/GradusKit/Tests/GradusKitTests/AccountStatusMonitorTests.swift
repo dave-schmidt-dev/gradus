@@ -43,30 +43,37 @@ func everyNonAvailableStatusIsBlocked(_ status: CKAccountStatus) {
     await source.setNextStatus(.available)
     let reported = ReportedStatuses()
 
-    let monitor = AccountStatusMonitor(source: source) { status in
+    let center = NotificationCenter()
+    let monitor = AccountStatusMonitor(source: source, notificationCenter: center) { status in
         Task { await reported.append(status) }
     }
     await monitor.start()
-    // Allow the detached onChange Task to run.
-    try? await Task.sleep(nanoseconds: 10_000_000)
+    #expect(await eventually { await reported.values == [.available] })
 
     #expect(await monitor.lastKnownStatus == .available)
     #expect(await source.callCount == 1)
-    #expect(await reported.values == [.available])
 }
 
 @Test func refreshOnTransientErrorLeavesLastKnownStatusUnchangedAndDoesNotReport() async {
     let source = MockAccountStatusSource()
     await source.setNextStatus(.available)
     let reported = ReportedStatuses()
-    let monitor = AccountStatusMonitor(source: source) { status in
+    let center = NotificationCenter()
+    let monitor = AccountStatusMonitor(source: source, notificationCenter: center) { status in
         Task { await reported.append(status) }
     }
     await monitor.start()
-    try? await Task.sleep(nanoseconds: 10_000_000)
+    #expect(await eventually { await reported.values == [.available] })
 
     await source.setNextFailure(CKError(.networkUnavailable))
     await monitor.refresh()
+
+    // `refresh()` is awaited, so the failed fetch is already handled; the only
+    // asynchronous tail left would be a spurious onChange hop. Absence can't be
+    // polled for, so settle briefly and then assert nothing arrived. If this
+    // window is ever too short the test under-reports a real bug — it does not
+    // fail spuriously, which is the tradeoff worth taking in a release gate.
+    try? await Task.sleep(nanoseconds: 50_000_000)
 
     #expect(await monitor.lastKnownStatus == .available)  // unchanged, not silently "blocked" or reset
     #expect(await reported.values == [.available])  // no spurious onChange for the failed refresh
@@ -76,21 +83,66 @@ func everyNonAvailableStatusIsBlocked(_ status: CKAccountStatus) {
     let source = MockAccountStatusSource()
     await source.setNextStatus(.noAccount)
     let reported = ReportedStatuses()
-    let monitor = AccountStatusMonitor(source: source) { status in
+    let center = NotificationCenter()
+    let monitor = AccountStatusMonitor(source: source, notificationCenter: center) { status in
         Task { await reported.append(status) }
     }
     await monitor.start()
-    try? await Task.sleep(nanoseconds: 10_000_000)
-    #expect(await monitor.lastKnownStatus == .noAccount)
+    #expect(await eventually { await monitor.lastKnownStatus == .noAccount })
 
     await source.setNextStatus(.available)
-    NotificationCenter.default.post(name: .CKAccountChanged, object: nil)
-    // The observer loop + refresh + onChange Task all need a moment.
-    try? await Task.sleep(nanoseconds: 200_000_000)
+    center.post(name: .CKAccountChanged, object: nil)
+    // The observer loop, the refresh, and the onChange Task all have to run.
+    #expect(await eventually { await monitor.lastKnownStatus == .available })
 
-    #expect(await monitor.lastKnownStatus == .available)
     #expect(await source.callCount == 2)
     await monitor.stopObserving()
+}
+
+/// Regression: `start()` must not return until the observer is actually
+/// registered.
+///
+/// The original implementation spawned `Task { for await _ in
+/// NotificationCenter.default.notifications(...) }`, which returns as soon as
+/// the Task is *created* — the sequence does not subscribe until the child task
+/// first iterates. A notification posted in that window was dropped. Posting
+/// with no intervening await is the only way to exercise it: every existing
+/// test slept first, which is exactly why the race survived.
+@Test func notificationPostedImmediatelyAfterStartIsNotDropped() async {
+    let source = MockAccountStatusSource()
+    await source.setNextStatus(.noAccount)
+    let center = NotificationCenter()
+    let monitor = AccountStatusMonitor(source: source, notificationCenter: center) { _ in }
+
+    await monitor.start()
+    await source.setNextStatus(.available)
+    center.post(name: .CKAccountChanged, object: nil)  // no sleep: the point of the test
+
+    #expect(await eventually { await monitor.lastKnownStatus == .available })
+    #expect(await source.callCount == 2)
+    await monitor.stopObserving()
+}
+
+/// Polls `condition` until it holds or `timeout` elapses; reports whether it held.
+///
+/// `AccountStatusMonitor` reports through `onChange`, which these tests hop onto
+/// a detached `Task` — there is no handle to await. The original tests slept a
+/// fixed 10ms instead, betting that the scheduler would run that Task promptly.
+/// On a loaded machine it does not: the suite failed ~1 run in 12 under CPU
+/// contention (found 2026-08-05 while wiring this package into `test-gate.sh`).
+/// Polling leaves the passing path just as fast — the first check almost always
+/// succeeds — while removing the race, so a busy gate machine can't turn green
+/// code red.
+private func eventually(
+    timeout: Duration = .seconds(5),
+    _ condition: () async -> Bool
+) async -> Bool {
+    let deadline = ContinuousClock.now + timeout
+    repeat {
+        if await condition() { return true }
+        try? await Task.sleep(nanoseconds: 1_000_000)
+    } while ContinuousClock.now < deadline
+    return await condition()
 }
 
 private actor ReportedStatuses {

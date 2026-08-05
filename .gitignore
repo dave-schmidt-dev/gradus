@@ -25,3 +25,9 @@ HISTORY.md
 TASKS.md
 history.md
 tasks.md
+
+# Design mocks rendered from live runtime state. `.state/` is ignored above, so
+# anything derived from it (real provider names, percentages, reset timestamps,
+# the publishing machine's hostname) must not reach a public remote either.
+# Kept on disk as durable design material, deliberately untracked.
+app/design-system/mocks/

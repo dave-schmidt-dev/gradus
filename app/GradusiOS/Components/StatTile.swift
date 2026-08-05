@@ -57,7 +57,7 @@ struct StatTile: View {
 
     @ViewBuilder
     private func windowBody(_ window: ProviderWindow) -> some View {
-        let color = SignalColor.forPercent(window.percentLeft)
+        let color = SignalColor.forWindow(window)
 
         if isHero {
             HStack(alignment: .firstTextBaseline) {

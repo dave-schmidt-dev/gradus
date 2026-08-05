@@ -1,0 +1,186 @@
+{
+  "_comment": [
+    "Canonical (percent_left, pace_delta) -> signal level truth table.",
+    "",
+    "Read by BOTH halves of the codebase so the Swift and Python ramps cannot",
+    "drift silently:",
+    "  - app/GradusKit/Tests/GradusKitTests/SignalLevelTests.swift (Swift)",
+    "  - tests/test_ui.py::SignalLevelTruthTableTest              (Python)",
+    "",
+    "It lives inside the SwiftPM test target because SwiftPM resources cannot",
+    "reference files outside the target directory (same constraint that put",
+    "golden-v2-snapshot.json here). Python reads it by relative path.",
+    "",
+    "This file is the interim stand-in for a single shared implementation --",
+    "see the [future] centralization row in TASKS.md. Until that lands, a",
+    "change to one surface's ramp that is not mirrored on the other fails",
+    "here, on both sides, rather than shipping as a rendering inconsistency.",
+    "",
+    "`nan` is spelled as the string \"nan\" because JSON has no non-finite",
+    "literal; both readers translate it to their language's NaN."
+  ],
+  "cases": [
+    {
+      "percent_left": null,
+      "pace_delta": null,
+      "level": "unknown",
+      "why": "No percentage at all -- nothing to color."
+    },
+    {
+      "percent_left": "nan",
+      "pace_delta": null,
+      "level": "unknown",
+      "why": "Non-finite percentage fails percentIsValid."
+    },
+    {
+      "percent_left": 150,
+      "pace_delta": null,
+      "level": "unknown",
+      "why": "Above 100 violates INV-3; refuse to color rather than guess. Note the pre-2026-08-05 percent ramp returned green here."
+    },
+    {
+      "percent_left": -5,
+      "pace_delta": null,
+      "level": "unknown",
+      "why": "Below 0 violates INV-3; same refusal as above."
+    },
+    {
+      "percent_left": 0,
+      "pace_delta": null,
+      "level": "red",
+      "why": "Depleted. Red regardless of pace -- there is nothing left to pace."
+    },
+    {
+      "percent_left": 0.4,
+      "pace_delta": null,
+      "level": "red",
+      "why": "Rounds to zero, so percentIsDepleted is true (matches snapshot.py)."
+    },
+    {
+      "percent_left": 0,
+      "pace_delta": 0.9,
+      "level": "red",
+      "why": "Depletion outranks a healthy pace: exhausted is exhausted."
+    },
+    {
+      "percent_left": 0.6,
+      "pace_delta": -0.9,
+      "level": "red",
+      "why": "Rounds to 1, so not depleted -- but the pace branch lands in red anyway."
+    },
+    {
+      "percent_left": 0.49,
+      "pace_delta": 0.002,
+      "level": "red",
+      "why": "Just under the 0.5 depletion ceiling: depleted, and depletion outranks a healthy pace."
+    },
+    {
+      "percent_left": 0.5,
+      "pace_delta": 0.002,
+      "level": "green",
+      "why": "Exactly at the ceiling and therefore NOT depleted, so pace decides and this is on pace. This pair is the regression test for the rounding divergence: Python's banker's round(0.5) == 0 made this red on the TUI while Swift's (0.5).rounded() == 1 made it green on Mac/iOS. Both now compare against a 0.5 bound instead of rounding, so no rounding mode is involved."
+    },
+    {
+      "percent_left": 85,
+      "pace_delta": null,
+      "level": "green",
+      "why": "No pace data: fall back to the legacy percent ramp rather than lose color."
+    },
+    {
+      "percent_left": 70,
+      "pace_delta": null,
+      "level": "green",
+      "why": "Fallback ramp boundary, inclusive (unchanged from the percent-only ramp)."
+    },
+    {
+      "percent_left": 69.9,
+      "pace_delta": null,
+      "level": "yellow",
+      "why": "Fallback ramp, just below the green boundary."
+    },
+    {
+      "percent_left": 40,
+      "pace_delta": null,
+      "level": "yellow",
+      "why": "Fallback ramp boundary, inclusive."
+    },
+    {
+      "percent_left": 39.9,
+      "pace_delta": null,
+      "level": "orange",
+      "why": "Fallback ramp, just below the yellow boundary."
+    },
+    {
+      "percent_left": 20,
+      "pace_delta": null,
+      "level": "orange",
+      "why": "Fallback ramp boundary, inclusive."
+    },
+    {
+      "percent_left": 19.9,
+      "pace_delta": null,
+      "level": "red",
+      "why": "Fallback ramp, just below the orange boundary. NOTE: this is one of the two cases where 'orange or worse' does NOT equal windowWarns -- with no pace there is nothing to warn on."
+    },
+    {
+      "percent_left": 60,
+      "pace_delta": "nan",
+      "level": "yellow",
+      "why": "Non-finite pace is treated as absent: fall back to the percent ramp."
+    },
+    {
+      "percent_left": 1,
+      "pace_delta": -0.0067,
+      "level": "yellow",
+      "why": "1% left 5 minutes before a 5-hour reset. Essentially on pace, so NOT red -- the case that motivated the pace ramp."
+    },
+    {
+      "percent_left": 50,
+      "pace_delta": 0.483,
+      "level": "green",
+      "why": "50% left 5 minutes before reset: a non-event. The percent ramp called this yellow."
+    },
+    {
+      "percent_left": 20,
+      "pace_delta": -0.6,
+      "level": "red",
+      "why": "20% left with 80% of the window still to run: the genuinely alarming case. The percent ramp called this orange."
+    },
+    {
+      "percent_left": 35,
+      "pace_delta": 0.05,
+      "level": "green",
+      "why": "Ahead of pace. The percent ramp called this orange."
+    },
+    {
+      "percent_left": 60,
+      "pace_delta": 0,
+      "level": "green",
+      "why": "Exactly on pace is healthy -- the green boundary is inclusive."
+    },
+    {
+      "percent_left": 60,
+      "pace_delta": -0.1,
+      "level": "yellow",
+      "why": "Exactly -0.10 does NOT warn (windowWarns is strictly <), so it must not reach orange."
+    },
+    {
+      "percent_left": 60,
+      "pace_delta": -0.1000001,
+      "level": "orange",
+      "why": "First value that warns. Anchors 'orange or worse' to windowWarns in snapshot.py and WarningPredicate.swift."
+    },
+    {
+      "percent_left": 60,
+      "pace_delta": -0.25,
+      "level": "orange",
+      "why": "Orange/red boundary, inclusive."
+    },
+    {
+      "percent_left": 60,
+      "pace_delta": -0.2500001,
+      "level": "red",
+      "why": "Burning down more than 25 points faster than the clock."
+    }
+  ]
+}

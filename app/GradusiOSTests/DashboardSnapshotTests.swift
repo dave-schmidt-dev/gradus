@@ -93,6 +93,59 @@ private func exhaustedProvider(named name: String) -> ProviderStatus {
     )
 }
 
+/// Fixtures whose signal level is the *opposite* of what the pre-pace,
+/// percent-only ramp produced, so a dashboard rendered with the old ramp
+/// cannot match this file's baseline.
+///
+/// Every other fixture in this file coincidentally agrees under both ramps
+/// (62%/-0.05 is yellow either way; 4%/-0.30 and 0%/-0.30 are red either
+/// way), which left the dashboard's adoption of the ramp with no pixel
+/// coverage at all. These two invert in both directions:
+///
+/// - `opencode` 3% left, +0.02 pace: nearly empty but the window is nearly
+///   over — David's motivating case. Old ramp: red. New: green.
+/// - `claude` 72% left, -0.26 pace: plenty left but almost none of the week
+///   spent. Old ramp: green. New: red.
+///
+/// Both are physically reachable: `paceDelta == fractionLeft -
+/// fractionOfWindowRemaining`, so the fixtures' reset timestamps are set to
+/// the window fraction each pace value implies (1% and 98% of 168h from
+/// `fixedNow`) rather than to arbitrary dates that would contradict them.
+private func paceDivergentProviders() -> [ProviderStatus] {
+    [
+        ProviderStatus(
+            providerName: "opencode",
+            providerDisplayName: "OpenCode",
+            ok: true,
+            errorMessage: nil,
+            windows: [
+                ProviderWindow(
+                    id: "weekly", percentLeft: 3, resetISO: "2026-07-25T15:00:48-04:00", windowHours: 168,
+                    paceDelta: 0.02)
+            ],
+            data: [:],
+            observedAt: ISO8601DateFormatter().string(from: fixedNow),
+            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+            publishedAt: fixedNow
+        ),
+        ProviderStatus(
+            providerName: "claude",
+            providerDisplayName: "Claude",
+            ok: true,
+            errorMessage: nil,
+            windows: [
+                ProviderWindow(
+                    id: "weekly", percentLeft: 72, resetISO: "2026-08-01T09:58:24-04:00", windowHours: 168,
+                    paceDelta: -0.26)
+            ],
+            data: [:],
+            observedAt: ISO8601DateFormatter().string(from: fixedNow),
+            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+            publishedAt: fixedNow
+        ),
+    ]
+}
+
 // P3/T3.3 gate: under the corrected ranking (Key decision #6), `cursor`
 // (errored, tier 1) is the hero -- not `codex` (62%, the highest percent) --
 // so these snapshots assert the error-variant `StatTile` renders as the
@@ -128,6 +181,24 @@ func testDashboardRendersRankedHeroAndListDark() {
         of: view,
         as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .dark)),
         testName: "dashboardRendersRankedHeroAndListDark")
+}
+
+@MainActor
+func testDashboardColorsByPaceNotByPercentageRemaining() {
+    // Assert the inversion at the classifier before trusting the pixels: if
+    // these two ever stop disagreeing with the percent ramp, the snapshot
+    // below silently stops proving anything.
+    XCTAssertEqual(signalLevel(percentLeft: 3, paceDelta: 0.02), .green)
+    XCTAssertEqual(signalLevel(percentLeft: 3, paceDelta: nil), .red)
+    XCTAssertEqual(signalLevel(percentLeft: 72, paceDelta: -0.26), .red)
+    XCTAssertEqual(signalLevel(percentLeft: 72, paceDelta: nil), .green)
+
+    let viewModel = makeViewModel(providers: paceDivergentProviders())
+    let view = DashboardContent(viewModel: viewModel, now: fixedNow)
+    assertSnapshot(
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 400), traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "dashboardColorsByPaceNotByPercentageRemaining")
 }
 
 @MainActor

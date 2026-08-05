@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import pathlib
 import unittest
 from datetime import datetime
 from io import StringIO
@@ -12,7 +13,7 @@ from rich.console import Console
 from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
-from gradus.snapshot import SAFE_DATA_KEYS
+from gradus.snapshot import SAFE_DATA_KEYS, window_warns
 from gradus.ui import (
     THEME,
     DynamicMicroDepletedPair,
@@ -29,7 +30,8 @@ from gradus.ui import (
     _percent_str,
     _provider_is_empty,
     _ResponsiveDashboardBody,
-    _style_for_percent,
+    _signal_level,
+    _style_for_signal,
     build_dashboard,
     build_loading_screen,
     build_micro_depleted_panel,
@@ -52,25 +54,174 @@ def _capture(renderable, *, width: int = 80) -> str:
     return console.file.getvalue()
 
 
-class StyleForPercentTests(unittest.TestCase):
+class PercentFallbackRampTests(unittest.TestCase):
+    """Boundaries of the no-pace fallback, exercised through the real entry point.
+
+    Asserting against ``_style_for_signal(percent, None)`` rather than the
+    private ``_percent_fallback_level`` keeps these tests on a path the app
+    can actually reach: a window whose provider reports no reset timestamp.
+    """
+
     def test_green_threshold(self) -> None:
-        self.assertEqual(_style_for_percent(75), "bar.green")
-        self.assertEqual(_style_for_percent(70), "bar.green")
+        self.assertEqual(_style_for_signal(75, None), "bar.green")
+        self.assertEqual(_style_for_signal(70, None), "bar.green")
 
     def test_yellow_threshold(self) -> None:
-        self.assertEqual(_style_for_percent(45), "bar.yellow")
-        self.assertEqual(_style_for_percent(40), "bar.yellow")
+        self.assertEqual(_style_for_signal(45, None), "bar.yellow")
+        self.assertEqual(_style_for_signal(40, None), "bar.yellow")
 
     def test_orange_threshold(self) -> None:
-        self.assertEqual(_style_for_percent(25), "bar.orange")
-        self.assertEqual(_style_for_percent(20), "bar.orange")
+        self.assertEqual(_style_for_signal(25, None), "bar.orange")
+        self.assertEqual(_style_for_signal(20, None), "bar.orange")
 
     def test_red_threshold(self) -> None:
-        self.assertEqual(_style_for_percent(10), "bar.red")
-        self.assertEqual(_style_for_percent(0), "bar.red")
+        self.assertEqual(_style_for_signal(10, None), "bar.red")
+        self.assertEqual(_style_for_signal(0, None), "bar.red")
 
     def test_none_returns_muted(self) -> None:
-        self.assertEqual(_style_for_percent(None), "text.muted")
+        self.assertEqual(_style_for_signal(None, None), "text.muted")
+
+    def test_invalid_percent_is_stricter_than_the_old_ramp(self) -> None:
+        """The pre-pace ramp returned green for 150; INV-3 says unknown."""
+        self.assertEqual(_style_for_signal(150, None), "text.muted")
+
+
+class PaceRampRenderingTests(unittest.TestCase):
+    """Prove the pace ramp reaches the rendered table, not just the pure function.
+
+    ``_capture`` renders with ``no_color=True``, so every other panel test in
+    this file is blind to style. Without these, a call site left on the
+    percent-only ramp would pass the whole suite.
+
+    Each case also asserts what the no-pace fallback would return for the same
+    percentage, so the test fails if the two ramps are ever collapsed into one.
+    """
+
+    now = datetime(2026, 8, 5, 12, 0, 0)
+
+    def _percent_cell_color(self, snap: ProviderSnapshot, needle: str) -> object:
+        console = Console(
+            file=StringIO(),
+            theme=THEME,
+            force_terminal=True,
+            width=80,
+            color_system="256",
+            _environ={"TERM": "xterm-256color"},
+        )
+        for segment in console.render(build_provider_panel(snap, self.now)):
+            if needle in segment.text and segment.style is not None:
+                return segment.style.color
+        self.fail(f"no styled segment containing {needle!r} was rendered")
+
+    def test_healthy_percent_burning_fast_renders_red(self) -> None:
+        """60% left but nearly the whole window still to run: the old ramp said green."""
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={
+                "five_hour_percent_left": 20.0,
+                "five_hour_reset": "Resets in 4h 0m",
+            },
+        )
+        self.assertEqual(self._percent_cell_color(snap, "20%"), THEME.styles["bar.red"].color)
+        self.assertEqual(_style_for_signal(20.0, None), "bar.orange")
+
+    def test_low_percent_at_end_of_window_is_not_red(self) -> None:
+        """1% left 5 minutes before reset — David's motivating case."""
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={
+                "five_hour_percent_left": 1.0,
+                "five_hour_reset": "Resets in 5m",
+            },
+        )
+        self.assertEqual(self._percent_cell_color(snap, "1.0%"), THEME.styles["bar.yellow"].color)
+        self.assertEqual(_style_for_signal(1.0, None), "bar.red")
+
+    def test_no_reset_falls_back_to_percent_ramp(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={"five_hour_percent_left": 85.0},
+        )
+        self.assertEqual(self._percent_cell_color(snap, "85%"), THEME.styles["bar.green"].color)
+
+
+class SignalLevelTruthTableTests(unittest.TestCase):
+    """Assert the TUI ramp against the shared cross-language truth table.
+
+    The Swift half (``SignalLevelTests.swift``) reads the same file, so a ramp
+    edit applied to only one surface fails on both. The fixture lives inside
+    the SwiftPM test target because SwiftPM resources cannot reference files
+    outside the target directory; see its header comment.
+    """
+
+    TRUTH_TABLE = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "app/GradusKit/Tests/GradusKitTests/Fixtures/signal-levels.json"
+    )
+
+    @staticmethod
+    def _number(raw: object) -> float | None:
+        """Translate the fixture's JSON encoding: null -> None, "nan" -> NaN."""
+        if raw is None:
+            return None
+        if raw == "nan":
+            return math.nan
+        assert isinstance(raw, (int, float))
+        return float(raw)
+
+    def _cases(self) -> list[dict[str, object]]:
+        self.assertTrue(
+            self.TRUTH_TABLE.is_file(),
+            f"shared truth table missing at {self.TRUTH_TABLE}",
+        )
+        cases = json.loads(self.TRUTH_TABLE.read_text())["cases"]
+        self.assertGreaterEqual(
+            len(cases), 15, "truth table shrank — boundary coverage was removed"
+        )
+        return cases
+
+    def test_matches_shared_truth_table(self) -> None:
+        for case in self._cases():
+            percent = self._number(case["percent_left"])
+            pace = self._number(case["pace_delta"])
+            with self.subTest(percent=percent, pace=pace, why=case["why"]):
+                self.assertEqual(_signal_level(percent, pace), case["level"])
+
+    def test_orange_or_worse_equals_window_warns_when_pace_is_known(self) -> None:
+        """A colored row and a notification can never contradict each other.
+
+        Only holds when pace is finite: with no pace the ramp falls back to
+        percent and can render red on a window that raises no alert.
+        """
+        for case in self._cases():
+            percent = self._number(case["percent_left"])
+            pace = self._number(case["pace_delta"])
+            if percent is None or not math.isfinite(percent):
+                continue
+            if pace is None or not math.isfinite(pace):
+                continue
+            with self.subTest(percent=percent, pace=pace):
+                alarming = case["level"] in ("orange", "red")
+                self.assertEqual(
+                    window_warns({"percent_left": percent, "pace_delta": pace}),
+                    alarming,
+                )
+
+    def test_style_mapping_covers_every_level(self) -> None:
+        for case in self._cases():
+            percent = self._number(case["percent_left"])
+            pace = self._number(case["pace_delta"])
+            style = _style_for_signal(percent, pace)
+            expected = "text.muted" if case["level"] == "unknown" else f"bar.{case['level']}"
+            with self.subTest(percent=percent, pace=pace):
+                self.assertEqual(style, expected)
+                self.assertIn(style, THEME.styles)
 
 
 class PercentageBarTests(unittest.TestCase):

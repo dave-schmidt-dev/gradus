@@ -115,7 +115,7 @@ private struct ProviderRow: View {
                             percentLeft: window.percentLeft,
                             paceDelta: window.paceDelta
                         ),
-                        tint: windowWarns(window) ? .orange : .green
+                        tint: SignalColor.forWindow(window)
                     )
                     .frame(height: 6)
                     Text("\(Int(window.percentLeft))%")

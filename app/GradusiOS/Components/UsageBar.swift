@@ -16,7 +16,7 @@ struct UsageBar: View {
     init(window: ProviderWindow, color: Color? = nil) {
         self.percentLeft = window.percentLeft
         self.paceDelta = window.paceDelta
-        self.color = color ?? SignalColor.forPercent(window.percentLeft)
+        self.color = color ?? SignalColor.forWindow(window)
     }
 
     var body: some View {

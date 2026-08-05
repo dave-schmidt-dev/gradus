@@ -53,9 +53,26 @@ def percent_is_valid(percent_left: object) -> bool:
     )
 
 
+#: A remaining percentage strictly below this rounds to zero, so the window is
+#: treated as depleted. Stated as a bound rather than as ``round(x) <= 0``
+#: deliberately: Python's ``round`` is banker's rounding (``round(0.5) == 0``)
+#: while Swift's ``.rounded()`` is half-away-from-zero (``(0.5).rounded() == 1``),
+#: so the two spellings disagreed at exactly 0.5 and a provider sitting there
+#: was depleted-and-warning on the TUI but neither on Mac/iOS. Because
+#: ``percent_is_valid`` bounds the input to 0-100, ``floor(x + 0.5) <= 0`` is
+#: exactly ``x < 0.5``, so this form is identical on both platforms with no
+#: rounding mode to get wrong. Mirrored by ``depletedPercentCeiling`` in
+#: ``app/GradusKit/Sources/GradusKit/WarningPredicate.swift``.
+DEPLETED_PERCENT_CEILING = 0.5
+
+
 def percent_is_depleted(percent_left: object) -> bool:
-    """Return whether a normalized remaining percentage is zero or rounds to zero."""
-    return percent_is_valid(percent_left) and round(float(percent_left)) <= 0
+    """Return whether a normalized remaining percentage rounds down to zero.
+
+    True for anything in ``[0, 0.5)``. Exactly 0.5 is *not* depleted: it
+    renders as 1% once rounded, and there is still something left to spend.
+    """
+    return percent_is_valid(percent_left) and float(percent_left) < DEPLETED_PERCENT_CEILING
 
 
 def window_warns(window: Mapping[str, object]) -> bool:

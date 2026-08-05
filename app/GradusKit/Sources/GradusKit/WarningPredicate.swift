@@ -12,11 +12,25 @@ public func percentIsValid(_ percentLeft: Double?) -> Bool {
     return percentLeft >= 0.0 && percentLeft <= 100.0
 }
 
-/// A normalized remaining percentage is depleted when it is zero or rounds
-/// to zero.
+/// A remaining percentage strictly below this rounds to zero, so the window
+/// is treated as depleted.
+///
+/// Stated as a bound rather than as `.rounded() <= 0` deliberately: Swift's
+/// `.rounded()` is half-away-from-zero (`(0.5).rounded() == 1`) while Python's
+/// `round` is banker's rounding (`round(0.5) == 0`), so the two spellings
+/// disagreed at exactly 0.5 and a provider sitting there was
+/// depleted-and-warning on the TUI but neither here. Because `percentIsValid`
+/// bounds the input to 0...100, `floor(x + 0.5) <= 0` is exactly `x < 0.5`, so
+/// this form is identical on both platforms with no rounding mode to get
+/// wrong. Mirrored by `DEPLETED_PERCENT_CEILING` in `gradus/snapshot.py`.
+public let depletedPercentCeiling = 0.5
+
+/// A normalized remaining percentage is depleted when it rounds down to zero
+/// — anything in `[0, 0.5)`. Exactly 0.5 is *not* depleted: it renders as 1%
+/// once rounded, and there is still something left to spend.
 public func percentIsDepleted(_ percentLeft: Double?) -> Bool {
     guard percentIsValid(percentLeft), let percentLeft else { return false }
-    return percentLeft.rounded() <= 0
+    return percentLeft < depletedPercentCeiling
 }
 
 /// A window warrants an alert only when its remaining percentage is exactly

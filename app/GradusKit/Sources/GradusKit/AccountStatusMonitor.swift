@@ -20,6 +20,28 @@ public struct ContainerAccountStatusSource: AccountStatusSource {
     }
 }
 
+/// Holds a `NotificationCenter` observer token so it can be unregistered from a
+/// `nonisolated deinit`.
+///
+/// The raw token is `any NSObjectProtocol`, which is not `Sendable`, so Swift 6
+/// refuses to touch it outside the actor. The token is never used *as* an
+/// object — it is only handed straight back to `NotificationCenter`, which is
+/// itself thread-safe — so `@unchecked Sendable` is accurate here rather than a
+/// suppression.
+private final class ObserverToken: @unchecked Sendable {
+    private let token: any NSObjectProtocol
+    private let center: NotificationCenter
+
+    init(_ token: any NSObjectProtocol, center: NotificationCenter) {
+        self.token = token
+        self.center = center
+    }
+
+    func remove() {
+        center.removeObserver(token)
+    }
+}
+
 /// Tracks CloudKit account status and reacts to account changes mid-session
 /// (user signs out of iCloud, switches accounts, etc. while the app is
 /// running). Exposes a simple ready/blocked classification so the publish
@@ -32,12 +54,23 @@ public actor AccountStatusMonitor {
     }
 
     private let source: AccountStatusSource
+    private let notificationCenter: NotificationCenter
     private let onChange: @Sendable (CKAccountStatus) -> Void
     public private(set) var lastKnownStatus: CKAccountStatus = .couldNotDetermine
-    private var notificationTask: Task<Void, Never>?
+    private var observerToken: ObserverToken?
 
-    public init(source: AccountStatusSource, onChange: @escaping @Sendable (CKAccountStatus) -> Void) {
+    /// - Parameter notificationCenter: Injectable so tests can post
+    ///   `.CKAccountChanged` to an isolated center. Sharing the process-wide
+    ///   `.default` means one test's post reaches every other test's monitor,
+    ///   which Swift Testing's parallel execution turns into cross-test
+    ///   interference.
+    public init(
+        source: AccountStatusSource,
+        notificationCenter: NotificationCenter = .default,
+        onChange: @escaping @Sendable (CKAccountStatus) -> Void
+    ) {
         self.source = source
+        self.notificationCenter = notificationCenter
         self.onChange = onChange
     }
 
@@ -63,18 +96,42 @@ public actor AccountStatusMonitor {
         }
     }
 
+    /// Registers the `.CKAccountChanged` observer.
+    ///
+    /// `addObserver` registers synchronously, so once this returns there is no
+    /// window in which a posted notification can be missed. The previous form
+    /// — `Task { for await _ in NotificationCenter.default.notifications(...) }`
+    /// — returned as soon as the Task was *created*, but that sequence does not
+    /// subscribe until the child task first iterates it. A `.CKAccountChanged`
+    /// posted in between was silently dropped (found 2026-08-05: the test for
+    /// this behavior only passed because it slept 10ms first, which is also
+    /// what made the suite flake under load).
+    ///
+    /// Tradeoff accepted: the old `for await` loop awaited each `refresh()`
+    /// before pulling the next notification, so refreshes were serialized. This
+    /// form spawns one Task per post, so N rapid notifications produce N
+    /// concurrent refreshes that can interleave — the older status could win the
+    /// final assignment. `.CKAccountChanged` is user-driven (signing out of
+    /// iCloud, switching accounts), so bursts are not a real pattern, and both
+    /// call sites (`GradusiOSApp`, `GradusMacApp`) only read `lastKnownStatus`
+    /// to gate publishing, which the next refresh corrects. Revisit if a
+    /// programmatic source ever posts this notification in a loop.
     private func startObserving() {
-        notificationTask = Task { [weak self] in
-            for await _ in NotificationCenter.default.notifications(named: .CKAccountChanged) {
-                guard let self else { return }
-                await self.refresh()
-            }
-        }
+        observerToken = ObserverToken(
+            notificationCenter.addObserver(
+                forName: .CKAccountChanged,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                Task { await self?.refresh() }
+            },
+            center: notificationCenter
+        )
     }
 
     public func stopObserving() {
-        notificationTask?.cancel()
-        notificationTask = nil
+        observerToken?.remove()
+        observerToken = nil
     }
 
     /// Maps a raw `CKAccountStatus` to whether the publish pipeline should
@@ -87,6 +144,6 @@ public actor AccountStatusMonitor {
     }
 
     deinit {
-        notificationTask?.cancel()
+        observerToken?.remove()
     }
 }

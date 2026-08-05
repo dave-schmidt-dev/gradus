@@ -306,18 +306,32 @@ def _format_reset_display(reset_text: str | None, now: datetime) -> str:
     return _format_clock(target.hour, target.minute)
 
 
+def _pace_value(
+    percent_left: float | None,
+    reset_text: str | None,
+    now: datetime,
+    window_hours: float | None,
+) -> float | None:
+    """Return a session window's numeric pace delta, or None if incomputable.
+
+    Split out of :func:`_pace_label` so the row's *color* and its *label* are
+    driven by the same number instead of recomputing it two ways.
+    """
+    if percent_left is None or window_hours is None:
+        return None
+    target = _parse_reset_target(reset_text, now)
+    if target is None:
+        return None
+    return pace_delta(percent_left, target, window_hours * 3600.0, now)
+
+
 def _pace_label(
     percent_left: float | None,
     reset_text: str | None,
     now: datetime,
     window_hours: float | None,
 ) -> str:
-    if percent_left is None or window_hours is None:
-        return "n/a"
-    target = _parse_reset_target(reset_text, now)
-    if target is None:
-        return "n/a"
-    delta = pace_delta(percent_left, target, window_hours * 3600.0, now)
+    delta = _pace_value(percent_left, reset_text, now, window_hours)
     if delta is None:
         return "n/a"
     diff_points = round(abs(delta) * 100)
@@ -451,6 +465,30 @@ def _copilot_monthly_reset_target(now: datetime) -> datetime:
     return datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
 
 
+def _billing_cycle_pace_value(
+    percent_left: float | None,
+    start_iso: str | None,
+    end_iso: str | None,
+    now: datetime,
+) -> float | None:
+    """Return a billing cycle's numeric pace delta, or None if incomputable.
+
+    Billing cycles carry explicit start/end dates rather than a rolling window
+    length, so they need their own total-seconds derivation; the resulting
+    delta feeds the same ramp as a session window's.
+    """
+    if percent_left is None or not start_iso or not end_iso:
+        return None
+    try:
+        start = datetime.fromisoformat(start_iso)
+        end = datetime.fromisoformat(end_iso)
+    except ValueError:
+        return None
+    start, end = reconcile(start, end)
+    total_seconds = max(1.0, (end - start).total_seconds())
+    return pace_delta(percent_left, end, total_seconds, now)
+
+
 def _billing_cycle_pace_label(
     percent_left: float | None,
     start_iso: str | None,
@@ -458,16 +496,7 @@ def _billing_cycle_pace_label(
     now: datetime,
 ) -> str:
     """Compute pace label for any billing cycle with known start and end dates."""
-    if percent_left is None or not start_iso or not end_iso:
-        return "n/a"
-    try:
-        start = datetime.fromisoformat(start_iso)
-        end = datetime.fromisoformat(end_iso)
-    except ValueError:
-        return "n/a"
-    start, end = reconcile(start, end)
-    total_seconds = max(1.0, (end - start).total_seconds())
-    delta = pace_delta(percent_left, end, total_seconds, now)
+    delta = _billing_cycle_pace_value(percent_left, start_iso, end_iso, now)
     if delta is None:
         return "n/a"
     delta_points = delta * 100.0
@@ -500,17 +529,103 @@ def _provider_display_fields(snapshot: ProviderSnapshot, now: datetime) -> dict[
 # ---------------------------------------------------------------------------
 
 
-def _style_for_percent(percent: float | None) -> str:
-    """Return a Rich theme style name for a usage percentage."""
-    if percent is None:
-        return "text.muted"
+#: Pace at or above this is healthy: spending exactly as fast as the clock
+#: runs down is what the window is for.
+_PACE_GREEN_FLOOR = 0.0
+
+#: Matches ``window_warns``, which alerts at ``pace_delta < -0.10``. Because
+#: this bound is inclusive, "orange or worse" and "warns" are the same
+#: predicate whenever pace is known, so a colored row and a notification
+#: cannot disagree.
+_PACE_YELLOW_FLOOR = -0.10
+
+#: Burning down more than 25 points faster than the clock. Unlike
+#: ``_PACE_YELLOW_FLOOR`` this is not derived from an existing predicate; it
+#: separates "drifting" from "will run out early" and is free to be retuned.
+_PACE_ORANGE_FLOOR = -0.25
+
+_SIGNAL_STYLES: dict[str, str] = {
+    "green": "bar.green",
+    "yellow": "bar.yellow",
+    "orange": "bar.orange",
+    "red": "bar.red",
+    "unknown": "text.muted",
+}
+
+
+def _percent_fallback_level(percent: float) -> str:
+    """Classify by absolute percentage alone, for windows with no usable pace.
+
+    This is the pre-pace ramp, kept only as :func:`_signal_level`'s step 3 —
+    it is not a public alternative to it. Reaching it means the window has no
+    reset timestamp, so there is no evidence about how fast the remaining
+    percentage is being spent.
+
+    Mirrors the ``guard let paceDelta`` branch of ``signalLevel`` in
+    ``app/GradusKit/Sources/GradusKit/SignalLevel.swift``.
+    """
     if percent >= 70:
-        return "bar.green"
+        return "green"
     if percent >= 40:
-        return "bar.yellow"
+        return "yellow"
     if percent >= 20:
-        return "bar.orange"
-    return "bar.red"
+        return "orange"
+    return "red"
+
+
+def _signal_level(percent: float | None, pace: float | None) -> str:
+    """Classify a window by pace rather than by absolute percentage left.
+
+    Mirrors ``signalLevel`` in ``app/GradusKit/Sources/GradusKit/SignalLevel.swift``.
+    The two are held together by the shared truth table at
+    ``app/GradusKit/Tests/GradusKitTests/Fixtures/signal-levels.json``, which
+    both test suites read.
+
+    The rules, in order:
+
+    1. An invalid percentage (missing, non-finite, or outside 0-100 per
+       INV-3) is ``unknown``. This is stricter than the pre-pace ramp, which
+       returned green for a value like 150.
+    2. A depleted percentage is ``red`` regardless of pace — there is nothing
+       left to pace.
+    3. A missing or non-finite pace falls back to the percent-only ramp so a
+       window without a reset timestamp still gets a color. This is the one
+       case where "orange or worse" is not equivalent to ``window_warns``:
+       19% with no pace renders red but raises no alert, because there is no
+       evidence to alert on.
+    4. Otherwise the pace delta selects the step.
+
+    Args:
+        percent: Remaining percentage, normalized 0-100.
+        pace: ``fraction_left - fraction_of_window_remaining``. Positive is
+            ahead of schedule. Not clamped (INV-4).
+
+    Returns:
+        One of ``green``, ``yellow``, ``orange``, ``red``, ``unknown``.
+    """
+    if not percent_is_valid(percent):
+        return "unknown"
+    if percent_is_depleted(percent):
+        return "red"
+
+    pace_is_usable = (
+        isinstance(pace, (int, float)) and not isinstance(pace, bool) and math.isfinite(pace)
+    )
+    if not pace_is_usable:
+        return _percent_fallback_level(percent)
+
+    if pace >= _PACE_GREEN_FLOOR:
+        return "green"
+    if pace >= _PACE_YELLOW_FLOOR:
+        return "yellow"
+    if pace >= _PACE_ORANGE_FLOOR:
+        return "orange"
+    return "red"
+
+
+def _style_for_signal(percent: float | None, pace: float | None) -> str:
+    """Return the Rich theme style for a window's pace-aware signal level."""
+    return _SIGNAL_STYLES[_signal_level(percent, pace)]
 
 
 ACCENT_STYLES: dict[str, str] = {
@@ -862,7 +977,8 @@ def _add_usage_rows(
             continue
         reset = data.get(window.reset_key)
         reset_str = None if reset is None else str(reset)
-        style = _style_for_percent(percent)
+        pace_value = _pace_value(percent, reset_str, now, window.window_hours)
+        style = _style_for_signal(percent, pace_value)
         reset_display = _format_reset_display(reset_str, now)
         pace = _pace_label(percent, reset_str, now, window.window_hours)
         table.add_row(
@@ -1002,7 +1118,10 @@ def _add_copilot_rows(table: Table, data: dict[str, object], now: datetime) -> N
     end = _copilot_monthly_reset_target(utc_now)
     pace_text = _billing_cycle_pace_label(percent_left, start.isoformat(), end.isoformat(), utc_now)
 
-    style = _style_for_percent(percent_left)
+    style = _style_for_signal(
+        percent_left,
+        _billing_cycle_pace_value(percent_left, start.isoformat(), end.isoformat(), utc_now),
+    )
     value_text = _format_percent_value(percent_left)
     reset_display = _format_reset_display(None if reset_value is None else str(reset_value), now)
     table.add_row(
@@ -1051,7 +1170,9 @@ def _add_cursor_rows(table: Table, data: dict[str, object], now: datetime) -> No
         ("ap", "api_percent_used", True),
     ):
         percent_left = _remaining(key, used=is_used)
-        style = _style_for_percent(percent_left)
+        style = _style_for_signal(
+            percent_left, _billing_cycle_pace_value(percent_left, start, end, now)
+        )
         pace_text = _billing_cycle_pace_label(percent_left, start, end, now)
         table.add_row(
             Text(label, style="text.muted"),
@@ -1074,17 +1195,16 @@ def _add_vibe_rows(table: Table, data: dict[str, object], now: datetime) -> None
 
     reset_value = data.get("reset_at")
 
-    style = _style_for_percent(percent_left)
     value_text = _format_percent_value(percent_left)
     reset_display = _format_reset_display(None if reset_value is None else str(reset_value), now)
     start_iso = data.get("start_date")
     end_iso = data.get("end_date")
-    pace_text = _billing_cycle_pace_label(
-        percent_left,
-        str(start_iso) if isinstance(start_iso, str) else None,
-        str(end_iso) if isinstance(end_iso, str) else None,
-        now,
+    cycle_start = str(start_iso) if isinstance(start_iso, str) else None
+    cycle_end = str(end_iso) if isinstance(end_iso, str) else None
+    style = _style_for_signal(
+        percent_left, _billing_cycle_pace_value(percent_left, cycle_start, cycle_end, now)
     )
+    pace_text = _billing_cycle_pace_label(percent_left, cycle_start, cycle_end, now)
     table.add_row(
         Text("mo", style="text.muted"),
         Text(value_text, style=style),
