@@ -46,15 +46,37 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
 }
 
 @MainActor
-@Test func denseGridIsSelectedForRegularWidthAndListForCompact() {
+@Test func multiColumnIsSelectedForRegularWidthAndSingleColumnForCompact() {
     // The override exists for tests; the default path is the size class, so
     // assert the derivation itself rather than only the override.
     let viewModel = makeDensityViewModel(providers: [provider("codex", windows: [window("weekly", 50)])])
     #expect(DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseGrid).layout == .denseGrid)
-    #expect(DashboardContent(viewModel: viewModel, now: fixedNow, layout: .compactList).layout == .compactList)
+    #expect(
+        DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn).layout
+            == .denseSingleColumn)
     // No override and no environment (the default `horizontalSizeClass` is
-    // nil off-screen) must not silently pick the dense grid.
-    #expect(DashboardContent(viewModel: viewModel, now: fixedNow).layout == .compactList)
+    // nil off-screen) must not silently pick the multi-column grid.
+    #expect(DashboardContent(viewModel: viewModel, now: fixedNow).layout == .denseSingleColumn)
+}
+
+/// The layouts differ in density detail, never in *which* windows they show.
+/// Guards the parity rule in `INVARIANTS.md` at the one place the two
+/// presentations are allowed to diverge: iPhone drops each row's reset time to
+/// keep the bar legible, and takes one column instead of an adaptive count.
+@MainActor
+@Test func bothLayoutsShowEveryWindowAndDifferOnlyInDensityDetail() {
+    #expect(DashboardLayout.denseGrid.showsReset)
+    #expect(!DashboardLayout.denseSingleColumn.showsReset)
+
+    // Same provider, same card type, same window count on both — the card has
+    // no per-layout filtering, so parity is structural rather than asserted.
+    let threeWindows = provider(
+        "opencode",
+        windows: [window("five_hour", 100), window("weekly", 61), window("monthly", 7)])
+    for showsReset in [true, false] {
+        let card = ProviderDensityCard(provider: threeWindows, now: fixedNow, showsReset: showsReset)
+        #expect(card.visibleWindows.count == 3, "reset column must not change which windows render")
+    }
 }
 
 @Test func syncStatusLineReportsAgeAndComputerName() {

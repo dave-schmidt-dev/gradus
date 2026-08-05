@@ -52,20 +52,29 @@ is the authoritative local gate. It runs, in order:
 Steps 2 and 3 are ordered before the simulator work so the gate fails fast, and
 they cost ~8s cold / <1s warm against several minutes for the simulator half.
 
-Step 5 exists because a size-class-dependent layout has no coverage on a
-destination that cannot reach its size class. The iPad dense layout renders
-only at the regular horizontal size class, so before this step the iPhone
-destination could not execute its routing or its tap-to-detail wiring no matter
-what tests were written. Only the UI-test bundle runs there; rerunning the full
-iOS suite on a second simulator would roughly double the gate's slowest phase
-to re-prove device-independent behavior.
+Step 5 exists because both size classes must be exercised (INV-12). iPhone and
+iPad now render the same dense layout, differing only in column count and
+whether each window row carries its reset time — so the interesting question is
+no longer "can this destination reach the layout at all" but "does the layout
+still behave when the adaptive column count resolves to more than one". Only
+the iPad destination answers that. Only the UI-test bundle runs there;
+rerunning the full iOS suite on a second simulator would roughly double the
+gate's slowest phase to re-prove device-independent behavior.
 
-The cost of a size-class-gated test is that it must skip on the destination it
-cannot run on, and a skipped test is green. `DensityLayoutXCUITests` self-skips
-on iPhone, so deleting step 5 would leave it passing everywhere while executing
-nothing. That is why step 5 is a separately named line in the gate output
-rather than an extra destination folded into step 4 — the failure mode is a
-missing step, so the step has to be visible when present.
+`DensityLayoutXCUITests` deliberately does **not** skip by idiom. It did while
+the dense grid was iPad-only, and that skip was the file's one soft spot: a
+skipped test is green, so dropping the iPad destination would have left it
+passing everywhere while executing nothing. Now that the layout is shared, the
+test runs unskipped on both destinations, and the iPhone run is what proves the
+compact path actually reaches the same layout rather than merely being
+configured to.
+
+This is the general rule, not a detail of one file: when a rule is supposed to
+hold across size classes, assert it on every destination that can run it, and
+reach for a skip only when a destination genuinely cannot. A skip is how two
+platforms drift apart with the suite still green — which is precisely how the
+iPhone kept a one-window-per-provider list for a full release after the iPad
+stopped having one.
 
 GradusKit needs its own step because it is consumed as a SwiftPM package
 *dependency*: `xcodebuild test -scheme GradusMac|GradusiOS` builds its library

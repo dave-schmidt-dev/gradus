@@ -138,3 +138,18 @@ rationale: Every new behavior has a test at the lowest layer that proves it; new
   producer/consumer behavior has tests on both sides. Tests must be wired into the runner and gate.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
+
+### INV-12 — iPhone and iPad show the same information and ship in the same release
+area: ["app/GradusiOS/**", "app/GradusiOSTests/**", "app/GradusiOSUITests/**", "app/test-gate.sh", "CHANGELOG.md"]
+gate_test: app/test-gate.sh
+threshold: 3
+rationale: GradusiOS is one artifact with one version, so a size class is a rendering detail and never
+  a feature boundary. The two layouts may differ in density detail — column count, and whether a
+  window row carries its reset time — but never in *which* providers or windows are shown, and never
+  in whether a workflow exists at all. A change to one size class ships with the other in the same
+  release; there is no iPad-only or iPhone-only release. Violated once, 2026-08-05: the iPad gained a
+  dense every-window layout in 1.5.0 while the iPhone kept a ranked list showing one window per
+  provider behind selection badges, so the same account read as healthy on the phone and not on the
+  tablet, and the release notes asked testers to "confirm the iPhone layout is unchanged" — documenting
+  the divergence as though it were a decision. Both destinations must be exercised by the gate:
+  size-class-gated coverage that runs on only one destination is how this divergence stays invisible.

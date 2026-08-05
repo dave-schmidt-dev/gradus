@@ -161,26 +161,30 @@ private func paceDivergentProviders() -> [ProviderStatus] {
 // `DashboardContent`'s doc comment in DashboardView.swift) -- this keeps
 // these tests independent of `DashboardView`'s outer shell entirely.
 final class DashboardSnapshotTests: XCTestCase {
+// Recorded at 393x852 — a real iPhone 16 in points, not the old 390x600.
+// The height matters now: these assert what a phone actually shows without
+// scrolling, and a 600pt canvas quietly flattered a layout whose whole claim
+// is density.
 @MainActor
-func testDashboardRendersRankedHeroAndListLight() {
+func testDashboardRendersDenseCardsCompactLight() {
     let viewModel = makeViewModel(providers: sampleProviders())
     XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
-    let view = DashboardContent(viewModel: viewModel, now: fixedNow)
+    let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .light)),
-        testName: "dashboardRendersRankedHeroAndListLight")
+        as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "dashboardRendersDenseCardsCompactLight")
 }
 
 @MainActor
-func testDashboardRendersRankedHeroAndListDark() {
+func testDashboardRendersDenseCardsCompactDark() {
     let viewModel = makeViewModel(providers: sampleProviders())
     XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
-    let view = DashboardContent(viewModel: viewModel, now: fixedNow)
+    let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 600), traits: UITraitCollection(userInterfaceStyle: .dark)),
-        testName: "dashboardRendersRankedHeroAndListDark")
+        as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        testName: "dashboardRendersDenseCardsCompactDark")
 }
 
 @MainActor
@@ -194,10 +198,10 @@ func testDashboardColorsByPaceNotByPercentageRemaining() {
     XCTAssertEqual(signalLevel(percentLeft: 72, paceDelta: nil), .green)
 
     let viewModel = makeViewModel(providers: paceDivergentProviders())
-    let view = DashboardContent(viewModel: viewModel, now: fixedNow)
+    let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 400), traits: UITraitCollection(userInterfaceStyle: .light)),
+        as: .image(layout: .fixed(width: 393, height: 400), traits: UITraitCollection(userInterfaceStyle: .light)),
         testName: "dashboardColorsByPaceNotByPercentageRemaining")
 }
 

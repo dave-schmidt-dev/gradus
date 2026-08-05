@@ -25,6 +25,18 @@ struct WindowRow: View {
 
     let window: ProviderWindow
     let now: Date
+    /// Dropped at compact width. The three fixed columns plus spacing cost
+    /// 246pt, which on a 393pt iPhone leaves the bar about 91pt — squeezing
+    /// the one element that actually carries the signal. Without reset the bar
+    /// gets ~203pt. Reset is not lost: it stays on this row at regular width,
+    /// and Provider Detail shows it on every device.
+    let showsReset: Bool
+
+    init(window: ProviderWindow, now: Date, showsReset: Bool = true) {
+        self.window = window
+        self.now = now
+        self.showsReset = showsReset
+    }
 
     var body: some View {
         let color = SignalColor.forWindow(window)
@@ -44,11 +56,13 @@ struct WindowRow: View {
                 .lineLimit(1)
                 .frame(width: Self.percentWidth, alignment: .trailing)
 
-            Text(resetText)
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .lineLimit(1)
-                .frame(width: Self.resetWidth, alignment: .trailing)
+            if showsReset {
+                Text(resetText)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .frame(width: Self.resetWidth, alignment: .trailing)
+            }
         }
         .frame(height: 22)
         .accessibilityElement(children: .ignore)

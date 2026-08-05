@@ -1,27 +1,32 @@
 import GradusKit
 import XCTest
 
-/// iPad Option B's interactive coverage: the dense grid actually routes on a
-/// real regular-width device, every window renders without a drill-in, and
-/// tapping a card pushes Provider Detail.
+/// The dense layout's interactive coverage, on **both** size classes: every
+/// window renders without a drill-in, and tapping a card pushes Provider
+/// Detail.
 ///
 /// This complements `DensityLayoutSnapshotTests`, which renders
-/// `DashboardContent` with `layout: .denseGrid` passed in explicitly. That
-/// proves the *layout* draws correctly but says nothing about whether the real
-/// app ever selects it — the size-class derivation, the `NavigationStack`, and
-/// the tap-to-push wiring are all outside a snapshot's reach. Only a launched
-/// app on an actual iPad exercises those.
+/// `DashboardContent` with a layout passed in explicitly. That proves the
+/// *layout* draws correctly but says nothing about whether the real app ever
+/// selects it — the size-class derivation, the `NavigationStack`, and the
+/// tap-to-push wiring are all outside a snapshot's reach. Only a launched app
+/// exercises those.
 ///
-/// Runs on the iPad destination `test-gate.sh` adds for `GradusiOSUITests`.
-/// It self-skips on the iPhone destination, where the dense grid correctly
-/// never renders. That skip is the one soft spot here: drop the iPad
-/// destination from the gate and this file goes silently green everywhere
-/// instead of failing, so the gate step is named explicitly in `test-gate.sh`
-/// to make its absence visible in the log.
+/// Deliberately **not** gated on `userInterfaceIdiom == .pad`. It was, while
+/// the dense grid rendered only at regular width; now that both size classes
+/// use it (INV-12), running unskipped on the iPhone destination is what proves
+/// the compact path actually reaches the same layout rather than merely being
+/// configured to. A skip here would let the two size classes drift back apart
+/// while the suite stayed green — which is exactly how they drifted the first
+/// time.
+///
+/// The iPad destination in `test-gate.sh` still earns its place: it is the only
+/// one where the adaptive column count resolves to more than one, so it is the
+/// only destination that can catch a regression in multi-column layout.
 final class DensityLayoutXCUITests: XCTestCase {
-    /// A provider with three windows. In the compact layout `StatTile` shows
-    /// one window and hides the rest behind badges, so "all three visible at
-    /// once" is exactly the claim Option B makes and the compact layout fails.
+    /// A provider with three windows. Both layouts must show all three at
+    /// once — that is the parity claim INV-12 makes, and the claim the
+    /// superseded `StatTile` list failed by hiding all but one behind badges.
     private func seedJSON() throws -> String {
         let providers = [
             ProviderStatus(
@@ -65,10 +70,6 @@ final class DensityLayoutXCUITests: XCTestCase {
     }
 
     func testDenseCardShowsEveryWindowAndPushesProviderDetail() throws {
-        try XCTSkipUnless(
-            UIDevice.current.userInterfaceIdiom == .pad,
-            "The dense grid only renders at regular horizontal size class.")
-
         let app = XCUIApplication()
         app.launchEnvironment["GRADUS_UITEST_SEED_JSON"] = try seedJSON()
         app.launch()

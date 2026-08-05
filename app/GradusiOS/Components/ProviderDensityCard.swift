@@ -15,6 +15,15 @@ import SwiftUI
 struct ProviderDensityCard: View {
     let provider: ProviderStatus
     let now: Date
+    /// Forwarded to every `WindowRow`; see that type for why compact width
+    /// drops the reset column.
+    let showsReset: Bool
+
+    init(provider: ProviderStatus, now: Date, showsReset: Bool = true) {
+        self.provider = provider
+        self.now = now
+        self.showsReset = showsReset
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -49,7 +58,7 @@ struct ProviderDensityCard: View {
         } else {
             VStack(spacing: 2) {
                 ForEach(Array(visibleWindows.enumerated()), id: \.offset) { _, window in
-                    WindowRow(window: window, now: now)
+                    WindowRow(window: window, now: now, showsReset: showsReset)
                 }
             }
         }

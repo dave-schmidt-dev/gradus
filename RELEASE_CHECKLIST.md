@@ -30,6 +30,14 @@ Before the TestFlight upload:
 A feature may ship on only one platform when the release notes explicitly
 record that it has no producer/consumer or shared-contract dependency.
 
+That exception is between Mac and iOS. It never applies between iPhone and
+iPad: they are one artifact with one version, so there is no such thing as an
+iPad-only or iPhone-only release (INV-12). A UI change lands on both size
+classes in the same release, and the gate must exercise both destinations —
+size-class-gated coverage that runs on only one is how a divergence stays
+invisible. If a change genuinely cannot be expressed at one size class, say so
+in the release notes as a limitation, not as a scope decision.
+
 ## Versioning gate
 
 Use `MAJOR.MINOR.PATCH` for the product version. Treat Apple's build number as

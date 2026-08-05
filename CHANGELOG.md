@@ -11,7 +11,36 @@ history from the overnight release train. New releases use
 
 ## Unreleased
 
-No changes yet.
+### Changed
+
+- iPhone now uses the same dense layout the iPad got in 1.5.0: every provider
+  and every one of its usage windows visible at once, with a bar per window.
+  Previously the phone showed a single enlarged "hero" provider and one window
+  each for the rest, so seeing a provider's other windows meant opening it.
+  The same account could read as healthy on the phone and not on the tablet.
+- The four-line connected-computer card at the top of the iPhone screen is
+  replaced by the one-line sync status ("synced 5m ago · dm5mbp") already used
+  on iPad. The full computer, user, and publish-time detail remains in
+  Settings under "Connected Computer".
+
+### Removed
+
+- The per-provider window badges that let you choose which window the main bar
+  tracked are gone from the iPhone, along with the enlarged hero provider and
+  the separate "Exhausted" section at the bottom. All of these existed to work
+  around showing one window per provider; with every window on screen there is
+  no longer a window to choose, and an exhausted provider reads as a card whose
+  bars are all red, still sorted last.
+
+### TestFlight focus
+
+- On iPhone, confirm every provider and every window is visible with a bar
+  each, and that the list is more compact than before rather than less.
+- Confirm tapping a provider still opens its detail view.
+- Confirm iPhone and iPad now show the same information, differing only in
+  column count and the per-row reset time.
+- Confirm the sync status line at the top names the publishing Mac, and that
+  Settings still shows the full connected-computer detail.
 
 ## 1.5.0 — 2026-08-05
 
