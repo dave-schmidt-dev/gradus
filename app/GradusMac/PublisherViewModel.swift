@@ -46,12 +46,23 @@ public final class PublisherViewModel: ObservableObject {
             defaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
         }
     }
+    /// Matches `DashboardViewModel.showExhausted`, including its default of
+    /// visible: a provider you can't use is still a provider you asked about,
+    /// so hiding it is opt-in.
+    @Published public var showExhausted: Bool {
+        didSet { defaults.set(showExhausted, forKey: Self.showExhaustedKey) }
+    }
     private var syncOperationID: UInt64 = 0
 
     static let syncEnabledKey = "iCloudSyncEnabled"
     static let lastSyncedAtKey = "iCloudLastSyncedAt"
     static let providerSortOptionKey = "providerSortOption"
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
+    /// Deliberately the same key string as `DashboardViewModel.showExhaustedKey`.
+    /// The two apps have separate defaults domains so nothing is shared at
+    /// runtime, but keeping the names aligned means a reader comparing the two
+    /// preference sets sees one concept, not two similar ones.
+    static let showExhaustedKey = "showExhausted"
 
     /// Matches `DashboardViewModel.defaultLocalWarningThresholdPercent`. A
     /// different default here would mean the same provider counts as "low" on
@@ -86,6 +97,13 @@ public final class PublisherViewModel: ObservableObject {
                 defaults.double(forKey: Self.localWarningThresholdPercentKey)
         } else {
             self.localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
+        }
+        // And again: `bool(forKey:)` returns false for a missing key, which
+        // would make a fresh install default to *hiding* exhausted providers.
+        if defaults.object(forKey: Self.showExhaustedKey) != nil {
+            self.showExhausted = defaults.bool(forKey: Self.showExhaustedKey)
+        } else {
+            self.showExhausted = true
         }
     }
 

@@ -44,7 +44,15 @@ struct MacSettingsView: View {
                     }
                 }
                 .pickerStyle(.menu)
+                Toggle("Show exhausted", isOn: $viewModel.showExhausted)
                 Text("Exhausted providers always sort to the bottom, in every mode.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                // Same sentence as iOS Settings. Worth stating on both: these
+                // two controls look like the sync settings above them but do
+                // not travel with the account, and finding that out by setting
+                // them twice is a bad way to learn it.
+                Text("Sorting and exhausted-provider visibility are local display choices on this device only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

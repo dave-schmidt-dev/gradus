@@ -22,12 +22,12 @@ struct MenuContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             MenuHeader(
-                providers: viewModel.providers,
+                providers: visibleProviders,
                 localThreshold: viewModel.localWarningThresholdPercent
             )
 
             ProviderListView(
-                providers: viewModel.providers,
+                providers: visibleProviders,
                 sortOption: viewModel.providerSortOption,
                 localThreshold: viewModel.localWarningThresholdPercent
             )
@@ -48,13 +48,34 @@ struct MenuContentView: View {
 
             Divider()
 
-            Button("Settings…") { Self.openSettings() }
+            Button("Settings…") { SettingsWindow.show(viewModel: viewModel) }
             Button("Quit Gradus") {
                 NSApplication.shared.terminate(nil)
             }
         }
         .padding(12)
         .frame(width: 280)
+    }
+
+    /// Applied here rather than in `PublisherViewModel.providers`, which is the
+    /// mirror image of where iOS filters. On iOS that array feeds only the
+    /// dashboard, so filtering at the model is the same thing. Here it also
+    /// feeds `MenuHeader`'s attention count, and both must agree -- a header
+    /// reading "3 need attention" above two rows is worse than either choice.
+    /// Filtering once, at the point both are built, keeps them consistent
+    /// without letting a display preference reach anything that alerts:
+    /// the menu bar icon is computed from the publish payload in
+    /// `GradusMacApp`, not from this array, so hiding a spent provider from
+    /// the list never quiets the icon for it.
+    ///
+    /// Internal rather than private so the filter has a direct test. The
+    /// alternative was a snapshot, which would prove a row is absent but not
+    /// *why* -- and a filter that silently passed everything looks identical to
+    /// a preference defaulting to on.
+    var visibleProviders: [ProviderEntry] {
+        viewModel.showExhausted
+            ? viewModel.providers
+            : viewModel.providers.filter { !$0.rankingIsDepleted }
     }
 
     /// "iCloud sync complete" answered the wrong question -- it reported the
@@ -85,22 +106,6 @@ struct MenuContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    /// Opens the `Settings` scene from a `LSUIElement` agent.
-    ///
-    /// Two steps, both required. `SettingsLink` would be the modern answer but
-    /// is macOS 14+, and this app deploys to 13.0, so the window is opened by
-    /// selector -- `showSettingsWindow:` on macOS 13+, *not* the older
-    /// `showPreferencesWindow:`. And an accessory app is not the active
-    /// application when its menu item is clicked, so without the explicit
-    /// `activate` the settings window opens *behind* whatever the user was
-    /// working in, which reads as the button doing nothing at all.
-    static func openSettings() {
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        NSApplication.shared.sendAction(
-            Selector(("showSettingsWindow:")), to: nil, from: nil
-        )
     }
 
     /// Uses `friendlyDateLabel` -- the same helper behind the "resets …" copy

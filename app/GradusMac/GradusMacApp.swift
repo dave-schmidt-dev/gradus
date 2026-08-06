@@ -69,13 +69,14 @@ struct GradusMacApp: App {
         // correct and green against a path the user never saw.
         .menuBarExtraStyle(.window)
 
-        // Reachable from the menu's "Settings…" row (and ⌘, once the window
-        // has focus). Holds the device-local display preferences that used to
-        // have nowhere to live on this platform, which is why the Mac had no
-        // sort control while iOS had three.
-        Settings {
-            MacSettingsView(viewModel: PublishPipeline.shared.viewModel)
-        }
+        // No `Settings` scene here on purpose. Declaring one is the idiomatic
+        // way to get a preferences window, and on macOS 26.5.2 nothing opens
+        // it: `showSettingsWindow:` returns true and does nothing, the pre-13
+        // `showPreferencesWindow:` no longer resolves at all, and neither
+        // changes when the app is promoted out of `.accessory` first. The
+        // window is built directly instead -- see `SettingsWindow`, which
+        // carries the measurements. A declared-but-unreachable scene would
+        // read as working code.
     }
 }
 
