@@ -27,27 +27,85 @@ nothing to do" without ever having looked at the build you actually meant.
 
 from __future__ import annotations
 
+import argparse
+import base64
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 from _asc_api import call, make_token
 
-BUNDLE_ID = "com.zerodelta.gradus.ios"
-INTERNAL_GROUP_NAME = "Internal Testers"
+DEFAULT_BUNDLE_ID = "com.zerodelta.gradus.ios"
+DEFAULT_INTERNAL_GROUP_NAME = "Internal Testers"
 BUILD_POLL_INTERVAL_SECONDS = 30
 BUILD_POLL_TIMEOUT_SECONDS = 30 * 60
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "version",
+        nargs="?",
+        help="build version to wait for; omitted means the newest uploaded build",
+    )
+    parser.add_argument(
+        "--bundle-id",
+        default=DEFAULT_BUNDLE_ID,
+        help=f"App bundle ID (default: {DEFAULT_BUNDLE_ID})",
+    )
+    parser.add_argument(
+        "--group-name",
+        default=DEFAULT_INTERNAL_GROUP_NAME,
+        help=f"Internal beta group name (default: {DEFAULT_INTERNAL_GROUP_NAME})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="discover the app and existing internal groups without changing ASC",
+    )
+    parser.add_argument(
+        "--create-group-only",
+        action="store_true",
+        help="create or find the internal group, then stop before testers/builds",
+    )
+    parser.add_argument(
+        "--skip-tester-invites",
+        action="store_true",
+        help="do not create or link beta tester records",
+    )
+    parser.add_argument(
+        "--create-profile",
+        choices=("development", "distribution"),
+        help="create and install a WWPIS iOS provisioning profile via the ASC API",
+    )
+    parser.add_argument(
+        "--profile-name",
+        help="override the name of the API-created provisioning profile",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = parse_args()
     token = make_token()
 
-    print(f"==> Looking up app by bundle ID {BUNDLE_ID}")
-    apps = call(token, "GET", f"/apps?filter[bundleId]={BUNDLE_ID}")
+    if args.create_profile:
+        return create_profile(
+            token,
+            bundle_id=args.bundle_id,
+            profile_kind=args.create_profile,
+            profile_name=args.profile_name,
+        )
+
+    print(f"==> Looking up app by bundle ID {args.bundle_id}")
+    apps = call(token, "GET", f"/apps?filter[bundleId]={args.bundle_id}")
     if not apps or not apps.get("data"):
-        print(f"FAIL: no app found for bundle ID {BUNDLE_ID}", file=sys.stderr)
+        print(f"FAIL: no app found for bundle ID {args.bundle_id}", file=sys.stderr)
         return 1
     app_id = apps["data"][0]["id"]
-    print(f"    App ID: {app_id}")
+    app_name = apps["data"][0]["attributes"].get("name")
+    print(f"    App: {app_name} ({app_id})")
 
     print("==> Finding internal beta group")
     groups = call(token, "GET", f"/apps/{app_id}/betaGroups?limit=50")
@@ -55,7 +113,10 @@ def main() -> int:
         g for g in (groups or {}).get("data", []) if g["attributes"].get("isInternalGroup")
     ]
     if not internal_groups:
-        print(f"    None found. Creating internal group '{INTERNAL_GROUP_NAME}'")
+        if args.dry_run:
+            print(f"    None found. Would create internal group '{args.group_name}'")
+            return 0
+        print(f"    None found. Creating internal group '{args.group_name}'")
         created = call(
             token,
             "POST",
@@ -63,7 +124,7 @@ def main() -> int:
             {
                 "data": {
                     "type": "betaGroups",
-                    "attributes": {"name": INTERNAL_GROUP_NAME, "isInternalGroup": True},
+                    "attributes": {"name": args.group_name, "isInternalGroup": True},
                     "relationships": {"app": {"data": {"type": "apps", "id": app_id}}},
                 }
             },
@@ -76,61 +137,68 @@ def main() -> int:
         group_name = internal_groups[0]["attributes"].get("name")
         print(f"    Internal group: {group_name} ({group_id})")
 
-    print("==> Listing current team members (users)")
-    users = call(token, "GET", "/users?limit=50")
-    members = [
-        (u["id"], u["attributes"].get("username"), u["attributes"].get("roles"))
-        for u in (users or {}).get("data", [])
-    ]
-    for uid, email, roles in members:
-        print(f"    - {email} ({', '.join(roles or [])})")
+    if args.dry_run or args.create_group_only:
+        print("==> Done. Group discovery/creation complete.")
+        return 0
 
-    print("==> Checking existing testers already in the internal group")
-    existing = call(token, "GET", f"/betaGroups/{group_id}/betaTesters?limit=50")
-    existing_emails = {t["attributes"].get("email") for t in (existing or {}).get("data", [])}
-    if existing_emails:
-        print(f"    Already in group: {', '.join(sorted(existing_emails))}")
+    if args.skip_tester_invites:
+        print("==> Skipping tester discovery/invites")
     else:
-        print("    No testers in this group yet.")
+        print("==> Listing current team members (users)")
+        users = call(token, "GET", "/users?limit=50")
+        members = [
+            (u["id"], u["attributes"].get("username"), u["attributes"].get("roles"))
+            for u in (users or {}).get("data", [])
+        ]
+        for uid, email, roles in members:
+            print(f"    - {email} ({', '.join(roles or [])})")
 
-    unmatched = [email for _, email, _ in members if email not in existing_emails]
-    if unmatched:
-        print(
-            "==> These team members are eligible but not yet in the internal "
-            "group. Checking for existing betaTesters records to link:"
-        )
-        for email in unmatched:
-            testers = call(token, "GET", f"/betaTesters?filter[email]={email}")
-            data = (testers or {}).get("data") or []
-            if data:
-                tester_id = data[0]["id"]
-                print(f"    Linking {email} (betaTester {tester_id}) to group")
-                call(
-                    token,
-                    "POST",
-                    f"/betaGroups/{group_id}/relationships/betaTesters",
-                    {"data": [{"type": "betaTesters", "id": tester_id}]},
-                )
-                print(f"    Linked {email}.")
-            else:
-                print(f"    No betaTesters record for {email} yet — creating one and inviting")
-                call(
-                    token,
-                    "POST",
-                    "/betaTesters",
-                    {
-                        "data": {
-                            "type": "betaTesters",
-                            "attributes": {"email": email},
-                            "relationships": {
-                                "betaGroups": {"data": [{"type": "betaGroups", "id": group_id}]}
-                            },
-                        }
-                    },
-                )
-                print(f"    Invited {email} — TestFlight invite email is on its way.")
+        print("==> Checking existing testers already in the internal group")
+        existing = call(token, "GET", f"/betaGroups/{group_id}/betaTesters?limit=50")
+        existing_emails = {t["attributes"].get("email") for t in (existing or {}).get("data", [])}
+        if existing_emails:
+            print(f"    Already in group: {', '.join(sorted(existing_emails))}")
+        else:
+            print("    No testers in this group yet.")
 
-    target_version = sys.argv[1] if len(sys.argv) > 1 else None
+        unmatched = [email for _, email, _ in members if email not in existing_emails]
+        if unmatched:
+            print(
+                "==> These team members are eligible but not yet in the internal "
+                "group. Checking for existing betaTesters records to link:"
+            )
+            for email in unmatched:
+                testers = call(token, "GET", f"/betaTesters?filter[email]={email}")
+                data = (testers or {}).get("data") or []
+                if data:
+                    tester_id = data[0]["id"]
+                    print(f"    Linking {email} (betaTester {tester_id}) to group")
+                    call(
+                        token,
+                        "POST",
+                        f"/betaGroups/{group_id}/relationships/betaTesters",
+                        {"data": [{"type": "betaTesters", "id": tester_id}]},
+                    )
+                    print(f"    Linked {email}.")
+                else:
+                    print(f"    No betaTesters record for {email} yet — creating one and inviting")
+                    call(
+                        token,
+                        "POST",
+                        "/betaTesters",
+                        {
+                            "data": {
+                                "type": "betaTesters",
+                                "attributes": {"email": email},
+                                "relationships": {
+                                    "betaGroups": {"data": [{"type": "betaGroups", "id": group_id}]}
+                                },
+                            }
+                        },
+                    )
+                    print(f"    Invited {email} — TestFlight invite email is on its way.")
+
+    target_version = args.version
     if target_version:
         print(f"==> Waiting for build version {target_version} to appear and process")
     else:
@@ -187,6 +255,121 @@ def main() -> int:
 
     print("==> Done.")
     return 0
+
+
+def create_profile(
+    token: str,
+    *,
+    bundle_id: str,
+    profile_kind: str,
+    profile_name: str | None,
+) -> int:
+    """Create and install an iOS profile using the Gradus API-backed path."""
+    profile_config = {
+        "development": {
+            "certificate_type": "DEVELOPMENT",
+            "profile_type": "IOS_APP_DEVELOPMENT",
+            "name": "WWPIS iOS Development (API-created)",
+            "filename": "wwpis-ios-development.provisionprofile",
+            "certificate_label": "Apple Development",
+        },
+        "distribution": {
+            "certificate_type": "DISTRIBUTION",
+            "profile_type": "IOS_APP_STORE",
+            "name": "WWPIS iOS App Store (API-created)",
+            "filename": "wwpis-ios-app-store.provisionprofile",
+            "certificate_label": "Apple Distribution",
+        },
+    }[profile_kind]
+    name = profile_name or profile_config["name"]
+
+    print(f"==> Looking up bundle ID {bundle_id}")
+    bundle_ids = call(token, "GET", f"/bundleIds?filter[identifier]={bundle_id}")
+    data = (bundle_ids or {}).get("data") or []
+    if not data:
+        print(f"FAIL: no bundleId resource found for {bundle_id}", file=sys.stderr)
+        return 1
+    bundle_id_resource = data[0]["id"]
+    print(f"    bundleId resource: {bundle_id_resource}")
+
+    print(f"==> Finding a usable {profile_config['certificate_label']} certificate")
+    certs = call(
+        token,
+        "GET",
+        f"/certificates?filter[certificateType]={profile_config['certificate_type']}&limit=50",
+    )
+    local_serials = local_certificate_serials(profile_config["certificate_label"])
+    cert_id = None
+    for certificate in (certs or {}).get("data", []):
+        serial = (certificate["attributes"].get("serialNumber") or "").upper()
+        if serial and serial in local_serials:
+            cert_id = certificate["id"]
+            print(
+                "    Found usable local certificate: "
+                f"{certificate['attributes'].get('displayName')} ({cert_id})"
+            )
+            break
+    if not cert_id:
+        print(
+            f"FAIL: no {profile_config['certificate_label']} certificate has a matching local private key",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"==> Replacing any existing profile named '{name}'")
+    existing_profiles = call(token, "GET", f"/bundleIds/{bundle_id_resource}/profiles")
+    for profile in (existing_profiles or {}).get("data", []):
+        if profile["attributes"].get("name") == name:
+            call(token, "DELETE", f"/profiles/{profile['id']}")
+
+    print(f"==> Creating {profile_config['profile_type']} profile")
+    created = call(
+        token,
+        "POST",
+        "/profiles",
+        {
+            "data": {
+                "type": "profiles",
+                "attributes": {"name": name, "profileType": profile_config["profile_type"]},
+                "relationships": {
+                    "bundleId": {"data": {"type": "bundleIds", "id": bundle_id_resource}},
+                    "certificates": {"data": [{"type": "certificates", "id": cert_id}]},
+                },
+            }
+        },
+    )
+    profile_content = created["data"]["attributes"]["profileContent"]
+    profiles_dir = Path.home() / "Library" / "MobileDevice" / "Provisioning Profiles"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    destination = profiles_dir / profile_config["filename"]
+    destination.write_bytes(base64.b64decode(profile_content))
+    print(f"==> Installed profile: {destination}")
+    return 0
+
+
+def local_certificate_serials(label: str) -> set[str]:
+    """Return local certificate serials for certificates backed by this Mac."""
+    listing = subprocess.run(
+        ["security", "find-certificate", "-a", "-c", label, "-p"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    serials: set[str] = set()
+    for pem in listing.split("-----BEGIN CERTIFICATE-----"):
+        if "-----END CERTIFICATE-----" not in pem:
+            continue
+        pem_block = "-----BEGIN CERTIFICATE-----" + pem
+        result = subprocess.run(
+            ["openssl", "x509", "-noout", "-serial"],
+            input=pem_block,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.startswith("serial="):
+            serials.add(result.stdout.strip().removeprefix("serial=").upper())
+    return serials
 
 
 if __name__ == "__main__":
