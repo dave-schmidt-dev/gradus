@@ -13,6 +13,9 @@ echo "==> Hermetic notarization script behavior tests"
 echo "==> Hermetic iOS upload wrapper behavior tests"
 ./test-archive-upload-ios.sh
 
+echo "==> Hermetic local Mac install behavior tests"
+./test-install-mac-local.sh
+
 # INV-11 declares `area:` over app/GradusKit/**, gradus/**, and tests/** with
 # this script as its gate_test -- but the two `xcodebuild test` invocations
 # below cover none of those three. GradusKit is consumed as a SwiftPM package

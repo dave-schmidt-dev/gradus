@@ -419,6 +419,22 @@ Test” field; keep individual candidate-build details and re-upload reasons in
 
 `archive-upload-ios.sh` prints the exact fixed-consumer follow-up command (with the build number it just uploaded) as its last line.
 
+### Installing GradusMac locally
+
+`install-mac-local.sh` archives, exports, installs into `/Applications`, and relaunches. This is the path for putting a build on this machine; notarization is only for handing the app to someone else, since Gatekeeper enforces it on quarantined files and a bundle built here never carries `com.apple.quarantine`.
+
+```bash
+cd app
+./test-install-mac-local.sh   # hermetic; every Xcode/system tool faked, never touches /Applications
+./install-mac-local.sh --dry-run     # archive, export, verify; stop before installing
+./install-mac-local.sh               # the real thing
+./install-mac-local.sh --skip-build  # reuse the existing export
+```
+
+The bundle is verified **twice**, and the second one is the reason the script exists: `ditto` into `/Applications` re-applies `com.apple.provenance` to the copy, so a bundle that passed `codesign --verify --deep --strict` on export can fail it once installed. The new copy is therefore staged beside the old one as `.GradusMac.app.incoming`, stripped and verified *there*, and swapped in by rename only if it passes — a failed verify leaves the working install untouched rather than having already destroyed it. `INSTALL_DIR` and `BUILD_DIR` override the destination and scratch directory.
+
+It exports with Developer ID rather than development signing on purpose: the installed app holds the `~/Documents` TCC grant, and that grant records the signing requirement of whichever build was approved. Expect the next Mac test gate after an install to prompt, and run it attended — see the TCC row in `TASKS.md` for why the two signing identities cannot both hold the grant.
+
 ### Notarizing GradusMac
 
 `notarize-mac.sh` archives, Developer-ID signs, verifies, uploads, waits for Apple, staples, and packages GradusMac. The upload stays visible, and the submission ID is recorded before polling in the gitignored `.state/notary-submissions.tsv` ledger.
