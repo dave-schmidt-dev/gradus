@@ -237,5 +237,8 @@ fi
 
 echo "==> Done. $APP_NAME $incoming_version installed at $INSTALLED_APP"
 echo "    First launch after an install re-stamps the ~/Documents TCC grant to"
-echo "    this bundle's signature, so the next Mac test gate may prompt. Run it"
-echo "    attended (see the TCC row in TASKS.md)."
+echo "    this bundle's signature. That alone does not decide whether the next"
+echo "    Mac test gate prompts: TCC attributes an access to the responsible"
+echo "    process, so a gate run from a shell that holds Full Disk Access reads"
+echo "    on the shell's authority and never consults the app's row. Start it"
+echo "    from one, or start it attended (see the TCC row in TASKS.md)."
