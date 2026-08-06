@@ -66,12 +66,10 @@ THEME = Theme(
         # legible in both places -- 1.95-4.18 against the four fills, 2.42
         # against the terminal background.
         #
-        # Never give this cell a background colour. That was tried twice and
-        # rejected on sight both times. The bar's `▓` is a stipple, not a
-        # solid, so a cell painted with a background becomes the only solid one
-        # in a textured row -- it stops reading as a line on the bar and starts
-        # reading as a block cut into it. The stroke goes on bare, exactly as
-        # the red one did.
+        # Used as a foreground on the bar's own fill glyph, never as a
+        # background. Painting this as a background was tried twice and
+        # rejected on sight both times: `▓` is a stipple, so a cell given a
+        # background becomes the only solid one in a textured row.
         "bar.marker": "color(26)",
         "accent.codex": "color(111)",
         "accent.claude": "color(219)",
@@ -673,21 +671,9 @@ DISPLAY_TITLES: dict[str, str] = {}
 # ---------------------------------------------------------------------------
 
 
-# Sub-cell marker strokes, indexed by which third of a character cell the
-# expected-pace boundary falls in: left edge, centre, right edge.
-#
-# A terminal has no sub-pixel positioning -- the smallest thing it can address
-# is one cell -- so a marker drawn as a single centred glyph can only be as
-# precise as the bar is wide. At the 14-cell bars this dashboard draws that is
-# 7.1 percentage points per step, and the marker visibly *jumps* that far
-# between refreshes while the value underneath it slides continuously. Choosing
-# where in the cell the stroke sits triples the resolution to ~2.4 points, which
-# is as fine as a text UI gets without half-block tricks.
-#
-# All three live in Unicode blocks (Block Elements, Box Drawing) the bar already
-# depends on for its own fill and empty glyphs, so this adds no font coverage
-# risk that was not already taken.
-_MARKER_GLYPHS = ("▏", "┃", "▕")
+# The glyph the bar's fill is drawn with. The marker uses it too, which is the
+# whole point of the marker's design -- see `_marker_index`.
+_FILL_GLYPH = "▓"
 
 
 class PercentageBar:
@@ -709,30 +695,51 @@ class PercentageBar:
         # nearest drawable length. The marker below is an *index*, which is why
         # it does not get the same treatment.
         filled = max(0, min(width, round(width * self.percent / 100)))
-        marker_index, marker_glyph = self._marker(width)
+        marker_index = self._marker_index(width)
         bar = Text()
         for index in range(width):
             if index == marker_index:
-                bar.append(marker_glyph, style="bar.marker")
+                bar.append(_FILL_GLYPH, style="bar.marker")
             elif index < filled:
-                bar.append("▓" if index < filled - 1 else "█", style=self.style)
+                bar.append(_FILL_GLYPH if index < filled - 1 else "█", style=self.style)
             else:
                 bar.append("░", style="bar.empty")
         yield bar
 
-    def _marker(self, width: int) -> tuple[int | None, str]:
-        """Cell index and stroke for the expected-pace marker, if there is one."""
+    def _marker_index(self, width: int) -> int | None:
+        """Which cell the expected-pace marker claims, if there is one.
+
+        The marker is one whole cell of `_FILL_GLYPH` in the marker colour --
+        the bar's own fill glyph, recoloured. That is a deliberate choice over
+        a thin stroke, and the reasoning is worth keeping because three
+        attempts went the other way first.
+
+        A thin stroke can be positioned inside a cell, which triples the
+        marker's resolution, but it costs two things that turned out to matter
+        more. Sub-cell placement needs a different glyph per position (`▏ ┃ ▕`)
+        and those ink 2, 4 and 1 pixels respectively, so the marker visibly
+        changes thickness as it slides -- David: "some of these blue bars are
+        thinner than others too." And a thin stroke inks at most 36% of its
+        cell against the fill's 67%, so the rest of the cell shows the terminal
+        background: "black bar is STILL there". Painting that remainder makes
+        the cell the only *solid* one in a stippled row, which reads worse
+        again. All three complaints are the same geometry, and there is no
+        arrangement of glyphs that escapes it -- fine movement, constant width
+        and no dark cell cannot coexist in a character grid.
+
+        Drawing the marker with the fill glyph settles all of it: identical ink
+        coverage to its neighbours so nothing shows through, identical width
+        every time, and the same texture as the bar it sits in. The cost, which
+        David chose knowingly, is that the marker steps one whole cell at a
+        time -- about 7 points on the 14-cell bars here.
+        """
         if self.expected_remaining is None or width <= 0:
-            return None, ""
+            return None
         position = min(1.0, max(0.0, self.expected_remaining / 100)) * width
-        # `int`, not `round`. The value names a *boundary* between two cells,
-        # and the glyph then fills the whole cell to the right of it, so
-        # rounding up put the stroke a full cell past the boundary it was
-        # supposed to mark -- 7 points of error at 14 cells, on top of the
-        # quantisation the sub-cell strokes exist to reduce.
-        index = min(width - 1, int(position))
-        third = min(2, int((position - index) * 3))
-        return index, _MARKER_GLYPHS[third]
+        # `int`, not `round`. The value names a *boundary* between two cells and
+        # the marker then claims the cell to the right of it, so rounding up put
+        # the mark a full cell past the boundary it was meant to name.
+        return min(width - 1, int(position))
 
 
 # Below this console width the 2-panel grid can't fit a full 12-char pace cell

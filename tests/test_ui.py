@@ -15,7 +15,7 @@ from rich.text import Text
 from gradus.providers import ProviderSnapshot
 from gradus.snapshot import SAFE_DATA_KEYS, window_warns
 from gradus.ui import (
-    _MARKER_GLYPHS,
+    _FILL_GLYPH,
     THEME,
     DynamicMicroDepletedPair,
     DynamicMicroDepletedSingle,
@@ -55,19 +55,64 @@ def _capture(renderable, *, width: int = 80) -> str:
     return console.file.getvalue()
 
 
-def _markers(text: str) -> int:
-    """Count expected-pace markers, whichever sub-cell stroke each one used.
+def _marker_cells(percent: float, expected_remaining: float | None, *, width: int) -> list[int]:
+    """Cell indices carrying the marker style, found by style rather than glyph.
 
-    The marker is one of three glyphs depending on where inside its cell the
-    boundary falls, so a test that counts ``┃`` alone would see a marker
-    disappear whenever it drifted to a cell edge — a false pass for two thirds
-    of the positions the bar can draw.
+    The marker is drawn with the bar's own fill glyph, so nothing in the plain
+    text distinguishes it — only its style does. Any test that looked for a
+    distinct marker character would now match every filled cell in the bar.
     """
-    return sum(text.count(glyph) for glyph in _MARKER_GLYPHS)
+    console = Console(
+        file=StringIO(),
+        theme=THEME,
+        force_terminal=True,
+        width=width,
+        _environ={"TERM": "xterm-256color"},
+    )
+    rendered = next(
+        PercentageBar(percent, "bar.green", expected_remaining=expected_remaining).__rich_console__(
+            console, console.options
+        )
+    )
+    assert isinstance(rendered, Text)
+    return [
+        index
+        for index in range(len(rendered.plain))
+        for span in rendered.spans
+        if span.style == "bar.marker" and span.start <= index < span.end
+    ]
 
 
-_FILL_GLYPHS = ("▓", "█")
-_BAR_GLYPHS = (*_FILL_GLYPHS, "░", *_MARKER_GLYPHS)
+def _capture_colored(renderable, *, width: int = 80) -> str:
+    """Render keeping ANSI colour, which is the only way to see the marker."""
+    console = Console(
+        file=StringIO(),
+        theme=THEME,
+        force_terminal=True,
+        width=width,
+        _environ={"TERM": "xterm-256color"},
+    )
+    console.print(renderable)
+    return console.file.getvalue()
+
+
+_MARKER_ANSI = f"\x1b[38;5;{THEME.styles['bar.marker'].color.number}m"
+
+
+def _markers(colored: str) -> int:
+    """Count marker cells in a colour-preserving capture.
+
+    Must be a coloured capture. The marker is drawn with the bar's own fill
+    glyph, so in plain text it is indistinguishable from any other filled cell
+    — its colour is the only thing that identifies it, and no other theme style
+    uses that colour. Passing a `no_color` capture here would silently count
+    zero, so the tests that need this use `_capture_colored`.
+    """
+    return colored.count(_MARKER_ANSI)
+
+
+_FILL_GLYPHS = (_FILL_GLYPH, "█")
+_BAR_GLYPHS = (*_FILL_GLYPHS, "░")
 
 
 def _bar_start(line: str) -> int:
@@ -274,46 +319,67 @@ class PercentageBarTests(unittest.TestCase):
 
     def test_expected_remaining_draws_one_marker_without_changing_bar_width(self) -> None:
         output = _capture(PercentageBar(72.0, "bar.green", expected_remaining=60.0), width=80)
-        bar = output.rstrip("\n")
-        self.assertEqual(len(bar), 80)
-        self.assertEqual(_markers(bar), 1)
-        self.assertEqual(bar.index(_MARKER_GLYPHS[0]), 48)
+        self.assertEqual(len(output.rstrip("\n")), 80)
+        colored = _capture_colored(
+            PercentageBar(72.0, "bar.green", expected_remaining=60.0), width=80
+        )
+        self.assertEqual(_markers(colored), 1)
+        self.assertEqual(_marker_cells(72.0, 60.0, width=80), [48])
 
     def test_marker_lands_on_the_cell_it_names_not_the_next_one(self) -> None:
         """The index is a floor, not a round.
 
-        ``expected_remaining`` names a boundary between two cells, and the glyph
-        drawn there fills the whole cell to its *right*. Rounding up therefore
-        put the stroke a full cell past the boundary it was marking — at the
+        ``expected_remaining`` names a boundary between two cells, and the cell
+        claimed as the marker is the one to its *right*. Rounding up therefore
+        put the mark a full cell past the boundary it was naming — at the
         14-cell width the dashboard actually draws, a 7-point error that made a
         provider look further ahead of pace than it was.
         """
         for expected, cell in ((61.0, 8), (75.0, 10), (99.0, 13), (100.0, 13)):
             with self.subTest(expected_remaining=expected):
-                bar = _capture(
+                self.assertEqual(_marker_cells(80.0, expected, width=14), [cell])
+
+    def test_marker_is_one_whole_cell_of_the_bars_own_fill_glyph(self) -> None:
+        """Same glyph and same width as the bar, wherever it lands.
+
+        This is the property the design turns on, and it is what three earlier
+        attempts gave up. A thin sub-cell stroke resolves ~3x finer, but needs a
+        different glyph per position — 2, 4 and 1 pixels of ink — so the marker
+        changed thickness as it moved ("some of these blue bars are thinner than
+        others too"), and its cell showed the terminal background through the
+        gap ("black bar is STILL there"). Reusing the fill glyph means the
+        marker cell inks exactly like its neighbours: nothing shows through, and
+        the width never varies.
+        """
+        for expected in (10.0, 33.3, 50.0, 66.6, 99.9):
+            with self.subTest(expected_remaining=expected):
+                cells = _marker_cells(80.0, expected, width=14)
+                self.assertEqual(len(cells), 1)
+                rendered = _capture(
                     PercentageBar(80.0, "bar.green", expected_remaining=expected), width=14
                 ).rstrip("\n")
-                self.assertEqual(_markers(bar), 1)
-                index = next(i for i, ch in enumerate(bar) if ch in _MARKER_GLYPHS)
-                self.assertEqual(index, cell)
+                self.assertEqual(rendered[cells[0]], _FILL_GLYPH)
 
-    def test_marker_resolves_below_one_whole_cell(self) -> None:
-        """Three sub-cell strokes, so the marker steps ~2.4 points, not ~7.1.
+    def test_marker_resolution_is_one_cell(self) -> None:
+        """Steps a whole cell at a time — the accepted cost of the above.
 
-        A terminal cannot place a glyph between two cells, so the only way to
-        beat one-cell precision is to say *where in* the cell the boundary sits.
-        Without this the marker visibly jumped a full cell at a time while the
-        value under it moved continuously.
+        Pinned so the tradeoff stays visible: if a future change reintroduces
+        sub-cell strokes, this fails and whoever did it has to re-read why the
+        marker is drawn the way it is.
+
+        Counted on a coloured capture, because the marker is the fill glyph and
+        a plain-text capture cannot see it at all — that spelled as `_capture`
+        reports 5 distinct renderings for 14 positions, since only the cells
+        that displace the `█` cap or a `░` track cell change the text.
         """
         width = 14
         rendered = {
-            _capture(PercentageBar(80.0, "bar.green", expected_remaining=v / 10), width=width)
+            _capture_colored(
+                PercentageBar(80.0, "bar.green", expected_remaining=v / 10), width=width
+            )
             for v in range(1001)
         }
-        # One cell would give `width` distinct renderings; three strokes per
-        # cell give three times that. Asserted as a floor, not equality, so a
-        # future finer marker is an improvement rather than a failure.
-        self.assertGreaterEqual(len(rendered), width * 3)
+        self.assertEqual(len(rendered), width)
 
     def _marker_style(self, percent: float, expected_remaining: float) -> object:
         console = Console(
@@ -329,18 +395,17 @@ class PercentageBarTests(unittest.TestCase):
             ).__rich_console__(console, console.options)
         )
         assert isinstance(rendered, Text)
-        self.assertEqual(_markers(rendered.plain), 1)
-        marker_at = next(i for i, ch in enumerate(rendered.plain) if ch in _MARKER_GLYPHS)
-        return next(span.style for span in rendered.spans if span.start <= marker_at < span.end)
+        cells = _marker_cells(percent, expected_remaining, width=20)
+        self.assertEqual(len(cells), 1)
+        return next(span.style for span in rendered.spans if span.start <= cells[0] < span.end)
 
     def test_marker_never_paints_a_background(self) -> None:
-        """A bare stroke, on the fill and off it alike -- the original drawing.
+        """Foreground only, on the fill and off it alike.
 
-        Giving the marker cell a background colour was tried twice, and rejected
+        Giving the marker cell a background colour was tried twice and rejected
         on sight both times: "this is bad", then "how is this getting worse every
         time!?". The bar's `▓` is a stipple, so a painted cell is the only solid
-        one in a textured row and stops reading as a line on the bar. The red
-        marker was always drawn bare and never drew a complaint.
+        one in a textured row. Recolouring the glyph instead keeps the texture.
         """
         for percent, where in ((100.0, "over the fill"), (20.0, "over the track")):
             with self.subTest(where=where):
@@ -417,7 +482,7 @@ class UsageRowMarkerTests(unittest.TestCase):
                 "five_hour_reset": "Resets in 2h 30m",
             },
         )
-        output = _capture(build_provider_panel(snap, self.now), width=80)
+        output = _capture_colored(build_provider_panel(snap, self.now), width=80)
         self.assertEqual(_markers(output), 1)
 
     def test_missing_session_pace_renders_no_marker(self) -> None:
@@ -427,7 +492,7 @@ class UsageRowMarkerTests(unittest.TestCase):
             source="api",
             data={"five_hour_percent_left": 60.0},
         )
-        output = _capture(build_provider_panel(snap, self.now), width=80)
+        output = _capture_colored(build_provider_panel(snap, self.now), width=80)
         self.assertEqual(_markers(output), 0)
 
     def test_malformed_session_reset_renders_no_marker(self) -> None:
@@ -440,7 +505,7 @@ class UsageRowMarkerTests(unittest.TestCase):
                 "five_hour_reset": "Resets in 999999999999999999999999999999999999d",
             },
         )
-        output = _capture(build_provider_panel(snap, self.now), width=80)
+        output = _capture_colored(build_provider_panel(snap, self.now), width=80)
         self.assertEqual(_markers(output), 0)
 
 
