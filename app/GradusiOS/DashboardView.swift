@@ -63,6 +63,10 @@ struct DashboardContent: View {
 
     /// `nil` means "follow the size class". Tests pass an explicit value.
     private let layoutOverride: DashboardLayout?
+    /// `nil` means "use the stored preference". Snapshot tests pass an explicit
+    /// density so a baseline names the density it depicts rather than depending
+    /// on whatever `UserDefaults` the fixture happened to build.
+    private let densityOverride: DashboardDensity?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// Row-tap navigation target (P4/T4.2): set on tap of any
     /// `ProviderDensityCard`, pushing `ProviderDetailView` for that provider.
@@ -81,10 +85,16 @@ struct DashboardContent: View {
     /// detail drill-in.
     @State private var showingSettings = false
 
-    init(viewModel: DashboardViewModel, now: Date = Date(), layout: DashboardLayout? = nil) {
+    init(
+        viewModel: DashboardViewModel,
+        now: Date = Date(),
+        layout: DashboardLayout? = nil,
+        density: DashboardDensity? = nil
+    ) {
         self.viewModel = viewModel
         self.now = now
         self.layoutOverride = layout
+        self.densityOverride = density
     }
 
     var layout: DashboardLayout {
@@ -137,12 +147,28 @@ struct DashboardContent: View {
     /// 361pt of content width, but only as arithmetic that happens to work
     /// out — a narrower card minimum or a wider phone would silently produce
     /// two cramped columns. Stating "one column" says what is meant.
+    /// The user's density, or the test override. Read once here and threaded
+    /// down; no descendant re-derives it.
+    var metrics: DensityMetrics {
+        (densityOverride ?? viewModel.density).metrics
+    }
+
     private var columns: [GridItem] {
         switch layout {
         case .denseSingleColumn:
-            return [GridItem(.flexible(), spacing: 12, alignment: .top)]
+            return [GridItem(.flexible(), spacing: metrics.cardGap, alignment: .top)]
         case .denseGrid:
-            return [GridItem(.adaptive(minimum: 320), spacing: 12, alignment: .top)]
+            // The minimum is a density metric because density scales the row's
+            // fixed columns, not just its height — at `.large` a 320pt card
+            // could not seat them and a readable bar at the same time. One
+            // column on an 11" iPad in portrait at `.large` is the intended
+            // result, not an accident of the number.
+            return [
+                GridItem(
+                    .adaptive(minimum: metrics.gridMinimum),
+                    spacing: metrics.cardGap,
+                    alignment: .top)
+            ]
         }
     }
 
@@ -174,10 +200,15 @@ struct DashboardContent: View {
                 LazyVGrid(
                     columns: columns,
                     alignment: .leading,
-                    spacing: 12
+                    spacing: metrics.cardGap
                 ) {
                     ForEach(activeProviders, id: \.providerName) { provider in
-                        ProviderDensityCard(provider: provider, now: now, showsReset: layout.showsReset)
+                        ProviderDensityCard(
+                            provider: provider,
+                            now: now,
+                            showsReset: layout.showsReset,
+                            metrics: metrics
+                        )
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 selectedProviderName = provider.providerName

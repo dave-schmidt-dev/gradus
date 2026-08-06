@@ -121,6 +121,232 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     #expect(withInvalid.visibleWindows.map(\.id) == ["auto"])
 }
 
+// MARK: - density (TASKS row 24)
+
+/// Resolves `GridItem(.adaptive(minimum:))` the way SwiftUI does, so the test
+/// asks about the width a card is *actually* given rather than the minimum it
+/// was allowed. The two differ by a lot: at `.compact` a 13" iPad's 1334pt of
+/// content seats four 324.5pt columns, not four 320pt ones.
+private func resolvedCardWidth(
+    contentWidth: CGFloat, minimum: CGFloat, spacing: CGFloat
+) -> CGFloat {
+    let columns = max(1, floor((contentWidth + spacing) / (minimum + spacing)))
+    return (contentWidth - spacing * (columns - 1)) / columns
+}
+
+/// Content width for each destination the gate runs, minus `denseGrid`'s 16pt
+/// horizontal padding on each side.
+private let deviceContentWidths: [(name: String, width: CGFloat, isGrid: Bool)] = [
+    ("iPhone portrait", 361, false),
+    ("iPad 11\" portrait", 802, true),
+    ("iPad 11\" landscape", 1162, true),
+    ("iPad 13\" landscape", 1334, true),
+]
+
+/// The property that makes the density numbers trustworthy rather than
+/// plausible: on every density, at every width the app ships to, the usage bar
+/// still has room to read as a proportion.
+///
+/// This is the test the metrics table exists to satisfy. David chose (2026-08-06)
+/// to scale type as well as spacing, which turned the row's *horizontal* demand
+/// into a density variable — `labelWidth`/`percentWidth`/`resetWidth` all grow,
+/// and a 320pt card that comfortably seated `.caption` columns cannot seat
+/// `.subheadline` ones. Without this assertion the failure mode is a bar
+/// squeezed toward zero on the widest screens, which no snapshot of an iPhone
+/// would ever show.
+@Test func everyDensityLeavesTheBarRoomToRead() {
+    for density in DashboardDensity.allCases {
+        let metrics = density.metrics
+        for device in deviceContentWidths {
+            // Matches `DashboardContent.columns`: compact width is one
+            // `.flexible()` column and drops the reset time; regular width is
+            // the adaptive grid and keeps it.
+            let cardWidth = device.isGrid
+                ? resolvedCardWidth(
+                    contentWidth: device.width,
+                    minimum: metrics.gridMinimum,
+                    spacing: metrics.cardGap)
+                : device.width
+            let barWidth = cardWidth - metrics.cardPadding * 2
+                - metrics.fixedColumnWidth(showsReset: device.isGrid)
+
+            #expect(
+                barWidth >= DensityMetrics.minimumBarWidth,
+                """
+                \(density.rawValue) on \(device.name): the bar gets \(barWidth)pt, \
+                under the \(DensityMetrics.minimumBarWidth)pt floor. Either the \
+                fixed columns grew or gridMinimum did not grow with them.
+                """
+            )
+        }
+    }
+}
+
+/// Selecting `.compact` must reproduce 1.6.0 exactly, so that adding the
+/// density axis is not itself a visual change for anyone who never opens the
+/// setting.
+///
+/// The literals are spelled out rather than compared against the views'
+/// constants, because the views now *read* these — asserting they match would
+/// only prove `a == a`. These numbers come from the pre-density source: the
+/// three column widths and 22pt row from `WindowRow`, the 12pt padding and
+/// corner radius from `ProviderDensityCard`, the 4pt bar from `UsageBar`, and
+/// the 320pt minimum from `DashboardContent.columns`.
+@Test func compactDensityReproducesTheShippedGeometry() {
+    let compact = DensityMetrics.compact
+    #expect(compact.labelWidth == 78)
+    #expect(compact.percentWidth == 40)
+    #expect(compact.resetWidth == 104)
+    #expect(compact.columnGap == 8)
+    #expect(compact.rowHeight == 22)
+    #expect(compact.barHeight == 4)
+    #expect(compact.cardPadding == 12)
+    #expect(compact.titleGap == 6)
+    #expect(compact.rowGap == 2)
+    #expect(compact.cardGap == 12)
+    #expect(compact.cornerRadius == 12)
+    #expect(compact.gridMinimum == 320)
+    // The documented pre-density arithmetic, restated as the two numbers
+    // `WindowRow`'s comment cites. A 393pt phone gives a 361pt card; 246pt of
+    // fixed columns leaves the bar 91pt, and dropping reset gives it 203pt.
+    #expect(compact.fixedColumnWidth(showsReset: true) == 246)
+    #expect(361 - compact.cardPadding * 2 - compact.fixedColumnWidth(showsReset: true) == 91)
+    #expect(361 - compact.cardPadding * 2 - compact.fixedColumnWidth(showsReset: false) == 203)
+
+    // Note what this does *not* claim: 91pt clears `minimumBarWidth`, so the
+    // reset column does not collapse the bar on a phone — `fitsResetColumn`
+    // correctly says it fits. Dropping it at compact width is a stricter
+    // editorial choice on top of that (91pt against 203pt is a large
+    // readability difference), not a geometric necessity. Conflating the two
+    // is what this assertion originally got wrong: it expected the collapse
+    // test to justify a comfort decision.
+    #expect(compact.fitsResetColumn(inCardWidth: 361))
+}
+
+/// A density that is only *partly* larger reads as a rendering bug rather than
+/// a setting. Ordering is asserted across the whole table so a future edit to
+/// one field cannot leave, say, `.standard` with taller rows than `.large`.
+@Test func densitiesAreOrderedOnEveryMeasurement() {
+    let ordered = DashboardDensity.allCases.map(\.metrics)
+    #expect(DashboardDensity.allCases == [.compact, .standard, .large])
+
+    for (smaller, bigger) in zip(ordered, ordered.dropFirst()) {
+        #expect(bigger.rowHeight > smaller.rowHeight)
+        #expect(bigger.barHeight > smaller.barHeight)
+        #expect(bigger.cardPadding > smaller.cardPadding)
+        #expect(bigger.rowGap > smaller.rowGap)
+        #expect(bigger.cardGap > smaller.cardGap)
+        #expect(bigger.titleGap > smaller.titleGap)
+        // Type grows, so the columns sized for it must grow too. This is the
+        // pairing that broke when only the fonts were bumped: `resetWidth` was
+        // already corrected once from 74, which truncated "Aug 23, 9:30 PM" to
+        // "Aug 23, 9:3…" -- and a half-rendered timestamp still reads as
+        // information, which is worse than omitting it.
+        #expect(bigger.labelWidth > smaller.labelWidth)
+        #expect(bigger.percentWidth > smaller.percentWidth)
+        #expect(bigger.resetWidth > smaller.resetWidth)
+        #expect(bigger.gridMinimum > smaller.gridMinimum)
+    }
+}
+
+/// INV-12 restated against the density axis: density changes how much room a
+/// provider's windows get, never how many of them are shown. A density that
+/// dropped windows would be the 1.5.0 divergence again, this time shipped as a
+/// setting rather than as a size-class accident.
+@MainActor
+@Test func everyDensityShowsEveryWindow() {
+    let threeWindows = provider(
+        "opencode",
+        windows: [window("five_hour", 100), window("weekly", 61), window("monthly", 7)])
+    for density in DashboardDensity.allCases {
+        let card = ProviderDensityCard(
+            provider: threeWindows, now: fixedNow, metrics: density.metrics)
+        #expect(card.visibleWindows.count == 3, "\(density.rawValue) hid a window")
+    }
+}
+
+/// Device-local, like the sort option and exhausted-visibility controls it sits
+/// beside in Settings' "Local Display" section. Density is a function of this
+/// screen's size and viewing distance, so a phone on compact and an iPad on
+/// large is the expected configuration, not a conflict to sync away.
+@MainActor
+@Test func densityPersistsPerDeviceAndDefaultsToCompact() {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gradus-density-pref-\(UUID().uuidString)", isDirectory: true)
+    let suite = "gradus-density-pref-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+
+    // Unset defaults to compact: an upgrading device sees 1.6.0's geometry
+    // until it opts into something else.
+    let viewModel = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+    #expect(viewModel.density == .compact)
+
+    viewModel.density = .large
+    #expect(defaults.string(forKey: DashboardViewModel.densityKey) == "large")
+
+    // Survives a relaunch against the same defaults.
+    let relaunched = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+    #expect(relaunched.density == .large)
+
+    // A stored value the enum no longer knows falls back rather than trapping.
+    defaults.set("gigantic", forKey: DashboardViewModel.densityKey)
+    let unknown = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+    #expect(unknown.density == .compact)
+}
+
+/// Asking for compact explicitly must resolve to the same metrics as not
+/// asking at all, since the stored preference defaults to compact.
+///
+/// This is the property a duplicate `.compact` snapshot baseline appeared to
+/// cover and did not: two baselines rendered from the same metrics move
+/// together under any edit, so neither can catch the other drifting. What can
+/// actually break here is the *override plumbing* — a `densityOverride` that
+/// was ignored, or a default that stopped being compact — and that is a
+/// comparison of resolved values, not of pixels.
+@MainActor
+@Test func explicitCompactResolvesTheSameAsTheDefault() {
+    let viewModel = makeDensityViewModel(providers: [provider("codex", windows: [window("weekly", 50)])])
+    #expect(viewModel.density == .compact)
+
+    let explicit = DashboardContent(
+        viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: .compact)
+    let byPreference = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseGrid)
+    #expect(explicit.metrics == byPreference.metrics)
+
+    // And the override must actually override, or the two densities above
+    // would agree for the wrong reason.
+    let overridden = DashboardContent(
+        viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: .large)
+    #expect(overridden.metrics != byPreference.metrics)
+
+    // The preference drives it when there is no override.
+    viewModel.density = .large
+    #expect(
+        DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseGrid).metrics
+            == DensityMetrics.large)
+}
+
+/// The two axes must stay independent: density is the user's choice, the reset
+/// column is a width consequence. Crossing them is how "large on iPhone"
+/// would end up with a reset column it has no room for.
+@MainActor
+@Test func densityDoesNotDecideTheResetColumn() {
+    let viewModel = makeDensityViewModel(providers: [provider("codex", windows: [window("weekly", 50)])])
+    for density in DashboardDensity.allCases {
+        #expect(
+            DashboardContent(
+                viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn, density: density
+            ).layout.showsReset == false)
+        #expect(
+            DashboardContent(
+                viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: density
+            ).layout.showsReset == true)
+    }
+}
+
 @Test func windowRowSpeaksAsOneElement() {
     // Bar + percentage + reset are three views but one fact; VoiceOver should
     // stop once, not three times.

@@ -83,12 +83,24 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
     #expect(viewModel.showExhausted == false)
 }
 
+/// Tall enough to contain every control, including the last one.
+///
+/// Raised from 500 when the density picker was added (2026-08-06): at 500 the
+/// new control fell below the viewport, so the baselines would have been
+/// re-recorded — showing a real diff, since the section caption above it also
+/// changed — while covering none of the pixels of the thing that was added. A
+/// fixed-height snapshot of a scrolling screen silently stops testing whatever
+/// grows past its bottom edge, and it does so by *passing*.
+///
+/// Anything appended to `SettingsView` must check it still fits here.
+private let settingsSnapshotHeight: CGFloat = 760
+
 @MainActor
 @Test func settingsViewAllTogglesOnLight() {
     let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 500), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
 }
 
 @MainActor
@@ -96,7 +108,7 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
     let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 500), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)))
 }
 
 @MainActor
@@ -104,7 +116,7 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
     let viewModel = makeViewModel(syncEnabled: false, notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 500), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
 }
 
 @MainActor
@@ -112,5 +124,5 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
     let viewModel = makeViewModel(syncEnabled: false, notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 500), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)))
 }

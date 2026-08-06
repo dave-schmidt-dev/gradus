@@ -22,24 +22,35 @@ struct ProviderDensityCard: View {
     /// Forwarded to every `WindowRow`; see that type for why compact width
     /// drops the reset column.
     let showsReset: Bool
+    /// The density the user picked, as measurements. Passed down rather than
+    /// re-derived per view so the card's padding and its rows' heights cannot
+    /// come from different densities mid-render.
+    let metrics: DensityMetrics
 
-    init(provider: ProviderStatus, now: Date, showsReset: Bool = true) {
+    init(
+        provider: ProviderStatus,
+        now: Date,
+        showsReset: Bool = true,
+        metrics: DensityMetrics = .compact
+    ) {
         self.provider = provider
         self.now = now
         self.showsReset = showsReset
+        self.metrics = metrics
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: metrics.titleGap) {
             Text(provider.providerDisplayName)
-                .font(.headline)
+                .font(metrics.titleFont)
                 .lineLimit(1)
 
             body(for: provider)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .padding(metrics.cardPadding)
+        .background(
+            .quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: metrics.cornerRadius))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("provider-card-\(provider.providerName)")
     }
@@ -50,19 +61,20 @@ struct ProviderDensityCard: View {
     private func body(for provider: ProviderStatus) -> some View {
         if !provider.ok {
             Text(provider.errorMessage ?? "error")
-                .font(.caption)
+                .font(metrics.labelFont)
                 .foregroundStyle(.red)
                 .lineLimit(2)
-                .frame(height: 22, alignment: .leading)
+                .frame(height: metrics.rowHeight, alignment: .leading)
         } else if visibleWindows.isEmpty {
             Text("no window data")
-                .font(.caption)
+                .font(metrics.labelFont)
                 .foregroundStyle(.secondary)
-                .frame(height: 22, alignment: .leading)
+                .frame(height: metrics.rowHeight, alignment: .leading)
         } else {
-            VStack(spacing: 2) {
+            VStack(spacing: metrics.rowGap) {
                 ForEach(Array(visibleWindows.enumerated()), id: \.offset) { _, window in
-                    WindowRow(window: window, now: now, showsReset: showsReset)
+                    WindowRow(
+                        window: window, now: now, showsReset: showsReset, metrics: metrics)
                 }
             }
         }

@@ -72,7 +72,31 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text("Sorting and exhausted-provider visibility are local display choices on this device only.")
+                Text("Sorting, density and exhausted-provider visibility are local display choices on this device only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+
+            // Same section, same control type and the same device-local
+            // persistence as the sort picker above. Density belongs to this set
+            // rather than to a nav-bar control: it is a set-once preference,
+            // and `MobileNavBar` is a single title plus one trailing slot by
+            // design-system rule -- a slot `DashboardContent` already spends on
+            // `SyncStatusLine` and the settings button.
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Card density")
+                    .font(.headline)
+                Picker("Card density", selection: $dashboardViewModel.density) {
+                    ForEach(DashboardDensity.allCases) { density in
+                        Text(density.title).tag(density)
+                    }
+                }
+                .pickerStyle(.segmented)
+                // Says what changes and, just as importantly, what does not:
+                // every density shows all of a provider's windows (INV-12), so
+                // this is not a way to hide pools.
+                Text("Larger cards use bigger text and taller rows. Every density still shows all of a provider's windows.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

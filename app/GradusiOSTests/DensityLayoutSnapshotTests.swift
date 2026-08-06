@@ -77,8 +77,9 @@ private func makeViewModel() -> DashboardViewModel {
 }
 
 @MainActor
-private func denseDashboard() -> some View {
-    DashboardContent(viewModel: makeViewModel(), now: fixedNow, layout: .denseGrid)
+private func denseDashboard(density: DashboardDensity? = nil) -> some View {
+    DashboardContent(
+        viewModel: makeViewModel(), now: fixedNow, layout: .denseGrid, density: density)
 }
 
 // iPad 11" portrait. Two columns at this width; all 8 providers and all 14
@@ -114,4 +115,75 @@ private func denseDashboard() -> some View {
             layout: .fixed(width: 1194, height: 834),
             traits: UITraitCollection(userInterfaceStyle: .dark)),
         testName: "densePadLandscapeDark")
+}
+
+// MARK: - density (TASKS row 24)
+
+// One baseline per density at the same device size, so the three are directly
+// comparable and a metrics edit shows up as a diff on exactly the density it
+// touched.
+//
+// iPad 11" portrait is the deliberate choice: it is where the column count
+// actually changes between densities (two at compact and standard, one at
+// large, since large's 460pt minimum cannot seat two columns in 802pt of
+// content). A device size where all three densities resolved to the same
+// column count would hide the layout consequence and record only spacing.
+//
+// The fixture is `fullProviderSet()` — 8 providers with 1, 2 or 3 windows
+// each. The uneven window counts matter: they are what makes the ragged-row
+// behavior visible (TASKS row 23), which `.large` makes worse because taller
+// cards mean a taller `LazyVGrid` row. These baselines are expected to show
+// that, and fixing it is that row's job, not this one's.
+
+// There is deliberately no `.compact` baseline here.
+//
+// `densePadPortraitLight` above already *is* it: with no override, density
+// comes from the stored preference, which defaults to `.compact`. Recording a
+// second one produced a byte-identical PNG (verified 2026-08-06,
+// sha256 31a41f0a…), and a duplicate baseline cannot fail on its own — both
+// copies would move together under any metrics edit, so it would read as
+// coverage without adding any. The wiring property it appeared to test —
+// that asking for compact explicitly resolves the same as not asking —
+// is asserted directly in
+// `DensityLayoutTests.explicitCompactResolvesTheSameAsTheDefault`.
+
+@MainActor
+@Test func densityStandardPadPortraitLight() {
+    assertSnapshot(
+        of: denseDashboard(density: .standard),
+        as: .image(
+            layout: .fixed(width: 834, height: 1194),
+            traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "densityStandardPadPortraitLight")
+}
+
+@MainActor
+@Test func densityLargePadPortraitLight() {
+    assertSnapshot(
+        of: denseDashboard(density: .large),
+        as: .image(
+            layout: .fixed(width: 834, height: 1194),
+            traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "densityLargePadPortraitLight")
+}
+
+/// Large on a phone, which is the case INV-12 forces to exist: the density
+/// control cannot be iPad-only, because a setting present on one size class and
+/// absent on the other is precisely the divergence that invariant was written
+/// after. An iPad in Slide Over is at compact width too, so "iPad-only" has no
+/// coherent rule behind it either.
+///
+/// The thing to look at here is the reset column's *absence*. It stays dropped
+/// at compact width regardless of density, because affording it is a width
+/// question — 98 + 50 + 130 of columns would leave the bar nothing on a phone.
+@MainActor
+@Test func densityLargePhoneDark() {
+    assertSnapshot(
+        of: DashboardContent(
+            viewModel: makeViewModel(), now: fixedNow,
+            layout: .denseSingleColumn, density: .large),
+        as: .image(
+            layout: .fixed(width: 393, height: 852),
+            traits: UITraitCollection(userInterfaceStyle: .dark)),
+        testName: "densityLargePhoneDark")
 }

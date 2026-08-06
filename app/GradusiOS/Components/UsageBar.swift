@@ -7,17 +7,33 @@ import SwiftUI
 /// absent, non-finite, or invalid input never produces a fabricated rule.
 struct UsageBar: View {
     private static let markerWidth: CGFloat = 3
-    private static let markerHeight: CGFloat = 12
+    /// The marker overhangs the bar by this much at each end, which is what
+    /// makes it readable as a rule across the bar rather than a segment of it.
+    /// Held constant as the bar thickens so every density reads the same; the
+    /// Mac keeps the same idea in `MenuContentView`'s
+    /// `max(0, (markerHeight - barHeight) / 2)`.
+    ///
+    /// Only the *horizontal* geometry is shared between platforms
+    /// (`GradusKit.markerOffset`) — thickness has always been per-platform
+    /// (Mac 14pt against iOS's 12pt), so scaling it here does not reopen the
+    /// divergence `fdecc01` closed.
+    private static let markerOverhang: CGFloat = 4
 
     let percentLeft: Double
     let paceDelta: Double?
     let color: Color
+    /// Defaulted to 1.6.0's literal so callers that predate the density axis
+    /// render unchanged.
+    let height: CGFloat
 
-    init(window: ProviderWindow, color: Color? = nil) {
+    init(window: ProviderWindow, color: Color? = nil, height: CGFloat = 4) {
         self.percentLeft = window.percentLeft
         self.paceDelta = window.paceDelta
         self.color = color ?? SignalColor.forWindow(window)
+        self.height = height
     }
+
+    private var markerHeight: CGFloat { height + Self.markerOverhang * 2 }
 
     var body: some View {
         GeometryReader { geometry in
@@ -37,7 +53,7 @@ struct UsageBar: View {
                 ) {
                     Rectangle()
                         .fill(SignalColor.paceMarker)
-                        .frame(width: Self.markerWidth, height: Self.markerHeight)
+                        .frame(width: Self.markerWidth, height: markerHeight)
                         .offset(
                             x: markerOffset(
                                 fraction: markerPosition,
@@ -50,7 +66,7 @@ struct UsageBar: View {
                 }
             }
         }
-        .frame(height: 4)
+        .frame(height: height)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(percentDisplay(percentLeft, suffix: " percent remaining"))
     }

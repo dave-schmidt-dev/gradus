@@ -14,58 +14,63 @@ import SwiftUI
 /// line up vertically inside a card. Ragged bar starts were the single biggest
 /// readability loss when this was prototyped with an intrinsic-width label.
 struct WindowRow: View {
-    /// Wide enough for "Billing Cycle", the longest label
-    /// `ProviderWindowLabel` produces, at `.caption`.
-    private static let labelWidth: CGFloat = 78
-    private static let percentWidth: CGFloat = 40
-    /// Sized for the longest string `friendlyResetDate` produces — its
-    /// `MMM d, h:mm a` branch, e.g. "Aug 23, 9:30 PM". The first cut at 74
-    /// truncated every absolute date to "Aug 23, 9:3…", which is worse than
-    /// showing nothing: a half-rendered timestamp still reads as information.
-    private static let resetWidth: CGFloat = 104
-
     let window: ProviderWindow
     let now: Date
-    /// Dropped at compact width. The three fixed columns plus spacing cost
-    /// 246pt, which on a 393pt iPhone leaves the bar about 91pt — squeezing
-    /// the one element that actually carries the signal. Without reset the bar
-    /// gets ~203pt. Reset is not lost: it stays on this row at regular width,
-    /// and Provider Detail shows it on every device.
+    /// Dropped at compact width. At `.compact` density the three fixed columns
+    /// plus spacing cost 246pt, which on a 393pt iPhone leaves the bar about
+    /// 91pt — squeezing the one element that actually carries the signal.
+    /// Without reset the bar gets ~203pt. Reset is not lost: it stays on this
+    /// row at regular width, and Provider Detail shows it on every device.
+    ///
+    /// Stays a width question rather than a density one even though density now
+    /// scales the columns: the column either fits in the card or it doesn't.
+    /// `DensityMetrics.fitsResetColumn(inCardWidth:)` is where the two axes
+    /// meet, and `DensityLayoutTests` checks it at real device widths.
     let showsReset: Bool
+    /// All widths, fonts and heights below come from here. Defaulted to
+    /// `.compact` so the many call sites that predate the density axis keep
+    /// rendering 1.6.0's geometry exactly.
+    let metrics: DensityMetrics
 
-    init(window: ProviderWindow, now: Date, showsReset: Bool = true) {
+    init(
+        window: ProviderWindow,
+        now: Date,
+        showsReset: Bool = true,
+        metrics: DensityMetrics = .compact
+    ) {
         self.window = window
         self.now = now
         self.showsReset = showsReset
+        self.metrics = metrics
     }
 
     var body: some View {
         let color = SignalColor.forWindow(window)
 
-        HStack(spacing: 8) {
+        HStack(spacing: metrics.columnGap) {
             Text(ProviderWindowLabel.label(for: window.id))
-                .font(.caption)
+                .font(metrics.labelFont)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .frame(width: Self.labelWidth, alignment: .leading)
+                .frame(width: metrics.labelWidth, alignment: .leading)
 
-            UsageBar(window: window, color: color)
+            UsageBar(window: window, color: color, height: metrics.barHeight)
 
             Text(percentDisplay(window.percentLeft))
-                .font(.caption.weight(.semibold).monospacedDigit())
+                .font(metrics.percentFont)
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .frame(width: Self.percentWidth, alignment: .trailing)
+                .frame(width: metrics.percentWidth, alignment: .trailing)
 
             if showsReset {
                 Text(resetText)
-                    .font(.caption2.monospacedDigit())
+                    .font(metrics.resetFont)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
-                    .frame(width: Self.resetWidth, alignment: .trailing)
+                    .frame(width: metrics.resetWidth, alignment: .trailing)
             }
         }
-        .frame(height: 22)
+        .frame(height: metrics.rowHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenLabel)
     }
