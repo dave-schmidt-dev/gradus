@@ -74,6 +74,13 @@ enum SettingsWindow {
     ///
     /// The two lines left untested are the two lines of presentation, which is
     /// the manual check `TASKS.md` already carries.
+    ///
+    /// `viewModel` is captured once, at construction, and the window is cached
+    /// for the process lifetime — so a later call with a *different* view model
+    /// silently keeps showing the first one. That is correct today only because
+    /// the sole caller passes `PublishPipeline.shared.viewModel`, itself a
+    /// process-lifetime singleton. If the Mac ever holds more than one
+    /// `PublisherViewModel`, this cache has to be keyed or dropped.
     static func makeWindow(viewModel: PublisherViewModel) -> NSWindow {
         if let existing = window { return existing }
 
