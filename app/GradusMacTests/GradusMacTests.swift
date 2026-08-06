@@ -480,6 +480,27 @@ private func recordID(_ name: String) -> CKRecord.ID {
     #expect(PublishCoordinator.describe(nil).contains("no result"))
 }
 
+/// `RELEASE_CHECKLIST.md` tells a reviewer they may see `unmappedCKErrorCode`
+/// and to look the number up rather than assume the publish path is broken, so
+/// that string is a documented contract and not just a `default:` arm.
+///
+/// It is only reachable if a future SDK hands back a code this table predates.
+/// `CKError.Code` is imported from an Objective-C `NS_ENUM` as a closed Swift
+/// enum, so `init(rawValue:)` refuses anything outside the compiled cases —
+/// which is exactly what this asserts. If a later SDK makes that construction
+/// succeed, this test starts exercising the fallback for real instead of
+/// silently passing on a premise that no longer holds.
+@Test func unmappedCloudKitCodesCannotBeConstructedFromThisSDK() {
+    let outsideTheEnum = CKError.Code(rawValue: 9999)
+    if let outsideTheEnum {
+        let described = PublishCoordinator.describe(.failure(CKError(outsideTheEnum)))
+        #expect(described.contains("unmappedCKErrorCode"))
+        #expect(described.contains("9999"))
+    } else {
+        #expect(outsideTheEnum == nil, "premise: the SDK rejects codes outside its own cases")
+    }
+}
+
 /// Nothing from `userInfo` may reach the log. These records hold the user's
 /// provider usage data, and `localizedDescription` is read straight out of the
 /// same dictionary that carries them — which is why the description is built
