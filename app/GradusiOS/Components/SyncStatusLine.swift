@@ -4,7 +4,8 @@ import SwiftUI
 /// One-line publish provenance for the dense layout's header: `synced 2m ago ·
 /// dm5mbp`.
 ///
-/// Replaces `ConnectionInfoCard` on iPad. The card is four stacked lines and a
+/// Replaced `ConnectionInfoCard`, which was deleted on 2026-08-06 once both
+/// size classes had moved to this line. That card was four stacked lines and a
 /// 24pt icon at the top of the screen — real estate spent on information that
 /// does not change between refreshes, which pushed provider content down and
 /// was a direct cause of having to scroll. The two facts worth keeping at a

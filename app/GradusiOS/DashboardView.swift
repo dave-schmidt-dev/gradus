@@ -95,10 +95,10 @@ struct DashboardContent: View {
         VStack(spacing: 0) {
             MobileNavBar(title: "Gradus") {
                 HStack(spacing: 12) {
-                    // Both layouts trade ConnectionInfoCard's four stacked
-                    // lines for this one, so the provenance it drops has
-                    // somewhere to go. The full computer/user/publish detail
-                    // lives in Settings' "Connected Computer" section.
+                    // Both layouts traded the former ConnectionInfoCard's four
+                    // stacked lines for this one, so the provenance it dropped
+                    // has somewhere to go. The full computer/user/publish
+                    // detail lives in Settings' "Connected Computer" section.
                     SyncStatusLine(
                         source: viewModel.connectedSource,
                         publishedAt: viewModel.connectedSourcePublishedAt,

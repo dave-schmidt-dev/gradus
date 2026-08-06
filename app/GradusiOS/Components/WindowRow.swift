@@ -4,10 +4,11 @@ import SwiftUI
 /// One window rendered as a single dense line: label, bar, percentage, reset.
 ///
 /// This is the unit that makes the iPad's Option B layout work — the Now
-/// screen's `StatTile` shows one window per provider and hides the rest behind
-/// badges, which is why seeing every pool at once previously required drilling
-/// into Provider Detail for each provider in turn. At roughly 22pt a row, a
-/// provider's whole set of windows costs about what one `StatTile` did.
+/// screen's superseded `StatTile` showed one window per provider and hid the
+/// rest behind badges, which is why seeing every pool at once previously
+/// required drilling into Provider Detail for each provider in turn. At
+/// roughly 22pt a row, a provider's whole set of windows costs about what that
+/// one tile did.
 ///
 /// The label column is a fixed width rather than sized to content so that bars
 /// line up vertically inside a card. Ragged bar starts were the single biggest

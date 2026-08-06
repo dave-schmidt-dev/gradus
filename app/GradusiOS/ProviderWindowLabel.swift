@@ -1,10 +1,10 @@
 import Foundation
 
-/// `ProviderWindow.id` -> human-readable label mapping (P4/T4.1). Only
-/// needed on a surface that renders more than one window at once and must
-/// visually distinguish them -- today that's `ProviderDetailView` only (the
-/// Now screen's `StatTile` still shows a single worst window, no id
-/// disambiguation needed there).
+/// `ProviderWindow.id` -> human-readable label mapping (P4/T4.1). Needed on
+/// any surface that renders more than one window at once and must visually
+/// distinguish them: `ProviderDetailView` and, since the dense layout
+/// (INV-12), every `WindowRow` on the Now screen. It was Provider Detail only
+/// while the Now screen showed a single worst window per provider.
 ///
 /// Verified directly against `gradus/snapshot.py`'s `V2_WINDOW_SPECS`
 /// (`snapshot.py:479-509`) -- the schema-v2 spec table that actually

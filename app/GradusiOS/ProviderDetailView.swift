@@ -3,9 +3,10 @@ import SwiftUI
 
 /// Provider Detail screen (P4/T4.2), pushed from a Now-screen row/hero tap
 /// (`DashboardContent.selectedProviderName`): renders every window in
-/// `provider.windows` at full size -- not just the single worst one
-/// `StatTile` shows on the Now screen -- using `ProviderWindowLabel` (P4/T4.1)
-/// to distinguish them.
+/// `provider.windows` at full size, using `ProviderWindowLabel` (P4/T4.1) to
+/// distinguish them. This was the only surface showing every window while the
+/// Now screen showed just the worst one per provider; since the dense layout
+/// (INV-12) it is the full-size view of what the Now screen shows densely.
 ///
 /// Provenance footer shows only `observed: <freshness()-derived age>`. The
 /// `Screens.jsx` mockup's `source: api` / `schema: v2` shields are

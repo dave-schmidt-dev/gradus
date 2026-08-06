@@ -345,45 +345,6 @@ func testDashboardHidesExhaustedCellsWhenPreferenceIsOff() {
     XCTAssertFalse(viewModel.providers.contains { $0.providerName == "vibe" })
 }
 
-@MainActor
-func testWindowBadgeSelectionChangesOnlySelectedProviderWindow() {
-    let selectable = ProviderStatus(
-        providerName: "codex",
-        providerDisplayName: "Codex",
-        ok: true,
-        errorMessage: nil,
-        windows: [
-            ProviderWindow(id: "five_hour", percentLeft: 82, resetISO: "2026-08-03T01:00:00-04:00", windowHours: 5, paceDelta: 0.02),
-            ProviderWindow(id: "weekly", percentLeft: 47, resetISO: "2026-08-08T05:00:00-04:00", windowHours: 168, paceDelta: -0.08),
-        ],
-        data: [:],
-        observedAt: ISO8601DateFormatter().string(from: fixedNow),
-        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-        publishedAt: fixedNow)
-    let unaffected = ProviderStatus(
-        providerName: "claude",
-        providerDisplayName: "Claude",
-        ok: true,
-        errorMessage: nil,
-        windows: [
-            ProviderWindow(id: "monthly", percentLeft: 31, resetISO: "2026-08-30T05:00:00-04:00", windowHours: 720, paceDelta: -0.04),
-        ],
-        data: [:],
-        observedAt: ISO8601DateFormatter().string(from: fixedNow),
-        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-        publishedAt: fixedNow)
-    let viewModel = makeViewModel(providers: [selectable, unaffected])
-
-    XCTAssertEqual(viewModel.selectedWindow(for: selectable)?.id, "weekly")
-    XCTAssertEqual(viewModel.selectedWindow(for: unaffected)?.id, "monthly")
-
-    viewModel.selectWindow(providerName: selectable.providerName, windowID: "five_hour")
-
-    XCTAssertEqual(viewModel.selectedWindow(for: selectable)?.id, "five_hour")
-    XCTAssertEqual(viewModel.selectedWindow(for: selectable)?.percentLeft, 82)
-    XCTAssertEqual(viewModel.selectedWindow(for: unaffected)?.id, "monthly")
-    XCTAssertEqual(viewModel.selectedWindow(for: unaffected)?.percentLeft, 31)
-}
 
 @MainActor
 func testEmptyStateNotSignedIn() {

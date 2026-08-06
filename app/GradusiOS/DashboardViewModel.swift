@@ -71,12 +71,6 @@ public final class DashboardViewModel: ObservableObject {
         }
     }
 
-    /// Transient, explicit per-provider window choices keyed by the provider's
-    /// exact name and the window's exact schema-v2 `id`. It is deliberately not
-    /// persisted: when this map has no entry, the headline follows the current
-    /// worst valid window; a refreshed payload reconciles only explicit choices.
-    @Published public private(set) var selectedWindowIDs: [String: String] = [:]
-
     static let syncEnabledKey = "iCloudSyncEnabled"
     static let notificationsEnabledKey = "warningNotificationsEnabled"
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
@@ -145,7 +139,6 @@ public final class DashboardViewModel: ObservableObject {
             showExhausted: self.showExhausted)
         self.lastSyncedAt = cache.lastSyncedAt()
         updateConnectedSource()
-        reconcileWindowSelections()
     }
 
     /// P5/T5.1: toggle-on is best-effort/optimistic (mirrors the existing
@@ -203,45 +196,6 @@ public final class DashboardViewModel: ObservableObject {
     /// All providers other than the hero, still in ranked order.
     public var restProviders: [ProviderStatus] { Array(providers.dropFirst()) }
 
-    /// Returns the explicitly selected valid window for a provider, or its
-    /// current worst valid window when no explicit choice exists. Matching is
-    /// exact; ids are never trimmed, lowercased, or otherwise normalized.
-    public func selectedWindow(for provider: ProviderStatus) -> ProviderWindow? {
-        let selected = selectedWindowIDs[provider.providerName].flatMap { selectedID in
-            provider.windows.first { $0.id == selectedID && percentIsValid($0.percentLeft) }
-        }
-        return selected ?? Self.worstValidWindow(in: provider.windows)
-    }
-
-    /// Provider-name convenience for tile/detail callers.
-    public func selectedWindow(forProviderName providerName: String) -> ProviderWindow? {
-        guard let provider = allProviders.first(where: { $0.providerName == providerName }) else { return nil }
-        return selectedWindow(for: provider)
-    }
-
-    /// Alternate label for callers that prefer an unlabeled provider-name
-    /// argument; both APIs retain the same exact-name semantics.
-    public func selectedWindow(for providerName: String) -> ProviderWindow? {
-        selectedWindow(forProviderName: providerName)
-    }
-
-    /// Selects a valid window by its exact schema-v2 id. Invalid or unknown
-    /// selections are ignored so the exposed selection never becomes nil when
-    /// a provider still has a valid fallback window.
-    public func selectWindow(providerName: String, windowID: String) {
-        guard let provider = allProviders.first(where: { $0.providerName == providerName }),
-              provider.windows.contains(where: { $0.id == windowID && percentIsValid($0.percentLeft) }) else { return }
-        selectedWindowIDs[providerName] = windowID
-    }
-
-    public func setSelectedWindow(providerName: String, windowID: String) {
-        selectWindow(providerName: providerName, windowID: windowID)
-    }
-
-    public func clearSelectedWindow(forProviderName providerName: String) {
-        selectedWindowIDs.removeValue(forKey: providerName)
-        reconcileWindowSelections()
-    }
 
     public func refreshAccountStatus() async {
         guard let accountSource else { return }
@@ -295,7 +249,6 @@ public final class DashboardViewModel: ObservableObject {
             providers = []
             connectedSource = nil
             connectedSourcePublishedAt = nil
-            selectedWindowIDs.removeAll()
             lastSyncedAt = nil
             try? cache.saveChangeToken(nil)
             try? cache.clear()
@@ -316,7 +269,6 @@ public final class DashboardViewModel: ObservableObject {
         for name in deletedProviderNames { byName.removeValue(forKey: name) }
         allProviders = Array(byName.values)
         applyPresentationPreferences()
-        reconcileWindowSelections()
     }
 
     private func notifyForWarningTransitions(from previous: [ProviderStatus], to current: [ProviderStatus]) {
@@ -346,7 +298,6 @@ public final class DashboardViewModel: ObservableObject {
         notifyForWarningTransitions(from: allProviders, to: fetched)
         allProviders = fetched
         applyPresentationPreferences()
-        reconcileWindowSelections()
         let syncedAt = Date()
         lastSyncedAt = syncedAt
         try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
@@ -375,35 +326,6 @@ public final class DashboardViewModel: ObservableObject {
             }
         connectedSource = latest?.syncSource
         connectedSourcePublishedAt = latest?.publishedAt
-    }
-
-    /// Reconciles explicit transient ids after an initial load, full sync, or
-    /// delta reconciliation. Missing selections are intentionally omitted so
-    /// `selectedWindow(for:)` can keep following the current worst window.
-    private func reconcileWindowSelections() {
-        var reconciled: [String: String] = [:]
-        for provider in allProviders {
-            if let selectedID = selectedWindowIDs[provider.providerName],
-               provider.windows.contains(where: { $0.id == selectedID && percentIsValid($0.percentLeft) }) {
-                reconciled[provider.providerName] = selectedID
-            }
-        }
-        selectedWindowIDs = reconciled
-    }
-
-    private static func worstValidWindow(in windows: [ProviderWindow]) -> ProviderWindow? {
-        windows.enumerated()
-            .filter { percentIsValid($0.element.percentLeft) }
-            .min { lhs, rhs in
-                if lhs.element.percentLeft != rhs.element.percentLeft {
-                    return lhs.element.percentLeft < rhs.element.percentLeft
-                }
-                if lhs.element.id != rhs.element.id {
-                    return lhs.element.id < rhs.element.id
-                }
-                return lhs.offset < rhs.offset
-            }?
-            .element
     }
 
     private static func presentedProviders(

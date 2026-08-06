@@ -3,12 +3,16 @@ import SwiftUI
 
 /// A provider and *every* one of its windows, as one card (iPad Option B).
 ///
-/// Deliberately not a `StatTile` variant. `StatTile` answers "which single
+/// Deliberately not a variant of the superseded `StatTile` (deleted
+/// 2026-08-06; recoverable at `5bce2af`, the commit before the deletion —
+/// `249deaf` is only where its last *caller* went away). That tile answered
+/// "which single
 /// window matters most for this provider", and its selected-window/badge state
-/// only means something when one window is privileged. This card answers "show
+/// only meant something when one window was privileged. This card answers "show
 /// me everything", so it has no selection state at all — every window is a peer
 /// `WindowRow`. Trying to express both in one type meant a selection concept
-/// that was inert half the time.
+/// that was inert half the time, which is why the whole selection API went with
+/// the tile rather than being kept for a future caller.
 ///
 /// Tapping still pushes Provider Detail: this card shows the same windows, but
 /// detail adds pace, per-window provenance, and the observed-at footer.
