@@ -140,6 +140,13 @@ struct DisplayPreferenceTests {
 /// `sendAction` returned `true`, and the responder resolved even with the
 /// scene deleted entirely. The only honest question is whether a window
 /// exists afterward, so that is what this asks.
+///
+/// Every case goes through `makeWindow` rather than `show`. This bundle is
+/// hosted, so a `show` here would activate the app and drop a settings window
+/// over the work of whoever is at the machine on every gate run — a test suite
+/// that interrupts you is one you learn to stop running. Nothing is given up:
+/// the defects worth catching are construction defects, and both of the ones
+/// this suite has already caught were.
 @MainActor
 @Suite("Settings window")
 struct SettingsWindowTests {
@@ -149,53 +156,57 @@ struct SettingsWindowTests {
         )
     }
 
-    @Test func showPutsAVisibleSettingsWindowOnScreen() {
+    @Test func settingsProducesAWindowTheAppOwnsAndCanActuallyBeReadIn() {
         SettingsWindow.resetForTesting()
         defer { SettingsWindow.resetForTesting() }
 
-        let window = SettingsWindow.show(viewModel: scratchViewModel())
+        let window = SettingsWindow.makeWindow(viewModel: scratchViewModel())
 
+        // The assertion the old `Settings` scene could never have passed: an
+        // `NSWindow` exists and the app owns it.
         #expect(NSApp.windows.contains(window))
         #expect(window.title == SettingsWindow.title)
-        #expect(window.isVisible)
         // A hosting controller that fails to measure its SwiftUI content
-        // yields a zero- or near-zero-sized window, which is on screen and
+        // yields a zero- or near-zero-sized window, which is a window and is
         // still useless. `MacSettingsView` fixes width at 420 and lets height
         // follow the form.
         #expect(window.frame.width >= 400)
         #expect(window.frame.height > 200)
     }
 
-    @Test func repeatedShowsReuseTheSameWindow() {
+    @Test func repeatedRequestsReuseTheSameWindow() {
         SettingsWindow.resetForTesting()
         defer { SettingsWindow.resetForTesting() }
         let viewModel = scratchViewModel()
 
-        let first = SettingsWindow.show(viewModel: viewModel)
-        let second = SettingsWindow.show(viewModel: viewModel)
+        let first = SettingsWindow.makeWindow(viewModel: viewModel)
+        let second = SettingsWindow.makeWindow(viewModel: viewModel)
 
+        // Identity, not a count of settings windows in `NSApp.windows`: a
+        // closed window lingers in that array until it deallocates, so the
+        // count picks up other cases' windows and says nothing about this one.
+        // Identity is the actual property — a second click re-focuses the
+        // window you have instead of stacking another copy on it.
         #expect(first === second)
-        // Counts *visible* windows, not all of them: a closed window stays in
-        // `NSApp.windows` until it deallocates, so an earlier case's window can
-        // still be sitting in that array when this one runs. Visibility is the
-        // property the user would actually notice being wrong.
-        #expect(NSApp.windows.filter { $0.title == SettingsWindow.title && $0.isVisible }.count == 1)
     }
 
     /// `isReleasedWhenClosed` defaults to true for programmatically-created
     /// windows, which would deallocate the cached window on close and leave
-    /// `SettingsWindow` holding a dangling reference to reopen from.
-    @Test func closingAndReopeningWorks() {
+    /// `SettingsWindow` holding a dangling reference to reopen from. Asserted
+    /// on the flag directly — the dangling case is undefined behavior, so
+    /// there's nothing to observe once it's wrong; the reopen below covers the
+    /// other half, that closing doesn't drop the cache.
+    @Test func aClosedWindowIsKeptAroundToBeReopened() {
         SettingsWindow.resetForTesting()
         defer { SettingsWindow.resetForTesting() }
         let viewModel = scratchViewModel()
 
-        let first = SettingsWindow.show(viewModel: viewModel)
+        let first = SettingsWindow.makeWindow(viewModel: viewModel)
         #expect(!first.isReleasedWhenClosed)
         first.close()
-        #expect(!first.isVisible)
 
-        let reopened = SettingsWindow.show(viewModel: viewModel)
-        #expect(reopened.isVisible)
+        let reopened = SettingsWindow.makeWindow(viewModel: viewModel)
+        #expect(reopened === first)
+        #expect(reopened.frame.width >= 400)
     }
 }

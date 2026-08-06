@@ -26,7 +26,8 @@ import SwiftUI
 /// more to the point, a `SettingsLink` is only exercised by a real click --
 /// there would be no way to gate it, which is exactly how the broken selector
 /// shipped. An `NSWindow` we construct ourselves is testable: after
-/// `SettingsWindow.show`, the window is in `NSApp.windows` or the test fails.
+/// `SettingsWindow.makeWindow`, a correctly-sized window is in `NSApp.windows`
+/// or the test fails.
 @MainActor
 enum SettingsWindow {
     /// Held across closes so a second "Settings…" click re-focuses the window
@@ -54,11 +55,27 @@ enum SettingsWindow {
         // in -- which reads as the button doing nothing, the same symptom the
         // selector had for a different reason.
         NSApplication.shared.activate(ignoringOtherApps: true)
+        let window = makeWindow(viewModel: viewModel)
+        window.makeKeyAndOrderFront(nil)
+        return window
+    }
 
-        if let existing = window {
-            existing.makeKeyAndOrderFront(nil)
-            return existing
-        }
+    /// Builds the window, or returns the one already built, without putting it
+    /// on screen.
+    ///
+    /// Split from `show` for the tests' sake, and that is not a compromise of
+    /// the gate: both defects it has caught so far -- a 1x32pt window and a
+    /// second window stacked on the first -- are construction defects, and this
+    /// is where construction happens. What the split buys is that the gate stops
+    /// being visible. `GradusMacTests` is a hosted bundle, so `xcodebuild test`
+    /// launches this app for real; a test calling `show` would fire
+    /// `activate(ignoringOtherApps:)` and drop a settings window over the work
+    /// of whoever happened to be at the machine, on every run.
+    ///
+    /// The two lines left untested are the two lines of presentation, which is
+    /// the manual check `TASKS.md` already carries.
+    static func makeWindow(viewModel: PublisherViewModel) -> NSWindow {
+        if let existing = window { return existing }
 
         let controller = NSHostingController(rootView: MacSettingsView(viewModel: viewModel))
         let window = NSWindow(contentViewController: controller)
@@ -74,7 +91,6 @@ enum SettingsWindow {
         window.setContentSize(Self.contentSize)
         window.center()
         Self.window = window
-        window.makeKeyAndOrderFront(nil)
         return window
     }
 

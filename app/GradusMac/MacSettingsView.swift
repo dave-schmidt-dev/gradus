@@ -1,8 +1,12 @@
 import GradusKit
 import SwiftUI
 
-/// The Mac's settings window (⌘,), mirroring the iOS `SettingsView` section
-/// for section so the two apps can be described with one set of words.
+/// The Mac's settings window, opened from the menu's "Settings…" row, mirroring
+/// the iOS `SettingsView` section for section so the two apps can be described
+/// with one set of words.
+///
+/// There is deliberately no ⌘, here. That key equivalent comes from a SwiftUI
+/// `Settings` scene, and this app has none -- see `SettingsWindow` for why.
 ///
 /// Everything here is device-local. The Mac is the *publisher* in this system,
 /// which makes it tempting to treat its preferences as authoritative and push
