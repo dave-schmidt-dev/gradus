@@ -28,6 +28,18 @@ enum SignalColor {
     static func forWindow(_ window: ProviderWindow) -> Color {
         forLevel(signalLevel(for: window))
     }
+
+    /// The expected-pace marker, matching the TUI's `bar.marker` (`color(26)`).
+    ///
+    /// Defined here rather than inline in each bar because the two apps had
+    /// already drifted once on this marker's *geometry*, and a literal repeated
+    /// in two files is how that happens. Deliberately outside the ramp: this
+    /// mark is not a signal level, it is a reference line, and blue is the one
+    /// hue none of the four tiers uses — which is the point, since while it was
+    /// red it was the same color as the fill on a red bar.
+    ///
+    /// Fixed rather than appearance-adaptive so all three surfaces agree.
+    static let paceMarker = Color(hex: 0x005FD7)
 }
 
 extension Color {

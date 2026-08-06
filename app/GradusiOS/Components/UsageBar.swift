@@ -36,7 +36,7 @@ struct UsageBar: View {
                     percentLeft: percentLeft, paceDelta: paceDelta
                 ) {
                     Rectangle()
-                        .fill(.red)
+                        .fill(SignalColor.paceMarker)
                         .frame(width: Self.markerWidth, height: Self.markerHeight)
                         .offset(
                             x: markerOffset(

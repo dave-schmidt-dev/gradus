@@ -12,6 +12,7 @@ from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderR
 from rich.panel import Panel
 from rich.segment import Segment
 from rich.spinner import Spinner
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -50,24 +51,26 @@ THEME = Theme(
         "bar.yellow": "color(221)",
         "bar.orange": "color(215)",
         "bar.red": "color(203)",
-        # The expected-pace marker. Deliberately not `bar.red`: this mark says
-        # "here is where you should be", which is not news about the provider,
-        # while red everywhere else in this UI means trouble. It was red, and on
-        # a red bar that made it invisible -- the two reds are the same colour,
-        # so the stroke vanished into the fill exactly when the row mattered
-        # most. Neutral also stays legible over all four tiers and over the
-        # empty track, so the marker needs only this one style.
+        # The expected-pace marker. Blue, David's call, and its own key rather
+        # than a borrowed `bar.red` so the tier colours are not entangled with
+        # it. Blue also happens to be the one hue no fill tier uses, which is
+        # what the marker needs: it says "here is where you should be", not
+        # "this provider is in trouble", and while it was red it was the same
+        # colour as the fill on a red bar -- a 1.00 contrast ratio, i.e. gone,
+        # on the one row where pace matters most.
         #
-        # Bright, not dark, and never a background fill. The bar's `▓` is a
-        # stipple rather than a solid, so a dark stroke reads as a gap torn in
-        # the bar while a light one reads as a tick laid across it -- and
-        # painting the fill colour behind the stroke to "protect" the bar makes
-        # that cell the only solid one in a stippled row, which stands out
-        # worse than either.
+        # This exact blue because the marker crosses two very different
+        # backgrounds: the light pastel fills, and the dark empty track. A
+        # properly dark navy (#0000af) is crisp on the fill and then vanishes
+        # into the terminal background out in the track, where the marker sits
+        # whenever a provider is behind. #005fd7 is the darkest blue that stays
+        # legible in both places -- 1.95-4.18 against the four fills, 2.42
+        # against the terminal background.
         #
-        # 252 over 231: pure white is louder than the rest of this palette and
-        # is weakest against the yellow tier anyway.
-        "bar.marker": "color(252)",
+        # Never paint this as a background. The bar's `▓` is a stipple, not a
+        # solid, so a cell given a background colour becomes the only solid one
+        # in a textured row and reads as an artefact rather than a mark.
+        "bar.marker": "color(26)",
         "accent.codex": "color(111)",
         "accent.claude": "color(219)",
         "accent.gemini": "color(80)",
@@ -708,7 +711,7 @@ class PercentageBar:
         bar = Text()
         for index in range(width):
             if index == marker_index:
-                bar.append(marker_glyph, style="bar.marker")
+                bar.append(marker_glyph, style=self._marker_style(console, index < filled))
             elif index < filled:
                 bar.append("▓" if index < filled - 1 else "█", style=self.style)
             else:
@@ -728,6 +731,36 @@ class PercentageBar:
         index = min(width - 1, int(position))
         third = min(2, int((position - index) * 3))
         return index, _MARKER_GLYPHS[third]
+
+    def _marker_style(self, console: Console, over_fill: bool) -> str | Style:
+        """Marker style, carrying the fill as a background where it crosses it.
+
+        The stroke glyphs are thin on purpose -- that is what buys sub-cell
+        precision -- but they still occupy a whole character cell, and whatever
+        the glyph does not ink shows the terminal background. Crossing the
+        filled bar that leaves a dark box around the stroke: David, on first
+        seeing the blue marker, "why is there a black box around the blue bar?"
+
+        It was there with the red marker too and went unremarked, because a
+        saturated red stroke dominates its cell and the eye reads a tick. A dark
+        blue one does not, so the surrounding background wins and the eye reads
+        a hole. Painting the fill as this cell's background removes it.
+
+        The cost, accepted: `▓` is a stipple at ~75% ink, so a cell given a
+        solid background is the brightest in the row. A previous attempt at this
+        used a near-black stroke, which turned that cell into a dark notch and
+        was rejected on sight. A blue stroke on the fill colour reads as a mark
+        on the bar rather than damage to it.
+
+        Over the empty track there is nothing to protect and the neighbours are
+        dark too, so no background is set there.
+        """
+        if not over_fill:
+            return "bar.marker"
+        return Style(
+            color=console.get_style("bar.marker", default="none").color,
+            bgcolor=console.get_style(self.style, default="none").color,
+        )
 
 
 # Below this console width the 2-panel grid can't fit a full 12-char pace cell

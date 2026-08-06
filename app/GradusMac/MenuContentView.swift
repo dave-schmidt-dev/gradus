@@ -401,7 +401,7 @@ struct ProgressBar: View {
                     .frame(width: geometry.size.width * max(0, min(1, fraction)))
                 if let markerFraction {
                     Rectangle()
-                        .fill(Color.red)
+                        .fill(SignalColor.paceMarker)
                         .frame(width: Self.markerWidth, height: Self.markerHeight)
                         .offset(
                             x: markerOffset(
