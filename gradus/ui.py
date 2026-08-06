@@ -12,7 +12,6 @@ from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderR
 from rich.panel import Panel
 from rich.segment import Segment
 from rich.spinner import Spinner
-from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -51,17 +50,24 @@ THEME = Theme(
         "bar.yellow": "color(221)",
         "bar.orange": "color(215)",
         "bar.red": "color(203)",
-        # The expected-pace marker, kept separate from `bar.red` on purpose: this
-        # red means "here is where you should be", not "this provider is in
-        # trouble", and the two want to be recolourable independently.
-        "bar.marker": "color(203)",
-        # Used where the marker crosses the *filled* part of the bar, drawn over
-        # the fill colour as a background. The marker red cannot be used there --
-        # measured against the four fill colours it scores 1.72 / 2.15 / 1.64 /
-        # 1.00 contrast (the last being marker-red on a red bar, i.e. invisible),
-        # all under the 3:1 WCAG asks of a graphical indicator. This near-black
-        # scores 9.82 / 12.28 / 9.37 / 5.72 against the same four.
-        "bar.marker.on_fill": "color(234)",
+        # The expected-pace marker. Deliberately not `bar.red`: this mark says
+        # "here is where you should be", which is not news about the provider,
+        # while red everywhere else in this UI means trouble. It was red, and on
+        # a red bar that made it invisible -- the two reds are the same colour,
+        # so the stroke vanished into the fill exactly when the row mattered
+        # most. Neutral also stays legible over all four tiers and over the
+        # empty track, so the marker needs only this one style.
+        #
+        # Bright, not dark, and never a background fill. The bar's `▓` is a
+        # stipple rather than a solid, so a dark stroke reads as a gap torn in
+        # the bar while a light one reads as a tick laid across it -- and
+        # painting the fill colour behind the stroke to "protect" the bar makes
+        # that cell the only solid one in a stippled row, which stands out
+        # worse than either.
+        #
+        # 252 over 231: pure white is louder than the rest of this palette and
+        # is weakest against the yellow tier anyway.
+        "bar.marker": "color(252)",
         "accent.codex": "color(111)",
         "accent.claude": "color(219)",
         "accent.gemini": "color(80)",
@@ -702,7 +708,7 @@ class PercentageBar:
         bar = Text()
         for index in range(width):
             if index == marker_index:
-                bar.append(marker_glyph, style=self._marker_style(console, index < filled))
+                bar.append(marker_glyph, style="bar.marker")
             elif index < filled:
                 bar.append("▓" if index < filled - 1 else "█", style=self.style)
             else:
@@ -722,21 +728,6 @@ class PercentageBar:
         index = min(width - 1, int(position))
         third = min(2, int((position - index) * 3))
         return index, _MARKER_GLYPHS[third]
-
-    def _marker_style(self, console: Console, over_fill: bool) -> str | Style:
-        if not over_fill:
-            return "bar.marker"
-        # Over the filled part of the bar the marker has to sit *on* the fill
-        # rather than take a cell from it. Replacing the cell punched a gap
-        # through the bar, worst exactly where the news was best: a provider at
-        # 100% with time to spare drew a solid bar with a hole in it. Painting
-        # the fill colour as this cell's background keeps the bar continuous
-        # behind the stroke, and the stroke goes dark because marker-red on a
-        # red bar is a 1.00 contrast ratio -- see the theme for the numbers.
-        return Style(
-            color=console.get_style("bar.marker.on_fill", default="none").color,
-            bgcolor=console.get_style(self.style, default="none").color,
-        )
 
 
 # Below this console width the 2-panel grid can't fit a full 12-char pace cell

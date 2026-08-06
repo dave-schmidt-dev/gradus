@@ -10,7 +10,6 @@ from datetime import datetime
 from io import StringIO
 
 from rich.console import Console
-from rich.style import Style
 from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
@@ -316,36 +315,51 @@ class PercentageBarTests(unittest.TestCase):
         # future finer marker is an improvement rather than a failure.
         self.assertGreaterEqual(len(rendered), width * 3)
 
-    def test_marker_over_a_filled_cell_keeps_the_bar_solid(self) -> None:
-        """The marker overlays the fill; it does not spend a cell of it.
+    def test_marker_is_one_style_wherever_it_falls(self) -> None:
+        """`bar.marker` and no background, over fill and over the empty track.
 
-        Reported from the dashboard: a provider at 100% with time in hand drew a
-        solid bar with a hole punched through it, because the marker *replaced*
-        the fill cell it landed on. The fill colour has to survive as this
-        cell's background.
+        An earlier attempt painted the fill colour behind the stroke where the
+        marker crossed the bar, to stop it "spending" a cell of fill. That made
+        the marker cell the only solid one in a row of `▓` stipple, which read
+        as an artefact -- a worse mark than the one it replaced. The marker is a
+        tick laid over the bar, drawn the same way everywhere.
         """
-        console = Console(
-            file=StringIO(),
-            theme=THEME,
-            force_terminal=True,
-            width=20,
-            _environ={"TERM": "xterm-256color"},
-        )
-        rendered = next(
-            PercentageBar(100.0, "bar.green", expected_remaining=84.0).__rich_console__(
-                console, console.options
-            )
-        )
-        assert isinstance(rendered, Text)
-        self.assertEqual(_markers(rendered.plain), 1)
-        marker_at = next(i for i, ch in enumerate(rendered.plain) if ch in _MARKER_GLYPHS)
-        style = next(span.style for span in rendered.spans if span.start <= marker_at < span.end)
-        assert isinstance(style, Style)
-        self.assertEqual(style.bgcolor, THEME.styles["bar.green"].color)
-        # ...and it is legible against that background. Marker red on a fill is
-        # 1.00-2.15 contrast depending on the tier — invisible on a red bar —
-        # which is why the stroke goes dark once it crosses the fill.
-        self.assertEqual(style.color, THEME.styles["bar.marker.on_fill"].color)
+        for percent, expected_remaining, where in (
+            (100.0, 84.0, "over fill"),
+            (20.0, 84.0, "over the empty track"),
+        ):
+            with self.subTest(where=where):
+                console = Console(
+                    file=StringIO(),
+                    theme=THEME,
+                    force_terminal=True,
+                    width=20,
+                    _environ={"TERM": "xterm-256color"},
+                )
+                rendered = next(
+                    PercentageBar(
+                        percent, "bar.green", expected_remaining=expected_remaining
+                    ).__rich_console__(console, console.options)
+                )
+                assert isinstance(rendered, Text)
+                self.assertEqual(_markers(rendered.plain), 1)
+                marker_at = next(i for i, ch in enumerate(rendered.plain) if ch in _MARKER_GLYPHS)
+                style = next(
+                    span.style for span in rendered.spans if span.start <= marker_at < span.end
+                )
+                self.assertEqual(style, "bar.marker")
+
+    def test_marker_colour_is_not_any_fill_colour(self) -> None:
+        """It went neutral because red-on-red was the same colour twice.
+
+        The marker used `bar.red`, so on a red bar -- the row where knowing your
+        pace matters most -- the stroke was a 1.00 contrast ratio against the
+        fill it was drawn on, i.e. not there at all.
+        """
+        marker = THEME.styles["bar.marker"].color
+        for tier in ("bar.green", "bar.yellow", "bar.orange", "bar.red"):
+            with self.subTest(tier=tier):
+                self.assertNotEqual(marker, THEME.styles[tier].color)
 
     def test_expected_remaining_preserves_fill_and_marker_styles(self) -> None:
         for expected_remaining in (60.0, 84.0):
@@ -365,15 +379,7 @@ class PercentageBarTests(unittest.TestCase):
             self.assertIsInstance(rendered, Text)
             assert isinstance(rendered, Text)
             self.assertTrue(any(span.style == "bar.green" for span in rendered.spans))
-            # Over the empty part of the bar the marker keeps its own red; over
-            # the fill it becomes a Style carrying the fill as a background.
-            self.assertTrue(
-                any(
-                    span.style == "bar.marker"
-                    or (isinstance(span.style, Style) and span.style.bgcolor is not None)
-                    for span in rendered.spans
-                )
-            )
+            self.assertTrue(any(span.style == "bar.marker" for span in rendered.spans))
 
     def test_missing_expected_remaining_keeps_existing_bar_output(self) -> None:
         original = _capture(PercentageBar(72.0, "bar.green"), width=80)
