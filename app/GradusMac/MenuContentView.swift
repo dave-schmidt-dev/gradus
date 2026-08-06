@@ -163,6 +163,64 @@ enum ProviderTriage {
         provider.windows.min { $0.percentLeft < $1.percentLeft }
     }
 
+    /// The window the row should actually *show*.
+    ///
+    /// `needsAttention` answers "is something wrong here"; this answers "then
+    /// what do we put on screen", and the two have to agree or the row
+    /// contradicts itself. They didn't. The 2026-08-06 fix moved attention onto
+    /// any-window but left display on worst-by-percentage, so a provider whose
+    /// 5%-left window was on pace and whose 80%-left window was burning drew a
+    /// *green* bar tinted from the fine window with a warning line underneath
+    /// it. Half an aggregation fix reads worse than none: the alert was right
+    /// and everything explaining it pointed at the wrong window.
+    ///
+    /// Rule: among the windows that warn, show the most severe, breaking ties
+    /// by depletion. Ties matter — two red windows are common, one red by pace
+    /// and one by depletion — and the tie-break keeps the older
+    /// worst-by-percentage answer for them, so this changes what the row shows
+    /// only when the severity ordering actually disagrees with the percentage
+    /// ordering.
+    ///
+    /// Falls back to `worstWindow` when nothing warns: there is no triggering
+    /// window to show, so the calm row keeps rendering exactly as it did.
+    static func displayWindow(_ provider: ProviderEntry) -> ProviderWindow? {
+        let warning = provider.windows.filter(windowWarns)
+        guard !warning.isEmpty else { return worstWindow(provider) }
+        // Split across three statements with the tuple type spelled out. As a
+        // single `map { … }.min { … }?.window` chain this failed to compile
+        // with "unable to type-check this expression in reasonable time" —
+        // inference across an unannotated tuple array plus a ternary inside the
+        // comparator is enough to blow the solver's budget. Keep it expanded.
+        let ranked: [(window: ProviderWindow, rank: Int)] = warning.map {
+            (window: $0, rank: attentionRank(signalLevel(for: $0)))
+        }
+        let mostUrgent = ranked.min { lhs, rhs in
+            if lhs.rank != rhs.rank { return lhs.rank > rhs.rank }
+            return lhs.window.percentLeft < rhs.window.percentLeft
+        }
+        return mostUrgent?.window
+    }
+
+    /// How loudly a level asks to be looked at, for ordering only.
+    ///
+    /// `SignalLevel` is deliberately not `Comparable`: conforming it in
+    /// GradusKit would force a public answer for where `.unknown` sorts, which
+    /// no other caller needs and which has no obviously right value. Ranking
+    /// locally keeps that decision in the one place that asks the question.
+    ///
+    /// Levels outside the attention steps share rank 0 rather than being
+    /// excluded, because the filter above uses `windowWarns` — the shared
+    /// predicate — not this function. If GradusKit ever promotes another level
+    /// to `needsAttention`, it starts appearing here ordered by percentage
+    /// instead of silently vanishing from the row.
+    private static func attentionRank(_ level: SignalLevel) -> Int {
+        switch level {
+        case .red: return 2
+        case .orange: return 1
+        case .green, .yellow, .unknown: return 0
+        }
+    }
+
     /// Attention means the shared ramp classified *any* window orange or red.
     /// Deliberately delegates to `signalLevel` rather than testing a
     /// percentage: the ramp classifies by *pace*, so a window at 1% five
@@ -292,7 +350,10 @@ private struct ProviderRow: View {
     let provider: ProviderEntry
     let now: Date
 
-    private var worstWindow: ProviderWindow? { ProviderTriage.worstWindow(provider) }
+    /// One window feeds the tint, the bar, the marker and the metadata line, so
+    /// the row can only ever describe a single window — which is why *which*
+    /// one it picks is the whole of row 36.
+    private var displayWindow: ProviderWindow? { ProviderTriage.displayWindow(provider) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -302,7 +363,7 @@ private struct ProviderRow: View {
                     .font(.caption2)
                     .foregroundStyle(SignalColor.forLevel(.red))
                     .lineLimit(2)
-            } else if let window = worstWindow {
+            } else if let window = displayWindow {
                 let tint = SignalColor.forWindow(window)
                 header(value: percentDisplay(window.percentLeft), tint: tint)
                 ProgressBar(

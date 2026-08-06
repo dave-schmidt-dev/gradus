@@ -120,6 +120,96 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
     assertSnapshot(of: image, as: .image)
 }
 
+/// The ramp itself, one provider per step, which nothing else covered.
+///
+/// `providerListViewRendersFromFixtureData` was the only Mac image snapshot
+/// with a colored bar in it, and its four providers land on yellow, red, red
+/// and a probe error — so green and orange had no pixel coverage at all. When
+/// the Mac adopted the four-tier ramp on 2026-08-05, exactly one baseline
+/// moved. Half the ramp could have been given the wrong hex and the gate would
+/// have stayed green.
+///
+/// Every provider here carries exactly one window, deliberately. With one
+/// window "any window warns" and "the worst window warns" are the same
+/// question, so this baseline moves only when a *color* changes;
+/// `providerListViewShowsTheTriggeringWindowNotTheWorstByPercentage` owns
+/// window selection and moves only when the *choice* changes. Keeping the two
+/// properties in separate fixtures is what lets a diff here mean one thing.
+///
+/// `Slow Burn` reaches red without a pace, through the percent-only 70/40/20
+/// fallback a window without a reset timestamp still uses. Since 2026-08-06
+/// that path also warns, so it is the one row whose metadata line shows a
+/// reset with no pace label beside it.
+@MainActor
+@Test func providerListViewRendersEveryRampLevel() {
+    let viewModel = PublisherViewModel()
+    viewModel.apply(
+        SnapshotPayload(
+            schemaVersion: 2,
+            updatedAt: "2026-08-02T18:00:00Z",
+            providers: [
+                // green: ahead of the clock. 85% left, 75% of the window to run.
+                rampProvider("Healthy", percentLeft: 85, paceDelta: 0.10),
+                // yellow: drifting, below the alert bound.
+                rampProvider("Drifting", percentLeft: 55, paceDelta: -0.06),
+                // orange: first step that warns, so metadata appears from here down.
+                rampProvider("Behind", percentLeft: 35, paceDelta: -0.18),
+                // red: past the -0.25 floor.
+                rampProvider("Burning", percentLeft: 20, paceDelta: -0.35),
+                // red with no pace at all -- percent-only fallback, 19 < 20.
+                rampProvider("Slow Burn", percentLeft: 19, paceDelta: nil),
+            ]
+        )
+    )
+
+    let providers = viewModel.providers
+    // Assert the levels rather than trusting the fixture to still land on them:
+    // a baseline records whatever it is handed, so if a pace bound moved, these
+    // five could collapse onto three steps and the re-recorded image would look
+    // perfectly plausible.
+    let levelsByName = Dictionary(
+        uniqueKeysWithValues: providers.compactMap { entry -> (String, SignalLevel)? in
+            guard let window = entry.windows.first else { return nil }
+            return (entry.name, signalLevel(for: window))
+        })
+    #expect(levelsByName["Healthy"] == .green)
+    #expect(levelsByName["Drifting"] == .yellow)
+    #expect(levelsByName["Behind"] == .orange)
+    #expect(levelsByName["Burning"] == .red)
+    #expect(levelsByName["Slow Burn"] == .red)
+    #expect(Set(levelsByName.values) == Set([.green, .yellow, .orange, .red]))
+
+    let image = snapshotImage(
+        ProviderListView(providers: providers, now: fixedNow),
+        size: CGSize(width: 256, height: 300)
+    )
+    assertSnapshot(of: image, as: .image)
+}
+
+/// Single-window provider for the ramp baseline. `resetISO` is always present
+/// so the warning rows render a complete metadata line and the image is about
+/// color rather than about which labels happen to be missing.
+private func rampProvider(
+    _ name: String, percentLeft: Double, paceDelta: Double?
+) -> ProviderEntry {
+    ProviderEntry(
+        name: name,
+        ok: true,
+        error: nil,
+        windows: [
+            ProviderWindow(
+                id: "5h",
+                percentLeft: percentLeft,
+                resetISO: "2026-08-02T23:30:00Z",
+                windowHours: 5,
+                paceDelta: paceDelta
+            )
+        ],
+        data: [:],
+        observedAt: "2026-08-02T17:55:00Z"
+    )
+}
+
 /// Pixel coverage for the 2026-08-06 attention rule, which nothing else has.
 ///
 /// `ProviderTriage.needsAttention` gates the metadata line under each bar
@@ -133,8 +223,21 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
 ///
 /// `Claude` is the control. It is the same shape with both windows healthy, so
 /// a rule that simply flagged everything would not pass either.
+///
+/// Since 2026-08-06 this fixture pins the *second* half of the same defect.
+/// Making attention any-window while the row still drew its worst-by-percentage
+/// window left the two disagreeing on screen, and the superseded baseline is
+/// worth describing because it was worse than "points at the wrong window":
+/// Codex rendered `5.0%` in green, a near-empty green bar, and the metadata
+/// line the new attention rule had just unlocked read "2% ahead". The alert
+/// fired and every pixel explaining it reassured the user. A row that says
+/// nothing beats a row that says the opposite.
+///
+/// `displayWindow` now picks the window that triggered the alert, so the bar
+/// reads 70%, the tint is the ramp's red, and the metadata describes `weekly`
+/// running behind. Tint, bar and text finally refer to one window.
 @MainActor
-@Test func providerListViewFlagsAProviderWhoseWorstWindowIsNotItsProblem() {
+@Test func providerListViewShowsTheTriggeringWindowNotTheWorstByPercentage() {
     let viewModel = PublisherViewModel()
     viewModel.apply(
         SnapshotPayload(
@@ -202,9 +305,17 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
     // Assert the discrimination directly as well as in pixels: a snapshot
     // records whatever it is given, so if the fixture stopped being the
     // inverting case the baseline would simply be re-recorded and look fine.
+    // `worstWindow` is still asserted, and is the assertion that keeps this
+    // fixture honest: it is what proves the two orderings still disagree here.
+    // If a future edit made `5h` the warning window too, `displayWindow` below
+    // would keep passing while the case quietly stopped inverting.
     #expect(ProviderTriage.worstWindow(codex)?.id == "5h")
+    #expect(ProviderTriage.displayWindow(codex)?.id == "weekly")
     #expect(ProviderTriage.needsAttention(codex))
     #expect(!ProviderTriage.needsAttention(claude))
+    // The control keeps its old row: nothing warns, so display falls back to
+    // worst-by-percentage and Claude renders exactly as it did before.
+    #expect(ProviderTriage.displayWindow(claude)?.id == "5h")
 
     let image = snapshotImage(
         ProviderListView(providers: providers, now: fixedNow),
