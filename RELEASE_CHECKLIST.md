@@ -21,22 +21,38 @@ Before the TestFlight upload:
    exercised, launch that binary locally, and confirm it publishes the new
    contract/data. A local republish does not require notarization.
 
-   GradusMac emits no log of its own, so read `cloudd`'s:
+   Read both logs. `cloudd` reports what CloudKit did; GradusMac's own log
+   reports what the app intended, and is the only place a *failed* save
+   appears at all:
 
    ```
    /usr/bin/log show --predicate 'process == "cloudd"' --last 30m \
      --info --debug --style compact | grep -i gradus
+
+   /usr/bin/log show --predicate 'subsystem == "com.zerodelta.gradus"' \
+     --last 30m --info --debug --style compact
    ```
 
-   Expect `environment=Production`, `zoneName=GradusZone`, and one
-   `was successfully saved to the server` line per provider record. Three
-   details are not optional: `/usr/bin/log` (in zsh, bare `log` is a shell
-   builtin that fails with `too many arguments`), `--info --debug` (CloudKit
-   logs at `info`; the default level filters it out), and **not** redirecting
-   stderr to `/dev/null` — that combination silently produced "the app emits
-   nothing" twice, and the wrong conclusion reached the docs both times.
-   This proves successful publishes only; a failed one is still invisible
-   until the app does its own logging.
+   From `cloudd`, expect `environment=Production`, `zoneName=GradusZone`, and
+   one `was successfully saved to the server` line per provider record. From
+   the app, expect a `publishing N of M provider(s)` line followed by
+   `published N record(s) successfully` — and if anything failed, a
+   `save failed for <provider>: CKError.<code>` line per record plus a
+   `publish incomplete` summary. A publish that fails now says so; before
+   2026-08-06 the app returned a bare failure count and `cloudd` showed only
+   the records that worked.
+
+   Three details are not optional: `/usr/bin/log` (in zsh, bare `log` is a
+   shell builtin that fails with `too many arguments`), `--info --debug`
+   (CloudKit logs at `info`; the default level filters it out), and **not**
+   redirecting stderr to `/dev/null` — that combination silently produced "the
+   app emits nothing" twice, and the wrong conclusion reached the docs both
+   times.
+
+   Warnings and errors are additionally mirrored to
+   `~/Library/Logs/Gradus/GradusMac.log`, which outlives the unified log's
+   retention. Read it when the release is being reviewed later than the
+   `--last` window reaches.
 4. Upload the iOS artifact only after the Mac publish evidence is present.
 5. If the Mac artifact itself is being distributed, run the notarization gate
    too; local publisher verification alone is not a distribution artifact.

@@ -65,7 +65,14 @@ public actor PublishCoordinator: CloudPublisher {
         }
         newlyWarningProviders = newlyWarning
 
-        guard !toSave.isEmpty else { return }
+        guard !toSave.isEmpty else {
+            GradusLog.publish.info(
+                "no changes to publish: all \(statuses.count) provider(s) matched their last saved content hash")
+            return
+        }
+        GradusLog.publish.info(
+            "publishing \(toSave.count) of \(statuses.count) provider(s); "
+                + "\(statuses.count - toSave.count) suppressed by content hash")
 
         let records = try toSave.map { try $0.status.toCKRecord(zoneID: zoneID) }
         var outcome = await database.modifyRecords(toSave: records, savePolicy: .changedKeys)
@@ -77,6 +84,15 @@ public actor PublishCoordinator: CloudPublisher {
             let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
             guard case .success = outcome.results[recordID] else {
                 failedRecordCount += 1
+                // The only point where a per-record cause is still known.
+                // Everything above has finished retrying it and everything
+                // below collapses it into a bare count, so a line not written
+                // here is gone for good: the caller receives
+                // `recordFailures(n)` and `cloudd` logs only the saves that
+                // succeeded. This is the gap RELEASE_CHECKLIST step 3 calls
+                // out — "a failed one is still invisible".
+                GradusLog.publish.warning(
+                    "save failed for \(status.providerName): \(Self.describe(outcome.results[recordID]))")
                 continue  // Well-defined state: leave prior lastSavedContentHash/publishedAt untouched.
             }
             var updated = state[status.providerName] ?? ProviderPublishState()
@@ -87,8 +103,25 @@ public actor PublishCoordinator: CloudPublisher {
         if failedRecordCount > 0 {
             // Successful records retain their committed state, while the
             // caller receives a sanitized aggregate signal suitable for UI.
+            GradusLog.publish.error(
+                "publish incomplete: \(failedRecordCount) of \(toSave.count) record(s) failed to save")
             throw PublishCoordinatorError.recordFailures(failedRecordCount)
         }
+        GradusLog.publish.notice("published \(toSave.count) record(s) successfully")
+    }
+
+    /// Describes a save result for the log by error *code*, not by dumping the
+    /// error whole. A `CKError`'s `userInfo` can carry the offending record and
+    /// its fields, and these records hold the user's provider usage data —
+    /// there is no reason for any of it to reach a log file to explain why a
+    /// save failed.
+    private static func describe(_ result: Result<CKRecord, Error>?) -> String {
+        guard let result else { return "no result returned for this record" }
+        guard case .failure(let error) = result else { return "success" }
+        guard let ckError = error as? CKError else {
+            return "\(type(of: error)) (code \((error as NSError).code))"
+        }
+        return "CKError.\(ckError.code) (\(ckError.code.rawValue))"
     }
 
     /// `.serverRecordChanged` means our change tag was stale. Fetch the

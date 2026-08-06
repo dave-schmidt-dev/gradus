@@ -85,6 +85,8 @@ Error strings published to the devices are classified by exception **type**, not
 
 Runtime logs go to `.logs/gradus.log` (gitignored, rotating at 1 MB with two backups), anchored to the package directory rather than the working directory — `local.gradus-snapshot` runs from launchd with a cwd gradus does not control. WARNING and above are always recorded; `--debug` adds DEBUG. Set `GRADUS_LOG_PATH` to redirect; the test suite sets it (see `tests/conftest.py`) so pytest's own warnings cannot rotate real production evidence out of the log.
 
+**GradusMac logs elsewhere, on purpose.** The Mac app writes to the unified log under subsystem `com.zerodelta.gradus` and mirrors WARNING and above to `~/Library/Logs/Gradus/GradusMac.log` (rotating at 512 KB, two backups); `defaults write com.zerodelta.gradus GradusDebugLogging -bool YES`, or the `GRADUS_DEBUG_LOGGING` environment variable, lowers that floor to DEBUG. It does **not** use the repo's `.logs/`, which is the convention everywhere else in this project. The app ships from `/Applications` while the repo sits under `~/Documents`, so a repo-relative log would make a released build request a Documents TCC grant on first launch — the same consent prompt that has stalled the Mac test gate — in order to write into one developer's working copy. `~/Library/Logs/` is the platform's answer for a non-sandboxed app and needs no grant. Decided 2026-08-06; please don't "restore" the convention here.
+
 Optional config file (`.gradus.json` in your current working directory; legacy `.ai_monitor.json` also read as a fallback):
 
 ```json

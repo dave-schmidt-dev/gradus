@@ -66,10 +66,23 @@ public actor SnapshotWatcher {
     }
 
     private func readAndEmit() {
-        guard let data = try? Data(contentsOf: path) else { return }
+        guard let data = try? Data(contentsOf: path) else {
+            GradusLog.snapshot.warning(
+                "could not read snapshot at \(path.path); watcher will retry on the next write event")
+            return
+        }
         guard let payload = try? JSONDecoder().decode(SnapshotPayload.self, from: data) else {
             // Malformed/partial read (rare race with the writer's fsync) —
             // the next write event will retry. Never crash on bad JSON.
+            //
+            // Logged at warning rather than notice despite being expected
+            // occasionally, because one line is harmless and the failure worth
+            // catching is the *persistent* case: a producer emitting a payload
+            // this app can no longer decode looks exactly like a producer that
+            // has stopped running, and neither shows up anywhere else.
+            GradusLog.snapshot.warning(
+                "snapshot at \(path.path) did not decode as SnapshotPayload (\(data.count) bytes); "
+                    + "expected occasionally as a write race, persistent means a contract mismatch")
             return
         }
         onUpdate(payload)

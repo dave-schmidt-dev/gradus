@@ -131,6 +131,7 @@ public final class PublisherViewModel: ObservableObject {
 
     public func cloudSyncDidFail(operationID: UInt64) {
         guard syncEnabled, operationID == syncOperationID else { return }
+        GradusLog.publish.warning("cloud sync failed (operation \(operationID))")
         syncState = .failed
     }
 
@@ -140,7 +141,11 @@ public final class PublisherViewModel: ObservableObject {
             launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
         } catch {
             // Reflect whatever SMAppService actually did rather than assume
-            // the requested state took effect.
+            // the requested state took effect. The UI silently snapping back
+            // to the old value is the only signal a user ever got; the reason
+            // was discarded here.
+            GradusLog.app.warning(
+                "could not set launch-at-login to \(enabled): \(error.localizedDescription)")
             launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
         }
     }
