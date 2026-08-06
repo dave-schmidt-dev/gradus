@@ -110,6 +110,15 @@ card widths. Depleted rows use a separate `0% until <reset_time>` layout with no
 generic status cards and error/auth cards likewise remain readable as key/value or
 message layouts rather than being forced through usage-bar columns.
 
+Percentages **truncate, never round**, and every surface — TUI, Mac, iOS, iPad —
+uses the same rule. Truncation is the correct direction for a remaining budget:
+rounding up would claim headroom that does not exist, so `47.8` reads as `47%`
+rather than `48%`. Below 10% the value keeps one decimal, which is correctness
+rather than decoration — a window is only "exhausted" at or under 0.5%, so
+whole-number truncation would print a live window at 0.7% as `0%`. The rule is
+implemented twice (`_percent_str` in Python, `GradusKit.percentText` in Swift)
+and pinned by a truth table both test suites read; see TESTING.md.
+
 At safe widths, dashboard cards are packed into two independently measured vertical
 stacks with a one-cell horizontal gutter and no empty vertical-row gutter. The
 two-column layout holds down to 79 columns — the width at which two bar-less cards

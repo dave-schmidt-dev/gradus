@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
-from gradus.snapshot import SAFE_DATA_KEYS, window_warns
+from gradus.snapshot import SAFE_DATA_KEYS, percent_is_depleted, window_warns
 from gradus.ui import (
     _FILL_GLYPH,
     THEME,
@@ -563,22 +563,112 @@ class PercentStrTests(unittest.TestCase):
     def test_values_ten_and_above_show_integer(self) -> None:
         self.assertEqual(_percent_str(10.0), "10")
         self.assertEqual(_percent_str(10.4), "10")
-        self.assertEqual(_percent_str(99.9), "100")
         self.assertEqual(_percent_str(100.0), "100")
 
-    def test_nine_nine_nine_rounds_to_ten_point_zero(self) -> None:
-        # Just below the threshold rounds to 10.0 (one decimal) rather than 10.
-        self.assertEqual(_percent_str(9.99), "10.0")
+    def test_display_truncates_rather_than_rounding_up(self) -> None:
+        """Remaining budget is never overstated.
+
+        This is the rule the surfaces disagreed on until 2026-08-06: `47.8`
+        showed 48% here and 47% on the phone. Truncation won because rounding
+        up claims headroom that does not exist, and because it is what four of
+        the five surfaces already did.
+        """
+        self.assertEqual(_percent_str(47.8), "47")
+        self.assertEqual(_percent_str(99.9), "99")
+        # Below ten the same rule applies one decimal down, so a value just
+        # under the threshold stays in its band instead of rounding across it.
+        self.assertEqual(_percent_str(9.99), "9.9")
         self.assertEqual(_percent_str(9.94), "9.9")
+
+    def test_live_windows_below_one_percent_never_display_as_zero(self) -> None:
+        """The defect that settled the sub-ten decimal rule.
+
+        `percent_is_depleted` treats <= 0.5 as exhausted, so 0.6 through 0.9
+        are live windows. Whole-number truncation renders every one of them as
+        "0", which reads as exhausted -- and until 2026-08-06 spoke that way to
+        VoiceOver on iOS, whose label was `Int(window.percentLeft)` as well.
+        """
+        # Expected strings are spelled out, not rebuilt from the input with the
+        # same format spec: an expectation derived from its own input cannot
+        # catch a formatting change.
+        for percent, text in ((0.6, "0.6"), (0.7, "0.7"), (0.8, "0.8"), (0.9, "0.9")):
+            with self.subTest(percent=percent):
+                self.assertFalse(percent_is_depleted(percent))
+                self.assertEqual(_percent_str(percent), text)
+                self.assertNotEqual(_percent_str(percent), "0")
+
+    def test_computed_percentages_do_not_lose_a_digit(self) -> None:
+        """`100.0 - used` lands a true 9.1 at 9.099999999999994.
+
+        Without the epsilon in `_truncated` the floor drops it to 9.0. Measured
+        over the realistic producer range: 40 affected values below ten, 123
+        overall.
+        """
+        self.assertEqual(_percent_str(100.0 - 90.9), "9.1")
+        self.assertEqual(_percent_str(0.29 * 100), "29")
+
+    def test_displayed_percentage_never_exceeds_the_actual_one(self) -> None:
+        """The property truncation exists to guarantee, swept rather than spot-checked."""
+        for thousandths in range(0, 100_001):
+            percent = thousandths / 1000
+            shown = float(_percent_str(percent))
+            if shown > percent + 1e-9:
+                self.fail(f"{percent} displayed as {shown}, claiming headroom that does not exist")
 
     def test_format_percent_value_none(self) -> None:
         self.assertEqual(_format_percent_value(None), "n/a")
 
+    def test_format_percent_value_non_finite(self) -> None:
+        self.assertEqual(_format_percent_value(math.nan), "n/a")
+        self.assertEqual(_format_percent_value(math.inf), "n/a")
+
     def test_format_percent_value_edge_values(self) -> None:
         self.assertEqual(_format_percent_value(0.0), "0.0%")
-        self.assertEqual(_format_percent_value(9.99), "10.0%")
+        self.assertEqual(_format_percent_value(9.99), "9.9%")
         self.assertEqual(_format_percent_value(10.0), "10%")
         self.assertEqual(_format_percent_value(100.0), "100%")
+
+
+class PercentFormatTruthTableTests(unittest.TestCase):
+    """The Python half of the shared percent-format contract.
+
+    `GradusKitTests/PercentFormatTests.swift` asserts the same rows against
+    `GradusKit.percentText`, so a one-sided formatting edit fails on both
+    sides. Same placement constraint as the signal-level table: it lives in the
+    SwiftPM test target because SwiftPM resources cannot reference files
+    outside the target directory.
+    """
+
+    FORMAT_TABLE = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "app/GradusKit/Tests/GradusKitTests/Fixtures/percent-format.json"
+    )
+
+    def _cases(self) -> list[dict[str, object]]:
+        self.assertTrue(
+            self.FORMAT_TABLE.is_file(),
+            f"shared percent-format table missing at {self.FORMAT_TABLE}",
+        )
+        cases = json.loads(self.FORMAT_TABLE.read_text())["cases"]
+        self.assertGreaterEqual(
+            len(cases), 16, "format table shrank — boundary coverage was removed"
+        )
+        return cases
+
+    def test_matches_shared_truth_table(self) -> None:
+        for case in self._cases():
+            percent = case["percent_left"]
+            with self.subTest(percent=percent, why=case["why"]):
+                actual = "n/a" if percent is None else _percent_str(float(percent))
+                self.assertEqual(actual, case["text"])
+
+    def test_table_pins_the_depleted_boundary(self) -> None:
+        """Without the 0.5/0.6 pair the table cannot catch a return to `Int()`."""
+        covered = {
+            case["percent_left"] for case in self._cases() if case["percent_left"] is not None
+        }
+        self.assertIn(0.5, covered, "the depleted ceiling itself is untested")
+        self.assertIn(0.6, covered, "the first live value above the ceiling is untested")
 
 
 class ProviderPanelTests(unittest.TestCase):
@@ -621,7 +711,8 @@ class ProviderPanelTests(unittest.TestCase):
         output = _capture(build_provider_panel(snap, self.now), width=44)
         self.assertIn("Copilot", output)
         self.assertIn("mo", output)
-        self.assertIn("98%", output)
+        # Truncated, not rounded -- the raw value is 97.x.
+        self.assertIn("97%", output)
 
     def test_panel_shows_decimal_for_fractional_percent_below_ten(self) -> None:
         snap = ProviderSnapshot(
@@ -846,10 +937,11 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("cg1w", output)
         self.assertEqual(output.count("100%"), 2)
 
-    def test_antigravity_cg_fractional_value_rounds_to_hundred_for_display(self) -> None:
+    def test_antigravity_cg_fractional_value_truncates_rather_than_reaching_hundred(self) -> None:
         # A near-full pool (99.9% raw) is a genuinely different value from an
-        # exactly-100% one, but both render the same way now that neither is
-        # hidden -- 99.9 just displays rounded to "100%".
+        # exactly-100% one, and since 2026-08-06 it displays as one: truncation
+        # keeps it at "99%" rather than rounding up to a "100%" that would
+        # claim the pool is untouched. Only an exact 100.0 reads as full.
         snap = ProviderSnapshot(
             name="Antigravity",
             ok=True,
@@ -863,7 +955,7 @@ class ProviderPanelTests(unittest.TestCase):
         output = _capture(build_provider_panel(snap, self.now), width=44)
         cg5_lines = [line for line in output.splitlines() if "cg5" in line and "cg1w" not in line]
         self.assertTrue(cg5_lines, "expected a cg5 row in the output")
-        self.assertIn("100%", cg5_lines[0])
+        self.assertIn("99%", cg5_lines[0])
 
     def test_antigravity_omits_missing_or_malformed_cg_windows_independently(self) -> None:
         for invalid_value in (None, "unknown"):
@@ -1024,7 +1116,8 @@ class ProviderPanelTests(unittest.TestCase):
         output = _capture(build_provider_panel(snap, self.now), width=44)
         self.assertIn("Vibe", output)
         self.assertIn("mo", output)
-        self.assertIn("99%", output)
+        # 1.17% used leaves 98.83, which truncates to 98 rather than rounding to 99.
+        self.assertIn("98%", output)
 
     def test_empty_view_codex_weekly_zero(self) -> None:
         snap = ProviderSnapshot(
@@ -2176,7 +2269,8 @@ class CompactModeTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         text = result[0][0]
         self.assertIn("mo:", text)
-        self.assertIn("99%", text)
+        # 1.17% used leaves 98.83, which truncates to 98 rather than rounding to 99.
+        self.assertIn("98%", text)
         self.assertTrue(any(c in text for c in "↑↓=—"))
 
     def test_compact_window_parts_vibe_non_numeric_usage_returns_empty(self) -> None:

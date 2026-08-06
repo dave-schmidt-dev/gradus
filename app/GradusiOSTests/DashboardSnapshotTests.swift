@@ -93,6 +93,56 @@ private func exhaustedProvider(named name: String) -> ProviderStatus {
     )
 }
 
+/// Fixtures whose *displayed number* differs under truncation and rounding, so
+/// a dashboard rendered with the old `Int(window.percentLeft)` cannot match
+/// this file's baseline.
+///
+/// Every other percentage in the image suite is a whole number. Those below
+/// ten (0, 1, 3, 4, 5) do move -- they gain a decimal -- so a wholesale revert
+/// to `Int()` would be caught without this fixture. What no whole number can
+/// catch is the defect TASKS row 29 actually described: truncation versus
+/// rounding at or above ten, where `Int(47)` and `round(47)` agree and only a
+/// fractional value disagrees. `47.8` is that value.
+/// Each reset time is derived from its pace rather than picked, on the same
+/// `paceDelta == fractionLeft - fractionOfWindowRemaining` identity
+/// `paceDivergentProviders` uses -- a fixture whose pace contradicts its own
+/// clock would be unreachable in production and a bad thing to pin pixels to.
+private func truncationDivergentProviders() -> [ProviderStatus] {
+    func provider(_ name: String, percentLeft: Double, paceDelta: Double, resetISO: String)
+        -> ProviderStatus
+    {
+        ProviderStatus(
+            providerName: name,
+            providerDisplayName: name.capitalized,
+            ok: true,
+            errorMessage: nil,
+            windows: [
+                ProviderWindow(
+                    id: "weekly", percentLeft: percentLeft, resetISO: resetISO,
+                    windowHours: 168, paceDelta: paceDelta)
+            ],
+            data: [:],
+            observedAt: ISO8601DateFormatter().string(from: fixedNow),
+            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+            publishedAt: fixedNow
+        )
+    }
+    return [
+        // Rounds to 48, truncates to 47 -- the value David saw disagree
+        // between the TUI and the phone.
+        provider(
+            "codex", percentLeft: 47.8, paceDelta: -0.05, resetISO: "2026-07-29T06:02:14-04:00"),
+        // Rounds up across the decimal band to "10.0", truncates to "9.9".
+        provider(
+            "cursor", percentLeft: 9.97, paceDelta: -0.12, resetISO: "2026-07-27T02:14:34-04:00"),
+        // The one that matters most: above the 0.5 depleted ceiling, so this
+        // is a LIVE window, but `Int(0.7)` is 0 -- it rendered, and spoke to
+        // VoiceOver, as fully exhausted.
+        provider(
+            "copilot", percentLeft: 0.7, paceDelta: -0.30, resetISO: "2026-07-27T16:54:33-04:00"),
+    ]
+}
+
 /// Fixtures whose signal level is the *opposite* of what the pre-pace,
 /// percent-only ramp produced, so a dashboard rendered with the old ramp
 /// cannot match this file's baseline.
@@ -206,6 +256,35 @@ func testDashboardColorsByPaceNotByPercentageRemaining() {
         of: view,
         as: .image(layout: .fixed(width: 393, height: 400), traits: UITraitCollection(userInterfaceStyle: .light)),
         testName: "dashboardColorsByPaceNotByPercentageRemaining")
+}
+
+/// The pixel half of the shared percent-format contract.
+///
+/// `GradusKitTests/PercentFormatTests` and `tests/test_ui.py` both assert the
+/// formatter directly; this asserts that the dashboard actually *uses* it. The
+/// distinction is not academic -- the pace ramp shipped with a green suite and
+/// no pixel coverage because every fixture happened to agree under both rules
+/// (see `paceDivergentProviders`), and every percentage in this file was a
+/// whole number until these three were added.
+@MainActor
+func testDashboardTruncatesPercentagesRatherThanRounding() {
+    // Assert the formatter's disagreement with the old rule before trusting
+    // the pixels: if these ever stop diverging, the baseline below silently
+    // stops proving anything.
+    XCTAssertEqual(percentText(47.8), "47")
+    XCTAssertNotEqual(percentText(47.8), "48")
+    XCTAssertEqual(percentText(9.97), "9.9")
+    // The live-window case. 0.7 is above the depleted ceiling, so this row is
+    // not in the exhausted section -- yet `Int(0.7)` would print it as "0%".
+    XCTAssertFalse(percentIsDepleted(0.7))
+    XCTAssertEqual(percentText(0.7), "0.7")
+
+    let viewModel = makeViewModel(providers: truncationDivergentProviders())
+    let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
+    assertSnapshot(
+        of: view,
+        as: .image(layout: .fixed(width: 393, height: 520), traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "dashboardTruncatesPercentagesRatherThanRounding")
 }
 
 @MainActor

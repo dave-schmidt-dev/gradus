@@ -111,7 +111,11 @@ final class DensityLayoutXCUITests: XCTestCase {
 
         XCTAssertTrue(rowExists(labeled: "5 Hour, 100 percent"), "5 Hour row missing")
         XCTAssertTrue(rowExists(labeled: "Weekly, 61 percent"), "Weekly row missing")
-        XCTAssertTrue(rowExists(labeled: "Monthly, 7 percent"), "Monthly row missing")
+        // "7.0", not "7": below ten the spoken label carries a decimal, because
+        // whole-number truncation would speak a live sub-1% window as "0
+        // percent remaining" (2026-08-06). Values at or above ten are unchanged,
+        // which is why only this row gained a decimal.
+        XCTAssertTrue(rowExists(labeled: "Monthly, 7.0 percent"), "Monthly row missing")
 
         // `descendants(matching: .any)` is a broad query, and the three
         // assertions above would pass just as happily against a predicate that

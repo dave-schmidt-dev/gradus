@@ -420,15 +420,51 @@ def _expected_billing_remaining(
         return None
 
 
+# Largest percentage still drawn with a decimal place. Not cosmetic:
+# `percent_is_depleted` treats <= 0.5 as exhausted, so a window at 0.6 is live
+# -- and truncating it to a whole number gives "0", which reads as exhausted.
+# A decimal below 10 is what keeps a live window from displaying as an empty
+# one. Mirrored by `GradusKit.percentDecimalCeiling`.
+_PERCENT_DECIMAL_CEILING = 10.0
+
+# Absorbs the float error in `100.0 - used`, which lands a true 9.1 at
+# 9.099999999999994 and would floor it to 9.0. Measured over the realistic
+# producer range: 40 affected values below 10, 123 overall.
+_TRUNCATION_EPSILON = 1e-9
+
+_PERCENT_MISSING_TEXT = "n/a"
+
+
+def _truncated(value: float, places: int) -> float:
+    """Truncate toward zero at ``places`` decimals, float error absorbed."""
+    scale = 10.0**places
+    return math.floor(value * scale + _TRUNCATION_EPSILON) / scale
+
+
 def _percent_str(percent: float) -> str:
-    if percent < 10:
-        return f"{percent:.1f}"
-    return f"{round(percent)}"
+    """The displayed number for a remaining percentage, without a ``%``.
+
+    Truncates rather than rounds: this is remaining budget, so rounding up
+    would claim more headroom than exists (47.8 -> "47", never "48").
+
+    Mirrored by `GradusKit.percentText`; the shared truth table at
+    `app/GradusKit/Tests/GradusKitTests/Fixtures/percent-format.json` is read
+    by both suites, so a one-sided change fails on both.
+    """
+    if not math.isfinite(percent):
+        return _PERCENT_MISSING_TEXT
+    if percent < _PERCENT_DECIMAL_CEILING:
+        return f"{_truncated(percent, 1):.1f}"
+    return f"{int(_truncated(percent, 0))}"
 
 
 def _format_percent_value(percent: float | None) -> str:
-    if percent is None:
-        return "n/a"
+    """A whole percentage label, ``%`` included, with no reading handled once.
+
+    Mirrored by `GradusKit.percentDisplay`.
+    """
+    if percent is None or not math.isfinite(percent):
+        return _PERCENT_MISSING_TEXT
     return f"{_percent_str(percent)}%"
 
 

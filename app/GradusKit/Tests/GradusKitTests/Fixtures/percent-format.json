@@ -1,0 +1,81 @@
+{
+  "_comment": [
+    "Canonical percent_left -> displayed number truth table.",
+    "",
+    "Read by BOTH halves of the codebase so the Swift and Python formatters",
+    "cannot drift silently:",
+    "  - app/GradusKit/Tests/GradusKitTests/PercentFormatTests.swift (Swift)",
+    "  - tests/test_ui.py::PercentFormatTruthTableTest               (Python)",
+    "",
+    "Same placement constraint as signal-levels.json: it lives inside the",
+    "SwiftPM test target because SwiftPM resources cannot reference files",
+    "outside the target directory. Python reads it by relative path.",
+    "",
+    "`text` is the number ALONE. The '%' suffix and the spoken 'percent",
+    "remaining' phrasing are the call site's business, the same way",
+    "SignalLevel vends `rgbHex` and lets each app apply its own Color(hex:).",
+    "",
+    "THE THREE RULES THIS TABLE PINS, and why each has a case that fails if",
+    "someone 'simplifies' it away:",
+    "",
+    "1. TRUNCATE, never round. percent_left is remaining budget, so rounding",
+    "   up tells you that you have more than you do. 47.8 -> 47, not 48.",
+    "",
+    "2. ONE DECIMAL BELOW 10. This is correctness, not decoration. The",
+    "   depleted ceiling is 0.5 (WarningPredicate.depletedPercentCeiling /",
+    "   snapshot.percent_is_depleted), so a window at 0.6-0.9 is LIVE -- but",
+    "   integer truncation renders it '0', which reads as exhausted. The",
+    "   0.5/0.6 pair below is what encodes that boundary. Before 2026-08-06",
+    "   every Swift call site was `Int(window.percentLeft)` and did exactly",
+    "   this: displayed a live window, and spoke it aloud to VoiceOver, as 0%.",
+    "",
+    "3. EPSILON-GUARDED FLOOR. percent_left is computed (`100.0 - used`), so",
+    "   a true 9.1 arrives as 9.099999999999994 and a naive floor drops it to",
+    "   9.0. Measured over the realistic producer range: 40 such values below",
+    "   10 and 123 overall. floor(p * m + 1e-9) / m fixes all of them. The two",
+    "   `_hazard` cases below are real bit patterns, not hand-written decimals;",
+    "   both languages parse them to the identical IEEE 754 double."
+  ],
+  "cases": [
+    { "percent_left": null, "text": "n/a", "why": "no reading at all" },
+    { "percent_left": 0.0, "text": "0.0", "why": "exactly empty" },
+    { "percent_left": 0.4, "text": "0.4", "why": "under the depleted ceiling" },
+    { "percent_left": 0.5, "text": "0.5", "why": "exactly the depleted ceiling" },
+    {
+      "percent_left": 0.6,
+      "text": "0.6",
+      "why": "LIVE window just over the ceiling -- integer truncation would say '0' and read as exhausted"
+    },
+    {
+      "percent_left": 0.9,
+      "text": "0.9",
+      "why": "still live, still truncates to '0' under the old Int() rule"
+    },
+    { "percent_left": 1.0, "text": "1.0", "why": "one whole point left" },
+    { "percent_left": 3.4, "text": "3.4", "why": "ordinary sub-10 value" },
+    {
+      "percent_left": 9.099999999999994,
+      "text": "9.1",
+      "why": "_hazard: true 9.1 as produced by 100.0 - 90.9; a naive floor yields 9.0"
+    },
+    { "percent_left": 9.9, "text": "9.9", "why": "top of the one-decimal band" },
+    {
+      "percent_left": 9.97,
+      "text": "9.9",
+      "why": "truncates DOWN to 9.9; rounding would cross the band into 10.0"
+    },
+    { "percent_left": 10.0, "text": "10", "why": "first whole-number value" },
+    {
+      "percent_left": 28.999999999999996,
+      "text": "29",
+      "why": "_hazard: true 29 as produced by 0.29 * 100; a naive floor yields 28"
+    },
+    {
+      "percent_left": 47.8,
+      "text": "47",
+      "why": "the case David saw: TUI showed 48, phone showed 47"
+    },
+    { "percent_left": 99.9, "text": "99", "why": "truncates rather than rounding to 100" },
+    { "percent_left": 100.0, "text": "100", "why": "completely full" }
+  ]
+}

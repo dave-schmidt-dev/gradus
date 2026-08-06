@@ -34,7 +34,7 @@ struct ProviderCard: View {
                 HStack {
                     ProgressView(value: max(0, min(100, window.percentLeft)) / 100)
                         .tint(provider.isWarning ? .orange : .green)
-                    Text("\(Int(window.percentLeft))%")
+                    Text(percentDisplay(window.percentLeft))
                         .font(.subheadline.monospacedDigit())
                 }
                 HStack(spacing: 12) {

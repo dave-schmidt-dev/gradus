@@ -300,7 +300,7 @@ private struct ProviderRow: View {
                     .lineLimit(2)
             } else if let window = worstWindow {
                 let tint = SignalColor.forWindow(window)
-                header(value: "\(Int(window.percentLeft))%", tint: tint)
+                header(value: percentDisplay(window.percentLeft), tint: tint)
                 ProgressBar(
                     fraction: max(0, min(100, window.percentLeft)) / 100,
                     markerFraction: ProgressBar.expectedRemainingMarkerFraction(

@@ -52,7 +52,7 @@ struct UsageBar: View {
         }
         .frame(height: 4)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(Int(percentLeft)) percent remaining")
+        .accessibilityLabel(percentDisplay(percentLeft, suffix: " percent remaining"))
     }
 
     /// Normalized expected remaining capacity, suitable for a horizontal

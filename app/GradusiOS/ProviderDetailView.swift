@@ -70,7 +70,7 @@ struct ProviderDetailView: View {
 
             HStack {
                 UsageBar(window: window, color: color)
-                Text("\(Int(window.percentLeft))%")
+                Text(percentDisplay(window.percentLeft))
                     .font(.subheadline.monospacedDigit())
                     .foregroundStyle(color)
             }

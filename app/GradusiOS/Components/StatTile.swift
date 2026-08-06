@@ -65,7 +65,7 @@ struct StatTile: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                Text("\(Int(window.percentLeft))%")
+                Text(percentDisplay(window.percentLeft))
                     .font(.system(size: 48, weight: .bold).monospacedDigit())
                     .foregroundStyle(color)
             }
@@ -76,7 +76,7 @@ struct StatTile: View {
                 .foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 UsageBar(window: window, color: color)
-                Text("\(Int(window.percentLeft))%")
+                Text(percentDisplay(window.percentLeft))
                     .font(.subheadline.monospacedDigit())
             }
         }
@@ -87,12 +87,12 @@ struct StatTile: View {
                     Button {
                         onSelectWindow(badgeWindow)
                     } label: {
-                        Text("\(ProviderWindowLabel.label(for: badgeWindow.id)) \(Int(badgeWindow.percentLeft))%")
+                        Text("\(ProviderWindowLabel.label(for: badgeWindow.id)) \(percentDisplay(badgeWindow.percentLeft))")
                             .font(.caption.weight(.semibold).monospacedDigit())
                     }
                     .buttonStyle(.bordered)
                     .accessibilityLabel(
-                        "Select \(ProviderWindowLabel.label(for: badgeWindow.id)), \(Int(badgeWindow.percentLeft)) percent remaining"
+                        "Select \(ProviderWindowLabel.label(for: badgeWindow.id)), \(percentDisplay(badgeWindow.percentLeft, suffix: " percent remaining"))"
                     )
                 }
             }

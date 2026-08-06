@@ -97,7 +97,9 @@ Where a rule is mirrored, encode its input/output pairs as a JSON fixture that
 **both** suites read, rather than writing the expectations twice. The signal
 ramp does this with
 `app/GradusKit/Tests/GradusKitTests/Fixtures/signal-levels.json`, read by
-`GradusKitTests/SignalLevelTests.swift` and `tests/test_ui.py`. Conventions:
+`GradusKitTests/SignalLevelTests.swift` and `tests/test_ui.py`. Percent
+formatting does the same with `Fixtures/percent-format.json`, read by
+`GradusKitTests/PercentFormatTests.swift` and `tests/test_ui.py`. Conventions:
 
 - The fixture lives inside the SwiftPM test target and is listed in
   `Package.swift`'s `resources:`. SwiftPM resources cannot reference files

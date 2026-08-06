@@ -50,7 +50,7 @@ struct WindowRow: View {
 
             UsageBar(window: window, color: color)
 
-            Text("\(Int(window.percentLeft))%")
+            Text(percentDisplay(window.percentLeft))
                 .font(.caption.weight(.semibold).monospacedDigit())
                 .foregroundStyle(color)
                 .lineLimit(1)
@@ -81,7 +81,7 @@ struct WindowRow: View {
     /// three views but one fact, so VoiceOver should not stop three times.
     var spokenLabel: String {
         let label = ProviderWindowLabel.label(for: window.id)
-        let percent = "\(Int(window.percentLeft)) percent remaining"
+        let percent = percentDisplay(window.percentLeft, suffix: " percent remaining")
         guard !resetText.isEmpty else { return "\(label), \(percent)" }
         return "\(label), \(percent), resets \(resetText)"
     }
