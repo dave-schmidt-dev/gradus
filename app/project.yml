@@ -30,7 +30,16 @@ targets:
         # pair impossible to talk about. CURRENT_PROJECT_VERSION stays
         # independent: it is a per-platform upload counter, not a version.
         MARKETING_VERSION: "1.6.0"
-        CURRENT_PROJECT_VERSION: "5"
+        # 6, not 1.7.0. The 2026-08-06 Mac pass changed only Mac-side
+        # behavior -- which window the menu row shows, and the app's own
+        # logging -- with no shared-contract change, so it stays on the 1.6.0
+        # train. VERSIONING.md rule 4: a further build on the same train "is
+        # labeled by build number only". It still has to move, because the
+        # installed copy was also 1.6.0 (5) and the version string exists to
+        # answer whether an install has a given change. GradusMac's counter is
+        # not allocated from App Store Connect, so unlike the iOS one it is
+        # bumped here.
+        CURRENT_PROJECT_VERSION: "6"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         # Without this the target compiles no app icon at all -- and does so
