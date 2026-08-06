@@ -10,7 +10,6 @@ from datetime import datetime
 from io import StringIO
 
 from rich.console import Console
-from rich.style import Style
 from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
@@ -334,24 +333,18 @@ class PercentageBarTests(unittest.TestCase):
         marker_at = next(i for i, ch in enumerate(rendered.plain) if ch in _MARKER_GLYPHS)
         return next(span.style for span in rendered.spans if span.start <= marker_at < span.end)
 
-    def test_marker_over_fill_carries_the_fill_as_its_background(self) -> None:
-        """No dark box around the stroke where it crosses the bar.
+    def test_marker_never_paints_a_background(self) -> None:
+        """A bare stroke, on the fill and off it alike -- the original drawing.
 
-        The stroke glyphs are thin so the marker can resolve below one cell, but
-        they still own a whole cell, and whatever they do not ink shows the
-        terminal background. Over the filled bar that reads as a hole punched
-        through it -- reported as "why is there a black box around the blue
-        bar?". It was there while the marker was red as well; a saturated red
-        stroke just dominates its cell enough that the eye reads a tick instead.
+        Giving the marker cell a background colour was tried twice, and rejected
+        on sight both times: "this is bad", then "how is this getting worse every
+        time!?". The bar's `▓` is a stipple, so a painted cell is the only solid
+        one in a textured row and stops reading as a line on the bar. The red
+        marker was always drawn bare and never drew a complaint.
         """
-        style = self._marker_style(100.0, 84.0)
-        assert isinstance(style, Style)
-        self.assertEqual(style.bgcolor, THEME.styles["bar.green"].color)
-        self.assertEqual(style.color, THEME.styles["bar.marker"].color)
-
-    def test_marker_over_the_empty_track_paints_no_background(self) -> None:
-        """Nothing to protect out there, and the neighbouring cells are dark."""
-        self.assertEqual(self._marker_style(20.0, 84.0), "bar.marker")
+        for percent, where in ((100.0, "over the fill"), (20.0, "over the track")):
+            with self.subTest(where=where):
+                self.assertEqual(self._marker_style(percent, 84.0), "bar.marker")
 
     def test_marker_colour_is_not_any_fill_colour(self) -> None:
         """The marker is blue, which is deliberately off the tier ramp.
@@ -368,11 +361,10 @@ class PercentageBarTests(unittest.TestCase):
                 self.assertNotEqual(marker, THEME.styles[tier].color)
 
     def test_expected_remaining_preserves_fill_and_marker_styles(self) -> None:
-        marker_colour = THEME.styles["bar.marker"].color
         # At width 80 and 72% left the fill ends at cell 58, so 60.0 puts the
         # marker inside the fill and 84.0 puts it out on the empty track. Both
-        # must still draw the fill and a marker in the marker colour; only the
-        # background differs, which the two cases above cover.
+        # draw the fill and a marker styled identically -- the stroke does not
+        # change how it is painted depending on what it crosses.
         for expected_remaining in (60.0, 84.0):
             with self.subTest(expected_remaining=expected_remaining):
                 console = Console(
@@ -391,13 +383,7 @@ class PercentageBarTests(unittest.TestCase):
                 self.assertIsInstance(rendered, Text)
                 assert isinstance(rendered, Text)
                 self.assertTrue(any(span.style == "bar.green" for span in rendered.spans))
-                self.assertTrue(
-                    any(
-                        span.style == "bar.marker"
-                        or (isinstance(span.style, Style) and span.style.color == marker_colour)
-                        for span in rendered.spans
-                    )
-                )
+                self.assertTrue(any(span.style == "bar.marker" for span in rendered.spans))
 
     def test_missing_expected_remaining_keeps_existing_bar_output(self) -> None:
         original = _capture(PercentageBar(72.0, "bar.green"), width=80)

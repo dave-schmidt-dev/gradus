@@ -12,7 +12,6 @@ from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderR
 from rich.panel import Panel
 from rich.segment import Segment
 from rich.spinner import Spinner
-from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -67,9 +66,12 @@ THEME = Theme(
         # legible in both places -- 1.95-4.18 against the four fills, 2.42
         # against the terminal background.
         #
-        # Never paint this as a background. The bar's `▓` is a stipple, not a
-        # solid, so a cell given a background colour becomes the only solid one
-        # in a textured row and reads as an artefact rather than a mark.
+        # Never give this cell a background colour. That was tried twice and
+        # rejected on sight both times. The bar's `▓` is a stipple, not a
+        # solid, so a cell painted with a background becomes the only solid one
+        # in a textured row -- it stops reading as a line on the bar and starts
+        # reading as a block cut into it. The stroke goes on bare, exactly as
+        # the red one did.
         "bar.marker": "color(26)",
         "accent.codex": "color(111)",
         "accent.claude": "color(219)",
@@ -711,7 +713,7 @@ class PercentageBar:
         bar = Text()
         for index in range(width):
             if index == marker_index:
-                bar.append(marker_glyph, style=self._marker_style(console, index < filled))
+                bar.append(marker_glyph, style="bar.marker")
             elif index < filled:
                 bar.append("▓" if index < filled - 1 else "█", style=self.style)
             else:
@@ -731,36 +733,6 @@ class PercentageBar:
         index = min(width - 1, int(position))
         third = min(2, int((position - index) * 3))
         return index, _MARKER_GLYPHS[third]
-
-    def _marker_style(self, console: Console, over_fill: bool) -> str | Style:
-        """Marker style, carrying the fill as a background where it crosses it.
-
-        The stroke glyphs are thin on purpose -- that is what buys sub-cell
-        precision -- but they still occupy a whole character cell, and whatever
-        the glyph does not ink shows the terminal background. Crossing the
-        filled bar that leaves a dark box around the stroke: David, on first
-        seeing the blue marker, "why is there a black box around the blue bar?"
-
-        It was there with the red marker too and went unremarked, because a
-        saturated red stroke dominates its cell and the eye reads a tick. A dark
-        blue one does not, so the surrounding background wins and the eye reads
-        a hole. Painting the fill as this cell's background removes it.
-
-        The cost, accepted: `▓` is a stipple at ~75% ink, so a cell given a
-        solid background is the brightest in the row. A previous attempt at this
-        used a near-black stroke, which turned that cell into a dark notch and
-        was rejected on sight. A blue stroke on the fill colour reads as a mark
-        on the bar rather than damage to it.
-
-        Over the empty track there is nothing to protect and the neighbours are
-        dark too, so no background is set there.
-        """
-        if not over_fill:
-            return "bar.marker"
-        return Style(
-            color=console.get_style("bar.marker", default="none").color,
-            bgcolor=console.get_style(self.style, default="none").color,
-        )
 
 
 # Below this console width the 2-panel grid can't fit a full 12-char pace cell
