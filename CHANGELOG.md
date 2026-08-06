@@ -9,6 +9,38 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## Unreleased
+
+### Added
+
+- A card density setting on both iPhone and iPad, under Settings → Local
+  Display: **Compact**, **Standard**, **Large**. Compact is exactly what 1.6.0
+  shipped, so the default changes nothing. Standard and Large give each provider
+  more room and step the text up a size; Large is close to the pre-1.5.0
+  presentation with its spacing tightened. Larger densities fit fewer columns —
+  at Large an 11" iPad shows one column in portrait and two in landscape, which
+  is the point rather than a side effect. Every density still shows all of a
+  provider's windows, and the choice is per-device, like the sort order and
+  exhausted-provider toggle it sits beside.
+
+### Fixed
+
+- The Mac menu bar, the iPhone's "N low" badge, and push notifications now agree
+  on which providers need attention. They used two different rules against the
+  same data: the Mac asked whether a provider's *worst* window was in trouble,
+  the phone asked whether *any* window was, and with no pace data one of them
+  fell back to a percentage ramp the other ignored. A provider could show a red
+  bar on the phone and nothing in the menu bar, off the same sync.
+
+### TestFlight focus
+
+- Try each card density on both devices. Confirm Compact looks exactly like the
+  build before it, and that no provider or window disappears at any setting.
+- Confirm the density you pick survives quitting and reopening the app, and that
+  it is set separately on each device rather than following you across them.
+- Confirm the low-provider count in the iPhone badge matches what the Mac menu
+  bar shows at the same moment.
+
 ## 1.6.0 — 2026-08-05
 
 The iPhone half of the layout 1.5.0 shipped on iPad. Same artifact, same

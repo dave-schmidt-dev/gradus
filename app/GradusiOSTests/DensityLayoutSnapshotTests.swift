@@ -167,6 +167,56 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         testName: "densityLargePadPortraitLight")
 }
 
+/// Large density *and* the text-size slider at its top notch — the combination
+/// a user who cannot read small type will actually be in, since picking large
+/// cards and turning system text up are the same intent expressed twice.
+///
+/// `.extraExtraExtraLarge` rather than an accessibility size on purpose: it is
+/// the ceiling of Settings > Display & Brightness > Text Size, so it is reachable
+/// without enabling Larger Text, which makes it the realistic worst case rather
+/// than the theoretical one.
+///
+/// This is the pairing the row's fixed columns are least equipped for. `resetWidth`
+/// is 130 points of *fixed* width holding a `.footnote` that Dynamic Type is free
+/// to scale past it; `labelWidth` and `percentWidth` have the same shape. The
+/// mismatch predates density — every density has it, and so did 1.6.0 — but
+/// scaling the fonts up moves it closer to the edge, so it belongs on the record
+/// with a picture rather than as a worry. What this baseline shows today is
+/// tracked in TASKS; the test's job is that the next change to it is visible.
+@MainActor
+@Test func densityLargePadPortraitExtraExtraExtraLarge() {
+    assertSnapshot(
+        of: denseDashboard(density: .large),
+        as: .image(
+            layout: .fixed(width: 834, height: 1194),
+            traits: UITraitCollection(traitsFrom: [
+                UITraitCollection(userInterfaceStyle: .light),
+                UITraitCollection(preferredContentSizeCategory: .extraExtraExtraLarge),
+            ])),
+        testName: "densityLargePadPortraitExtraExtraExtraLarge")
+}
+
+/// The same text size at `.compact`, which is 1.6.0's shipped geometry.
+///
+/// This one exists to keep the record straight rather than to cover a new
+/// surface: it shows the truncation above is inherited, not introduced. Every
+/// density pairs fixed column widths with fonts Dynamic Type is free to scale,
+/// and compact — having the least width to give — truncates hardest. Without
+/// this picture, the `.large` baseline would read as a cost of the density
+/// feature, and the fix would get scoped to the wrong place.
+@MainActor
+@Test func densityCompactPadPortraitExtraExtraExtraLarge() {
+    assertSnapshot(
+        of: denseDashboard(density: .compact),
+        as: .image(
+            layout: .fixed(width: 834, height: 1194),
+            traits: UITraitCollection(traitsFrom: [
+                UITraitCollection(userInterfaceStyle: .light),
+                UITraitCollection(preferredContentSizeCategory: .extraExtraExtraLarge),
+            ])),
+        testName: "densityCompactPadPortraitExtraExtraExtraLarge")
+}
+
 /// Large on a phone, which is the case INV-12 forces to exist: the density
 /// control cannot be iPad-only, because a setting present on one size class and
 /// absent on the other is precisely the divergence that invariant was written

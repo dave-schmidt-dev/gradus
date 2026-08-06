@@ -246,6 +246,87 @@ private let deviceContentWidths: [(name: String, width: CGFloat, isGrid: Bool)] 
         #expect(bigger.percentWidth > smaller.percentWidth)
         #expect(bigger.resetWidth > smaller.resetWidth)
         #expect(bigger.gridMinimum > smaller.gridMinimum)
+        // The exhausted section is on the same screen, directly under the
+        // cards. If it did not move with them, choosing a larger density would
+        // scale the top of the dashboard and leave the bottom at 12pt -- and
+        // the reason to choose a larger density is that 12pt is hard to read.
+        #expect(bigger.exhaustedRowHeight > smaller.exhaustedRowHeight)
+        #expect(bigger.exhaustedGap > smaller.exhaustedGap)
+        #expect(bigger.exhaustedLineGap > smaller.exhaustedLineGap)
+        #expect(bigger.exhaustedCornerRadius > smaller.exhaustedCornerRadius)
+        #expect(bigger.exhaustedMinimumSingleColumn > smaller.exhaustedMinimumSingleColumn)
+        #expect(bigger.exhaustedMinimumGrid > smaller.exhaustedMinimumGrid)
+    }
+}
+
+/// The exhausted grid on a phone is the one part of this section no snapshot
+/// reaches: at every density the eight active cards push it past the bottom of a
+/// 393x852 viewport, so `densityLargePhoneDark` passes without covering a pixel
+/// of it. That is worth stating rather than papering over with a snapshot at a
+/// height no device has — the section is real, a user scrolls to it, and what
+/// can be checked cheaply is the number that decides its shape.
+///
+/// Two cells per row on a phone at compact, one at standard and large.
+///
+/// The two-to-one step lands between compact and standard, which is earlier than
+/// it does for the cards, and it is the string that puts it there rather than a
+/// choice: half of a 361pt phone is 175pt, and "resets Aug 12, 7:46 PM" at
+/// `.footnote` plus the cell's insets needs about 179. Buying the second column
+/// back would mean shaving the minimum below what the text needs — trading a
+/// truncated timestamp for a tidier grid, which is the wrong way round. Compact
+/// keeps two because 12pt type still fits in the same half-width.
+@Test func theExhaustedGridPacksAsIntendedOnAPhone() {
+    let phoneContent: CGFloat = 361
+    let expected: [(DashboardDensity, CGFloat)] = [(.compact, 2), (.standard, 1), (.large, 1)]
+
+    for (density, columns) in expected {
+        let m = density.metrics
+        let packed = max(
+            1,
+            floor((phoneContent + m.exhaustedGap) / (m.exhaustedMinimumSingleColumn + m.exhaustedGap)))
+        #expect(
+            packed == columns,
+            "\(density.rawValue) packs \(packed) exhausted columns on a phone, expected \(columns)")
+    }
+}
+
+/// The exhausted grid's minimum is what keeps "resets Aug 12, 7:46 PM" whole,
+/// so it has to clear the string's width at that density's font -- not merely
+/// be larger than the density below it, which `densitiesAreOrderedOnEveryMeasurement`
+/// already covers and which a set of three too-small numbers would also satisfy.
+///
+/// Measured against the widest label the section renders: the longest provider
+/// display name is "Antigravity (Claude)" and the longest reset string is
+/// "resets Aug 12, 7:46 PM" (22 characters). At iOS system font metrics a
+/// character averages ~0.52em, so the reset line needs roughly
+/// `22 * 0.52 * pointSize` plus the cell's horizontal insets.
+@Test func exhaustedCellsFitTheStringTheyExistToShow() {
+    // (density, title font points, reset font points) for the fonts the three
+    // tables actually name.
+    let fontPoints: [(DashboardDensity, CGFloat, CGFloat)] = [
+        (.compact, 15, 12),  // .subheadline / .caption
+        (.standard, 16, 13),  // .callout / .footnote
+        (.large, 17, 15),  // .body / .subheadline
+    ]
+
+    for (density, titlePoints, resetPoints) in fontPoints {
+        let m = density.metrics
+        let needed = 22.0 * 0.52 * resetPoints + m.cardPadding * 2
+        #expect(
+            m.exhaustedMinimumGrid >= needed,
+            "\(density.rawValue) truncates the reset time on iPad: needs \(needed)")
+        #expect(
+            m.exhaustedMinimumSingleColumn >= needed,
+            "\(density.rawValue) truncates the reset time on iPhone: needs \(needed)")
+        // A cell is two lines plus its vertical insets. Below that the text
+        // clips rather than the cell growing, because `minHeight` is a floor
+        // and `lineLimit(1)` will not wrap out of it. Line height runs a few
+        // points over the nominal size at these sizes.
+        let twoLines =
+            (titlePoints + 3) + (resetPoints + 3) + m.exhaustedLineGap + m.exhaustedGap * 2
+        #expect(
+            m.exhaustedRowHeight >= twoLines,
+            "\(density.rawValue) clips the cell: needs \(twoLines)")
     }
 }
 

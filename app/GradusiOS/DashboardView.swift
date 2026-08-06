@@ -240,24 +240,31 @@ struct DashboardContent: View {
     /// Sized from the content, not from the card grid: a cell holds a provider
     /// name and "resets Aug 12, 7:46 PM". A 150pt minimum packs four columns
     /// onto an iPad and truncates both strings — which defeats the point,
-    /// since the reset time is the entire reason the cell exists. 240 keeps
-    /// them whole at every width this app is used at.
+    /// since the reset time is the entire reason the cell exists. The compact
+    /// numbers (170/240) keep them whole at every width this app is used at,
+    /// and the larger densities scale from there with their reset font.
     private var exhaustedColumns: [GridItem] {
-        switch layout {
-        case .denseSingleColumn:
-            return [GridItem(.adaptive(minimum: 170), spacing: 8, alignment: .top)]
-        case .denseGrid:
-            return [GridItem(.adaptive(minimum: 240), spacing: 8, alignment: .top)]
-        }
+        let minimum =
+            switch layout {
+            case .denseSingleColumn: metrics.exhaustedMinimumSingleColumn
+            case .denseGrid: metrics.exhaustedMinimumGrid
+            }
+        return [
+            GridItem(.adaptive(minimum: minimum), spacing: metrics.exhaustedGap, alignment: .top)
+        ]
     }
 
     private var exhaustedSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: metrics.exhaustedGap) {
             Text("Exhausted")
-                .font(.caption.weight(.semibold))
+                .font(metrics.exhaustedHeaderFont)
                 .foregroundStyle(.tertiary)
                 .accessibilityIdentifier("exhausted-section-header")
-            LazyVGrid(columns: exhaustedColumns, alignment: .leading, spacing: 8) {
+            LazyVGrid(
+                columns: exhaustedColumns,
+                alignment: .leading,
+                spacing: metrics.exhaustedGap
+            ) {
                 ForEach(exhaustedProviders, id: \.providerName) { provider in
                     exhaustedCell(provider)
                 }
@@ -269,20 +276,20 @@ struct DashboardContent: View {
     /// the row costs on screen, not about withholding the full breakdown from
     /// anyone who wants it.
     private func exhaustedCell(_ provider: ProviderStatus) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: metrics.exhaustedLineGap) {
             Text(provider.providerDisplayName)
-                .font(.subheadline)
+                .font(metrics.exhaustedTitleFont)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Text(earliestResetLabel(provider.windows, now: now) ?? "reset unknown")
-                .font(.caption)
+                .font(metrics.exhaustedResetFont)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, minHeight: metrics.exhaustedRowHeight, alignment: .leading)
+        .padding(.horizontal, metrics.cardPadding)
+        .padding(.vertical, metrics.exhaustedGap)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: metrics.exhaustedCornerRadius))
         .contentShape(Rectangle())
         .onTapGesture {
             selectedProviderName = provider.providerName

@@ -84,6 +84,39 @@ public struct DensityMetrics: Equatable, Sendable {
     public let percentFont: Font
     public let resetFont: Font
 
+    // MARK: exhausted section
+
+    // Density governs this section too, and that is not a cosmetic nicety. The
+    // reason to choose a larger density is that the small type is hard to read
+    // — at viewing distance, or at all. A screen whose top half scaled and
+    // whose bottom half did not would fail the request for exactly the
+    // providers it applies to. The cells stay *relatively* compact at every
+    // density: a spent provider raises one question and two short lines answer
+    // it, which is a statement about how much of the screen it deserves, not
+    // about how big the text is.
+
+    /// The "Exhausted" heading.
+    public let exhaustedHeaderFont: Font
+    /// Provider name inside a cell. One notch below `titleFont` at every
+    /// density, since a spent provider outranks nothing.
+    public let exhaustedTitleFont: Font
+    /// "resets Aug 12, 7:46 PM" — the line the cell exists for.
+    public let exhaustedResetFont: Font
+    /// Between a cell's two lines.
+    public let exhaustedLineGap: CGFloat
+    /// Between cells, around the heading, and the cell's vertical inset.
+    public let exhaustedGap: CGFloat
+    public let exhaustedRowHeight: CGFloat
+    public let exhaustedCornerRadius: CGFloat
+    /// `.adaptive(minimum:)` for the exhausted grid — one per `DashboardLayout`
+    /// case, because the cell's job is keeping the reset string whole and the
+    /// phone has less width to pack into. These grow with `exhaustedResetFont`
+    /// for the reason `resetWidth` does: a fixed width under a scaled font
+    /// truncates a timestamp mid-string, and half a timestamp still reads as
+    /// information.
+    public let exhaustedMinimumSingleColumn: CGFloat
+    public let exhaustedMinimumGrid: CGFloat
+
     // MARK: grid
 
     /// `GridItem(.adaptive(minimum:))`'s minimum.
@@ -164,6 +197,15 @@ public struct DensityMetrics: Equatable, Sendable {
         labelFont: .caption,
         percentFont: .caption.weight(.semibold).monospacedDigit(),
         resetFont: .caption2.monospacedDigit(),
+        exhaustedHeaderFont: .caption.weight(.semibold),
+        exhaustedTitleFont: .subheadline,
+        exhaustedResetFont: .caption,
+        exhaustedLineGap: 2,
+        exhaustedGap: 8,
+        exhaustedRowHeight: 52,
+        exhaustedCornerRadius: 10,
+        exhaustedMinimumSingleColumn: 170,
+        exhaustedMinimumGrid: 240,
         gridMinimum: 320
     )
 
@@ -188,6 +230,15 @@ public struct DensityMetrics: Equatable, Sendable {
         labelFont: .footnote,
         percentFont: .footnote.weight(.semibold).monospacedDigit(),
         resetFont: .caption.monospacedDigit(),
+        exhaustedHeaderFont: .footnote.weight(.semibold),
+        exhaustedTitleFont: .callout,
+        exhaustedResetFont: .footnote,
+        exhaustedLineGap: 4,
+        exhaustedGap: 10,
+        exhaustedRowHeight: 60,
+        exhaustedCornerRadius: 12,
+        exhaustedMinimumSingleColumn: 185,
+        exhaustedMinimumGrid: 260,
         gridMinimum: 360
     )
 
@@ -216,6 +267,15 @@ public struct DensityMetrics: Equatable, Sendable {
         labelFont: .subheadline,
         percentFont: .subheadline.weight(.semibold).monospacedDigit(),
         resetFont: .footnote.monospacedDigit(),
+        exhaustedHeaderFont: .subheadline.weight(.semibold),
+        exhaustedTitleFont: .body,
+        exhaustedResetFont: .subheadline,
+        exhaustedLineGap: 6,
+        exhaustedGap: 12,
+        exhaustedRowHeight: 70,
+        exhaustedCornerRadius: 14,
+        exhaustedMinimumSingleColumn: 215,
+        exhaustedMinimumGrid: 300,
         gridMinimum: 460
     )
 }

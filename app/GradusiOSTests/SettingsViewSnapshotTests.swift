@@ -77,6 +77,13 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
         #expect(defaults.string(forKey: DashboardViewModel.providerSortOptionKey) == option.rawValue)
         #expect(viewModel.providerSortOption == option)
     }
+    #expect(DashboardDensity.allCases.map(\.title) == ["Compact", "Standard", "Large"])
+    for density in DashboardDensity.allCases {
+        viewModel.density = density
+        #expect(defaults.string(forKey: DashboardViewModel.densityKey) == density.rawValue)
+        #expect(viewModel.density == density)
+    }
+
     viewModel.showExhausted = false
 
     #expect(defaults.bool(forKey: DashboardViewModel.showExhaustedKey) == false)
