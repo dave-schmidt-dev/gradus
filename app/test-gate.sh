@@ -49,7 +49,17 @@ IPAD_DEVICE_NAME="iPad Pro 11-inch (M5)"
 IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
 
 echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
-active_xcode_version="$(xcodebuild -version | head -1 | awk '{print $2}')"
+# One `awk` that reads to EOF, rather than `| head -1 | awk ...`. `head` exits
+# as soon as it has its line, and if `xcodebuild` is still writing it takes
+# SIGPIPE; under `set -euo pipefail` that surfaces as the gate aborting with
+# 141 right here, before a single test runs, and the log just stops after the
+# banner above with no error text -- which reads like a clean run to anything
+# tailing it. Observed once in three runs on 2026-08-06.
+#
+# Note `awk 'NR==1{print $2; exit}'` would NOT fix it: that `exit` closes the
+# pipe exactly as early as `head` does. Consuming the whole stream is the
+# point, not matching only the first line.
+active_xcode_version="$(xcodebuild -version | awk 'NR==1{print $2}')"
 if [[ "$active_xcode_version" != "$PINNED_XCODE_VERSION" ]]; then
   echo "FAIL: active Xcode is $active_xcode_version, pinned to $PINNED_XCODE_VERSION (.xcode-version)" >&2
   echo "      floating minor versions silently break OS-specific snapshot baselines — regenerate deliberately on upgrade." >&2
