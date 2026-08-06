@@ -46,6 +46,43 @@ private func referencesForbiddenTerm(_ term: String, in lowered: String) -> Bool
     return false
 }
 
+/// Counting raw occurrences counts the ones in prose too, and a comment
+/// explaining why a file *avoids* an API is not a call site.
+///
+/// On 2026-08-06 a comment in `GradusLog.swift` reading "not
+/// `NSHomeDirectory()`, because INV7Tests counts its call sites" failed the
+/// call-site test — twice over, by saying so. Rewording it would have passed
+/// while leaving the next person to hit the same wall with a failure message
+/// that explains nothing.
+///
+/// Same shape as the `.env` narrowing above: drop a false-positive class
+/// without touching the true-positive one. Code after `//` does not run, so a
+/// call site cannot hide there. Line comments only — this codebase uses `///`
+/// and `//`, and a block-comment parser would be more machinery than the
+/// tripwire itself.
+private func strippingLineComments(_ contents: String) -> String {
+    contents
+        .components(separatedBy: .newlines)
+        .map { line -> Substring in
+            guard let marker = line.range(of: "//") else { return line[...] }
+            return line[line.startIndex..<marker.lowerBound]
+        }
+        .joined(separator: "\n")
+}
+
+/// The narrowing must not blind the wire it narrows.
+@Test func lineCommentStrippingStillCountsRealCallSites() {
+    let source = """
+        // NSHomeDirectory() belongs in exactly one file.
+        let home = URL(fileURLWithPath: NSHomeDirectory())  // and NSHomeDirectory() again
+        /// Doc comment mentioning NSHomeDirectory() as well.
+        """
+    let stripped = strippingLineComments(source)
+    #expect(stripped.components(separatedBy: "NSHomeDirectory()").count - 1 == 1)
+    // The real call survived intact, not just the count.
+    #expect(stripped.contains("URL(fileURLWithPath: NSHomeDirectory())"))
+}
+
 @Test func publisherSourceReferencesNoCredentialPath() throws {
     let forbidden = [
         ".env", "credentials", "secret", "password", "api_key", "apikey",
@@ -91,7 +128,7 @@ private func referencesForbiddenTerm(_ term: String, in lowered: String) -> Bool
     let files = publisherSourceFiles()
     var occurrences: [(file: String, count: Int)] = []
     for file in files {
-        let contents = try String(contentsOf: file, encoding: .utf8)
+        let contents = strippingLineComments(try String(contentsOf: file, encoding: .utf8))
         let count = contents.components(separatedBy: "NSHomeDirectory()").count - 1
         if count > 0 {
             occurrences.append((file.lastPathComponent, count))

@@ -114,14 +114,69 @@ public actor PublishCoordinator: CloudPublisher {
     /// error whole. A `CKError`'s `userInfo` can carry the offending record and
     /// its fields, and these records hold the user's provider usage data —
     /// there is no reason for any of it to reach a log file to explain why a
-    /// save failed.
-    private static func describe(_ result: Result<CKRecord, Error>?) -> String {
+    /// save failed. That rules out `localizedDescription` too: it is read out
+    /// of the same `userInfo` and can carry server-supplied text.
+    static func describe(_ result: Result<CKRecord, Error>?) -> String {
         guard let result else { return "no result returned for this record" }
         guard case .failure(let error) = result else { return "success" }
         guard let ckError = error as? CKError else {
-            return "\(type(of: error)) (code \((error as NSError).code))"
+            let nsError = error as NSError
+            return "\(type(of: error)) (code \(nsError.code), domain \(nsError.domain))"
         }
-        return "CKError.\(ckError.code) (\(ckError.code.rawValue))"
+        return "\(name(for: ckError.code)) (CKError \(ckError.code.rawValue))"
+    }
+
+    /// `CKError.Code` is imported from an Objective-C `NS_ENUM`, so it has no
+    /// synthesized case names: interpolating it yields
+    /// `CKErrorCode(rawValue: 26)` — the number twice and the name never. The
+    /// first release-checklist line this ever produced read
+    /// `save failed for B: CKError.CKErrorCode(rawValue: 26) (26)`, which
+    /// tells a reader at 2am to go look up 26 rather than telling them the
+    /// zone is gone.
+    ///
+    /// Spelled out rather than derived, because the alternative that needs no
+    /// table is `localizedDescription`, and that reaches into the `userInfo`
+    /// this function exists to stay out of. An unmapped code still prints its
+    /// number: honest, and one line short of ideal, rather than wrong.
+    private static func name(for code: CKError.Code) -> String {
+        switch code {
+        case .internalError: return "internalError"
+        case .partialFailure: return "partialFailure"
+        case .networkUnavailable: return "networkUnavailable"
+        case .networkFailure: return "networkFailure"
+        case .badContainer: return "badContainer"
+        case .serviceUnavailable: return "serviceUnavailable"
+        case .requestRateLimited: return "requestRateLimited"
+        case .missingEntitlement: return "missingEntitlement"
+        case .notAuthenticated: return "notAuthenticated"
+        case .permissionFailure: return "permissionFailure"
+        case .unknownItem: return "unknownItem"
+        case .invalidArguments: return "invalidArguments"
+        case .serverRecordChanged: return "serverRecordChanged"
+        case .serverRejectedRequest: return "serverRejectedRequest"
+        case .assetFileNotFound: return "assetFileNotFound"
+        case .assetFileModified: return "assetFileModified"
+        case .incompatibleVersion: return "incompatibleVersion"
+        case .constraintViolation: return "constraintViolation"
+        case .operationCancelled: return "operationCancelled"
+        case .changeTokenExpired: return "changeTokenExpired"
+        case .batchRequestFailed: return "batchRequestFailed"
+        case .zoneBusy: return "zoneBusy"
+        case .badDatabase: return "badDatabase"
+        case .quotaExceeded: return "quotaExceeded"
+        case .zoneNotFound: return "zoneNotFound"
+        case .limitExceeded: return "limitExceeded"
+        case .userDeletedZone: return "userDeletedZone"
+        case .tooManyParticipants: return "tooManyParticipants"
+        case .alreadyShared: return "alreadyShared"
+        case .referenceViolation: return "referenceViolation"
+        case .managedAccountRestricted: return "managedAccountRestricted"
+        case .participantMayNeedVerification: return "participantMayNeedVerification"
+        case .serverResponseLost: return "serverResponseLost"
+        case .assetNotAvailable: return "assetNotAvailable"
+        case .accountTemporarilyUnavailable: return "accountTemporarilyUnavailable"
+        default: return "unmappedCKErrorCode"
+        }
     }
 
     /// `.serverRecordChanged` means our change tag was stale. Fetch the

@@ -37,10 +37,17 @@ Before the TestFlight upload:
    one `was successfully saved to the server` line per provider record. From
    the app, expect a `publishing N of M provider(s)` line followed by
    `published N record(s) successfully` — and if anything failed, a
-   `save failed for <provider>: CKError.<code>` line per record plus a
+   `save failed for <provider>: <code name> (CKError <number>)` line per
+   record (e.g. `save failed for Codex: zoneNotFound (CKError 26)`) plus a
    `publish incomplete` summary. A publish that fails now says so; before
    2026-08-06 the app returned a bare failure count and `cloudd` showed only
    the records that worked.
+
+   The line carries the code and nothing else on purpose — a `CKError`'s
+   `userInfo` can hold the offending record and its fields, and that includes
+   the usage data being published. If a code is not one the app has a name
+   for, the line reads `unmappedCKErrorCode (CKError <number>)`; look the
+   number up rather than assuming the publish path is broken.
 
    Three details are not optional: `/usr/bin/log` (in zsh, bare `log` is a
    shell builtin that fails with `too many arguments`), `--info --debug`
@@ -52,7 +59,10 @@ Before the TestFlight upload:
    Warnings and errors are additionally mirrored to
    `~/Library/Logs/Gradus/GradusMac.log`, which outlives the unified log's
    retention. Read it when the release is being reviewed later than the
-   `--last` window reaches.
+   `--last` window reaches. It contains release evidence only: the Mac test
+   bundle is hosted inside a real GradusMac process, so the suite would
+   otherwise append its own staged failures here, and it is redirected to a
+   temporary directory instead (`GRADUS_MAC_LOG_DIR` overrides the location).
 4. Upload the iOS artifact only after the Mac publish evidence is present.
 5. If the Mac artifact itself is being distributed, run the notarization gate
    too; local publisher verification alone is not a distribution artifact.

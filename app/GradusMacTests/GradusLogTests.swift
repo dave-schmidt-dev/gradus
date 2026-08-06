@@ -143,6 +143,52 @@ struct GradusLogTests {
         #expect(all.count == 3, "expected live + 2 rotations, found \(all.sorted())")
     }
 
+    // MARK: - where the shared sink writes
+
+    /// The one that matters. Every test above injects its own directory, but
+    /// production code under test does not: `PublishCoordinator` and
+    /// `PublisherViewModel` log through `GradusLog.publish`, which reaches
+    /// `GradusLogFile.shared`.
+    ///
+    /// The Mac test bundle is hosted inside a real GradusMac process, so
+    /// before this check existed the suite appended fabricated failures to
+    /// `~/Library/Logs/Gradus/GradusMac.log` — the exact file
+    /// `RELEASE_CHECKLIST.md` step 3 tells a reviewer to read as evidence that
+    /// a release published cleanly. Ten lines like
+    /// `save failed for B: CKError 26` were sitting there, indistinguishable
+    /// from real ones, written by tests named after failures they had staged.
+    @Test func theSharedSinkDoesNotWriteToTheRealLogDirectoryDuringTests() {
+        #expect(
+            GradusLogFile.isRunningUnderTest,
+            "test-run detection failed, so the suite is writing to the production log")
+
+        let real = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Gradus", isDirectory: true)
+        #expect(GradusLogFile.defaultDirectory().standardizedFileURL != real.standardizedFileURL)
+        #expect(GradusLogFile.shared.fileURL.standardizedFileURL.path != real.appendingPathComponent("GradusMac.log").standardizedFileURL.path)
+    }
+
+    /// Shipping behavior, which no test can observe directly from inside a
+    /// test run — hence the injected `isTestRun`.
+    @Test func outsideATestRunTheDefaultIsLibraryLogs() {
+        let directory = GradusLogFile.defaultDirectory(environment: [:], isTestRun: false)
+        #expect(directory.path.hasSuffix("Library/Logs/Gradus"))
+    }
+
+    @Test func theEnvironmentOverrideWinsOverBothOtherBranches() {
+        let override = GradusLogFile.defaultDirectory(
+            environment: [GradusLogFile.directoryOverrideKey: "/tmp/gradus-override"],
+            isTestRun: true)
+        #expect(override.path == "/tmp/gradus-override")
+
+        // An unset variable and a variable set to nothing are the same
+        // intention. Treating "" as a path would send the log to the
+        // process's working directory, which for a launched .app is `/`.
+        let empty = GradusLogFile.defaultDirectory(
+            environment: [GradusLogFile.directoryOverrideKey: ""], isTestRun: false)
+        #expect(empty.path.hasSuffix("Library/Logs/Gradus"))
+    }
+
     // MARK: - level floor
 
     @Test func levelsAreOrderedBySeverity() {
