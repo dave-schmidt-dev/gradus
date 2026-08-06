@@ -2,6 +2,7 @@ import GradusKit
 import SnapshotTesting
 import SwiftUI
 import Testing
+import UIKit
 
 @testable import GradusiOS
 
@@ -143,6 +144,57 @@ private let deviceContentWidths: [(name: String, width: CGFloat, isGrid: Bool)] 
     ("iPad 13\" landscape", 1334, true),
 ]
 
+/// Pins `resolvedCardWidth` to what SwiftUI renders, rather than to itself.
+///
+/// The helper above is a *reconstruction* of `.adaptive(minimum:)`'s packing
+/// rule, and every other width assertion in this file is built on it. A wrong
+/// reconstruction would therefore let the whole file pass while describing a
+/// layout the app does not produce — the same failure mode as a constant fitted
+/// to the number it is later used to justify.
+///
+/// So these four widths are not computed here: they were read off the committed
+/// iPad baselines with a pixel scan (both are 834pt portrait at 3x, leaving
+/// 802pt of content inside `denseGrid`'s 16pt margins). They are SwiftUI's own
+/// output. No phone baseline reaches the exhausted section, so grounding the
+/// formula on the two iPad surfaces is what makes its phone predictions —
+/// `theExhaustedGridPacksAsIntendedOnEveryPhone` — worth trusting.
+///
+/// The standard exhausted row is the case that discriminates. Its minimum is
+/// 260, but SwiftUI renders 260.67, which only follows if `.adaptive` seats
+/// `floor((content + gap) / (minimum + gap))` columns and then divides *all*
+/// the leftover space among them. The intuitive "each cell gets the minimum"
+/// model predicts 260 and is simply wrong; the 0.5pt tolerance below is tight
+/// enough to fail on it.
+@Test func theColumnFormulaMatchesWhatSwiftUIActuallyRenders() {
+    let iPadPortraitContent: CGFloat = 802
+    let standard = DashboardDensity.standard.metrics
+    let large = DashboardDensity.large.metrics
+
+    let measured: [(minimum: CGFloat, gap: CGFloat, rendered: CGFloat, source: String)] = [
+        (standard.gridMinimum, standard.cardGap, 394,
+         "densityStandardPadPortraitLight, provider card at y=310pt spans 16.0->410.0"),
+        (large.gridMinimum, large.cardGap, 802,
+         "densityLargePadPortraitLight, provider card at y=146pt spans 16.0->818.0"),
+        (standard.exhaustedMinimumGrid, standard.exhaustedGap, 260.67,
+         "densityStandardPadPortraitLight, exhausted cell at y=536pt spans 16.0->276.7"),
+        (large.exhaustedMinimumGrid, large.exhaustedGap, 395,
+         "densityLargePadPortraitLight, exhausted cell at y=1074pt spans 16.0->411.0"),
+    ]
+
+    for (minimum, gap, rendered, source) in measured {
+        let predicted = resolvedCardWidth(
+            contentWidth: iPadPortraitContent, minimum: minimum, spacing: gap)
+        #expect(
+            abs(predicted - rendered) < 0.5,
+            """
+            The packing model this file is built on no longer matches SwiftUI: \
+            minimum \(minimum) with gap \(gap) predicts \(predicted)pt, but the \
+            baseline shows \(rendered)pt (\(source)). Re-measure before changing \
+            the expected value — the baseline is the authority here, not the formula.
+            """)
+    }
+}
+
 /// The property that makes the density numbers trustworthy rather than
 /// plausible: on every density, at every width the app ships to, the usage bar
 /// still has room to read as a proportion.
@@ -221,6 +273,18 @@ private let deviceContentWidths: [(name: String, width: CGFloat, isGrid: Bool)] 
     // is what this assertion originally got wrong: it expected the collapse
     // test to justify a comfort decision.
     #expect(compact.fitsResetColumn(inCardWidth: 361))
+
+    // The exhausted section's literals, taken from `DashboardView` before that
+    // section joined the metrics. These are pinned here because they are the
+    // part of compact with no pixel coverage on a phone: the section sits below
+    // the fold of every phone baseline, so a regression to these six numbers
+    // would show up in no snapshot on the device where they matter most.
+    #expect(compact.exhaustedLineGap == 2)
+    #expect(compact.exhaustedGap == 8)
+    #expect(compact.exhaustedRowHeight == 52)
+    #expect(compact.exhaustedCornerRadius == 10)
+    #expect(compact.exhaustedMinimumSingleColumn == 170)
+    #expect(compact.exhaustedMinimumGrid == 240)
 }
 
 /// A density that is only *partly* larger reads as a rendering bug rather than
@@ -259,6 +323,19 @@ private let deviceContentWidths: [(name: String, width: CGFloat, isGrid: Bool)] 
     }
 }
 
+/// Every iPhone width the app ships to, minus `denseSingleColumn`'s 16pt
+/// horizontal padding on each side. The list spans the range rather than
+/// sampling it, because what this test checks is *where the column count
+/// changes*, and a boundary is only visible from both sides of it.
+private let phoneContentWidths: [(name: String, content: CGFloat)] = [
+    ("iPhone SE / mini (375pt)", 343),
+    ("iPhone 15 (390pt)", 358),
+    ("iPhone 16 (393pt)", 361),
+    ("iPhone 16 Pro (402pt)", 370),
+    ("iPhone 16 Plus (430pt)", 398),
+    ("iPhone 16 Pro Max (440pt)", 408),
+]
+
 /// The exhausted grid on a phone is the one part of this section no snapshot
 /// reaches: at every density the eight active cards push it past the bottom of a
 /// 393x852 viewport, so `densityLargePhoneDark` passes without covering a pixel
@@ -266,67 +343,157 @@ private let deviceContentWidths: [(name: String, width: CGFloat, isGrid: Bool)] 
 /// height no device has — the section is real, a user scrolls to it, and what
 /// can be checked cheaply is the number that decides its shape.
 ///
-/// Two cells per row on a phone at compact, one at standard and large.
+/// The column count is asserted at every phone width rather than at one,
+/// because the interesting property is not "how many columns" but "where the
+/// count flips" — and `.adaptive` flips it at
+/// `content = 2 * (minimum + gap) - gap`. Measured boundaries, in device points:
+/// compact flips at 380, standard at 412, large at 474. So compact is two-up on
+/// everything but the SE, standard is two-up only on Plus and Pro Max, and large
+/// is one column on every iPhone.
 ///
-/// The two-to-one step lands between compact and standard, which is earlier than
-/// it does for the cards, and it is the string that puts it there rather than a
-/// choice: half of a 361pt phone is 175pt, and "resets Aug 12, 7:46 PM" at
-/// `.footnote` plus the cell's insets needs about 179. Buying the second column
-/// back would mean shaving the minimum below what the text needs — trading a
-/// truncated timestamp for a tidier grid, which is the wrong way round. Compact
-/// keeps two because 12pt type still fits in the same half-width.
-@Test func theExhaustedGridPacksAsIntendedOnAPhone() {
-    let phoneContent: CGFloat = 361
-    let expected: [(DashboardDensity, CGFloat)] = [(.compact, 2), (.standard, 1), (.large, 1)]
+/// Standard's boundary is the one that was chosen rather than derived, and the
+/// first version of this test justified it wrongly — it claimed the reset string
+/// forced one column. It does not: at a half-width 393pt phone the cell gives
+/// its text 147.5pt and the longest line measures 144.5pt, so two columns would
+/// fit. The real constraint is boundary placement. Any minimum small enough to
+/// give a 393pt iPhone two columns lands the flip at a 392pt device — between
+/// iPhone 15 (390) and iPhone 16 (393), so two phones a user would call the same
+/// size would disagree. 185 puts it at 412, in open space between the Pro (402)
+/// and the Plus (430).
+///
+/// Compact's own boundary sits only 5pt above the SE. Note the direction: the SE
+/// is the one phone compact leaves at a single column, so a device 5pt wider
+/// flips *into* two and gets narrower cells. That is the direction that could
+/// truncate, which is why `exhaustedCellsFitTheStringTheyExistToShow` checks the
+/// two-column compact cell on every phone above the boundary — and no shipping
+/// iPhone falls in the 375–390pt gap in any case. Compact is frozen 1.6.0
+/// geometry regardless: recorded here, not chosen.
+@Test func theExhaustedGridPacksAsIntendedOnEveryPhone() {
+    let expected: [DashboardDensity: [CGFloat]] = [
+        //         SE  15  16  Pro  Plus  Max
+        .compact: [1, 2, 2, 2, 2, 2],
+        .standard: [1, 1, 1, 1, 2, 2],
+        .large: [1, 1, 1, 1, 1, 1],
+    ]
 
-    for (density, columns) in expected {
+    for density in DashboardDensity.allCases {
         let m = density.metrics
-        let packed = max(
-            1,
-            floor((phoneContent + m.exhaustedGap) / (m.exhaustedMinimumSingleColumn + m.exhaustedGap)))
-        #expect(
-            packed == columns,
-            "\(density.rawValue) packs \(packed) exhausted columns on a phone, expected \(columns)")
+        for (index, phone) in phoneContentWidths.enumerated() {
+            let packed = max(
+                1,
+                floor(
+                    (phone.content + m.exhaustedGap)
+                        / (m.exhaustedMinimumSingleColumn + m.exhaustedGap)))
+            #expect(
+                packed == expected[density]![index],
+                """
+                \(density.rawValue) packs \(packed) exhausted columns on \
+                \(phone.name), expected \(expected[density]![index]). A changed \
+                minimum moved the 1→2 boundary across a shipping device.
+                """
+            )
+        }
     }
 }
 
-/// The exhausted grid's minimum is what keeps "resets Aug 12, 7:46 PM" whole,
-/// so it has to clear the string's width at that density's font -- not merely
-/// be larger than the density below it, which `densitiesAreOrderedOnEveryMeasurement`
-/// already covers and which a set of three too-small numbers would also satisfy.
-///
-/// Measured against the widest label the section renders: the longest provider
-/// display name is "Antigravity (Claude)" and the longest reset string is
-/// "resets Aug 12, 7:46 PM" (22 characters). At iOS system font metrics a
-/// character averages ~0.52em, so the reset line needs roughly
-/// `22 * 0.52 * pointSize` plus the cell's horizontal insets.
-@Test func exhaustedCellsFitTheStringTheyExistToShow() {
-    // (density, title font points, reset font points) for the fonts the three
-    // tables actually name.
-    let fontPoints: [(DashboardDensity, CGFloat, CGFloat)] = [
-        (.compact, 15, 12),  // .subheadline / .caption
-        (.standard, 16, 13),  // .callout / .footnote
-        (.large, 17, 15),  // .body / .subheadline
+/// SwiftUI's `Font` exposes neither a point size nor line metrics, so measuring
+/// what the exhausted cell has to hold means going through UIKit's equivalent
+/// text style. This table is the one thing the test cannot derive: it restates
+/// the style each density's `exhaustedTitleFont`/`exhaustedResetFont` names.
+/// Change a font in `DashboardDensity.swift` without changing the matching row
+/// here and the test keeps passing while measuring the wrong string.
+private let exhaustedTextStyles:
+    [(density: DashboardDensity, title: UIFont.TextStyle, reset: UIFont.TextStyle)] = [
+        (.compact, .subheadline, .caption1),
+        (.standard, .callout, .footnote),
+        (.large, .body, .subheadline),
     ]
 
-    for (density, titlePoints, resetPoints) in fontPoints {
+/// Pinned to the default content size category. The question here is whether
+/// the geometry fits its own text, and the answer must not move because the
+/// simulator's text-size slider did. What Dynamic Type does to these cells is a
+/// separate, worse question, recorded in the `…ExtraExtraExtraLarge` baselines.
+private func exhaustedFont(_ style: UIFont.TextStyle) -> UIFont {
+    UIFont.preferredFont(
+        forTextStyle: style,
+        compatibleWith: UITraitCollection(preferredContentSizeCategory: .large))
+}
+
+private func typesetWidth(_ string: String, _ font: UIFont) -> CGFloat {
+    (string as NSString).size(withAttributes: [.font: font]).width
+}
+
+/// The exhausted cell's job is to name a spent provider and say when it comes
+/// back. Both lines are `lineLimit(1)`, so a cell too narrow for them does not
+/// wrap or grow — it truncates, and "resets Aug 12, 7:4…" is worse than no
+/// reset time at all because it still reads as an answer.
+///
+/// Asserted against the width the cell is actually *given* at each shipping
+/// device width, not against `exhaustedMinimum*`. The minimum is a packing
+/// input; `.adaptive` then divides the leftover space among the columns it
+/// seated, so the real cell is always wider than the minimum and sometimes much
+/// wider. Checking the minimum would be the conservative proxy — and at compact
+/// it is the wrong question, since that number is frozen 1.6.0 geometry.
+///
+/// Both strings are measured through UIKit rather than estimated from an
+/// average character width. An earlier version of this test used `22 * 0.52 *
+/// pointSize`; the constant had been fitted to one shipped number, which made
+/// every margin it reported unfalsifiable.
+@Test func exhaustedCellsFitTheStringTheyExistToShow() {
+    // The widest strings the section renders: the longest provider display name
+    // in the fixture set, and a full `friendlyResetDate` with month, day, and a
+    // two-digit hour.
+    let longestTitle = "Antigravity (Claude)"
+    let longestReset = "resets Aug 12, 7:46 PM"
+
+    for (density, titleStyle, resetStyle) in exhaustedTextStyles {
         let m = density.metrics
-        let needed = 22.0 * 0.52 * resetPoints + m.cardPadding * 2
-        #expect(
-            m.exhaustedMinimumGrid >= needed,
-            "\(density.rawValue) truncates the reset time on iPad: needs \(needed)")
-        #expect(
-            m.exhaustedMinimumSingleColumn >= needed,
-            "\(density.rawValue) truncates the reset time on iPhone: needs \(needed)")
-        // A cell is two lines plus its vertical insets. Below that the text
-        // clips rather than the cell growing, because `minHeight` is a floor
-        // and `lineLimit(1)` will not wrap out of it. Line height runs a few
-        // points over the nominal size at these sizes.
+        let titleFont = exhaustedFont(titleStyle)
+        let resetFont = exhaustedFont(resetStyle)
+        let needed = max(
+            typesetWidth(longestTitle, titleFont), typesetWidth(longestReset, resetFont))
+
+        // Every phone under the single-column layout's minimum, then every iPad
+        // width under the grid's. Both lists in full rather than one width each:
+        // the tightest cell is not the one on the narrowest screen. A 390pt
+        // iPhone seats two compact columns out of less width than a 393pt one
+        // does, so its cell is the smaller of the two, and the SE — narrower
+        // than both — drops to one column and gets the widest cell on any phone.
+        let surfaces: [(name: String, content: CGFloat, isGrid: Bool)] =
+            phoneContentWidths.map { ($0.name, $0.content, false) }
+            + deviceContentWidths.filter(\.isGrid).map { ($0.name, $0.width, true) }
+
+        for device in surfaces {
+            let minimum = device.isGrid ? m.exhaustedMinimumGrid : m.exhaustedMinimumSingleColumn
+            let cellWidth = resolvedCardWidth(
+                contentWidth: device.content, minimum: minimum, spacing: m.exhaustedGap)
+            let textWidth = cellWidth - m.cardPadding * 2
+            #expect(
+                textWidth >= needed,
+                """
+                \(density.rawValue) on \(device.name): the cell gives its text \
+                \(textWidth)pt and the longest line needs \(needed)pt, so it \
+                truncates. Raise the matching exhausted minimum.
+                """
+            )
+        }
+
+        // A cell is two typeset lines plus its vertical insets. Unlike the width
+        // above, falling short here does not truncate: `minHeight` is a floor,
+        // so a cell whose text is taller simply grows, as the XXXL baselines
+        // show. What the assertion protects is that the metric still *binds* —
+        // below this figure `exhaustedRowHeight` stops setting the row height
+        // and the grid's cells size to their own content instead, which is a
+        // dead number pretending to be a design choice.
         let twoLines =
-            (titlePoints + 3) + (resetPoints + 3) + m.exhaustedLineGap + m.exhaustedGap * 2
+            titleFont.lineHeight + resetFont.lineHeight + m.exhaustedLineGap + m.exhaustedGap * 2
         #expect(
             m.exhaustedRowHeight >= twoLines,
-            "\(density.rawValue) clips the cell: needs \(twoLines)")
+            """
+            \(density.rawValue): exhaustedRowHeight is \(m.exhaustedRowHeight)pt against \
+            \(twoLines)pt of content, so the minimum no longer decides the row.
+            """
+        )
     }
 }
 
