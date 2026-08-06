@@ -404,8 +404,11 @@ struct ProgressBar: View {
                         .fill(Color.red)
                         .frame(width: Self.markerWidth, height: Self.markerHeight)
                         .offset(
-                            x: geometry.size.width * max(0, min(1, markerFraction))
-                                - Self.markerWidth / 2
+                            x: markerOffset(
+                                fraction: markerFraction,
+                                barWidth: geometry.size.width,
+                                markerWidth: Self.markerWidth
+                            )
                         )
                         .zIndex(1)
                         .accessibilityLabel("Expected remaining")

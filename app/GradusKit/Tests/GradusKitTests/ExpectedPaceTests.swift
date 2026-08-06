@@ -34,3 +34,30 @@ import Testing
     #expect(expectedRemaining(percentLeft: -0.001, paceDelta: 0) == nil)
     #expect(expectedRemaining(percentLeft: 100.001, paceDelta: 0) == nil)
 }
+
+@Test func markerIsCenteredOnThePositionItMarks() {
+    // Leading edge sits half a marker before the position, so the marker's
+    // own center lands on it.
+    #expect(markerOffset(fraction: 0.5, barWidth: 200, markerWidth: 3) == 98.5)
+    #expect(markerOffset(fraction: 0.25, barWidth: 200, markerWidth: 3) == 48.5)
+}
+
+/// The divergence this function exists to end: iOS clamped the marker into its
+/// bar and the Mac did not, so a Mac window at 0% or 100% drew half a marker
+/// hanging off the end of the bar it was marking.
+@Test func markerStaysInsideTheBarAtBothEnds() {
+    #expect(markerOffset(fraction: 0, barWidth: 200, markerWidth: 3) == 0)
+    #expect(markerOffset(fraction: 1, barWidth: 200, markerWidth: 3) == 197)
+    // Out-of-range fractions cannot push it out either. `expectedRemaining`
+    // already clamps to 0...100, so this only fires if a future caller feeds
+    // the marker something that helper did not produce.
+    #expect(markerOffset(fraction: -5, barWidth: 200, markerWidth: 3) == 0)
+    #expect(markerOffset(fraction: 5, barWidth: 200, markerWidth: 3) == 197)
+}
+
+/// A bar too small to hold the marker is a degenerate layout, but it must not
+/// also be a negatively-positioned one.
+@Test func markerDoesNotGoNegativeOnADegenerateBar() {
+    #expect(markerOffset(fraction: 0.5, barWidth: 2, markerWidth: 3) == 0)
+    #expect(markerOffset(fraction: 1, barWidth: 0, markerWidth: 3) == 0)
+}

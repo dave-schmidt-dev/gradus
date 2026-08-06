@@ -38,7 +38,13 @@ struct UsageBar: View {
                     Rectangle()
                         .fill(.red)
                         .frame(width: Self.markerWidth, height: Self.markerHeight)
-                        .offset(x: Self.markerOffset(markerPosition, width: width))
+                        .offset(
+                            x: markerOffset(
+                                fraction: markerPosition,
+                                barWidth: width,
+                                markerWidth: Self.markerWidth
+                            )
+                        )
                         .zIndex(1)
                         .accessibilityHidden(true)
                 }
@@ -57,12 +63,5 @@ struct UsageBar: View {
 
     private static func clampedFraction(_ percent: Double) -> Double {
         min(max(percent / 100, 0), 1)
-    }
-
-    private static func markerOffset(_ position: Double, width: Double) -> Double {
-        min(
-            max(position * width - Double(markerWidth / 2), 0),
-            max(width - Double(markerWidth), 0)
-        )
     }
 }
