@@ -20,11 +20,12 @@ extension ProviderEntry: RankableProvider {
         windows.contains { percentIsDepleted($0.percentLeft) }
     }
 
-    /// The Mac's half of the union documented on `rankedPartition`. The pace
-    /// ramp plays the role `isWarning` plays on iOS: it is this platform's
-    /// existing "the system already flagged this" signal, so unioning the local
-    /// threshold on top can only add providers to the tier, never demote one
-    /// the ramp already placed there.
+    /// The Mac's half of the union documented on `rankedPartition`. It
+    /// evaluates `providerNeedsAttention` directly where iOS reads the stored
+    /// `isWarning` the publisher stamped with that same function — one rule,
+    /// reached two ways, because only one of the two models carries the field.
+    /// Unioning the local threshold on top can only add providers to the tier,
+    /// never demote one the ramp already placed there.
     func rankingNeedsAttention(localThreshold: Double) -> Bool {
         ProviderTriage.needsAttention(self)
             || windows.contains { localIsUrgent($0, threshold: localThreshold) }

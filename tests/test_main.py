@@ -79,7 +79,12 @@ class CursorWarningTests(unittest.TestCase):
         with patch("gradus.__main__._notify_warning", return_value=True) as notify:
             _check_warnings([self._cursor(100, 82)], notified, NOW)
             _check_warnings([self._cursor(100, 82)], notified, NOW)
-            _check_warnings([self._cursor(95, 82)], notified, NOW)
+            # The recovery step. It used to be 95% used (5% left), which
+            # stopped warning only because these fixtures carry no billing
+            # cycle and so produce no pace. Since 2026-08-06 a no-pace window
+            # falls back to the percent ramp, and 5% left is red -- that is not
+            # a recovery by any definition, it just used to read as one.
+            _check_warnings([self._cursor(50, 82)], notified, NOW)
             _check_warnings([self._cursor(100, 82)], notified, NOW)
 
         self.assertEqual(notify.call_count, 2)

@@ -57,10 +57,14 @@ protocol RankableProvider {
     /// Whether this provider belongs in the exhausted partition at the bottom.
     var rankingIsDepleted: Bool { get }
     /// Whether this provider belongs in the attention tier within its
-    /// partition. A conformance point rather than a shared implementation
-    /// because the two platforms answer it from different (both correct)
-    /// signals -- CloudKit's stored `isWarning` on iOS, the pace ramp on the
-    /// Mac -- unioned with the caller's local threshold on both.
+    /// partition. Still a conformance point, but no longer a divergence: since
+    /// 2026-08-06 both platforms answer with `GradusKit.providerNeedsAttention`
+    /// unioned with the caller's local threshold. iOS reads it from the stored
+    /// `isWarning` the publisher stamped, the Mac evaluates it directly,
+    /// because only `ProviderStatus` carries the field. The two rules used to
+    /// differ in both the per-window predicate and the aggregation, which is
+    /// how the Mac's "N low" badge and the iPhone's warning count could
+    /// disagree about one snapshot.
     func rankingNeedsAttention(localThreshold: Double) -> Bool
 }
 

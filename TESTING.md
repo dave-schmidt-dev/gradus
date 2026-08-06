@@ -113,6 +113,25 @@ formatting does the same with `Fixtures/percent-format.json`, read by
   and "warns"), assert the *relationship* over the table, not just each
   function in isolation.
 
+Better still, where two predicates are meant to agree, **define one in terms
+of the other** instead of asserting that two independent definitions match.
+"Orange or worse" and "warns" were separate implementations that agreed for
+every window carrying a pace and silently diverged for every window without
+one, and the relationship test had a `guard` skipping exactly the rows where
+they differed — so the suite documented the divergence rather than catching it.
+`windowWarns` is now `signalLevel(...).needsAttention`, the guard is gone, and
+the test asserts it covers at least one no-pace row so the skip cannot come
+back. A relationship test is the right tool when two definitions genuinely must
+stay separate; when they must not, one definition is stronger than any test.
+
+The same applies to *aggregation*, which is easier to overlook because both
+sides can use an identical per-item predicate and still disagree. The Mac asked
+whether its worst-by-percentage window needed attention; iOS asked whether any
+window did. Both called the same function. When a rule is "does this collection
+need attention", pin the quantifier in one shared place —
+`providerNeedsAttention` — and give it a test whose fixture answers differently
+under `any` than under `worst`.
+
 A shared truth table catches drift; it does not prevent it. It is the interim
 stand-in for real centralization — see the `[future]` row in `TASKS.md`.
 

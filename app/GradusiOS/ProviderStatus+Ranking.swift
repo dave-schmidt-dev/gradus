@@ -17,6 +17,10 @@ extension ProviderStatus: RankableProvider {
     /// The union documented on `rankedPartition` (Key decision #6): the stored
     /// `isWarning` guarantees anything CloudKit already pushed about is never
     /// demoted, and the local threshold can only ever add to this tier.
+    ///
+    /// Since 2026-08-06 the stored field carries `providerNeedsAttention`, the
+    /// same function the Mac evaluates locally — so reading it through here is
+    /// no longer a *different* answer from the Mac's, just a cheaper one.
     func rankingNeedsAttention(localThreshold: Double) -> Bool {
         isWarning || windows.contains { localIsUrgent($0, threshold: localThreshold) }
     }

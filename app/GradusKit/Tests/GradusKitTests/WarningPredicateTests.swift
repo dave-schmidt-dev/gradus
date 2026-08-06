@@ -9,15 +9,30 @@ private func window(percentLeft: Double, paceDelta: Double? = nil) -> ProviderWi
 }
 
 // CV-2: generated truth table over the percent_left / pace_delta combinations
-// that decide `window_warns` in gradus/snapshot.py. Mirrors the Python
-// predicate exactly so the two apps cannot silently drift apart.
+// that decide `window_warns` in gradus/snapshot.py. Restates the rule rather
+// than calling the ramp, so the two apps cannot silently drift apart and so a
+// change to `signalLevel` has to be made here deliberately.
+//
+// The `paceDelta == nil` branch is the part that changed on 2026-08-06: it
+// used to contribute `false` unconditionally, and now falls through to the
+// percent-only ramp (70/40/20), which is what `signalLevel` does with a window
+// that has no reset timestamp.
 private let truthTable: [(percentLeft: Double, paceDelta: Double?, expectWarns: Bool)] = {
+    func fallbackWarns(_ percentLeft: Double) -> Bool { percentLeft < 40 }
+
     var cases: [(Double, Double?, Bool)] = []
     for percentLeft in [0.0, 0.4, 1.0, 50.0, 99.0, 100.0] {
-        let depleted = percentLeft.rounded() <= 0
+        let depleted = percentLeft < 0.5
         for paceDelta in [Optional<Double>.none, -0.5, -0.10, -0.099, 0.0, 0.5] {
-            let paceWarns = paceDelta.map { $0 < -0.10 } ?? false
-            cases.append((percentLeft, paceDelta, depleted || paceWarns))
+            let warns: Bool
+            if depleted {
+                warns = true
+            } else if let paceDelta, paceDelta.isFinite {
+                warns = paceDelta < -0.10
+            } else {
+                warns = fallbackWarns(percentLeft)
+            }
+            cases.append((percentLeft, paceDelta, warns))
         }
     }
     return cases
@@ -38,9 +53,14 @@ func windowWarnsMatchesGeneratedTruthTable(
     #expect(windowWarns(window(percentLeft: 101.0, paceDelta: -5.0)) == false)
 }
 
-@Test func invalidPaceNeverWarnsWhenNotDepleted() {
+/// A non-finite pace is treated as *no* pace, so the percent ramp decides.
+/// That is not the same as "never warns": at 50% the fallback says yellow, at
+/// 19% it says red. Before 2026-08-06 both of these were silent.
+@Test func invalidPaceFallsBackToThePercentRamp() {
     #expect(windowWarns(window(percentLeft: 50.0, paceDelta: .nan)) == false)
     #expect(windowWarns(window(percentLeft: 50.0, paceDelta: .infinity)) == false)
+    #expect(windowWarns(window(percentLeft: 19.0, paceDelta: .nan)) == true)
+    #expect(windowWarns(window(percentLeft: 19.0, paceDelta: nil)) == true)
 }
 
 @Test func exactlyAtDepletedRoundingBoundary() {
@@ -60,7 +80,10 @@ func windowWarnsMatchesGeneratedTruthTable(
 /// `DEPLETED_PERCENT_CEILING` instead of rounding at all.
 @Test func depletionCeilingIsExclusiveAndRoundingModeFree() {
     #expect(percentIsDepleted(0.5) == false)
-    #expect(windowWarns(window(percentLeft: 0.5, paceDelta: nil)) == false)
+    // Carries a healthy pace on purpose. With no pace the ramp falls back to
+    // percentage and calls 0.5% red, so `paceDelta: nil` would warn whether or
+    // not the ceiling were exclusive and would assert nothing about depletion.
+    #expect(windowWarns(window(percentLeft: 0.5, paceDelta: 0.2)) == false)
     #expect(percentIsDepleted(depletedPercentCeiling.nextDown) == true)
     #expect(percentIsDepleted(0.0) == true)
 }

@@ -243,8 +243,16 @@ class TestWarningPredicate(unittest.TestCase):
     def test_pace_warning_boundary_and_invalid_values(self) -> None:
         self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": -0.10}))
         self.assertTrue(snap.window_warns({"percent_left": 1.0, "pace_delta": -0.1001}))
-        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": math.nan}))
-        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": -math.inf}))
+        # A non-finite pace is *no evidence*, not evidence of health. Since
+        # 2026-08-06 it falls through to the percent ramp exactly like a
+        # missing pace does, and 1% left is red there. These two asserted False
+        # until then, which meant a window could render red and stay silent.
+        self.assertTrue(snap.window_warns({"percent_left": 1.0, "pace_delta": math.nan}))
+        self.assertTrue(snap.window_warns({"percent_left": 1.0, "pace_delta": -math.inf}))
+        # Same non-finite pace, healthy percentage: the fallback says yellow,
+        # so this is the case that proves the fallthrough is to the ramp and
+        # not simply to "warn".
+        self.assertFalse(snap.window_warns({"percent_left": 55.0, "pace_delta": math.nan}))
         self.assertFalse(snap.window_warns({"percent_left": True, "pace_delta": -0.2}))
         self.assertFalse(snap.window_warns({"percent_left": "0", "pace_delta": -0.2}))
         for percent_left in (math.nan, math.inf, -math.inf, -1.0, 100.1):
@@ -253,9 +261,18 @@ class TestWarningPredicate(unittest.TestCase):
                     snap.window_warns({"percent_left": percent_left, "pace_delta": -0.2})
                 )
 
-    def test_zero_warns_with_unknown_pace_and_one_percent_near_reset_does_not(self) -> None:
+    def test_zero_warns_and_one_percent_on_pace_near_reset_does_not(self) -> None:
+        """Almost empty is fine if the window is almost over.
+
+        Reworded 2026-08-06. This used to spell "near reset" as
+        ``pace_delta: None``, which does not mean near reset -- it means the
+        pace is unknown, and the ramp now (correctly) treats an unknown pace at
+        1% left as red rather than as an implicit all-clear. Stating the pace
+        explicitly is what the test meant all along.
+        """
         self.assertTrue(snap.window_warns({"percent_left": 0.0, "pace_delta": None}))
-        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": None}))
+        self.assertFalse(snap.window_warns({"percent_left": 1.0, "pace_delta": 0.02}))
+        self.assertTrue(snap.window_warns({"percent_left": 1.0, "pace_delta": None}))
 
     def test_cursor_warning_windows_are_v2_capable_but_not_v1_persisted(self) -> None:
         cursor = _ps(
@@ -1461,7 +1478,11 @@ class TestCopilotParity(unittest.TestCase):
         """
         self.assertEqual(snap.DEPLETED_PERCENT_CEILING, 0.5)
         self.assertFalse(snap.percent_is_depleted(0.5))
-        self.assertFalse(snap.window_warns({"percent_left": 0.5, "pace_delta": None}))
+        # Carries a healthy pace on purpose. With ``pace_delta: None`` the ramp
+        # falls back to percentage and calls 0.5% red, so that spelling would
+        # warn whether or not the ceiling were exclusive -- it would assert
+        # nothing about depletion. A window on pace isolates the ceiling.
+        self.assertFalse(snap.window_warns({"percent_left": 0.5, "pace_delta": 0.2}))
         self.assertTrue(snap.percent_is_depleted(0.49999))
         # The old spelling; kept as an explicit record of what changed.
         self.assertEqual(round(0.5), 0)

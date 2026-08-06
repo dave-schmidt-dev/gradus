@@ -163,17 +163,21 @@ enum ProviderTriage {
         provider.windows.min { $0.percentLeft < $1.percentLeft }
     }
 
-    /// Attention means the shared ramp classified the row orange or red.
+    /// Attention means the shared ramp classified *any* window orange or red.
     /// Deliberately delegates to `signalLevel` rather than testing a
     /// percentage: the ramp classifies by *pace*, so a window at 1% five
     /// minutes before it resets is fine and must not be flagged.
+    ///
+    /// It asks about every window, not just `worstWindow`. Until 2026-08-06 it
+    /// asked only about the worst-by-percentage one, which is not the same
+    /// question: a provider with a 5%-left window sitting on pace and an
+    /// 80%-left window burning at -0.5 has nothing wrong with its worst window
+    /// and something badly wrong with the other. iOS had always used
+    /// any-window, so that provider raised a warning on the phone and none on
+    /// the Mac.
     static func needsAttention(_ provider: ProviderEntry) -> Bool {
         if !provider.ok { return true }
-        guard let window = worstWindow(provider) else { return false }
-        switch signalLevel(for: window) {
-        case .orange, .red: return true
-        case .green, .yellow, .unknown: return false
-        }
+        return providerNeedsAttention(provider.windows)
     }
 
 }

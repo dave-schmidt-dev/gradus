@@ -24,6 +24,7 @@ from .snapshot import (
     percent_is_valid,
     project_data,
     reconcile,
+    signal_level,
     warning_window_ids,
 )
 from .snapshot import parse_reset_target as _parse_reset_target
@@ -586,21 +587,9 @@ def _provider_display_fields(snapshot: ProviderSnapshot, now: datetime) -> dict[
 # ---------------------------------------------------------------------------
 
 
-#: Pace at or above this is healthy: spending exactly as fast as the clock
-#: runs down is what the window is for.
-_PACE_GREEN_FLOOR = 0.0
-
-#: Matches ``window_warns``, which alerts at ``pace_delta < -0.10``. Because
-#: this bound is inclusive, "orange or worse" and "warns" are the same
-#: predicate whenever pace is known, so a colored row and a notification
-#: cannot disagree.
-_PACE_YELLOW_FLOOR = -0.10
-
-#: Burning down more than 25 points faster than the clock. Unlike
-#: ``_PACE_YELLOW_FLOOR`` this is not derived from an existing predicate; it
-#: separates "drifting" from "will run out early" and is free to be retuned.
-_PACE_ORANGE_FLOOR = -0.25
-
+#: The ramp itself lives in ``snapshot.py`` next to ``window_warns``, which is
+#: defined in terms of it. Only the style mapping is presentation and belongs
+#: here.
 _SIGNAL_STYLES: dict[str, str] = {
     "green": "bar.green",
     "yellow": "bar.yellow",
@@ -610,79 +599,9 @@ _SIGNAL_STYLES: dict[str, str] = {
 }
 
 
-def _percent_fallback_level(percent: float) -> str:
-    """Classify by absolute percentage alone, for windows with no usable pace.
-
-    This is the pre-pace ramp, kept only as :func:`_signal_level`'s step 3 —
-    it is not a public alternative to it. Reaching it means the window has no
-    reset timestamp, so there is no evidence about how fast the remaining
-    percentage is being spent.
-
-    Mirrors the ``guard let paceDelta`` branch of ``signalLevel`` in
-    ``app/GradusKit/Sources/GradusKit/SignalLevel.swift``.
-    """
-    if percent >= 70:
-        return "green"
-    if percent >= 40:
-        return "yellow"
-    if percent >= 20:
-        return "orange"
-    return "red"
-
-
-def _signal_level(percent: float | None, pace: float | None) -> str:
-    """Classify a window by pace rather than by absolute percentage left.
-
-    Mirrors ``signalLevel`` in ``app/GradusKit/Sources/GradusKit/SignalLevel.swift``.
-    The two are held together by the shared truth table at
-    ``app/GradusKit/Tests/GradusKitTests/Fixtures/signal-levels.json``, which
-    both test suites read.
-
-    The rules, in order:
-
-    1. An invalid percentage (missing, non-finite, or outside 0-100 per
-       INV-3) is ``unknown``. This is stricter than the pre-pace ramp, which
-       returned green for a value like 150.
-    2. A depleted percentage is ``red`` regardless of pace — there is nothing
-       left to pace.
-    3. A missing or non-finite pace falls back to the percent-only ramp so a
-       window without a reset timestamp still gets a color. This is the one
-       case where "orange or worse" is not equivalent to ``window_warns``:
-       19% with no pace renders red but raises no alert, because there is no
-       evidence to alert on.
-    4. Otherwise the pace delta selects the step.
-
-    Args:
-        percent: Remaining percentage, normalized 0-100.
-        pace: ``fraction_left - fraction_of_window_remaining``. Positive is
-            ahead of schedule. Not clamped (INV-4).
-
-    Returns:
-        One of ``green``, ``yellow``, ``orange``, ``red``, ``unknown``.
-    """
-    if not percent_is_valid(percent):
-        return "unknown"
-    if percent_is_depleted(percent):
-        return "red"
-
-    pace_is_usable = (
-        isinstance(pace, (int, float)) and not isinstance(pace, bool) and math.isfinite(pace)
-    )
-    if not pace_is_usable:
-        return _percent_fallback_level(percent)
-
-    if pace >= _PACE_GREEN_FLOOR:
-        return "green"
-    if pace >= _PACE_YELLOW_FLOOR:
-        return "yellow"
-    if pace >= _PACE_ORANGE_FLOOR:
-        return "orange"
-    return "red"
-
-
 def _style_for_signal(percent: float | None, pace: float | None) -> str:
     """Return the Rich theme style for a window's pace-aware signal level."""
-    return _SIGNAL_STYLES[_signal_level(percent, pace)]
+    return _SIGNAL_STYLES[signal_level(percent, pace)]
 
 
 ACCENT_STYLES: dict[str, str] = {

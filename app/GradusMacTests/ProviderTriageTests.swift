@@ -70,6 +70,35 @@ struct ProviderTriageTests {
         #expect(!ProviderTriage.needsAttention(provider("Empty")))
     }
 
+    /// The Mac-side half of the 2026-08-06 unification: attention asks about
+    /// every window, not just the worst-by-percentage one.
+    ///
+    /// This fixture is the case the old rule got wrong. `worstWindow` picks
+    /// `five_hour` at 5%, which is comfortably on pace and green, so the menu
+    /// showed nothing while iOS -- which had always asked about any window --
+    /// counted this provider as warning. Same snapshot, two answers.
+    @Test func attentionAsksAboutEveryWindowNotJustTheWorst() {
+        let multiWindow = ProviderEntry(
+            name: "Codex",
+            ok: true,
+            error: nil,
+            windows: [
+                // Physically reachable pace values -- see the note on
+                // `providerAttentionAsksAboutEveryWindowNotJustTheWorst` in
+                // GradusKitTests for why 80%/-0.5 would not be.
+                ProviderWindow(
+                    id: "five_hour", percentLeft: 5, resetISO: nil, windowHours: 5, paceDelta: 0.02),
+                ProviderWindow(
+                    id: "weekly", percentLeft: 70, resetISO: nil, windowHours: 168, paceDelta: -0.28),
+            ],
+            data: [:],
+            observedAt: nil
+        )
+
+        #expect(ProviderTriage.worstWindow(multiWindow)?.id == "five_hour")
+        #expect(ProviderTriage.needsAttention(multiWindow))
+    }
+
     // MARK: - ordering (shared `rankedPartition`)
 
     /// The Mac's threshold default, so these assertions describe what ships

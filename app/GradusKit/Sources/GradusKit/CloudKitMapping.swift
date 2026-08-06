@@ -51,7 +51,7 @@ public struct ProviderStatus: Codable, Equatable, Sendable {
         self.observedAt = observedAt
         self.snapshotUpdatedAt = snapshotUpdatedAt
         self.publishedAt = publishedAt
-        self.isWarning = isWarning ?? windows.contains(where: windowWarns)
+        self.isWarning = isWarning ?? providerNeedsAttention(windows)
         self.isDepleted = isDepleted ?? windows.contains { percentIsDepleted($0.percentLeft) }
         self.syncSource = syncSource
     }

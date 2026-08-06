@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
-from gradus.snapshot import SAFE_DATA_KEYS, percent_is_depleted, window_warns
+from gradus.snapshot import SAFE_DATA_KEYS, percent_is_depleted, signal_level, window_warns
 from gradus.ui import (
     _FILL_GLYPH,
     THEME,
@@ -31,7 +31,6 @@ from gradus.ui import (
     _percent_str,
     _provider_is_empty,
     _ResponsiveDashboardBody,
-    _signal_level,
     _style_for_signal,
     build_dashboard,
     build_loading_screen,
@@ -262,27 +261,38 @@ class SignalLevelTruthTableTests(unittest.TestCase):
             percent = self._number(case["percent_left"])
             pace = self._number(case["pace_delta"])
             with self.subTest(percent=percent, pace=pace, why=case["why"]):
-                self.assertEqual(_signal_level(percent, pace), case["level"])
+                self.assertEqual(signal_level(percent, pace), case["level"])
 
-    def test_orange_or_worse_equals_window_warns_when_pace_is_known(self) -> None:
+    def test_orange_or_worse_equals_window_warns(self) -> None:
         """A colored row and a notification can never contradict each other.
 
-        Only holds when pace is finite: with no pace the ramp falls back to
-        percent and can render red on a window that raises no alert.
+        This used to skip rows with no pace, because there the two genuinely
+        differed: the ramp fell back to percentage and ``window_warns``
+        returned False, so a window could render red and stay silent. Since
+        2026-08-06 ``window_warns`` *is* this property, and the absence of that
+        skip is what pins it. Mirrors
+        ``SignalLevelTests.orangeOrWorseEqualsWindowWarns``.
         """
+        checked_without_pace = 0
         for case in self._cases():
             percent = self._number(case["percent_left"])
             pace = self._number(case["pace_delta"])
             if percent is None or not math.isfinite(percent):
                 continue
             if pace is None or not math.isfinite(pace):
-                continue
+                checked_without_pace += 1
             with self.subTest(percent=percent, pace=pace):
                 alarming = case["level"] in ("orange", "red")
                 self.assertEqual(
                     window_warns({"percent_left": percent, "pace_delta": pace}),
                     alarming,
                 )
+        self.assertGreater(
+            checked_without_pace,
+            0,
+            "the fixture no longer covers a window without pace, "
+            "which is the case this property used to fail on",
+        )
 
     def test_style_mapping_covers_every_level(self) -> None:
         for case in self._cases():
@@ -1067,11 +1077,14 @@ class ProviderPanelTests(unittest.TestCase):
             source="api",
             data={"auto_percent_used": 100, "api_percent_used": 18},
         )
+        # 50% used, not 80%. These fixtures omit the billing cycle, so neither
+        # pool has a pace and both fall back to the percent ramp -- under which
+        # 20% left is orange and does warn. 50% left is yellow and does not.
         no_warning = ProviderSnapshot(
             name="Cursor",
             ok=True,
             source="api",
-            data={"auto_percent_used": 80, "api_percent_used": 18},
+            data={"auto_percent_used": 50, "api_percent_used": 18},
         )
 
         warning_output = _capture(build_provider_panel(one_warning, self.now), width=44)

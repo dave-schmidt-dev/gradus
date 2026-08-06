@@ -113,25 +113,117 @@ def percent_is_depleted(percent_left: object) -> bool:
     return percent_is_valid(percent_left) and float(percent_left) < DEPLETED_PERCENT_CEILING
 
 
-def window_warns(window: Mapping[str, object]) -> bool:
-    """Return whether one normalized window warrants an alert.
+#: Pace at or above this is healthy: spending exactly as fast as the clock
+#: runs down is what the window is for.
+PACE_GREEN_FLOOR = 0.0
 
-    A window warns only when its numeric remaining percentage is exactly zero,
-    or its finite canonical pace delta is strictly below -0.10. Invalid
-    percentage values, including booleans, are never warning candidates.
+#: Drifting behind, but not yet by enough to act on.
+PACE_YELLOW_FLOOR = -0.10
+
+#: Burning down more than 25 points faster than the clock. This separates
+#: "drifting" from "will run out early" and is the one number here free to be
+#: retuned; the other two are pinned by what they mean.
+PACE_ORANGE_FLOOR = -0.25
+
+
+def _percent_fallback_level(percent: float) -> str:
+    """Classify by absolute percentage alone, for windows with no usable pace.
+
+    This is the pre-pace ramp, kept only as :func:`signal_level`'s step 3 — it
+    is not a public alternative to it. Reaching it means the window has no
+    reset timestamp, so there is no evidence about how fast the remaining
+    percentage is being spent.
+
+    Mirrors the ``guard let paceDelta`` branch of ``signalLevel`` in
+    ``app/GradusKit/Sources/GradusKit/SignalLevel.swift``.
+    """
+    if percent >= 70:
+        return "green"
+    if percent >= 40:
+        return "yellow"
+    if percent >= 20:
+        return "orange"
+    return "red"
+
+
+def signal_level(percent: float | None, pace: float | None) -> str:
+    """Classify a window by pace rather than by absolute percentage left.
+
+    Mirrors ``signalLevel`` in ``app/GradusKit/Sources/GradusKit/SignalLevel.swift``.
+    The two are held together by the shared truth table at
+    ``app/GradusKit/Tests/GradusKitTests/Fixtures/signal-levels.json``, which
+    both test suites read.
+
+    Lives here rather than in ``ui.py`` because :func:`window_warns` is defined
+    in terms of it and ``ui`` imports ``snapshot``, not the reverse. The Rich
+    style mapping stays in ``ui.py``: this function classifies, it does not
+    present.
+
+    The rules, in order:
+
+    1. An invalid percentage (missing, non-finite, or outside 0-100 per
+       INV-3) is ``unknown``. This is stricter than the pre-pace ramp, which
+       returned green for a value like 150.
+    2. A depleted percentage is ``red`` regardless of pace — there is nothing
+       left to pace.
+    3. A missing or non-finite pace falls back to the percent-only ramp so a
+       window without a reset timestamp still gets a color.
+    4. Otherwise the pace delta selects the step.
+
+    Args:
+        percent: Remaining percentage, normalized 0-100.
+        pace: ``fraction_left - fraction_of_window_remaining``. Positive is
+            ahead of schedule. Not clamped (INV-4).
+
+    Returns:
+        One of ``green``, ``yellow``, ``orange``, ``red``, ``unknown``.
+    """
+    if not percent_is_valid(percent):
+        return "unknown"
+    if percent_is_depleted(percent):
+        return "red"
+
+    pace_is_usable = (
+        isinstance(pace, (int, float)) and not isinstance(pace, bool) and math.isfinite(pace)
+    )
+    if not pace_is_usable:
+        return _percent_fallback_level(percent)
+
+    if pace >= PACE_GREEN_FLOOR:
+        return "green"
+    if pace >= PACE_YELLOW_FLOOR:
+        return "yellow"
+    if pace >= PACE_ORANGE_FLOOR:
+        return "orange"
+    return "red"
+
+
+def window_warns(window: Mapping[str, object]) -> bool:
+    """Return whether one normalized window warrants attention.
+
+    Defined as *the ramp said orange or red* — deliberately the same predicate
+    that colors the row, not a parallel one. Before 2026-08-06 this was its own
+    rule (depleted, or finite pace below -0.10), which agreed with the ramp for
+    every window carrying a pace and disagreed for every window without one: a
+    19%-left window with no reset timestamp rendered red and raised no alert,
+    on the reasoning that there was no evidence to alert on.
+
+    That gap was real but it was not the reason this changed. The two rules
+    were also aggregated differently per provider — the Mac asked only about
+    its worst-by-percentage window, iOS about any window — so the same snapshot
+    could produce a warning count on one platform and not the other. Collapsing
+    both onto one predicate with one aggregation
+    (:func:`warning_window_ids`) is what makes them agree by construction.
+
+    Invalid percentage values, including booleans, are never candidates.
     """
     percent_left = window.get("percent_left")
     if not percent_is_valid(percent_left):
         return False
-    if percent_is_depleted(percent_left):
-        return True
     pace = window.get("pace_delta")
-    return (
-        isinstance(pace, (int, float))
-        and not isinstance(pace, bool)
-        and math.isfinite(pace)
-        and pace < -0.10
-    )
+    if isinstance(pace, bool) or not isinstance(pace, (int, float)):
+        pace = None
+    return signal_level(float(percent_left), pace) in ("orange", "red")
 
 
 def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:

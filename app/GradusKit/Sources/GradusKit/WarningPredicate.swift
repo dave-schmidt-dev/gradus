@@ -33,14 +33,32 @@ public func percentIsDepleted(_ percentLeft: Double?) -> Bool {
     return percentLeft < depletedPercentCeiling
 }
 
-/// A window warrants an alert only when its remaining percentage is exactly
-/// depleted, or its finite pace delta is strictly below -0.10. Invalid
-/// percentages are never warning candidates.
+/// A window warrants attention when the ramp classifies it orange or red —
+/// deliberately the same predicate that colors the row, not a parallel one.
+///
+/// Before 2026-08-06 this was its own rule (depleted, or finite pace below
+/// -0.10), which agreed with the ramp for every window carrying a pace and
+/// disagreed for every window without one: a 19%-left window with no reset
+/// timestamp rendered red and raised no alert, on the reasoning that there was
+/// no evidence to alert on.
+///
+/// That gap was real but it was not the reason this changed. The two rules
+/// were also aggregated differently per provider — the Mac asked only about
+/// its worst-by-percentage window, iOS about any window — so the same snapshot
+/// could produce a warning count on one platform and not the other. Collapsing
+/// both onto one predicate with one aggregation (`providerNeedsAttention`) is
+/// what makes them agree by construction.
+///
+/// Invalid percentages are never candidates; `signalLevel` returns `.unknown`
+/// for them, which is not an attention step.
 public func windowWarns(_ window: ProviderWindow) -> Bool {
-    guard percentIsValid(window.percentLeft) else { return false }
-    if percentIsDepleted(window.percentLeft) {
-        return true
-    }
-    guard let paceDelta = window.paceDelta, paceDelta.isFinite else { return false }
-    return paceDelta < -0.10
+    signalLevel(for: window).needsAttention
+}
+
+/// The one definition of "this provider needs attention": any of its windows
+/// does. Both apps' ranking and the publisher's stored `isWarning` field read
+/// this, so the Mac's "N low" badge, the iPhone's warning count, and the
+/// CloudKit push subscription are answering the same question.
+public func providerNeedsAttention(_ windows: [ProviderWindow]) -> Bool {
+    windows.contains(where: windowWarns)
 }

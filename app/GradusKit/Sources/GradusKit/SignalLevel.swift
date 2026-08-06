@@ -15,6 +15,20 @@ public enum SignalLevel: String, Sendable, CaseIterable, Codable {
     /// their muted/secondary color rather than picking a ramp step.
     case unknown
 
+    /// Whether this step is worth surfacing to the user — the single meaning
+    /// of "needs attention" on every surface.
+    ///
+    /// `windowWarns` is defined as exactly this, so a colored row, a ranked
+    /// tier, a badge count and a notification cannot disagree about the same
+    /// window. Before 2026-08-06 the alert rule was a separate predicate that
+    /// happened to agree whenever pace was known.
+    public var needsAttention: Bool {
+        switch self {
+        case .orange, .red: return true
+        case .green, .yellow, .unknown: return false
+        }
+    }
+
     /// The canonical sRGB value for this level, or `nil` for `.unknown`
     /// (whose color is surface-specific: `text.muted` in the TUI, `.secondary`
     /// in SwiftUI).
@@ -39,17 +53,15 @@ public enum SignalLevel: String, Sendable, CaseIterable, Codable {
 /// clock runs down is fine — that is what the window is for.
 private let paceGreenFloor = 0.0
 
-/// Matches `windowWarns` / `window_warns`, which alert at `paceDelta < -0.10`.
-/// Because this bound is inclusive, "orange or worse" and "warns" are the same
-/// predicate for every window with a finite pace, so a colored row and a
-/// notification can never disagree. (They can differ when pace is absent — see
-/// `signalLevel` below.)
+/// Drifting behind, but not yet by enough to act on. This bound is what
+/// `windowWarns` alerts below, so moving it moves the alert threshold with it —
+/// which is now the point: they are one predicate rather than two that happen
+/// to line up.
 private let paceYellowFloor = -0.10
 
-/// Burning down more than 25 points faster than the clock. Unlike
-/// `paceYellowFloor` this bound is not derived from an existing predicate; it
-/// was chosen to separate "drifting" from "will run out early" and is the one
-/// number here free to be retuned.
+/// Burning down more than 25 points faster than the clock. It separates
+/// "drifting" from "will run out early" and is the one number here free to be
+/// retuned; the other two are pinned by what they mean.
 private let paceOrangeFloor = -0.25
 
 /// Classify a window by how its consumption compares to the time remaining,
@@ -64,9 +76,9 @@ private let paceOrangeFloor = -0.25
 ///    There is nothing left to pace.
 /// 3. A missing or non-finite pace falls back to the legacy percent-only
 ///    ramp (70/40/20) so a window without a reset timestamp still gets a
-///    color. This is the one case where "orange or worse" is not equivalent
-///    to `windowWarns`: 19% with no pace renders red but raises no alert,
-///    because there is no evidence to alert on.
+///    color. Since 2026-08-06 that fallback also alerts: `windowWarns` is
+///    defined as this function's `.needsAttention`, so a 19%-left window with
+///    no pace is red *and* warns, where it used to render red silently.
 /// 4. Otherwise the pace delta selects the step.
 ///
 /// - Parameters:
