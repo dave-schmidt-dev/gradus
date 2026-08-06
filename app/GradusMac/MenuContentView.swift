@@ -21,9 +21,16 @@ struct MenuContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            MenuHeader(providers: viewModel.providers)
+            MenuHeader(
+                providers: viewModel.providers,
+                localThreshold: viewModel.localWarningThresholdPercent
+            )
 
-            ProviderListView(providers: viewModel.providers)
+            ProviderListView(
+                providers: viewModel.providers,
+                sortOption: viewModel.providerSortOption,
+                localThreshold: viewModel.localWarningThresholdPercent
+            )
 
             Divider()
 
@@ -41,6 +48,7 @@ struct MenuContentView: View {
 
             Divider()
 
+            Button("Settings…") { Self.openSettings() }
             Button("Quit Gradus") {
                 NSApplication.shared.terminate(nil)
             }
@@ -79,6 +87,22 @@ struct MenuContentView: View {
         }
     }
 
+    /// Opens the `Settings` scene from a `LSUIElement` agent.
+    ///
+    /// Two steps, both required. `SettingsLink` would be the modern answer but
+    /// is macOS 14+, and this app deploys to 13.0, so the window is opened by
+    /// selector -- `showSettingsWindow:` on macOS 13+, *not* the older
+    /// `showPreferencesWindow:`. And an accessory app is not the active
+    /// application when its menu item is clicked, so without the explicit
+    /// `activate` the settings window opens *behind* whatever the user was
+    /// working in, which reads as the button doing nothing at all.
+    static func openSettings() {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        NSApplication.shared.sendAction(
+            Selector(("showSettingsWindow:")), to: nil, from: nil
+        )
+    }
+
     /// Uses `friendlyDateLabel` -- the same helper behind the "resets …" copy
     /// on each row -- so the menu never shows two date vocabularies at once.
     static func lastSyncLabel(_ date: Date?, now: Date = Date()) -> String? {
@@ -91,9 +115,20 @@ struct MenuContentView: View {
 /// answer to "is anything wrong" is available without reading any row.
 struct MenuHeader: View {
     let providers: [ProviderEntry]
+    let localThreshold: Double
 
+    init(
+        providers: [ProviderEntry],
+        localThreshold: Double = PublisherViewModel.defaultLocalWarningThresholdPercent
+    ) {
+        self.providers = providers
+        self.localThreshold = localThreshold
+    }
+
+    /// Counted with the same predicate that decides ranking tier, so the badge
+    /// can never disagree with the order below it about what "low" means.
     private var attentionCount: Int {
-        providers.filter(ProviderTriage.needsAttention).count
+        providers.filter { $0.rankingNeedsAttention(localThreshold: localThreshold) }.count
     }
 
     var body: some View {
@@ -136,33 +171,14 @@ enum ProviderTriage {
         }
     }
 
-    /// Lower rank sorts first: failures, then the ramp worst-to-best.
-    private static func rank(_ provider: ProviderEntry) -> Int {
-        guard provider.ok else { return 0 }
-        guard let window = worstWindow(provider) else { return 5 }
-        switch signalLevel(for: window) {
-        case .red: return 1
-        case .orange: return 2
-        case .yellow: return 3
-        case .green: return 4
-        case .unknown: return 5
-        }
-    }
-
-    /// Urgency order, so the provider about to run out is never buried
-    /// mid-list. Ties break on percentage and then name, which keeps the
-    /// order stable across refreshes rather than reshuffling equal rows.
-    static func sorted(_ providers: [ProviderEntry]) -> [ProviderEntry] {
-        providers.sorted { lhs, rhs in
-            let (lrank, rrank) = (rank(lhs), rank(rhs))
-            if lrank != rrank { return lrank < rrank }
-            let lpct = worstWindow(lhs)?.percentLeft ?? .infinity
-            let rpct = worstWindow(rhs)?.percentLeft ?? .infinity
-            if lpct != rpct { return lpct < rpct }
-            return lhs.name < rhs.name
-        }
-    }
 }
+// Ordering deliberately does NOT live here any more. `ProviderTriage.sorted`
+// ranked by signal level, and because a depleted provider is red, it sorted
+// exhausted providers to the *top* -- while iOS's ranking put them last, on
+// purpose. Same snapshot, opposite answer, for as long as the two platforms
+// each owned a private copy of the rule. Both now call the one
+// `rankedPartition` in `Shared/ProviderRanking.swift`; this type keeps only
+// the Mac-specific pace-ramp classification that feeds it.
 
 /// The provider rows, split out from `MenuContentView` so it can be
 /// snapshot-tested standalone. `Toggle` and the native `ProgressView` are
@@ -174,10 +190,23 @@ enum ProviderTriage {
 struct ProviderListView: View {
     let providers: [ProviderEntry]
     let now: Date
+    let sortOption: ProviderSortOption
+    let localThreshold: Double
 
-    init(providers: [ProviderEntry], now: Date = Date()) {
+    init(
+        providers: [ProviderEntry],
+        now: Date = Date(),
+        sortOption: ProviderSortOption = .mostUrgent,
+        localThreshold: Double = PublisherViewModel.defaultLocalWarningThresholdPercent
+    ) {
         self.providers = providers
         self.now = now
+        self.sortOption = sortOption
+        self.localThreshold = localThreshold
+    }
+
+    private var ranked: RankedProviders<ProviderEntry> {
+        rankedPartition(providers, localThreshold: localThreshold, sortOption: sortOption)
     }
 
     var body: some View {
@@ -186,10 +215,51 @@ struct ProviderListView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
+            let ranked = ranked
             VStack(alignment: .leading, spacing: 8) {
-                ForEach(ProviderTriage.sorted(providers), id: \.name) { provider in
+                ForEach(ranked.active, id: \.name) { provider in
                     ProviderRow(provider: provider, now: now)
                 }
+                if !ranked.exhausted.isEmpty {
+                    ExhaustedProviderSection(providers: ranked.exhausted, now: now)
+                }
+            }
+        }
+    }
+}
+
+/// Providers with nothing left, in the one place they belong: the bottom, in
+/// the least amount of space that still answers the only question a spent
+/// provider raises -- when does it come back.
+///
+/// A depleted provider is the *least* actionable row in the menu: there is no
+/// pace to correct and no budget to spend. Rendering it with the same name +
+/// percentage + bar + metadata as an active provider spends four lines saying
+/// "0%" and pushes the rows that can still be acted on off the top. Name and
+/// reset time, one line each, is the whole payload.
+private struct ExhaustedProviderSection: View {
+    let providers: [ProviderEntry]
+    let now: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Divider()
+            Text("Exhausted")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            ForEach(providers, id: \.name) { provider in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(provider.name)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    if let reset = earliestResetLabel(provider.windows, now: now) {
+                        Text(reset).monospacedDigit()
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("exhausted-provider-\(provider.name)")
             }
         }
     }

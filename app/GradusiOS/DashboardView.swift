@@ -154,25 +154,38 @@ struct DashboardContent: View {
     /// count would stretch cards across 1366pt and reintroduce the wasted
     /// horizontal space this layout exists to remove.
     ///
-    /// Renders `viewModel.providers` in rank order without splitting exhausted
-    /// providers into their own section: at this density an exhausted provider
-    /// is legible inline as a card whose rows are all red, and the ranking
-    /// already sorts it last. The `showExhausted` preference still applies —
-    /// it filters the source array.
+    /// Active providers as full density cards, then exhausted ones in a
+    /// compact section at the bottom.
+    ///
+    /// An earlier version rendered exhausted providers inline as ordinary
+    /// cards, on the reasoning that the ranking already sorts them last and an
+    /// all-red card reads as spent. In practice that spends a full card —
+    /// every window, every bar — on the one provider you can do nothing about,
+    /// and on a phone it pushes the actionable rows off the first screen. A
+    /// spent provider raises exactly one question: when does it come back.
+    /// Name and reset time answer it in two lines.
+    ///
+    /// The `showExhausted` preference still applies upstream — it filters the
+    /// source array, so hiding them removes this section entirely.
     @ViewBuilder
     private var denseGrid: some View {
         ScrollView {
-            LazyVGrid(
-                columns: columns,
-                alignment: .leading,
-                spacing: 12
-            ) {
-                ForEach(viewModel.providers, id: \.providerName) { provider in
-                    ProviderDensityCard(provider: provider, now: now, showsReset: layout.showsReset)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedProviderName = provider.providerName
-                        }
+            VStack(alignment: .leading, spacing: 16) {
+                LazyVGrid(
+                    columns: columns,
+                    alignment: .leading,
+                    spacing: 12
+                ) {
+                    ForEach(activeProviders, id: \.providerName) { provider in
+                        ProviderDensityCard(provider: provider, now: now, showsReset: layout.showsReset)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedProviderName = provider.providerName
+                            }
+                    }
+                }
+                if !exhaustedProviders.isEmpty {
+                    exhaustedSection
                 }
             }
             .padding(.horizontal, 16)
@@ -180,4 +193,69 @@ struct DashboardContent: View {
         }
     }
 
+    /// `viewModel.providers` already arrives in `rankedPartition` order with
+    /// exhausted last, so filtering here preserves both the split and the
+    /// order within each half — it does not re-derive either.
+    private var activeProviders: [ProviderStatus] {
+        viewModel.providers.filter { !$0.isDepleted }
+    }
+
+    private var exhaustedProviders: [ProviderStatus] {
+        viewModel.providers.filter(\.isDepleted)
+    }
+
+    /// Two per row on iPhone, wider on iPad.
+    ///
+    /// Sized from the content, not from the card grid: a cell holds a provider
+    /// name and "resets Aug 12, 7:46 PM". A 150pt minimum packs four columns
+    /// onto an iPad and truncates both strings — which defeats the point,
+    /// since the reset time is the entire reason the cell exists. 240 keeps
+    /// them whole at every width this app is used at.
+    private var exhaustedColumns: [GridItem] {
+        switch layout {
+        case .denseSingleColumn:
+            return [GridItem(.adaptive(minimum: 170), spacing: 8, alignment: .top)]
+        case .denseGrid:
+            return [GridItem(.adaptive(minimum: 240), spacing: 8, alignment: .top)]
+        }
+    }
+
+    private var exhaustedSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Exhausted")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityIdentifier("exhausted-section-header")
+            LazyVGrid(columns: exhaustedColumns, alignment: .leading, spacing: 8) {
+                ForEach(exhaustedProviders, id: \.providerName) { provider in
+                    exhaustedCell(provider)
+                }
+            }
+        }
+    }
+
+    /// Still tappable through to the detail view: compact is about how much
+    /// the row costs on screen, not about withholding the full breakdown from
+    /// anyone who wants it.
+    private func exhaustedCell(_ provider: ProviderStatus) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(provider.providerDisplayName)
+                .font(.subheadline)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text(earliestResetLabel(provider.windows, now: now) ?? "reset unknown")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selectedProviderName = provider.providerName
+        }
+        .accessibilityIdentifier("exhausted-provider-\(provider.providerName)")
+    }
 }

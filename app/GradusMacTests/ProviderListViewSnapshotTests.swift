@@ -84,6 +84,28 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
                     data: [:],
                     observedAt: nil
                 ),
+                // Depleted, and deliberately listed first-ish in the input so
+                // the baseline proves the *sort* moved it, not the fixture
+                // order. Its presence is the point: with no depleted provider
+                // in this fixture the exhausted section never renders, and the
+                // whole compact treatment could be deleted with a green gate --
+                // exactly how the equivalent iOS cell was lost (TASKS row 21).
+                ProviderEntry(
+                    name: "Copilot",
+                    ok: true,
+                    error: nil,
+                    windows: [
+                        ProviderWindow(
+                            id: "weekly",
+                            percentLeft: 0,
+                            resetISO: "2026-08-04T04:00:00Z",
+                            windowHours: 168,
+                            paceDelta: -0.60
+                        )
+                    ],
+                    data: [:],
+                    observedAt: "2026-08-02T17:55:00Z"
+                ),
             ]
         )
     )
@@ -93,7 +115,7 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
     // the live menu rather than an arbitrary one.
     let image = snapshotImage(
         ProviderListView(providers: viewModel.providers, now: fixedNow),
-        size: CGSize(width: 256, height: 200)
+        size: CGSize(width: 256, height: 260)
     )
     assertSnapshot(of: image, as: .image)
 }

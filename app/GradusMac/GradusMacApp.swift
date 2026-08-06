@@ -68,6 +68,14 @@ struct GradusMacApp: App {
         // `ImageRenderer`, where SwiftUI draws normally, so the baselines were
         // correct and green against a path the user never saw.
         .menuBarExtraStyle(.window)
+
+        // Reachable from the menu's "Settings…" row (and ⌘, once the window
+        // has focus). Holds the device-local display preferences that used to
+        // have nowhere to live on this platform, which is why the Mac had no
+        // sort control while iOS had three.
+        Settings {
+            MacSettingsView(viewModel: PublishPipeline.shared.viewModel)
+        }
     }
 }
 

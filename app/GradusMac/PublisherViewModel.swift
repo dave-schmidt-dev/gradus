@@ -32,10 +32,32 @@ public final class PublisherViewModel: ObservableObject {
     /// been running for a week would otherwise claim it had never synced until
     /// the next snapshot changed, which is exactly when a user checks.
     @Published public private(set) var lastSyncedAt: Date?
+
+    /// Device-local display preferences, mirroring `DashboardViewModel`'s on
+    /// iOS down to the `UserDefaults` key names. They are deliberately *not*
+    /// published to CloudKit: "how I like this Mac's menu sorted" is not a
+    /// property of the usage data, and syncing it would let one device
+    /// reorder another's list.
+    @Published public var providerSortOption: ProviderSortOption {
+        didSet { defaults.set(providerSortOption.rawValue, forKey: Self.providerSortOptionKey) }
+    }
+    @Published public var localWarningThresholdPercent: Double {
+        didSet {
+            defaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
+        }
+    }
     private var syncOperationID: UInt64 = 0
 
     static let syncEnabledKey = "iCloudSyncEnabled"
     static let lastSyncedAtKey = "iCloudLastSyncedAt"
+    static let providerSortOptionKey = "providerSortOption"
+    static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
+
+    /// Matches `DashboardViewModel.defaultLocalWarningThresholdPercent`. A
+    /// different default here would mean the same provider counts as "low" on
+    /// the phone and not on the Mac, which is the class of drift this whole
+    /// change exists to remove.
+    public static let defaultLocalWarningThresholdPercent: Double = 20.0
 
     /// Injectable so tests do not write to the shipping app's own preference
     /// domain. That is not hypothetical: this bundle is hosted, so
@@ -53,6 +75,18 @@ public final class PublisherViewModel: ObservableObject {
         // 0 for a missing key, which would render as 1970 instead of "never".
         self.lastSyncedAt = (defaults.object(forKey: Self.lastSyncedAtKey) as? Double)
             .map { Date(timeIntervalSince1970: $0) }
+        self.providerSortOption = ProviderSortOption(
+            rawValue: defaults.string(forKey: Self.providerSortOptionKey) ?? ""
+        ) ?? .mostUrgent
+        // Same `object(forKey:)` guard as the timestamp above, for the same
+        // reason: `double(forKey:)` returns 0 for a missing key, which would
+        // silently mean "warn me about nothing" instead of the 20% default.
+        if defaults.object(forKey: Self.localWarningThresholdPercentKey) != nil {
+            self.localWarningThresholdPercent =
+                defaults.double(forKey: Self.localWarningThresholdPercentKey)
+        } else {
+            self.localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
+        }
     }
 
     public func apply(_ payload: SnapshotPayload) {

@@ -225,6 +225,37 @@ func testDashboardSeparatesActiveProvidersBeforeCompactExhaustedSection() {
     }
 }
 
+/// The view-level half of that gate, and the half that was missing.
+///
+/// The assertion above checks the order `DashboardViewModel` produces, which
+/// is necessary and was demonstrably not sufficient: the compact exhausted
+/// cell was deleted once already while view-model assertions stayed green,
+/// because nothing rendered the view and looked at what came out (TASKS row
+/// 21). A snapshot is what makes "these two providers render as small cells
+/// under a header, not as full density cards" a thing that can fail.
+///
+/// Both widths, because the treatments diverged here before: the phone is
+/// where a full card for a spent provider actually pushes actionable rows off
+/// screen, and the iPad is where it's least noticeable and so most likely to
+/// silently regress.
+@MainActor
+func testDashboardRendersExhaustedProvidersAsCompactCells() {
+    let viewModel = makeViewModel(providers: sampleProviders() + [
+        exhaustedProvider(named: "vibe"),
+        exhaustedProvider(named: "copilot"),
+    ])
+
+    assertSnapshot(
+        of: DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn),
+        as: .image(layout: .fixed(width: 393, height: 760), traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "exhaustedCompactCellsPhone")
+
+    assertSnapshot(
+        of: DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseGrid),
+        as: .image(layout: .fixed(width: 1024, height: 600), traits: UITraitCollection(userInterfaceStyle: .light)),
+        testName: "exhaustedCompactCellsPad")
+}
+
 @MainActor
 func testDashboardHidesExhaustedCellsWhenPreferenceIsOff() {
     let viewModel = makeViewModel(

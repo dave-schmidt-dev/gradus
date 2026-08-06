@@ -70,25 +70,31 @@ struct ProviderTriageTests {
         #expect(!ProviderTriage.needsAttention(provider("Empty")))
     }
 
-    // MARK: - sorted
+    // MARK: - ordering (shared `rankedPartition`)
+
+    /// The Mac's threshold default, so these assertions describe what ships
+    /// rather than an arbitrary number.
+    private let threshold = PublisherViewModel.defaultLocalWarningThresholdPercent
+
+    private func ranked(_ providers: [ProviderEntry], _ option: ProviderSortOption = .mostUrgent) -> [String] {
+        rankProviders(providers, localThreshold: threshold, sortOption: option).map(\.name)
+    }
 
     @Test func failuresSortAboveEverything() {
-        let sorted = ProviderTriage.sorted([
+        #expect(ranked([
             provider("Healthy", percentLeft: 90, paceDelta: 0.10),
             provider("Broken", ok: false),
             provider("Critical", percentLeft: 5, paceDelta: -0.50),
-        ])
-        #expect(sorted.map(\.name) == ["Broken", "Critical", "Healthy"])
+        ]) == ["Broken", "Critical", "Healthy"])
     }
 
     @Test func rampOrdersWorstFirst() {
-        let sorted = ProviderTriage.sorted([
+        #expect(ranked([
             provider("Green", percentLeft: 80, paceDelta: 0.10),
             provider("Orange", percentLeft: 60, paceDelta: -0.20),
             provider("Yellow", percentLeft: 70, paceDelta: -0.05),
             provider("Red", percentLeft: 40, paceDelta: -0.40),
-        ])
-        #expect(sorted.map(\.name) == ["Red", "Orange", "Yellow", "Green"])
+        ]) == ["Red", "Orange", "Yellow", "Green"])
     }
 
     /// Equal-severity rows must not reshuffle between refreshes -- a menu
@@ -100,8 +106,75 @@ struct ProviderTriageTests {
             provider("Alpha", percentLeft: 50, paceDelta: 0.10),
             provider("Mike", percentLeft: 20, paceDelta: 0.10),
         ]
-        #expect(ProviderTriage.sorted(input).map(\.name) == ["Mike", "Alpha", "Zulu"])
-        #expect(ProviderTriage.sorted(input.reversed()).map(\.name) == ["Mike", "Alpha", "Zulu"])
+        #expect(ranked(input) == ["Mike", "Alpha", "Zulu"])
+        #expect(ranked(input.reversed()) == ["Mike", "Alpha", "Zulu"])
+    }
+
+    // MARK: - exhausted partition
+
+    /// The regression this whole change exists to prevent. The old
+    /// `ProviderTriage.sorted` ranked by signal level, and a depleted provider
+    /// is red -- so "Spent" sorted **first**, above providers the user could
+    /// still act on, while iOS put it last. Nothing caught it: every row still
+    /// rendered, just in the opposite order from the other app.
+    @Test func depletedSortsLastDespiteBeingRed() {
+        #expect(ranked([
+            provider("Spent", percentLeft: 0, paceDelta: -0.90),
+            provider("Healthy", percentLeft: 90, paceDelta: 0.10),
+            provider("Broken", ok: false),
+        ]) == ["Broken", "Healthy", "Spent"])
+    }
+
+    /// A sort mode is a *presentation* choice and must not be able to pull a
+    /// depleted provider back up among the actionable ones.
+    @Test func depletedStaysLastInEverySortMode() {
+        let input = [
+            provider("Spent", percentLeft: 0, paceDelta: -0.90),
+            provider("Zulu", percentLeft: 60, paceDelta: 0.10),
+            provider("Alpha", percentLeft: 80, paceDelta: 0.10),
+        ]
+        for option in ProviderSortOption.allCases {
+            #expect(ranked(input, option).last == "Spent", "sort mode \(option.rawValue)")
+        }
+    }
+
+    @Test func partitionSeparatesExhaustedFromActive() {
+        let split = rankedPartition(
+            [
+                provider("Spent", percentLeft: 0, paceDelta: -0.90),
+                provider("AlsoSpent", percentLeft: 0.4, paceDelta: 0),
+                provider("Healthy", percentLeft: 90, paceDelta: 0.10),
+            ],
+            localThreshold: threshold
+        )
+        #expect(split.active.map(\.name) == ["Healthy"])
+        // Ordered within the partition too: 0% is worse than 0.4%, and the
+        // exhausted group is sorted by the same comparator as the active one.
+        #expect(split.exhausted.map(\.name) == ["Spent", "AlsoSpent"])
+    }
+
+    /// `percentIsDepleted`'s boundary, restated against the Mac's own model:
+    /// exactly 0.5 renders as 1% once rounded and still has something to
+    /// spend, so it stays active. Recomputing depletion from windows here (the
+    /// Mac has no stored `isDepleted`) is the seam where the two platforms
+    /// could drift apart, so it gets its own assertion.
+    @Test func depletionBoundaryMatchesTheSharedPredicate() {
+        #expect(provider("Edge", percentLeft: 0.5).rankingIsDepleted == false)
+        #expect(provider("Edge", percentLeft: 0.49).rankingIsDepleted == true)
+        #expect(provider("NoWindows").rankingIsDepleted == false)
+    }
+
+    /// The local threshold may only ever *add* providers to the attention
+    /// tier. If raising it could clear a pace warning the shared ramp already
+    /// raised, the setting would be a way to silence real alerts.
+    @Test func thresholdOnlyAddsToAttentionNeverRemoves() {
+        let paceWarned = provider("Burning", percentLeft: 50, paceDelta: -0.40)
+        #expect(paceWarned.rankingNeedsAttention(localThreshold: 0))
+        #expect(paceWarned.rankingNeedsAttention(localThreshold: 100))
+
+        let calm = provider("Calm", percentLeft: 50, paceDelta: 0.10)
+        #expect(!calm.rankingNeedsAttention(localThreshold: 20))
+        #expect(calm.rankingNeedsAttention(localThreshold: 50))
     }
 
     @Test func worstWindowIsTheOneClosestToDepletion() {
