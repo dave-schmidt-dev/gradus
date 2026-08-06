@@ -12,6 +12,7 @@ from rich.console import Console, ConsoleOptions, Group, RenderableType, RenderR
 from rich.panel import Panel
 from rich.segment import Segment
 from rich.spinner import Spinner
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
@@ -50,6 +51,17 @@ THEME = Theme(
         "bar.yellow": "color(221)",
         "bar.orange": "color(215)",
         "bar.red": "color(203)",
+        # The expected-pace marker, kept separate from `bar.red` on purpose: this
+        # red means "here is where you should be", not "this provider is in
+        # trouble", and the two want to be recolourable independently.
+        "bar.marker": "color(203)",
+        # Used where the marker crosses the *filled* part of the bar, drawn over
+        # the fill colour as a background. The marker red cannot be used there --
+        # measured against the four fill colours it scores 1.72 / 2.15 / 1.64 /
+        # 1.00 contrast (the last being marker-red on a red bar, i.e. invisible),
+        # all under the 3:1 WCAG asks of a graphical indicator. This near-black
+        # scores 9.82 / 12.28 / 9.37 / 5.72 against the same four.
+        "bar.marker.on_fill": "color(234)",
         "accent.codex": "color(111)",
         "accent.claude": "color(219)",
         "accent.gemini": "color(80)",
@@ -650,6 +662,23 @@ DISPLAY_TITLES: dict[str, str] = {}
 # ---------------------------------------------------------------------------
 
 
+# Sub-cell marker strokes, indexed by which third of a character cell the
+# expected-pace boundary falls in: left edge, centre, right edge.
+#
+# A terminal has no sub-pixel positioning -- the smallest thing it can address
+# is one cell -- so a marker drawn as a single centred glyph can only be as
+# precise as the bar is wide. At the 14-cell bars this dashboard draws that is
+# 7.1 percentage points per step, and the marker visibly *jumps* that far
+# between refreshes while the value underneath it slides continuously. Choosing
+# where in the cell the stroke sits triples the resolution to ~2.4 points, which
+# is as fine as a text UI gets without half-block tricks.
+#
+# All three live in Unicode blocks (Block Elements, Box Drawing) the bar already
+# depends on for its own fill and empty glyphs, so this adds no font coverage
+# risk that was not already taken.
+_MARKER_GLYPHS = ("▏", "┃", "▕")
+
+
 class PercentageBar:
     """Custom Rich renderable: a static percentage bar using block characters."""
 
@@ -665,22 +694,49 @@ class PercentageBar:
         if self.percent is None:
             yield Text("·" * width, style="shadow")
             return
+        # `filled` is a *count* of cells, so rounding it is right -- it picks the
+        # nearest drawable length. The marker below is an *index*, which is why
+        # it does not get the same treatment.
         filled = max(0, min(width, round(width * self.percent / 100)))
+        marker_index, marker_glyph = self._marker(width)
         bar = Text()
-        marker_index: int | None = None
-        if self.expected_remaining is not None and width > 0:
-            marker_index = min(width - 1, max(0, round(width * self.expected_remaining / 100)))
         for index in range(width):
             if index == marker_index:
-                # A full-height box-drawing stroke remains legible at narrow
-                # terminal widths, where a thin left fragment disappears into
-                # the filled bar. The marker still occupies exactly one cell.
-                bar.append("┃", style="bar.red")
+                bar.append(marker_glyph, style=self._marker_style(console, index < filled))
             elif index < filled:
                 bar.append("▓" if index < filled - 1 else "█", style=self.style)
             else:
                 bar.append("░", style="bar.empty")
         yield bar
+
+    def _marker(self, width: int) -> tuple[int | None, str]:
+        """Cell index and stroke for the expected-pace marker, if there is one."""
+        if self.expected_remaining is None or width <= 0:
+            return None, ""
+        position = min(1.0, max(0.0, self.expected_remaining / 100)) * width
+        # `int`, not `round`. The value names a *boundary* between two cells,
+        # and the glyph then fills the whole cell to the right of it, so
+        # rounding up put the stroke a full cell past the boundary it was
+        # supposed to mark -- 7 points of error at 14 cells, on top of the
+        # quantisation the sub-cell strokes exist to reduce.
+        index = min(width - 1, int(position))
+        third = min(2, int((position - index) * 3))
+        return index, _MARKER_GLYPHS[third]
+
+    def _marker_style(self, console: Console, over_fill: bool) -> str | Style:
+        if not over_fill:
+            return "bar.marker"
+        # Over the filled part of the bar the marker has to sit *on* the fill
+        # rather than take a cell from it. Replacing the cell punched a gap
+        # through the bar, worst exactly where the news was best: a provider at
+        # 100% with time to spare drew a solid bar with a hole in it. Painting
+        # the fill colour as this cell's background keeps the bar continuous
+        # behind the stroke, and the stroke goes dark because marker-red on a
+        # red bar is a 1.00 contrast ratio -- see the theme for the numbers.
+        return Style(
+            color=console.get_style("bar.marker.on_fill", default="none").color,
+            bgcolor=console.get_style(self.style, default="none").color,
+        )
 
 
 # Below this console width the 2-panel grid can't fit a full 12-char pace cell

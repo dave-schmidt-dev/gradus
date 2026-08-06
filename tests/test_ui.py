@@ -10,11 +10,13 @@ from datetime import datetime
 from io import StringIO
 
 from rich.console import Console
+from rich.style import Style
 from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
 from gradus.snapshot import SAFE_DATA_KEYS, window_warns
 from gradus.ui import (
+    _MARKER_GLYPHS,
     THEME,
     DynamicMicroDepletedPair,
     DynamicMicroDepletedSingle,
@@ -52,6 +54,31 @@ def _capture(renderable, *, width: int = 80) -> str:
     )
     console.print(renderable)
     return console.file.getvalue()
+
+
+def _markers(text: str) -> int:
+    """Count expected-pace markers, whichever sub-cell stroke each one used.
+
+    The marker is one of three glyphs depending on where inside its cell the
+    boundary falls, so a test that counts ``┃`` alone would see a marker
+    disappear whenever it drifted to a cell edge — a false pass for two thirds
+    of the positions the bar can draw.
+    """
+    return sum(text.count(glyph) for glyph in _MARKER_GLYPHS)
+
+
+_FILL_GLYPHS = ("▓", "█")
+_BAR_GLYPHS = (*_FILL_GLYPHS, "░", *_MARKER_GLYPHS)
+
+
+def _bar_start(line: str) -> int:
+    """Column of a row's first bar cell, whatever glyph happens to be drawn there.
+
+    Not ``line.index("▓")``: on a narrow card the bar is a handful of cells, and
+    the expected-pace marker can legitimately be sitting on the first one. The
+    property under test is where the bar *starts*, not which glyph won that cell.
+    """
+    return min(line.index(glyph) for glyph in _BAR_GLYPHS if glyph in line)
 
 
 class PercentFallbackRampTests(unittest.TestCase):
@@ -250,8 +277,75 @@ class PercentageBarTests(unittest.TestCase):
         output = _capture(PercentageBar(72.0, "bar.green", expected_remaining=60.0), width=80)
         bar = output.rstrip("\n")
         self.assertEqual(len(bar), 80)
-        self.assertEqual(bar.count("┃"), 1)
-        self.assertEqual(bar.index("┃"), 48)
+        self.assertEqual(_markers(bar), 1)
+        self.assertEqual(bar.index(_MARKER_GLYPHS[0]), 48)
+
+    def test_marker_lands_on_the_cell_it_names_not_the_next_one(self) -> None:
+        """The index is a floor, not a round.
+
+        ``expected_remaining`` names a boundary between two cells, and the glyph
+        drawn there fills the whole cell to its *right*. Rounding up therefore
+        put the stroke a full cell past the boundary it was marking — at the
+        14-cell width the dashboard actually draws, a 7-point error that made a
+        provider look further ahead of pace than it was.
+        """
+        for expected, cell in ((61.0, 8), (75.0, 10), (99.0, 13), (100.0, 13)):
+            with self.subTest(expected_remaining=expected):
+                bar = _capture(
+                    PercentageBar(80.0, "bar.green", expected_remaining=expected), width=14
+                ).rstrip("\n")
+                self.assertEqual(_markers(bar), 1)
+                index = next(i for i, ch in enumerate(bar) if ch in _MARKER_GLYPHS)
+                self.assertEqual(index, cell)
+
+    def test_marker_resolves_below_one_whole_cell(self) -> None:
+        """Three sub-cell strokes, so the marker steps ~2.4 points, not ~7.1.
+
+        A terminal cannot place a glyph between two cells, so the only way to
+        beat one-cell precision is to say *where in* the cell the boundary sits.
+        Without this the marker visibly jumped a full cell at a time while the
+        value under it moved continuously.
+        """
+        width = 14
+        rendered = {
+            _capture(PercentageBar(80.0, "bar.green", expected_remaining=v / 10), width=width)
+            for v in range(1001)
+        }
+        # One cell would give `width` distinct renderings; three strokes per
+        # cell give three times that. Asserted as a floor, not equality, so a
+        # future finer marker is an improvement rather than a failure.
+        self.assertGreaterEqual(len(rendered), width * 3)
+
+    def test_marker_over_a_filled_cell_keeps_the_bar_solid(self) -> None:
+        """The marker overlays the fill; it does not spend a cell of it.
+
+        Reported from the dashboard: a provider at 100% with time in hand drew a
+        solid bar with a hole punched through it, because the marker *replaced*
+        the fill cell it landed on. The fill colour has to survive as this
+        cell's background.
+        """
+        console = Console(
+            file=StringIO(),
+            theme=THEME,
+            force_terminal=True,
+            width=20,
+            _environ={"TERM": "xterm-256color"},
+        )
+        rendered = next(
+            PercentageBar(100.0, "bar.green", expected_remaining=84.0).__rich_console__(
+                console, console.options
+            )
+        )
+        assert isinstance(rendered, Text)
+        self.assertEqual(_markers(rendered.plain), 1)
+        marker_at = next(i for i, ch in enumerate(rendered.plain) if ch in _MARKER_GLYPHS)
+        style = next(span.style for span in rendered.spans if span.start <= marker_at < span.end)
+        assert isinstance(style, Style)
+        self.assertEqual(style.bgcolor, THEME.styles["bar.green"].color)
+        # ...and it is legible against that background. Marker red on a fill is
+        # 1.00-2.15 contrast depending on the tier — invisible on a red bar —
+        # which is why the stroke goes dark once it crosses the fill.
+        self.assertEqual(style.color, THEME.styles["bar.marker.on_fill"].color)
 
     def test_expected_remaining_preserves_fill_and_marker_styles(self) -> None:
         for expected_remaining in (60.0, 84.0):
@@ -271,7 +365,15 @@ class PercentageBarTests(unittest.TestCase):
             self.assertIsInstance(rendered, Text)
             assert isinstance(rendered, Text)
             self.assertTrue(any(span.style == "bar.green" for span in rendered.spans))
-            self.assertTrue(any(span.style == "bar.red" for span in rendered.spans))
+            # Over the empty part of the bar the marker keeps its own red; over
+            # the fill it becomes a Style carrying the fill as a background.
+            self.assertTrue(
+                any(
+                    span.style == "bar.marker"
+                    or (isinstance(span.style, Style) and span.style.bgcolor is not None)
+                    for span in rendered.spans
+                )
+            )
 
     def test_missing_expected_remaining_keeps_existing_bar_output(self) -> None:
         original = _capture(PercentageBar(72.0, "bar.green"), width=80)
@@ -306,7 +408,7 @@ class UsageRowMarkerTests(unittest.TestCase):
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=80)
-        self.assertEqual(output.count("┃"), 1)
+        self.assertEqual(_markers(output), 1)
 
     def test_missing_session_pace_renders_no_marker(self) -> None:
         snap = ProviderSnapshot(
@@ -316,7 +418,7 @@ class UsageRowMarkerTests(unittest.TestCase):
             data={"five_hour_percent_left": 60.0},
         )
         output = _capture(build_provider_panel(snap, self.now), width=80)
-        self.assertNotIn("┃", output)
+        self.assertEqual(_markers(output), 0)
 
     def test_malformed_session_reset_renders_no_marker(self) -> None:
         snap = ProviderSnapshot(
@@ -329,7 +431,7 @@ class UsageRowMarkerTests(unittest.TestCase):
             },
         )
         output = _capture(build_provider_panel(snap, self.now), width=80)
-        self.assertNotIn("┃", output)
+        self.assertEqual(_markers(output), 0)
 
 
 class PaceLabelTests(unittest.TestCase):
@@ -528,7 +630,7 @@ class ProviderPanelTests(unittest.TestCase):
 
         # Filled blocks begin at the bar's common left edge; reset text starts
         # immediately after its common right edge.
-        self.assertEqual(usage_lines[0].index("▓"), usage_lines[1].index("▓"))
+        self.assertEqual(_bar_start(usage_lines[0]), _bar_start(usage_lines[1]))
         self.assertEqual(usage_lines[0].index("09:22"), usage_lines[1].index("Mar 21"))
 
     def test_depleted_rows_keep_reset_text_at_normal_bar_boundary(self) -> None:
@@ -721,7 +823,8 @@ class ProviderPanelTests(unittest.TestCase):
         output = _capture(build_provider_panel(snap, self.now), width=44)
         self.assertIn("cg5", output)
         self.assertIn("42%", output)
-        self.assertIn("▓", output)
+        cg_line = next(line for line in output.splitlines() if "cg5" in line)
+        self.assertTrue(any(glyph in cg_line for glyph in _FILL_GLYPHS))
         self.assertNotIn("until", output)
 
     def test_antigravity_cg_rows_remain_readable_at_44_columns(self) -> None:
