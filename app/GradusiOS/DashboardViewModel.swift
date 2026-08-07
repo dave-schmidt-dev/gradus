@@ -44,6 +44,29 @@ public final class DashboardViewModel: ObservableObject {
     /// direction. Settings renders this as an inline row error (CR-5).
     @Published public private(set) var notificationsToggleError: String?
 
+    /// Whether iOS will *display* a warning once we schedule one. Read from the
+    /// system rather than remembered from the first-launch authorization
+    /// request, since permission can be revoked from iOS Settings later.
+    ///
+    /// Starts `.notDetermined` and is corrected by
+    /// `refreshNotificationAuthorization()` on launch and on every return to
+    /// the foreground -- the only two moments it can have changed, because
+    /// changing it requires leaving the app.
+    @Published public private(set) var systemNotificationAuthorization: NotificationAuthorization = .notDetermined
+
+    /// True when our own opt-in is on but iOS will not display the result. The
+    /// only state worth surfacing: every warning transition schedules a
+    /// notification that is silently dropped, so the feature reads as broken
+    /// rather than off.
+    ///
+    /// Deliberately does *not* imply the toggle should be disabled. The warning
+    /// subscription is a silent content-available push whose side effect is
+    /// waking the app to sync; that still works while alerts are suppressed, so
+    /// turning it off would cost the user something real.
+    public var notificationsSuppressedBySystem: Bool {
+        notificationsEnabled && systemNotificationAuthorization == .denied
+    }
+
     /// P5/T5.2: iOS-local, per-device "locally urgent" percent-left
     /// threshold (Key decision #1/#5) -- affects local display/ranking
     /// only, never what CloudKit pushes. Plain `didSet`-persists, like
@@ -97,6 +120,7 @@ public final class DashboardViewModel: ObservableObject {
     private let zoneChangesFetcher: ZoneChangesFetcher?
     private let subscriptionManager: CKSubscriptionManager?
     private let warningNotificationScheduler: WarningNotificationScheduling?
+    private let notificationAuthorizationSource: NotificationAuthorizationSource?
     private let userDefaults: UserDefaults
     private var allProviders: [ProviderStatus] = []
 
@@ -110,6 +134,7 @@ public final class DashboardViewModel: ObservableObject {
         zoneChangesFetcher: ZoneChangesFetcher? = nil,
         subscriptionManager: CKSubscriptionManager? = nil,
         warningNotificationScheduler: WarningNotificationScheduling? = nil,
+        notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.cache = cache
@@ -118,6 +143,7 @@ public final class DashboardViewModel: ObservableObject {
         self.zoneChangesFetcher = zoneChangesFetcher
         self.subscriptionManager = subscriptionManager
         self.warningNotificationScheduler = warningNotificationScheduler
+        self.notificationAuthorizationSource = notificationAuthorizationSource
         self.userDefaults = userDefaults
         // Default OFF: usage data leaves the device only on explicit opt-in.
         let syncEnabledValue = userDefaults.bool(forKey: Self.syncEnabledKey)
@@ -191,6 +217,20 @@ public final class DashboardViewModel: ObservableObject {
         } catch {
             notificationsToggleError = "Couldn't turn off notifications -- check your connection and try again."
         }
+    }
+
+    /// Re-reads the system authorization state. Called on launch and on every
+    /// foreground transition, since the user can only change it by leaving the
+    /// app for iOS Settings.
+    ///
+    /// No-ops without a source rather than assuming a value: a view model built
+    /// for snapshot tests has no UserNotifications wiring, and defaulting to
+    /// `.denied` would put a permission warning into every baseline while
+    /// defaulting to `.authorized` would assert something unverified.
+    /// `.notDetermined` is the honest starting point and stays put.
+    public func refreshNotificationAuthorization() async {
+        guard let notificationAuthorizationSource else { return }
+        systemNotificationAuthorization = await notificationAuthorizationSource.currentAuthorization()
     }
 
     /// `nil` means "render the populated dashboard" -- there is data (fresh

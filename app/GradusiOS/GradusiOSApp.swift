@@ -25,6 +25,7 @@ enum CloudKitRuntimeConfiguration {
 struct GradusiOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel: DashboardViewModel
+    @Environment(\.scenePhase) private var scenePhase
     private let accountMonitor: AccountStatusMonitor?
     private let subscriptionManager: CKSubscriptionManager?
 
@@ -54,7 +55,8 @@ struct GradusiOSApp: App {
         let viewModel = DashboardViewModel(
             cache: cache, fetcher: dependencies.fetcher, accountSource: dependencies.accountSource,
             zoneChangesFetcher: dependencies.zoneChangesFetcher, subscriptionManager: dependencies.subscriptionManager,
-            warningNotificationScheduler: warningNotificationScheduler)
+            warningNotificationScheduler: warningNotificationScheduler,
+            notificationAuthorizationSource: SystemNotificationAuthorizationSource())
         _viewModel = StateObject(wrappedValue: viewModel)
 
         self.subscriptionManager = dependencies.subscriptionManager
@@ -80,9 +82,19 @@ struct GradusiOSApp: App {
             DashboardView(viewModel: viewModel)
                 .task {
                     guard !Self.isUITesting else { return }
+                    await viewModel.refreshNotificationAuthorization()
                     await accountMonitor?.start()
                     await viewModel.sync()
                     await subscribeIfEnabled()
+                }
+                .onChange(of: scenePhase) { phase in
+                    // The only way to change notification permission is to
+                    // leave for iOS Settings and come back, so `.active` is
+                    // exactly when the cached answer can have gone stale --
+                    // and re-reading it on every foreground is what makes the
+                    // Settings deep link above self-clearing.
+                    guard phase == .active, !Self.isUITesting else { return }
+                    Task { await viewModel.refreshNotificationAuthorization() }
                 }
                 .onChange(of: viewModel.syncEnabled) { enabled in
                     guard enabled, !Self.isUITesting else { return }

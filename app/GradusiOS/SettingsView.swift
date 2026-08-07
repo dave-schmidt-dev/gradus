@@ -1,5 +1,6 @@
 import GradusKit
 import SwiftUI
+import UIKit
 
 /// The Settings screen (P5/T5.3): Sync + Notifications, connected computer,
 /// local display, warning threshold, and About. Takes the live `DashboardViewModel`
@@ -16,6 +17,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var dashboardViewModel: DashboardViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
 
     /// Custom binding, not a direct `$dashboardViewModel.notificationsEnabled`
     /// binding: `notificationsEnabled` is `private(set)` precisely because
@@ -119,7 +121,37 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            if dashboardViewModel.notificationsSuppressedBySystem {
+                systemAuthorizationWarning
+            }
         }
+    }
+
+    /// Shown only when our own toggle is on and iOS is dropping the result --
+    /// the state where the app would otherwise look like it simply does not
+    /// notify. The button rather than prose-only because the fix is four taps
+    /// deep in a different app, and HIG's Settings guidance names this pattern
+    /// directly: "consider providing a button that opens it directly from your
+    /// interface."
+    ///
+    /// Says what still works, not just what does not. The warning subscription
+    /// keeps waking the app to sync even with alerts suppressed, so "you will
+    /// not see alerts" is the accurate claim and "notifications are off" is not.
+    @ViewBuilder
+    private var systemAuthorizationWarning: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Icon.warning
+                Text("iOS is not allowing Gradus to show notifications, so you won't see warning alerts. Syncing is unaffected.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                Button("Open iOS Settings") { openURL(settingsURL) }
+                    .font(.caption.weight(.semibold))
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
