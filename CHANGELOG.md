@@ -29,7 +29,8 @@ history from the overnight release train. New releases use
   in iOS Settings later — the app's own Notifications toggle still showed "on"
   and gave no hint that nothing would ever appear. Settings now says so, and
   offers a button that takes you straight to the right place in iOS Settings.
-  It clears itself as soon as you come back. Note that turning notifications
+  It appears right away if you decline the permission prompt on first launch,
+  and clears itself as soon as you come back. Note that turning notifications
   off at the iOS level does not stop syncing: the wording says so, because
   those are genuinely separate.
 

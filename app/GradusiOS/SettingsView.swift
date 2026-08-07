@@ -139,16 +139,25 @@ struct SettingsView: View {
     /// not see alerts" is the accurate claim and "notifications are off" is not.
     @ViewBuilder
     private var systemAuthorizationWarning: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Icon.warning
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Icon.warning
+            // The button sits inside the text column rather than beside the
+            // icon, so it indents under the sentence it acts on. Recording the
+            // first baseline caught it hanging off the row's leading edge
+            // instead, reading as an unrelated control.
+            VStack(alignment: .leading, spacing: 6) {
                 Text("iOS is not allowing Gradus to show notifications, so you won't see warning alerts. Syncing is unaffected.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-            if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
-                Button("Open iOS Settings") { openURL(settingsURL) }
-                    .font(.caption.weight(.semibold))
+                if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                    // Explicit accent tint: inside a `.plain`-styled `List`
+                    // row this button's label otherwise renders in the primary
+                    // label color, which is indistinguishable from the prose
+                    // above it and gives no sign it is tappable.
+                    Button("Open iOS Settings") { openURL(settingsURL) }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
             }
         }
         .padding(.vertical, 4)

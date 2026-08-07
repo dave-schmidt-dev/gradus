@@ -52,8 +52,21 @@ private func sampleProviders() -> [ProviderStatus] {
     ]
 }
 
+/// Reports a fixed authorization state, standing in for
+/// `notificationSettings()`. Deliberately a second copy of the stub in
+/// `NotificationAuthorizationTests.swift` rather than a shared one: both are
+/// three lines, and sharing it would couple two files whose only real
+/// relationship is using the same protocol.
+private struct StubAuthorizationSource: NotificationAuthorizationSource {
+    let authorization: NotificationAuthorization
+
+    func currentAuthorization() async -> NotificationAuthorization { authorization }
+}
+
 @MainActor
-private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> DashboardViewModel {
+private func makeViewModel(
+    syncEnabled: Bool, notificationsEnabled: Bool, systemAuthorization: NotificationAuthorization? = nil
+) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-settings-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
     let cache = FileLocalCacheStore(directory: directory)
@@ -61,7 +74,10 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
     let defaults = isolatedDefaults()
     defaults.set(syncEnabled, forKey: DashboardViewModel.syncEnabledKey)
     defaults.set(notificationsEnabled, forKey: DashboardViewModel.notificationsEnabledKey)
-    return DashboardViewModel(cache: cache, userDefaults: defaults)
+    return DashboardViewModel(
+        cache: cache,
+        notificationAuthorizationSource: systemAuthorization.map { StubAuthorizationSource(authorization: $0) },
+        userDefaults: defaults)
 }
 
 @MainActor
@@ -99,8 +115,16 @@ private func makeViewModel(syncEnabled: Bool, notificationsEnabled: Bool) -> Das
 /// fixed-height snapshot of a scrolling screen silently stops testing whatever
 /// grows past its bottom edge, and it does so by *passing*.
 ///
+/// Raised again from 760 (2026-08-07), because 760 did not in fact satisfy the
+/// sentence above: it cut off mid-`Slider`, so the warning threshold's own
+/// control, its caption, and the entire About group were outside every
+/// baseline. Measured by recording once at 1400 and reading where the content
+/// actually ended (~1085pt), then trimming to leave roughly one row of slack —
+/// slack is deliberate, so a single appended row lands inside the frame and
+/// gets covered instead of silently falling past the edge.
+///
 /// Anything appended to `SettingsView` must check it still fits here.
-private let settingsSnapshotHeight: CGFloat = 760
+private let settingsSnapshotHeight: CGFloat = 1150
 
 @MainActor
 @Test func settingsViewAllTogglesOnLight() {
@@ -132,4 +156,43 @@ private let settingsSnapshotHeight: CGFloat = 760
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)))
+}
+
+/// The state that shipped invisible in 1.6.0: our toggle on, iOS refusing to
+/// display anything. The four cases above build view models with no
+/// authorization source at all, so `systemNotificationAuthorization` stays
+/// `.notDetermined` and this branch never renders in them -- which is why they
+/// went green without covering a pixel of it.
+@MainActor
+@Test func settingsViewWarnsWhenSystemNotificationsAreDeniedLight() async {
+    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true, systemAuthorization: .denied)
+    await viewModel.refreshNotificationAuthorization()
+    #expect(viewModel.notificationsSuppressedBySystem)
+    let view = SettingsView(dashboardViewModel: viewModel)
+    assertSnapshot(
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
+}
+
+@MainActor
+@Test func settingsViewWarnsWhenSystemNotificationsAreDeniedDark() async {
+    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true, systemAuthorization: .denied)
+    await viewModel.refreshNotificationAuthorization()
+    #expect(viewModel.notificationsSuppressedBySystem)
+    let view = SettingsView(dashboardViewModel: viewModel)
+    assertSnapshot(
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)))
+}
+
+/// Same permission denial, but with our own toggle off -- the warning must not
+/// appear, because nothing the user asked for is being dropped. Pairs with the
+/// two above so a change that renders the warning unconditionally fails here
+/// instead of quietly passing.
+@MainActor
+@Test func settingsViewStaysQuietWhenDeniedButOptedOut() async {
+    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: false, systemAuthorization: .denied)
+    await viewModel.refreshNotificationAuthorization()
+    #expect(!viewModel.notificationsSuppressedBySystem)
+    let view = SettingsView(dashboardViewModel: viewModel)
+    assertSnapshot(
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
 }

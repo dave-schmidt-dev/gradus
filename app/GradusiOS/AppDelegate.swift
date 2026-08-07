@@ -9,7 +9,38 @@ import UserNotifications
 final class AppDelegate: NSObject, UIApplicationDelegate {
     var onRemoteNotification: (() async -> Void)?
 
+    /// Fires once the first-launch permission prompt has been answered,
+    /// whichever way it went.
+    ///
+    /// Without this, a first-launch *denial* stays invisible: the app's
+    /// `.task` reads the authorization state concurrently with the prompt
+    /// being answered, so it sees `.notDetermined`, and the only other read
+    /// is a `scenePhase` return to `.active` -- which a permission alert does
+    /// not necessarily produce, since the app never leaves the foreground for
+    /// it. A user who taps "Don't Allow" would otherwise see no warning in
+    /// Settings until some unrelated background/foreground cycle. This
+    /// notifies rather than passing the prompt's own `granted` flag along, so
+    /// the displayed state still comes from `notificationSettings()` on every
+    /// read instead of a cached copy of one moment's answer.
+    var onAuthorizationResolved: (() -> Void)?
+
     private let clearBadge: (UIApplication) -> Void
+
+    /// Requests notification authorization and calls back once the prompt has
+    /// been answered. Injected so the launch path can be exercised in a unit
+    /// test without a real prompt (which no test can answer) and without a
+    /// real APNs registration attempt.
+    private let requestNotificationAuthorization: (UIApplication, @escaping () -> Void) -> Void
+
+    private static let systemNotificationAuthorizationRequest: (UIApplication, @escaping () -> Void) -> Void = {
+        application, resolved in
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
+            DispatchQueue.main.async {
+                application.registerForRemoteNotifications()
+                resolved()
+            }
+        }
+    }
 
     override init() {
         self.clearBadge = { application in
@@ -21,11 +52,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             application.applicationIconBadgeNumber = 0
             UNUserNotificationCenter.current().setBadgeCount(0) { _ in }
         }
+        self.requestNotificationAuthorization = Self.systemNotificationAuthorizationRequest
         super.init()
     }
 
-    init(clearBadge: @escaping () -> Void) {
+    init(
+        clearBadge: @escaping () -> Void,
+        requestNotificationAuthorization: @escaping (UIApplication, @escaping () -> Void) -> Void = { _, _ in }
+    ) {
         self.clearBadge = { _ in clearBadge() }
+        self.requestNotificationAuthorization = requestNotificationAuthorization
         super.init()
     }
 
@@ -36,10 +72,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         // The app-side warning notification is visible only after this local
         // authorization succeeds. Both CloudKit subscriptions are silent
         // content-available pushes and never display alerts themselves.
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
-            DispatchQueue.main.async {
-                application.registerForRemoteNotifications()
-            }
+        requestNotificationAuthorization(application) { [weak self] in
+            // Read the closure at call time rather than capturing it: the
+            // prompt resolves long after launch, and the SwiftUI `App`'s
+            // `init` is what assigns this.
+            self?.onAuthorizationResolved?()
         }
         return true
     }

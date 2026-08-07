@@ -75,6 +75,10 @@ struct GradusiOSApp: App {
         appDelegate.onRemoteNotification = {
             await viewModel.handleRemoteNotification()
         }
+
+        appDelegate.onAuthorizationResolved = {
+            Task { await viewModel.refreshNotificationAuthorization() }
+        }
     }
 
     var body: some Scene {
