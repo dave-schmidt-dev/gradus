@@ -140,11 +140,9 @@ if ((skip_build == 0)); then
     -destination "generic/platform=macOS"
 
   echo "==> Exporting for Developer ID distribution"
-  # Developer ID rather than development signing on purpose: the installed app
-  # holds the TCC grant for ~/Documents, and that grant records the signing
-  # requirement of whoever was approved. Installing a development-signed build
-  # would rewrite it into a form the *next* install fails, which is the churn
-  # documented in the TCC row in TASKS.md.
+  # Export the same Developer ID-signed artifact that is installed locally.
+  # GradusMac consumes only its Application Support snapshot mirror; it never
+  # needs a Documents-folder grant for ordinary monitoring.
   progress "Starting xcodebuild -exportArchive"
   xcodebuild -exportArchive \
     -archivePath "$ARCHIVE_PATH" \
@@ -236,9 +234,5 @@ if ! open -a "$INSTALLED_APP"; then
 fi
 
 echo "==> Done. $APP_NAME $incoming_version installed at $INSTALLED_APP"
-echo "    First launch after an install re-stamps the ~/Documents TCC grant to"
-echo "    this bundle's signature. That alone does not decide whether the next"
-echo "    Mac test gate prompts: TCC attributes an access to the responsible"
-echo "    process, so a gate run from a shell that holds Full Disk Access reads"
-echo "    on the shell's authority and never consults the app's row. Start it"
-echo "    from one, or start it attended (see the TCC row in TASKS.md)."
+echo "    GradusMac reads its credential-free snapshot from Application Support."
+echo "    It does not require Documents access for ordinary monitoring."

@@ -13,15 +13,11 @@ history from the overnight release train. New releases use
 
 ### Added
 
-- A card density setting on both iPhone and iPad, under Settings → Local
-  Display: **Compact**, **Standard**, **Large**. Compact is exactly what 1.6.0
-  shipped, so the default changes nothing. Standard and Large give each provider
-  more room and step the text up a size; Large is close to the pre-1.5.0
-  presentation with its spacing tightened. Larger densities fit fewer columns —
-  at Large an 11" iPad shows one column in portrait and two in landscape, which
-  is the point rather than a side effect. Every density still shows all of a
-  provider's windows, and the choice is per-device, like the sort order and
-  exhausted-provider toggle it sits beside.
+- A device-relative card-density slider on both iPhone and iPad, under Settings →
+  Local Display. Auto selects the richest feasible layout for the current device;
+  manual stops are the layouts that preserve the minimum usage-bar width. Every
+  position shows every provider window, and the choice is stored per device like
+  sort order and the exhausted-provider toggle.
 
 ### Fixed
 
@@ -41,12 +37,16 @@ history from the overnight release train. New releases use
   fell back to a percentage ramp the other ignored. A provider could show a red
   bar on the phone and nothing in the menu bar, off the same sync.
 
+- Usage percentages no longer truncate at large text sizes. A full provider cannot
+  read as nearly exhausted because its percent column ran out of room.
+
 ### TestFlight focus
 
-- Try each card density on both devices. Confirm Compact looks exactly like the
-  build before it, and that no provider or window disappears at any setting.
-- Confirm the density you pick survives quitting and reopening the app, and that
-  it is set separately on each device rather than following you across them.
+- Move the card-density slider through every offered position on both devices;
+  confirm no provider or window disappears.
+- Confirm the selected position survives quitting and reopening the app, and is
+  stored separately on each device.
+- At large text sizes, confirm every displayed percentage remains fully legible.
 - Confirm the low-provider count in the iPhone badge matches what the Mac menu
   bar shows at the same moment.
 

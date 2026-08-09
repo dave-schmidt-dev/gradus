@@ -44,21 +44,28 @@ struct ProviderDetailView: View {
 
     @ViewBuilder
     private var windowsBody: some View {
-        if !provider.ok {
-            Text(provider.errorMessage ?? "error")
-                .font(.subheadline)
-                .foregroundStyle(.red)
-        } else if provider.windows.isEmpty {
-            Text("no window data")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        } else {
+        if !provider.windows.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(provider.windows.enumerated()), id: \.offset) { _, window in
                     windowCard(window)
                 }
+                if !provider.ok {
+                    errorText
+                }
             }
+        } else if !provider.ok {
+            errorText
+        } else {
+            Text("no window data")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
         }
+    }
+
+    private var errorText: some View {
+        Text(provider.errorMessage ?? "error")
+            .font(.subheadline)
+            .foregroundStyle(.red)
     }
 
     @ViewBuilder

@@ -1,5 +1,8 @@
 import GradusKit
 import SwiftUI
+import UIKit
+
+let dashboardHorizontalInset: CGFloat = 16
 
 /// The "Now" screen (P3/T3.3): every provider as a `ProviderDensityCard`
 /// showing every one of its windows, in `rankProviders`' total order — or one
@@ -52,9 +55,10 @@ enum DashboardLayout {
     /// once, no drill-in needed.
     case denseGrid
 
-    /// Both layouts show every window; only the reset column and the column
-    /// count differ.
-    var showsReset: Bool { self == .denseGrid }
+    /// The editorial comfort rule: reset is welcome on the wider presentation
+    /// but deliberately omitted from the compact presentation even when the
+    /// collapse floor says the column would technically fit.
+    var editorialShowsReset: Bool { self == .denseGrid }
 }
 
 struct DashboardContent: View {
@@ -68,6 +72,7 @@ struct DashboardContent: View {
     /// on whatever `UserDefaults` the fixture happened to build.
     private let densityOverride: DashboardDensity?
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// Row-tap navigation target (P4/T4.2): set on tap of any
     /// `ProviderDensityCard`, pushing `ProviderDetailView` for that provider.
     /// Same behavior in both layouts (INV-12). Tracked by `providerName`
@@ -84,6 +89,20 @@ struct DashboardContent: View {
     /// Settings to participate in the same navigation stack as provider
     /// detail drill-in.
     @State private var showingSettings = false
+
+    // The grid must resolve its column count before the child WindowRows are
+    // installed. Keep the same compile-time style mapping as WindowRow here;
+    // reading a child's @ScaledMetric through a temporary View would use the
+    // default environment and silently make the solver ignore Dynamic Type.
+    @ScaledMetric(relativeTo: .caption) private var compactLabelWidth = DensityMetrics.compact.labelWidth
+    @ScaledMetric(relativeTo: .caption) private var compactPercentWidth = DensityMetrics.compact.percentWidth
+    @ScaledMetric(relativeTo: .caption2) private var compactResetWidth = DensityMetrics.compact.resetWidth
+    @ScaledMetric(relativeTo: .footnote) private var standardLabelWidth = DensityMetrics.standard.labelWidth
+    @ScaledMetric(relativeTo: .footnote) private var standardPercentWidth = DensityMetrics.standard.percentWidth
+    @ScaledMetric(relativeTo: .caption) private var standardResetWidth = DensityMetrics.standard.resetWidth
+    @ScaledMetric(relativeTo: .subheadline) private var largeLabelWidth = DensityMetrics.large.labelWidth
+    @ScaledMetric(relativeTo: .subheadline) private var largePercentWidth = DensityMetrics.large.percentWidth
+    @ScaledMetric(relativeTo: .footnote) private var largeResetWidth = DensityMetrics.large.resetWidth
 
     init(
         viewModel: DashboardViewModel,
@@ -140,45 +159,169 @@ struct DashboardContent: View {
         }
     }
 
-    /// One column on iPhone, adaptive on iPad.
+    /// One column on iPhone, an explicit solver-selected count on iPad.
     ///
     /// The compact case is `.flexible()` rather than the same
-    /// `.adaptive(minimum: 320)`. Adaptive *would* resolve to one column at
+    /// former 320pt minimum. That rule *would* resolve to one column at
     /// 361pt of content width, but only as arithmetic that happens to work
     /// out — a narrower card minimum or a wider phone would silently produce
     /// two cramped columns. Stating "one column" says what is meant.
-    /// The user's density, or the test override. Read once here and threaded
-    /// down; no descendant re-derives it.
+    /// Explicit test rung, or the compact ladder floor for callers that ask a
+    /// non-geometric question. Rendering always uses `gridResolution(in:)`.
     var metrics: DensityMetrics {
-        (densityOverride ?? viewModel.density).metrics
+        (densityOverride ?? .compact).metrics
     }
 
-    private var columns: [GridItem] {
+    private struct GridResolution {
+        let metrics: DensityMetrics
+        let columns: Int
+        let maximumColumns: Int
+        let didFitDensity: Bool
+    }
+
+    private func columns(for resolution: GridResolution) -> [GridItem] {
+        return Array(
+            repeating: GridItem(.flexible(), spacing: resolution.metrics.cardGap, alignment: .top),
+            count: resolution.columns)
+    }
+
+    private func gridResolution(in contentWidth: CGFloat) -> GridResolution {
         switch layout {
         case .denseSingleColumn:
-            return [GridItem(.flexible(), spacing: metrics.cardGap, alignment: .top)]
+            let rung = densityOverride ?? .compact
+            return GridResolution(
+                metrics: rung.metrics, columns: 1, maximumColumns: 1, didFitDensity: true)
         case .denseGrid:
-            // The minimum is a density metric because density scales the row's
-            // fixed columns, not just its height — at `.large` a 320pt card
-            // could not seat them and a readable bar at the same time. One
-            // column on an 11" iPad in portrait at `.large` is the intended
-            // result, not an accident of the number.
-            return [
-                GridItem(
-                    .adaptive(minimum: metrics.gridMinimum),
-                    spacing: metrics.cardGap,
-                    alignment: .top)
-            ]
+            // Explicit rungs are snapshot-only fixtures. They preserve the
+            // pre-slider baselines while production follows the one-way
+            // slider -> column count -> card width -> rung pipeline below.
+            if let densityOverride {
+                let columns = legacyColumnCount(for: densityOverride, contentWidth: contentWidth)
+                return GridResolution(
+                    metrics: densityOverride.metrics,
+                    columns: columns,
+                    maximumColumns: columns,
+                    didFitDensity: true)
+            }
+
+            let compact = DashboardDensity.compact.metrics
+            let stops = feasibleColumnStops(
+                containerWidth: contentWidth,
+                scaledFixedColumnWidth: scaledFixedColumnWidth(
+                    for: .compact, showsReset: false),
+                cardPadding: compact.cardPadding,
+                cardGap: compact.cardGap,
+                minimumBarWidth: DensityMetrics.minimumBarWidth)
+            let maximum = stops.last ?? 1
+            let selectedColumns = DashboardViewModel.resolvedCardColumnCount(
+                preference: viewModel.cardColumnPreference,
+                maximum: maximum)
+            let resolution = DashboardDensity.resolveRung { rung in
+                let rungMetrics = rung.metrics
+                let width = cardWidth(
+                    containerWidth: contentWidth,
+                    columns: selectedColumns,
+                    cardGap: rungMetrics.cardGap)
+                return width - rungMetrics.cardPadding * 2
+                    - scaledFixedColumnWidth(for: rung, showsReset: false)
+                    >= DensityMetrics.minimumBarWidth
+            }
+            return GridResolution(
+                metrics: resolution.rung.metrics,
+                columns: selectedColumns,
+                maximumColumns: maximum,
+                didFitDensity: resolution.didFit)
         }
+    }
+
+    /// The pre-slider behavior remains available only to explicit snapshot
+    /// fixtures. Runtime selection is handled by `gridResolution(in:)`.
+    private func legacyColumnCount(
+        for density: DashboardDensity,
+        contentWidth: CGFloat
+    ) -> Int {
+        let metrics = density.metrics
+        let fixedColumnWidth: CGFloat
+        if scaledFixedColumnWidth(for: density, showsReset: true)
+            > metrics.fixedColumnWidth(showsReset: true)
+        {
+            fixedColumnWidth = scaledFixedColumnWidth(for: density, showsReset: false)
+        } else {
+            fixedColumnWidth = max(
+                0,
+                metrics.gridMinimum - metrics.cardPadding * 2
+                    - DensityMetrics.minimumBarWidth)
+        }
+        return maxColumns(
+            containerWidth: contentWidth,
+            scaledFixedColumnWidth: fixedColumnWidth,
+            cardPadding: metrics.cardPadding,
+            cardGap: metrics.cardGap,
+            minimumBarWidth: DensityMetrics.minimumBarWidth)
+    }
+
+    /// The row owns Dynamic Type scaling; the grid only consumes its exposed
+    /// values to choose a count before the rows are laid out. This is resolved
+    /// in this view rather than by reading a temporary WindowRow, because
+    /// DynamicProperty values are only valid after their owning view installs
+    /// them in the environment.
+    private func scaledFixedColumnWidth(
+        for density: DashboardDensity,
+        showsReset: Bool
+    ) -> CGFloat {
+        let columns: (label: CGFloat, percent: CGFloat, reset: CGFloat)
+        switch density {
+        case .compact:
+            columns = (compactLabelWidth, compactPercentWidth, compactResetWidth)
+        case .standard:
+            columns = (standardLabelWidth, standardPercentWidth, standardResetWidth)
+        case .large:
+            columns = (largeLabelWidth, largePercentWidth, largeResetWidth)
+        }
+        let fixed = columns.label + columns.percent
+            + (showsReset ? columns.reset : 0)
+        let gaps = density.metrics.columnGap * CGFloat(showsReset ? 3 : 2)
+        return fixed + gaps
+    }
+
+    /// The answer sent to every card after the grid has resolved its count and
+    /// therefore its actual card width. Geometry can only remove reset from
+    /// the layout's named editorial comfort decision.
+    func runtimeShowsReset(
+        inContentWidth contentWidth: CGFloat,
+        columns: Int,
+        scaledFixedColumnWidth: CGFloat
+    ) -> Bool {
+        runtimeShowsReset(
+            inContentWidth: contentWidth,
+            columns: columns,
+            metrics: metrics,
+            scaledFixedColumnWidth: scaledFixedColumnWidth)
+    }
+
+    private func runtimeShowsReset(
+        inContentWidth contentWidth: CGFloat,
+        columns: Int,
+        metrics: DensityMetrics,
+        scaledFixedColumnWidth: CGFloat
+    ) -> Bool {
+        let resolvedWidth = cardWidth(
+            containerWidth: contentWidth,
+            columns: columns,
+            cardGap: metrics.cardGap)
+        return layout.editorialShowsReset
+            && metrics.fitsResetColumn(
+                inCardWidth: resolvedWidth,
+                scaledFixedColumnWidth: scaledFixedColumnWidth)
     }
 
     /// Every provider and every window at once, on both platforms.
     ///
-    /// On iPad, columns are adaptive rather than a fixed two. The mock was
-    /// drawn at portrait width, where this resolves to two — but the whole
-    /// point is to use the screen, and landscape has room for three. A fixed
-    /// count would stretch cards across 1366pt and reintroduce the wasted
-    /// horizontal space this layout exists to remove.
+    /// On iPad, the solver chooses an explicit count rather than a fixed two.
+    /// The mock was drawn at portrait width, where this resolves to two — but
+    /// the whole point is to use the screen, and landscape has room for three.
+    /// A fixed count would stretch cards across 1366pt and reintroduce the
+    /// wasted horizontal space this layout exists to remove.
     ///
     /// Active providers as full density cards, then exhausted ones in a
     /// compact section at the bottom.
@@ -195,32 +338,48 @@ struct DashboardContent: View {
     /// source array, so hiding them removes this section entirely.
     @ViewBuilder
     private var denseGrid: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                LazyVGrid(
-                    columns: columns,
-                    alignment: .leading,
-                    spacing: metrics.cardGap
-                ) {
-                    ForEach(activeProviders, id: \.providerName) { provider in
-                        ProviderDensityCard(
-                            provider: provider,
-                            now: now,
-                            showsReset: layout.showsReset,
-                            metrics: metrics
-                        )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedProviderName = provider.providerName
-                            }
+        GeometryReader { geometry in
+            let contentWidth = geometry.size.width - dashboardHorizontalInset * 2
+            let resolution = gridResolution(in: contentWidth)
+            let resolvedShowsReset = runtimeShowsReset(
+                inContentWidth: contentWidth,
+                columns: resolution.columns,
+                metrics: resolution.metrics,
+                scaledFixedColumnWidth: scaledFixedColumnWidth(
+                    for: resolution.metrics.rung, showsReset: true))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    LazyVGrid(
+                        columns: columns(for: resolution),
+                        alignment: .leading,
+                        spacing: resolution.metrics.cardGap
+                    ) {
+                        ForEach(activeProviders, id: \.providerName) { provider in
+                            ProviderDensityCard(
+                                provider: provider,
+                                now: now,
+                                showsReset: resolvedShowsReset,
+                                metrics: resolution.metrics
+                            )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedProviderName = provider.providerName
+                                }
+                        }
+                    }
+                    if !exhaustedProviders.isEmpty {
+                        exhaustedSection(metrics: resolution.metrics, contentWidth: contentWidth)
                     }
                 }
-                if !exhaustedProviders.isEmpty {
-                    exhaustedSection
-                }
+                .padding(.horizontal, dashboardHorizontalInset)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .onAppear {
+                viewModel.setAvailableCardColumns(resolution.maximumColumns)
+            }
+            .onChange(of: resolution.maximumColumns) { _, maximum in
+                viewModel.setAvailableCardColumns(maximum)
+            }
         }
     }
 
@@ -235,56 +394,86 @@ struct DashboardContent: View {
         viewModel.providers.filter(\.isDepleted)
     }
 
-    /// Two per row on iPhone, wider on iPad.
-    ///
-    /// Sized from the content, not from the card grid: a cell holds a provider
-    /// name and "resets Aug 12, 7:46 PM". A 150pt minimum packs four columns
-    /// onto an iPad and truncates both strings — which defeats the point,
-    /// since the reset time is the entire reason the cell exists. The compact
-    /// numbers (170/240) keep them whole at every width this app is used at,
-    /// and the larger densities scale from there with their reset font.
-    private var exhaustedColumns: [GridItem] {
-        let minimum =
-            switch layout {
-            case .denseSingleColumn: metrics.exhaustedMinimumSingleColumn
-            case .denseGrid: metrics.exhaustedMinimumGrid
-            }
-        return [
-            GridItem(.adaptive(minimum: minimum), spacing: metrics.exhaustedGap, alignment: .top)
-        ]
+    /// Sizes cells from the actual reset-label demand at the active Dynamic
+    /// Type size. The timestamp is the exhausted cell's purpose, so an explicit
+    /// solver count must never create a cell that truncates it mid-string.
+    private func exhaustedColumns(metrics: DensityMetrics, contentWidth: CGFloat) -> [GridItem] {
+        let columns = maxColumns(
+            containerWidth: contentWidth,
+            scaledFixedColumnWidth: exhaustedResetLabelWidth(for: metrics.rung),
+            cardPadding: metrics.cardPadding,
+            cardGap: metrics.exhaustedGap,
+            minimumBarWidth: 0)
+        return Array(
+            repeating: GridItem(.flexible(), spacing: metrics.exhaustedGap, alignment: .top),
+            count: columns)
     }
 
-    private var exhaustedSection: some View {
+    private func exhaustedSection(metrics: DensityMetrics, contentWidth: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: metrics.exhaustedGap) {
             Text("Exhausted")
                 .font(metrics.exhaustedHeaderFont)
                 .foregroundStyle(.tertiary)
                 .accessibilityIdentifier("exhausted-section-header")
             LazyVGrid(
-                columns: exhaustedColumns,
+                columns: exhaustedColumns(metrics: metrics, contentWidth: contentWidth),
                 alignment: .leading,
                 spacing: metrics.exhaustedGap
             ) {
                 ForEach(exhaustedProviders, id: \.providerName) { provider in
-                    exhaustedCell(provider)
+                    exhaustedCell(provider, metrics: metrics)
                 }
             }
         }
     }
 
+    private func exhaustedResetLabelWidth(for density: DashboardDensity) -> CGFloat {
+        let style: UIFont.TextStyle = switch density {
+        case .compact: .caption1
+        case .standard: .footnote
+        case .large: .subheadline
+        }
+        let font = UIFont.preferredFont(forTextStyle: style, compatibleWith: dynamicTypeTraits)
+        return ("resets Aug 12, 7:46 PM" as NSString).size(withAttributes: [.font: font]).width
+    }
+
+    private var dynamicTypeTraits: UITraitCollection {
+        let category: UIContentSizeCategory = switch dynamicTypeSize {
+        case .xSmall: .extraSmall
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        case .xLarge: .extraLarge
+        case .xxLarge: .extraExtraLarge
+        case .xxxLarge: .extraExtraExtraLarge
+        case .accessibility1: .accessibilityMedium
+        case .accessibility2: .accessibilityLarge
+        case .accessibility3: .accessibilityExtraLarge
+        case .accessibility4: .accessibilityExtraExtraLarge
+        case .accessibility5: .accessibilityExtraExtraExtraLarge
+        @unknown default: .large
+        }
+        return UITraitCollection(preferredContentSizeCategory: category)
+    }
+
     /// Still tappable through to the detail view: compact is about how much
     /// the row costs on screen, not about withholding the full breakdown from
     /// anyone who wants it.
-    private func exhaustedCell(_ provider: ProviderStatus) -> some View {
+    private func exhaustedCell(_ provider: ProviderStatus, metrics: DensityMetrics) -> some View {
         VStack(alignment: .leading, spacing: metrics.exhaustedLineGap) {
             Text(provider.providerDisplayName)
                 .font(metrics.exhaustedTitleFont)
-                .lineLimit(1)
-                .truncationMode(.tail)
+                // At accessibility sizes, a one-column iPhone can no longer
+                // fit a full provider name on one line. Let the cell grow
+                // rather than replace part of the name with an ellipsis.
+                .fixedSize(horizontal: false, vertical: true)
             Text(earliestResetLabel(provider.windows, now: now) ?? "reset unknown")
                 .font(metrics.exhaustedResetFont)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+                // The solver prevents a second cramped column. A full reset
+                // timestamp can still exceed a narrow phone at AX4/AX5, so it
+                // wraps instead of truncating mid-timestamp.
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, minHeight: metrics.exhaustedRowHeight, alignment: .leading)
         .padding(.horizontal, metrics.cardPadding)

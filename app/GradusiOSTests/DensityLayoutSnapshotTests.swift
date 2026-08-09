@@ -72,7 +72,13 @@ private func makeViewModel() -> DashboardViewModel {
     let cache = FileLocalCacheStore(directory: directory)
     let defaults = UserDefaults(suiteName: "gradus-density-snap-\(UUID().uuidString)")!
     defaults.set(true, forKey: DashboardViewModel.showExhaustedKey)
-    try? cache.saveCachedStatuses(fullProviderSet(), syncedAt: fixedNow)
+    let providers = fullProviderSet()
+    let windows = providers.flatMap(\.windows)
+    #expect(windows.contains { ($0.paceDelta ?? 0) > 0 })
+    #expect(windows.contains { ($0.paceDelta ?? 0) < 0 })
+    #expect(windows.contains { $0.percentLeft == 0 })
+    #expect(windows.contains { $0.percentLeft == 100 })
+    try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
     return DashboardViewModel(cache: cache, userDefaults: defaults)
 }
 
@@ -236,4 +242,63 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
             layout: .fixed(width: 393, height: 852),
             traits: UITraitCollection(userInterfaceStyle: .dark)),
         testName: "densityLargePhoneDark")
+}
+
+/// The first Larger Text accessibility rung on the compact phone layout.
+/// This is the narrowest dashboard case where the percent column must keep a
+/// whole `100%` instead of clipping the final digit.
+@MainActor
+@Test func densityCompactPhoneAccessibility1() {
+    assertSnapshot(
+        of: DashboardContent(
+            viewModel: makeViewModel(), now: fixedNow,
+            layout: .denseSingleColumn, density: .compact),
+        as: .image(
+            layout: .fixed(width: 393, height: 852),
+            traits: UITraitCollection(traitsFrom: [
+                UITraitCollection(userInterfaceStyle: .light),
+                UITraitCollection(preferredContentSizeCategory: .accessibilityMedium),
+            ])),
+        testName: "densityCompactPhoneAccessibility1")
+}
+
+@MainActor
+@Test func densityCompactPhoneAccessibility5() {
+    assertSnapshot(
+        of: DashboardContent(
+            viewModel: makeViewModel(), now: fixedNow,
+            layout: .denseSingleColumn, density: .compact),
+        as: .image(
+            layout: .fixed(width: 393, height: 852),
+            traits: UITraitCollection(traitsFrom: [
+                UITraitCollection(userInterfaceStyle: .light),
+                UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge),
+            ])),
+        testName: "densityCompactPhoneAccessibility5")
+}
+
+@MainActor
+@Test func densityLargePadPortraitAccessibility1() {
+    assertSnapshot(
+        of: denseDashboard(density: .large),
+        as: .image(
+            layout: .fixed(width: 834, height: 1194),
+            traits: UITraitCollection(traitsFrom: [
+                UITraitCollection(userInterfaceStyle: .light),
+                UITraitCollection(preferredContentSizeCategory: .accessibilityMedium),
+            ])),
+        testName: "densityLargePadPortraitAccessibility1")
+}
+
+@MainActor
+@Test func densityLargePadPortraitAccessibility5() {
+    assertSnapshot(
+        of: denseDashboard(density: .large),
+        as: .image(
+            layout: .fixed(width: 834, height: 1194),
+            traits: UITraitCollection(traitsFrom: [
+                UITraitCollection(userInterfaceStyle: .light),
+                UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge),
+            ])),
+        testName: "densityLargePadPortraitAccessibility5")
 }

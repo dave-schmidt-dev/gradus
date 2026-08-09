@@ -1,8 +1,8 @@
 import CoreGraphics
 import SwiftUI
 
-/// How much room each provider's card is given. A *third* axis, orthogonal to
-/// `DashboardLayout`'s size-class axis.
+/// The internal presentation rung chosen for a provider card. A *third* axis,
+/// orthogonal to `DashboardLayout`'s size-class axis.
 ///
 /// Deliberately not more cases on `DashboardLayout`. That enum answers "how
 /// many columns, and is there room for a reset time" — both consequences of
@@ -12,10 +12,16 @@ import SwiftUI
 ///
 /// David, 2026-08-05: "our current version should be 'compact' with a standard
 /// and large version. Large being something close to what we started with, but
-/// more efficient in spacing. The standard would be between." So `.compact` is
+/// more efficient in spacing. The standard would be between." `.compact` is
 /// exactly what shipped in 1.6.0 — its metrics are the current literals, not a
-/// re-tuned approximation of them, so selecting compact reproduces 1.6.0 pixel
-/// for pixel.
+/// re-tuned approximation of them, so selecting this internal rung reproduces
+/// 1.6.0 pixel for pixel.
+///
+/// The original user-facing picker became a device-relative column slider.
+/// The slider chooses card width; this ladder then chooses the richest rung
+/// that fits that width at the active Dynamic Type size. Keeping the rungs
+/// discrete preserves semantic Dynamic Type fonts: `Font` has no meaningful
+/// midpoint between `.caption`, `.footnote`, and `.subheadline`.
 ///
 /// Every density shows *all* of a provider's windows. That is what INV-12
 /// requires and what `ProviderDensityCard` exists to do: "large" means bigger
@@ -43,6 +49,21 @@ public enum DashboardDensity: String, CaseIterable, Identifiable, Sendable {
         case .large: .large
         }
     }
+
+    /// Walks from the richest presentation to the leanest. The caller owns
+    /// the geometry question because a rung fits only after its scaled fixed
+    /// columns, padding, gap, and resolved card width are known.
+    ///
+    /// Returning `didFit` distinguishes a compact card that genuinely clears
+    /// the floor from the leanest fallback when no rung can clear it.
+    static func resolveRung(
+        fits: (DashboardDensity) -> Bool
+    ) -> (rung: DashboardDensity, didFit: Bool) {
+        for rung in Self.allCases.reversed() where fits(rung) {
+            return (rung, true)
+        }
+        return (.compact, false)
+    }
 }
 
 /// The measurements a density varies. One value threaded down rather than a
@@ -56,6 +77,11 @@ public enum DashboardDensity: String, CaseIterable, Identifiable, Sendable {
 /// `DashboardLayout`, and `fitsResetColumn(inCardWidth:)` below is how a
 /// density participates in that question without owning it.
 public struct DensityMetrics: Equatable, Sendable {
+    /// The discrete density rung these measurements describe. Views use this
+    /// identity to select values that Dynamic Type has already scaled against
+    /// the rung's compile-time text styles.
+    public let rung: DashboardDensity
+
     // MARK: card
 
     /// Inset from the card's rounded background to its content.
@@ -108,19 +134,8 @@ public struct DensityMetrics: Equatable, Sendable {
     public let exhaustedGap: CGFloat
     public let exhaustedRowHeight: CGFloat
     public let exhaustedCornerRadius: CGFloat
-    /// `.adaptive(minimum:)` for the exhausted grid — one per `DashboardLayout`
-    /// case, because the cell's job is keeping the reset string whole and the
-    /// phone has less width to pack into. These grow with `exhaustedResetFont`
-    /// for the reason `resetWidth` does: a fixed width under a scaled font
-    /// truncates a timestamp mid-string, and half a timestamp still reads as
-    /// information.
-    public let exhaustedMinimumSingleColumn: CGFloat
-    public let exhaustedMinimumGrid: CGFloat
-
     // MARK: grid
 
-    /// `GridItem(.adaptive(minimum:))`'s minimum.
-    ///
     /// A density metric because David chose to scale type as well as spacing
     /// (2026-08-06). Once the three fixed columns grow, a 320pt card cannot
     /// seat them *and* a legible bar — at `.subheadline` the columns alone
@@ -160,28 +175,26 @@ public struct DensityMetrics: Equatable, Sendable {
     /// Whether a card of `cardWidth` can seat the reset column and still leave
     /// the bar `minimumBarWidth`.
     ///
-    /// This is the arithmetic `showsReset` has always encoded, made explicit so
-    /// it survives density: "iPhone drops reset" was only ever shorthand for
-    /// "393pt minus 246pt of columns leaves 91pt of bar." Scaling the columns
-    /// changes the answer at widths that used to be comfortable.
+    /// Whether a resolved card can seat the reset column and still leave the
+    /// bar `minimumBarWidth`.
     ///
-    /// Used by `DensityLayoutTests`, not at runtime. `showsReset` stays
-    /// derived from `DashboardLayout` because a card inside an adaptive
-    /// `LazyVGrid` cannot cheaply know its own resolved width, and the
-    /// `GeometryReader` that would tell it does not size to content vertically
-    /// inside a grid cell. Keeping this as a checked property of the metrics
-    /// rather than a runtime branch means the numbers above are validated
-    /// against the widths the app actually renders at, without adding layout
-    /// machinery whose failure mode is a collapsed card.
-    public func fitsResetColumn(inCardWidth cardWidth: CGFloat) -> Bool {
+    /// The runtime caller supplies the scaled fixed-column demand from the
+    /// active Dynamic Type environment. The default keeps this arithmetic
+    /// useful for callers that only have the density's unscaled measurements.
+    public func fitsResetColumn(
+        inCardWidth cardWidth: CGFloat,
+        scaledFixedColumnWidth: CGFloat? = nil
+    ) -> Bool {
         let content = cardWidth - cardPadding * 2
-        return content - fixedColumnWidth(showsReset: true) >= Self.minimumBarWidth
+        let resetDemand = scaledFixedColumnWidth ?? self.fixedColumnWidth(showsReset: true)
+        return content - resetDemand >= Self.minimumBarWidth
     }
 
     /// 1.6.0's shipped literals, unchanged. `WindowRow` and
     /// `ProviderDensityCard` read these rather than hard-coding, so the
     /// baselines recorded before the density axis existed stay valid.
     public static let compact = DensityMetrics(
+        rung: .compact,
         cardPadding: 12,
         titleGap: 6,
         rowGap: 2,
@@ -204,8 +217,6 @@ public struct DensityMetrics: Equatable, Sendable {
         exhaustedGap: 8,
         exhaustedRowHeight: 52,
         exhaustedCornerRadius: 10,
-        exhaustedMinimumSingleColumn: 170,
-        exhaustedMinimumGrid: 240,
         gridMinimum: 320
     )
 
@@ -215,6 +226,7 @@ public struct DensityMetrics: Equatable, Sendable {
     /// originally set against specific strings ("Billing Cycle", "Aug 23, 9:30
     /// PM") rather than against the font's em width.
     public static let standard = DensityMetrics(
+        rung: .standard,
         cardPadding: 14,
         titleGap: 8,
         rowGap: 6,
@@ -237,8 +249,6 @@ public struct DensityMetrics: Equatable, Sendable {
         exhaustedGap: 10,
         exhaustedRowHeight: 60,
         exhaustedCornerRadius: 12,
-        exhaustedMinimumSingleColumn: 185,
-        exhaustedMinimumGrid: 260,
         gridMinimum: 360
     )
 
@@ -252,6 +262,7 @@ public struct DensityMetrics: Equatable, Sendable {
     /// a half-rendered timestamp still reads as information, which is worse
     /// than omitting it. At `.subheadline` the same string needs ~130.
     public static let large = DensityMetrics(
+        rung: .large,
         cardPadding: 18,
         titleGap: 12,
         rowGap: 10,
@@ -274,8 +285,6 @@ public struct DensityMetrics: Equatable, Sendable {
         exhaustedGap: 12,
         exhaustedRowHeight: 70,
         exhaustedCornerRadius: 14,
-        exhaustedMinimumSingleColumn: 215,
-        exhaustedMinimumGrid: 300,
         gridMinimum: 460
     )
 }

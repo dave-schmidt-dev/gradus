@@ -577,7 +577,7 @@ class TestPayloadSchema(unittest.TestCase):
         for entry in payload["providers"]:
             for key in ("name", "ok", "error", "windows", "data", "observed_at"):
                 self.assertIn(key, entry)
-            if entry["ok"]:
+            if entry["ok"] or entry["windows"]:
                 self.assertIsInstance(entry["observed_at"], str)
                 datetime.fromisoformat(entry["observed_at"])
             else:
@@ -739,8 +739,8 @@ class TestPayloadSchema(unittest.TestCase):
         failing = _ps("Antigravity", False, error="network error")
         v2 = snap.build_snapshot_v2_payload([failing], NOW, prior=prior)
         claude = next(entry for entry in v2["providers"] if entry["name"] == "Antigravity (Claude)")
-        self.assertTrue(claude["ok"])
-        self.assertIsNone(claude["error"])
+        self.assertFalse(claude["ok"])
+        self.assertEqual(claude["error"], "network error")
         self.assertEqual(claude["windows"], [])
         self.assertEqual(claude["data"], {})
 
@@ -758,7 +758,7 @@ class TestPayloadSchema(unittest.TestCase):
         )
         self.assertEqual(claude_fresh["observed_at"], fresh["updated_at"])
 
-        original_observed_at = NOW - timedelta(seconds=250)
+        original_observed_at = NOW - timedelta(seconds=100)
         prior = snap.build_snapshot_v2_payload([antigravity], original_observed_at)
         failing = _ps("Antigravity", False, error="network error")
         payload = prior
@@ -793,7 +793,11 @@ class TestPayloadSchema(unittest.TestCase):
                         names += ("Antigravity (Claude)",)
                     for name in names:
                         entry = next(item for item in payload["providers"] if item["name"] == name)
-                        self.assertEqual(entry["ok"], age < 300)
+                        self.assertFalse(entry["ok"])
+                        if age < 300:
+                            self.assertEqual(entry["observed_at"], snap.local_iso(observed_at))
+                        else:
+                            self.assertIsNone(entry["observed_at"])
 
     def test_carry_forward_rejects_invalid_observed_at_for_both_paths(self) -> None:
         """Invalid, naive, and future observations fail closed for both entries."""
@@ -838,16 +842,17 @@ class TestTransientMerge(unittest.TestCase):
         )
         return snap.build_snapshot_payload([codex], at)
 
-    def test_transient_retains_recent_prior(self) -> None:
-        """A transient failure within 300s reuses the healthy prior entry."""
+    def test_transient_carries_recent_prior_values_and_failure_reason(self) -> None:
+        """A transient failure keeps stale values without masquerading as healthy."""
         prior = self._healthy_prior(NOW - timedelta(seconds=100))
         failing = _ps("Codex", False, error="rate limited")
         payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
         prior_codex = next(p for p in prior["providers"] if p["name"] == "Codex")
-        self.assertTrue(codex["ok"])
+        self.assertFalse(codex["ok"])
+        self.assertEqual(codex["error"], "rate limited")
         self.assertTrue(codex["windows"])
-        self.assertEqual(codex, prior_codex)
+        self.assertEqual(codex["observed_at"], prior_codex["observed_at"])
         self.assertIsNot(codex, prior_codex)
         codex["data"]["five_hour_percent_left"] = 1
         self.assertEqual(prior_codex["data"]["five_hour_percent_left"], 88)
@@ -867,7 +872,7 @@ class TestTransientMerge(unittest.TestCase):
         but the third hop is 360 seconds after the original observation and
         must publish the fresh error entry.
         """
-        original_observed_at = NOW - timedelta(seconds=250)
+        original_observed_at = NOW - timedelta(seconds=100)
         original_observed_iso = snap.local_iso(original_observed_at)
         prior = self._healthy_prior(original_observed_at)
         failing = _ps("Codex", False, error="rate limited")
@@ -879,7 +884,8 @@ class TestTransientMerge(unittest.TestCase):
             payload = snap.build_snapshot_payload([failing], hop_at, prior=payload)
             codex = next(p for p in payload["providers"] if p["name"] == "Codex")
             if hop < 2:
-                self.assertTrue(codex["ok"])
+                self.assertFalse(codex["ok"])
+                self.assertEqual(codex["error"], "rate limited")
                 self.assertEqual(codex["observed_at"], original_observed_iso)
 
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
@@ -920,7 +926,8 @@ class TestTransientMerge(unittest.TestCase):
         failing = _ps("Codex", False, error="rate limited")
         payload = snap.build_snapshot_payload([failing], NOW, prior=legacy_prior)
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
-        self.assertTrue(codex["ok"])
+        self.assertFalse(codex["ok"])
+        self.assertEqual(codex["error"], "rate limited")
         self.assertEqual(codex["observed_at"], snap.local_iso(prior_at))
 
     def test_transient_rejects_prior_with_extra_or_error_metadata(self) -> None:
@@ -974,7 +981,8 @@ class TestTransientMerge(unittest.TestCase):
                 prior["updated_at"] = timestamp
                 payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
                 current = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
-                self.assertTrue(current["ok"])
+                self.assertFalse(current["ok"])
+                self.assertEqual(current["error"], "rate limited")
                 self.assertEqual(
                     current["observed_at"],
                     next(entry for entry in prior["providers"] if entry["name"] == "Codex")[
@@ -1085,7 +1093,8 @@ class TestTransientMerge(unittest.TestCase):
                 retained_antigravity = next(
                     entry for entry in retained["providers"] if entry["name"] == "Antigravity"
                 )
-                self.assertTrue(retained_antigravity["ok"])
+                self.assertFalse(retained_antigravity["ok"])
+                self.assertEqual(retained_antigravity["error"], "network error")
                 self.assertEqual(
                     [window["id"] for window in retained_antigravity["windows"]],
                     ["five_hour", "weekly"],
@@ -1136,18 +1145,18 @@ class TestTransientMerge(unittest.TestCase):
         The headless snapshot path (--write-snapshot / --json) refuses to touch
         a Keychain-only provider's credential (INV-2) and reports
         "auth required: no cached credentials". A recent interactive prior is
-        authoritative, so it must be carried forward with ok=True and windows —
-        otherwise a downstream router (Switchyard) sees ok=false and drops the
-        provider, failing closed with no_provider.
+        authoritative, so its values and observation time must be carried
+        forward while the current credential failure remains visible.
         """
         prior = self._healthy_prior(NOW - timedelta(seconds=100))
         failing = _ps("Codex", False, error="auth required: no cached credentials")
         payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
         codex = next(p for p in payload["providers"] if p["name"] == "Codex")
         prior_codex = next(p for p in prior["providers"] if p["name"] == "Codex")
-        self.assertTrue(codex["ok"])
+        self.assertFalse(codex["ok"])
+        self.assertEqual(codex["error"], "auth required: no cached credentials")
         self.assertTrue(codex["windows"])
-        self.assertEqual(codex, prior_codex)
+        self.assertEqual(codex["observed_at"], prior_codex["observed_at"])
 
     def test_headless_deferred_probe_drops_stale_prior(self) -> None:
         """A headless-deferred probe past 300s does NOT retain the prior."""
@@ -1275,12 +1284,13 @@ class TestTransientMerge(unittest.TestCase):
         prior_claude = next(
             entry for entry in prior["providers"] if entry["name"] == "Antigravity (Claude)"
         )
-        self.assertTrue(claude["ok"])
+        self.assertFalse(claude["ok"])
+        self.assertEqual(claude["error"], "rate limited")
         windows = {window["id"]: window for window in claude["windows"]}
         self.assertEqual(set(windows), {"five_hour", "weekly"})
         self.assertEqual(windows["five_hour"]["percent_left"], 42.5)
         self.assertEqual(windows["weekly"]["percent_left"], 15.0)
-        self.assertEqual(claude, prior_claude)
+        self.assertEqual(claude["observed_at"], prior_claude["observed_at"])
         self.assertIsNot(claude, prior_claude)
 
     def test_transient_antigravity_claude_no_prior_is_fresh(self) -> None:
@@ -1386,6 +1396,22 @@ class TestAtomicWrite(unittest.TestCase):
             self.assertIs(snap.write_snapshot(newer, path), snap.SnapshotWrite.WRITTEN)
             self.assertIs(snap.write_snapshot(older, path), snap.SnapshotWrite.SKIPPED_STALE)
             self.assertEqual(snap.read_prior_snapshot(path), newer)
+
+    def test_schema_v2_write_mirrors_the_credential_free_app_copy(self) -> None:
+        payload = snap.build_snapshot_v2_payload([], NOW)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / ".state" / "snapshot-v2.json"
+            mirror = (
+                Path(tmpdir) / "Library" / "Application Support" / "Gradus" / "snapshot-v2.json"
+            )
+            with (
+                patch.object(snap, "SNAPSHOT_V2_PATH", source),
+                patch.object(snap, "MAC_APP_SNAPSHOT_V2_PATH", mirror),
+            ):
+                self.assertIs(snap.write_snapshot(payload, source), snap.SnapshotWrite.WRITTEN)
+
+            self.assertEqual(snap.read_prior_snapshot(source), payload)
+            self.assertEqual(snap.read_prior_snapshot(mirror), payload)
 
     def test_untrusted_incoming_timestamp_preserves_valid_current_snapshot(self) -> None:
         """Invalid incoming timestamps cannot replace a valid current payload."""

@@ -64,6 +64,16 @@ private func sampleProviders() -> [ProviderStatus] {
     ]
 }
 
+private func assertSampleProviders(_ providers: [ProviderStatus]) {
+    XCTAssertEqual(providers.count, 3)
+    XCTAssertTrue(providers.contains { $0.ok && !$0.windows.isEmpty })
+    XCTAssertTrue(providers.contains { !$0.ok && $0.windows.isEmpty })
+}
+
+private func bundledSampleProviders() throws -> [ProviderStatus] {
+    try SampleDataMode.bundledProviders(bundle: Bundle(for: AppDelegate.self))
+}
+
 @MainActor
 private func makeViewModel(providers: [ProviderStatus], showExhausted: Bool = true) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
@@ -220,7 +230,9 @@ final class DashboardSnapshotTests: XCTestCase {
 // is density.
 @MainActor
 func testDashboardRendersDenseCardsCompactLight() {
-    let viewModel = makeViewModel(providers: sampleProviders())
+    let providers = sampleProviders()
+    assertSampleProviders(providers)
+    let viewModel = makeViewModel(providers: providers)
     XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
     let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
     assertSnapshot(
@@ -231,7 +243,9 @@ func testDashboardRendersDenseCardsCompactLight() {
 
 @MainActor
 func testDashboardRendersDenseCardsCompactDark() {
-    let viewModel = makeViewModel(providers: sampleProviders())
+    let providers = sampleProviders()
+    assertSampleProviders(providers)
+    let viewModel = makeViewModel(providers: providers)
     XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
     let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
     assertSnapshot(
@@ -250,7 +264,11 @@ func testDashboardColorsByPaceNotByPercentageRemaining() {
     XCTAssertEqual(signalLevel(percentLeft: 72, paceDelta: -0.26), .red)
     XCTAssertEqual(signalLevel(percentLeft: 72, paceDelta: nil), .green)
 
-    let viewModel = makeViewModel(providers: paceDivergentProviders())
+    let providers = paceDivergentProviders()
+    let levels = Set(providers.flatMap(\.windows).map(signalLevel(for:)))
+    XCTAssertTrue(levels.contains(.green))
+    XCTAssertTrue(levels.contains(.red))
+    let viewModel = makeViewModel(providers: providers)
     let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
     assertSnapshot(
         of: view,
@@ -279,7 +297,12 @@ func testDashboardTruncatesPercentagesRatherThanRounding() {
     XCTAssertFalse(percentIsDepleted(0.7))
     XCTAssertEqual(percentText(0.7), "0.7")
 
-    let viewModel = makeViewModel(providers: truncationDivergentProviders())
+    let providers = truncationDivergentProviders()
+    XCTAssertTrue(
+        providers.flatMap(\.windows).contains {
+            percentText($0.percentLeft) != String(Int($0.percentLeft.rounded()))
+        })
+    let viewModel = makeViewModel(providers: providers)
     let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
     assertSnapshot(
         of: view,
@@ -289,7 +312,9 @@ func testDashboardTruncatesPercentagesRatherThanRounding() {
 
 @MainActor
 func testDashboardSeparatesActiveProvidersBeforeCompactExhaustedSection() {
-    let viewModel = makeViewModel(providers: sampleProviders() + [
+    let providers = sampleProviders()
+    assertSampleProviders(providers)
+    let viewModel = makeViewModel(providers: providers + [
         exhaustedProvider(named: "vibe"),
         exhaustedProvider(named: "copilot"),
     ])
@@ -319,30 +344,89 @@ func testDashboardSeparatesActiveProvidersBeforeCompactExhaustedSection() {
 /// silently regress.
 @MainActor
 func testDashboardRendersExhaustedProvidersAsCompactCells() {
-    let viewModel = makeViewModel(providers: sampleProviders() + [
+    let providers = sampleProviders()
+    assertSampleProviders(providers)
+    let viewModel = makeViewModel(providers: providers + [
         exhaustedProvider(named: "vibe"),
         exhaustedProvider(named: "copilot"),
     ])
 
     assertSnapshot(
-        of: DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn),
+        of: DashboardContent(
+            viewModel: viewModel,
+            now: fixedNow,
+            layout: .denseSingleColumn,
+            density: .compact),
         as: .image(layout: .fixed(width: 393, height: 760), traits: UITraitCollection(userInterfaceStyle: .light)),
         testName: "exhaustedCompactCellsPhone")
 
     assertSnapshot(
-        of: DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseGrid),
+        of: DashboardContent(
+            viewModel: viewModel,
+            now: fixedNow,
+            layout: .denseGrid,
+            density: .compact),
         as: .image(layout: .fixed(width: 1024, height: 600), traits: UITraitCollection(userInterfaceStyle: .light)),
         testName: "exhaustedCompactCellsPad")
 }
 
 @MainActor
 func testDashboardHidesExhaustedCellsWhenPreferenceIsOff() {
+    let providers = sampleProviders()
+    assertSampleProviders(providers)
     let viewModel = makeViewModel(
-        providers: sampleProviders() + [exhaustedProvider(named: "vibe")],
+        providers: providers + [exhaustedProvider(named: "vibe")],
         showExhausted: false)
 
     XCTAssertTrue(viewModel.providers.allSatisfy { !$0.isDepleted })
     XCTAssertFalse(viewModel.providers.contains { $0.providerName == "vibe" })
+}
+
+/// Screenshot fixtures exercise the same bundled payload and banner used by
+/// the Debug-only launch path. Each supported App Store device class gets a
+/// distinct frame so a marker or populated card cannot be cropped away.
+@MainActor
+func testSampleDataDashboardAtAppStoreScreenshotSizes() throws {
+    XCTAssertEqual(SampleDataMode.fixedNow, fixedNow)
+    let providers = try bundledSampleProviders()
+    XCTAssertFalse(providers.isEmpty)
+    XCTAssertTrue(providers.allSatisfy { $0.providerDisplayName.hasPrefix("Sample ") })
+    XCTAssertTrue(providers.allSatisfy { !$0.windows.isEmpty })
+
+    let snapshots: [(String, CGFloat, CGFloat, DashboardLayout, DashboardDensity)] = [
+        ("sampleDataDashboardIPhone", 393, 852, .denseSingleColumn, .compact),
+        ("sampleDataDashboardIPhoneLarge", 430, 932, .denseSingleColumn, .compact),
+        ("sampleDataDashboardIPad", 1024, 1366, .denseGrid, .compact),
+    ]
+    for (name, width, height, layout, density) in snapshots {
+        let viewModel = makeViewModel(providers: providers)
+        assertSnapshot(
+            of: SampleDataDashboard(
+                viewModel: viewModel,
+                now: fixedNow,
+                layout: layout,
+                density: density),
+            as: .image(
+                layout: .fixed(width: width, height: height),
+                traits: UITraitCollection(userInterfaceStyle: .light)),
+            testName: name)
+    }
+}
+
+func testSampleDataModeIsDebugLaunchArgumentOnly() {
+    XCTAssertTrue(SampleDataMode.isEnabled(arguments: ["GradusiOS", SampleDataMode.launchArgument], isDebugBuild: true))
+    XCTAssertFalse(SampleDataMode.isEnabled(arguments: ["GradusiOS", SampleDataMode.launchArgument], isDebugBuild: false))
+    XCTAssertFalse(SampleDataMode.isEnabled(arguments: ["GradusiOS"], isDebugBuild: true))
+}
+
+func testSampleDataModeDisablesLiveLifecycle() {
+    XCTAssertFalse(GradusiOSApp.shouldRunLiveLifecycle(isUITesting: false, sampleDataModeEnabled: true))
+    XCTAssertFalse(GradusiOSApp.shouldRunLiveLifecycle(isUITesting: true, sampleDataModeEnabled: false))
+    XCTAssertTrue(GradusiOSApp.shouldRunLiveLifecycle(isUITesting: false, sampleDataModeEnabled: false))
+}
+
+func testSampleDataBannerUsesFixedLabel() {
+    XCTAssertEqual(SampleDataMode.bannerText, "Sample data")
 }
 
 

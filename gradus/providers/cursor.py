@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from ..parsing import CursorStatus
-from . import _base
 from ._base import (
     ProbeFailure,
     _auth_required_message,
@@ -25,15 +24,6 @@ log = logging.getLogger(__name__)
 
 @register("Cursor")
 class CursorProvider:
-    _DB_PATH = (
-        Path.home()
-        / "Library"
-        / "Application Support"
-        / "Cursor"
-        / "User"
-        / "globalStorage"
-        / "state.vscdb"
-    )
     _CACHE_PATH = Path(__file__).resolve().parent.parent.parent / ".cache" / "cursor_token.json"
     _USAGE_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
     _PLAN_URL = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetPlanInfo"
@@ -52,20 +42,6 @@ class CursorProvider:
     def _load_token(self) -> None:
         if self._load_from_cache():
             self._token_source = "cache"
-            return
-
-        token = self._extract_token_from_safari()
-        if token:
-            self._access_token = token
-            self._token_source = "safari"
-            self._save_to_cache()
-            return
-
-        self._load_from_desktop_db()
-        if self._access_token:
-            self._token_source = "desktop_db"
-            self._save_to_cache()
-            return
 
     def _load_from_cache(self) -> bool:
         if not self._CACHE_PATH.exists():
@@ -86,55 +62,8 @@ class CursorProvider:
         _harden_existing(self._CACHE_PATH)
         return True
 
-    def _save_to_cache(self) -> None:
-        if not self._access_token:
-            return
-        try:
-            payload = {
-                "access_token": self._access_token,
-                "refresh_token": self._refresh_token,
-                "cached_at": datetime.now().isoformat(),
-            }
-            _base._write_private(self._CACHE_PATH, json.dumps(payload))
-        except OSError as exc:
-            log.warning("Failed to write Cursor token cache: %s", exc)
-
     def _clear_cache(self) -> None:
         _remove_private(self._CACHE_PATH)
-
-    def _extract_token_from_safari(self) -> str | None:
-        import urllib.parse
-
-        cookies = _base._read_safari_cookies("cursor")
-        token_value = cookies.get("WorkosCursorSessionToken", "")
-        if token_value:
-            decoded = urllib.parse.unquote(token_value)
-            parts = decoded.split("::", 1)
-            if len(parts) == 2 and parts[1]:
-                log.debug("Extracted Cursor token from Safari cookie")
-                return parts[1]
-        return None
-
-    def _load_from_desktop_db(self) -> None:
-        import sqlite3 as _sqlite3
-
-        if not self._DB_PATH.exists():
-            return
-        try:
-            conn = _sqlite3.connect(f"file:{self._DB_PATH}?mode=ro", uri=True)
-            try:
-                row = conn.execute(
-                    "SELECT value FROM cursorDiskKV WHERE key = 'cursorAuth/accessToken'"
-                ).fetchone()
-                self._access_token = row[0] if row else None
-                row = conn.execute(
-                    "SELECT value FROM cursorDiskKV WHERE key = 'cursorAuth/refreshToken'"
-                ).fetchone()
-                self._refresh_token = row[0] if row else None
-            finally:
-                conn.close()
-        except _sqlite3.Error:
-            return
 
     def fetch(self) -> CursorStatus:
         import urllib.error as _ue
@@ -344,7 +273,6 @@ class CursorProvider:
                 new_refresh = body.get("refresh_token")
                 if isinstance(new_refresh, str) and new_refresh:
                     self._refresh_token = new_refresh
-                self._save_to_cache()
                 log.debug("Cursor access token refreshed successfully")
             else:
                 log.warning("Cursor token refresh response missing access_token")

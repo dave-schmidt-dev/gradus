@@ -3,18 +3,140 @@
 # runs `xcodebuild test` for both destinations. Exits non-zero on any
 # failure (preflight mismatch, build failure, or test failure) so it's safe
 # to wire into CI/pre-push as a hard gate.
+
+EXPECTED_COUNTING_LEG_COUNT=5
+COUNTING_LEG_NAMES=(
+  "swift-testing"
+  "pytest"
+  "GradusMac"
+  "GradusiOS-iPhone"
+  "GradusiOS-iPad"
+)
+COUNTING_LEG_REPORTERS=(
+  "swift-testing"
+  "pytest"
+  "xctest"
+  "xctest"
+  "xctest"
+)
+COUNTING_LEG_MINIMUMS=(2 2 2 2 2)
+COUNTING_LEG_RUN_COUNT=0
+
+validate_counting_leg_declarations() {
+  local leg_count="${#COUNTING_LEG_NAMES[@]}"
+  if [[ "$leg_count" -ne "$EXPECTED_COUNTING_LEG_COUNT" ||
+        "${#COUNTING_LEG_REPORTERS[@]}" -ne "$EXPECTED_COUNTING_LEG_COUNT" ||
+        "${#COUNTING_LEG_MINIMUMS[@]}" -ne "$EXPECTED_COUNTING_LEG_COUNT" ]]; then
+    echo "FAIL: counting-leg declarations disagree (expected $EXPECTED_COUNTING_LEG_COUNT, names $leg_count, reporters ${#COUNTING_LEG_REPORTERS[@]}, floors ${#COUNTING_LEG_MINIMUMS[@]})" >&2
+    return 1
+  fi
+
+  local index
+  for ((index = 0; index < leg_count; index++)); do
+    if ! [[ "${COUNTING_LEG_MINIMUMS[index]}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "FAIL: counting leg '${COUNTING_LEG_NAMES[index]}' has invalid minimum '${COUNTING_LEG_MINIMUMS[index]}'" >&2
+      return 1
+    fi
+  done
+}
+
+assert_counting_leg() {
+  local leg_name="$1"
+  shift
+  local leg_index=-1
+  local index
+  for ((index = 0; index < ${#COUNTING_LEG_NAMES[@]}; index++)); do
+    if [[ "${COUNTING_LEG_NAMES[index]}" == "$leg_name" ]]; then
+      leg_index="$index"
+      break
+    fi
+  done
+  if [[ "$leg_index" -lt 0 ]]; then
+    echo "FAIL: undeclared counting leg '$leg_name'" >&2
+    return 1
+  fi
+
+  local output_file
+  output_file="$(mktemp "${TMPDIR:-/tmp}/gradus-test-gate.XXXXXX")"
+  local command_status=0
+  if "$@" 2>&1 | tee "$output_file"; then
+    :
+  else
+    command_status="$?"
+  fi
+  if [[ "$command_status" -ne 0 ]]; then
+    echo "FAIL: counting leg '$leg_name' exited with status $command_status" >&2
+    rm -f "$output_file"
+    return "$command_status"
+  fi
+
+  local reported_count
+  reported_count="$(awk '
+    function record(value) {
+      gsub(/[^0-9]/, "", value)
+      if (value != "" && value > maximum) maximum = value
+      found = 1
+    }
+    {
+      if (match($0, /Test run with [0-9]+ tests?/)) {
+        value = substr($0, RSTART, RLENGTH)
+        sub(/^Test run with /, "", value)
+        record(value)
+      }
+      if (match($0, /[0-9]+ passed/)) {
+        record(substr($0, RSTART, RLENGTH))
+      }
+      if (match($0, /Executed [0-9]+ tests?/)) {
+        value = substr($0, RSTART, RLENGTH)
+        sub(/^Executed /, "", value)
+        record(value)
+      }
+    }
+    END { if (found) print maximum }
+  ' "$output_file")"
+  rm -f "$output_file"
+
+  if [[ -z "$reported_count" ]]; then
+    echo "FAIL: counting leg '$leg_name' reported no recognized test count" >&2
+    return 1
+  fi
+  if [[ "$reported_count" -lt "${COUNTING_LEG_MINIMUMS[leg_index]}" ]]; then
+    echo "FAIL: counting leg '$leg_name' reported $reported_count tests; minimum is ${COUNTING_LEG_MINIMUMS[leg_index]}" >&2
+    return 1
+  fi
+
+  COUNTING_LEG_RUN_COUNT=$((COUNTING_LEG_RUN_COUNT + 1))
+  echo "    $leg_name: $reported_count tests reported (minimum ${COUNTING_LEG_MINIMUMS[leg_index]}). OK."
+}
+
+assert_counting_legs_complete() {
+  if [[ "$COUNTING_LEG_RUN_COUNT" -ne "$EXPECTED_COUNTING_LEG_COUNT" ]]; then
+    echo "FAIL: ran $COUNTING_LEG_RUN_COUNT of $EXPECTED_COUNTING_LEG_COUNT declared counting legs" >&2
+    return 1
+  fi
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+validate_counting_leg_declarations
+
 echo "==> Hermetic notarization script behavior tests"
 ./test-notary-scripts.sh
+
+echo "==> Hermetic test-count gate behavior tests"
+./test-gate-selfcheck.sh
 
 echo "==> Hermetic iOS upload wrapper behavior tests"
 ./test-archive-upload-ios.sh
 
 echo "==> Hermetic local Mac install behavior tests"
 ./test-install-mac-local.sh
+
+echo "==> Hermetic credential bridge install behavior tests"
+./test-install-credential-bridge.sh
 
 # INV-11 declares `area:` over app/GradusKit/**, gradus/**, and tests/** with
 # this script as its gate_test -- but the two `xcodebuild test` invocations
@@ -27,10 +149,10 @@ echo "==> Hermetic local Mac install behavior tests"
 # pre-push. Both run here now, ordered before the slow simulator work so the
 # gate fails fast.
 echo "==> swift test — GradusKit package (SwiftPM; not reachable via either app scheme)"
-swift test --package-path GradusKit
+assert_counting_leg "swift-testing" swift test --package-path GradusKit
 
 echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
-(cd .. && uv run pytest -q)
+assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
 SIM_DEVICE_NAME="iPhone 16"
@@ -127,18 +249,21 @@ xcrun simctl bootstatus "$sim_udid" -b || true
 xcrun simctl bootstatus "$ipad_udid" -b || true
 
 echo "==> xcodebuild test — GradusMac (platform=macOS)"
-xcodebuild test \
+# Tests execute local Debug products and do not produce a distributable artifact.
+# Keeping signing disabled here avoids provisioning/account state becoming a false test gate;
+# archive, export, and notarization scripts retain their normal signing paths.
+assert_counting_leg "GradusMac" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusMac \
   -destination 'platform=macOS' \
-  -allowProvisioningUpdates
+  CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-xcodebuild test \
+assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$sim_udid" \
-  -allowProvisioningUpdates
+  CODE_SIGNING_ALLOWED=NO
 
 # `DensityLayoutXCUITests` runs on the iPhone destination above too, but only
 # here does the adaptive grid resolve to multiple columns. The test carries no
@@ -146,11 +271,14 @@ xcodebuild test \
 # would just stop covering the multi-column geometry. Kept as a named,
 # separate gate line so that loss is visible if anyone deletes it.
 echo "==> xcodebuild test — GradusiOS UI tests ($IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION simulator)"
-xcodebuild test \
+assert_counting_leg "GradusiOS-iPad" xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$ipad_udid" \
   -only-testing:GradusiOSUITests \
-  -allowProvisioningUpdates
+  CODE_SIGNING_ALLOWED=NO
+
+assert_counting_legs_complete
 
 echo "==> test-gate.sh: all destinations green"
+fi

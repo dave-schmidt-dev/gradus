@@ -14,6 +14,21 @@ import SwiftUI
 /// line up vertically inside a card. Ragged bar starts were the single biggest
 /// readability loss when this was prototyped with an intrinsic-width label.
 struct WindowRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    // `relativeTo` is intentionally compile-time. Each density rung uses a
+    // different text style for each column, so keep one scaled value for every
+    // column/style pair and choose the matching trio below at render time.
+    @ScaledMetric(relativeTo: .caption) private var compactLabelWidth = DensityMetrics.compact.labelWidth
+    @ScaledMetric(relativeTo: .caption) private var compactPercentWidth = DensityMetrics.compact.percentWidth
+    @ScaledMetric(relativeTo: .caption2) private var compactResetWidth = DensityMetrics.compact.resetWidth
+    @ScaledMetric(relativeTo: .footnote) private var standardLabelWidth = DensityMetrics.standard.labelWidth
+    @ScaledMetric(relativeTo: .footnote) private var standardPercentWidth = DensityMetrics.standard.percentWidth
+    @ScaledMetric(relativeTo: .caption) private var standardResetWidth = DensityMetrics.standard.resetWidth
+    @ScaledMetric(relativeTo: .subheadline) private var largeLabelWidth = DensityMetrics.large.labelWidth
+    @ScaledMetric(relativeTo: .subheadline) private var largePercentWidth = DensityMetrics.large.percentWidth
+    @ScaledMetric(relativeTo: .footnote) private var largeResetWidth = DensityMetrics.large.resetWidth
+
     let window: ProviderWindow
     let now: Date
     /// Dropped at compact width. At `.compact` density the three fixed columns
@@ -47,32 +62,81 @@ struct WindowRow: View {
     var body: some View {
         let color = SignalColor.forWindow(window)
 
-        HStack(spacing: metrics.columnGap) {
-            Text(ProviderWindowLabel.label(for: window.id))
-                .font(metrics.labelFont)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .frame(width: metrics.labelWidth, alignment: .leading)
+        Group {
+            if dynamicTypeSize >= .accessibility1 {
+                VStack(alignment: .leading, spacing: metrics.rowGap) {
+                    HStack(spacing: metrics.columnGap) {
+                        labelText
+                        Spacer(minLength: 0)
+                        percentText(color: color)
+                    }
 
-            UsageBar(window: window, color: color, height: metrics.barHeight)
+                    UsageBar(window: window, color: color, height: metrics.barHeight)
+                        .frame(maxWidth: .infinity)
+                }
+            } else {
+                HStack(spacing: metrics.columnGap) {
+                    labelText
+                    UsageBar(window: window, color: color, height: metrics.barHeight)
+                    percentText(color: color)
 
-            Text(percentDisplay(window.percentLeft))
-                .font(metrics.percentFont)
-                .foregroundStyle(color)
-                .lineLimit(1)
-                .frame(width: metrics.percentWidth, alignment: .trailing)
-
-            if showsReset {
-                Text(resetText)
-                    .font(metrics.resetFont)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .frame(width: metrics.resetWidth, alignment: .trailing)
+                    if showsReset {
+                        Text(resetText)
+                            .font(metrics.resetFont)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .frame(width: scaledResetWidth, alignment: .trailing)
+                    }
+                }
             }
         }
-        .frame(height: metrics.rowHeight)
+        .frame(minHeight: metrics.rowHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenLabel)
+    }
+
+    private var labelText: some View {
+        Text(ProviderWindowLabel.label(for: window.id))
+            .font(metrics.labelFont)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(width: scaledLabelWidth, alignment: .leading)
+    }
+
+    private func percentText(color: Color) -> some View {
+        Text(percentDisplay(window.percentLeft))
+            .font(metrics.percentFont)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .frame(minWidth: scaledPercentWidth, alignment: .trailing)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// Fixed column widths after Dynamic Type scaling, selected for the
+    /// current density. These stay view-owned so `DensityMetrics` and the
+    /// layout solver remain pure measurements and arithmetic.
+    var scaledLabelWidth: CGFloat {
+        switch metrics.rung {
+        case .compact: compactLabelWidth
+        case .standard: standardLabelWidth
+        case .large: largeLabelWidth
+        }
+    }
+
+    var scaledPercentWidth: CGFloat {
+        switch metrics.rung {
+        case .compact: compactPercentWidth
+        case .standard: standardPercentWidth
+        case .large: largePercentWidth
+        }
+    }
+
+    var scaledResetWidth: CGFloat {
+        switch metrics.rung {
+        case .compact: compactResetWidth
+        case .standard: standardResetWidth
+        case .large: largeResetWidth
+        }
     }
 
     /// Falls back to the raw ISO string only when `friendlyResetDate` cannot

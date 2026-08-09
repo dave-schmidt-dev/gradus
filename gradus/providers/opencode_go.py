@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
 import time
 import urllib.request
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..parsing import OpenCodeGoStatus
-from . import _base
 from ._base import (
     ProbeFailure,
     _auth_required_message,
@@ -22,8 +19,6 @@ from ._base import (
     register,
 )
 from ._seroval import _seroval_decode
-
-log = logging.getLogger(__name__)
 
 HISTORY_SERVER_ROUTE = "https://opencode.ai/_server"
 HISTORY_WORKSPACE_ROUTE_TEMPLATE = "https://opencode.ai/workspace/{workspace_id}/go"
@@ -63,13 +58,7 @@ class OpenCodeGoProvider:
             self._load_cookie()
 
     def _load_cookie(self) -> None:
-        if self._load_from_cache():
-            return
-        cookies = _base._read_safari_cookies("opencode")
-        auth = cookies.get("auth", "")
-        if auth:
-            self._auth_cookie = auth
-            self._save_to_cache()
+        self._load_from_cache()
 
     def _load_from_cache(self) -> bool:
         if not self._CACHE_PATH.exists():
@@ -84,18 +73,6 @@ class OpenCodeGoProvider:
         self._auth_cookie = auth
         _harden_existing(self._CACHE_PATH)
         return True
-
-    def _save_to_cache(self) -> None:
-        if not self._auth_cookie:
-            return
-        try:
-            payload = {
-                "auth": self._auth_cookie,
-                "cached_at": datetime.now().isoformat(),
-            }
-            _base._write_private(self._CACHE_PATH, json.dumps(payload))
-        except OSError as exc:
-            log.warning("Failed to write OpenCode Go cookie cache: %s", exc)
 
     def _clear_cache(self) -> None:
         _remove_private(self._CACHE_PATH)

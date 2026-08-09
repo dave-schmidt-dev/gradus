@@ -59,25 +59,32 @@ struct ProviderDensityCard: View {
     /// that is errored or window-less reads the same on both screens.
     @ViewBuilder
     private func body(for provider: ProviderStatus) -> some View {
-        if !provider.ok {
-            Text(provider.errorMessage ?? "error")
-                .font(metrics.labelFont)
-                .foregroundStyle(.red)
-                .lineLimit(2)
-                .frame(height: metrics.rowHeight, alignment: .leading)
-        } else if visibleWindows.isEmpty {
-            Text("no window data")
-                .font(metrics.labelFont)
-                .foregroundStyle(.secondary)
-                .frame(height: metrics.rowHeight, alignment: .leading)
-        } else {
+        if !visibleWindows.isEmpty {
             VStack(spacing: metrics.rowGap) {
                 ForEach(Array(visibleWindows.enumerated()), id: \.offset) { _, window in
                     WindowRow(
                         window: window, now: now, showsReset: showsReset, metrics: metrics)
                 }
+                if !provider.ok {
+                    errorText
+                }
             }
+        } else if !provider.ok {
+            errorText
+                .frame(height: metrics.rowHeight, alignment: .leading)
+        } else {
+            Text("no window data")
+                .font(metrics.labelFont)
+                .foregroundStyle(.secondary)
+                .frame(height: metrics.rowHeight, alignment: .leading)
         }
+    }
+
+    private var errorText: some View {
+        Text(provider.errorMessage ?? "error")
+            .font(metrics.labelFont)
+            .foregroundStyle(.red)
+            .lineLimit(2)
     }
 
     /// Windows whose percentage violates INV-3 are dropped rather than drawn

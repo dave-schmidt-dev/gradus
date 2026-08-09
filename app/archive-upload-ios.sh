@@ -23,6 +23,89 @@
 #   bws-run -- app/archive-upload-ios.sh
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLOUDKIT_ENVIRONMENT_KEY="com.apple.developer.icloud-container-environment"
+PRODUCER_EVIDENCE_FILENAME="publish-evidence.json"
+# The snapshot refresher runs every 120 seconds. Five missed refresh intervals
+# are enough to reject a quiet producer without making the upload race a normal
+# refresh delay.
+PRODUCER_EVIDENCE_MAX_AGE_SECONDS=600
+
+read_cloudkit_environment() {
+  local entitlements_path="$1"
+  [[ -f "$entitlements_path" ]] || {
+    echo "FAIL: entitlements file not found: $entitlements_path" >&2
+    return 1
+  }
+  local environment
+  environment="$(/usr/libexec/PlistBuddy -c "Print :$CLOUDKIT_ENVIRONMENT_KEY" "$entitlements_path" 2>/dev/null || true)"
+  if [[ -n "$environment" ]]; then
+    printf '%s\n' "$environment"
+  else
+    # The Debug entitlement omits the optional key and therefore uses the
+    # Development CloudKit environment.
+    printf '%s\n' "Development"
+  fi
+}
+
+read_mac_build_number() {
+  local project_path="$1"
+  awk '
+    /^  GradusMac:/ { in_mac=1; next }
+    in_mac && /^  [A-Za-z0-9_]+:/ { exit }
+    in_mac && /CURRENT_PROJECT_VERSION:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$project_path"
+}
+
+read_evidence_field() {
+  local field="$1"
+  local evidence_path="$2"
+  /usr/bin/plutil -extract "$field" raw -o - "$evidence_path"
+}
+
+validate_producer_evidence() {
+  local evidence_path="$1"
+  local expected_build="$2"
+  local expected_environment="$3"
+  local evidence_build evidence_environment published_at normalized_timestamp published_epoch age
+
+  if [[ ! -f "$evidence_path" ]]; then
+    echo "FAIL: producer evidence is missing" >&2
+    return 1
+  fi
+  evidence_build="$(read_evidence_field producerBuildNumber "$evidence_path" 2>/dev/null || true)"
+  evidence_environment="$(read_evidence_field cloudKitEnvironment "$evidence_path" 2>/dev/null || true)"
+  published_at="$(read_evidence_field publishedAt "$evidence_path" 2>/dev/null || true)"
+  if [[ -z "$evidence_build" || -z "$evidence_environment" || -z "$published_at" ]]; then
+    echo "FAIL: producer evidence is incomplete" >&2
+    return 1
+  fi
+  if [[ "$evidence_environment" != "$expected_environment" ]]; then
+    echo "FAIL: producer evidence targets the wrong CloudKit environment" >&2
+    return 1
+  fi
+  if [[ "$evidence_build" != "$expected_build" ]]; then
+    echo "FAIL: producer evidence has the wrong GradusMac build" >&2
+    return 1
+  fi
+  if [[ "$published_at" != *Z ]]; then
+    echo "FAIL: producer evidence timestamp is not UTC" >&2
+    return 1
+  fi
+  normalized_timestamp="${published_at%Z}"
+  normalized_timestamp="${normalized_timestamp%%.*}Z"
+  published_epoch="$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$normalized_timestamp" +%s 2>/dev/null || true)"
+  if [[ -z "$published_epoch" ]]; then
+    echo "FAIL: producer evidence timestamp is invalid" >&2
+    return 1
+  fi
+  age=$(( $(date -u +%s) - published_epoch ))
+  if (( age < 0 || age > PRODUCER_EVIDENCE_MAX_AGE_SECONDS )); then
+    echo "FAIL: producer evidence is older than ${PRODUCER_EVIDENCE_MAX_AGE_SECONDS}s" >&2
+    return 1
+  fi
+}
+
 resolve_user_home() {
   if [[ -n "${HOME:-}" ]]; then
     printf '%s\n' "$HOME"
@@ -76,7 +159,13 @@ bump_ios_build_number() {
 }
 
 main() {
-  cd "$(dirname "${BASH_SOURCE[0]}")"
+  cd "$SCRIPT_DIR"
+  local project_root evidence_path expected_mac_build expected_cloudkit_environment
+  project_root="$(cd .. && pwd)"
+  evidence_path="${GRADUS_PRODUCER_EVIDENCE_PATH:-$project_root/.state/$PRODUCER_EVIDENCE_FILENAME}"
+  expected_mac_build="$(read_mac_build_number project.yml)"
+  expected_cloudkit_environment="$(read_cloudkit_environment "$SCRIPT_DIR/GradusMac/GradusMacProduction.entitlements")"
+  validate_producer_evidence "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment"
 
   # bws-run and bws-secret-exec intentionally start children with a minimal
   # environment. Restore HOME from the local account record before uv,
@@ -145,7 +234,7 @@ main() {
 # Development) icloud-container-environment grant, can't resolve a single
 # value, and silently emits an empty string -- which ASC's upload validator
 # rejects outright ("this value should be a string value of 'Production'").
-  /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-container-environment string Production" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :$CLOUDKIT_ENVIRONMENT_KEY string $expected_cloudkit_environment" "$PACKAGE_DIR/entitlements.plist" 2>/dev/null || true
 
   codesign --force --sign "$SIGNING_IDENTITY" \
     --entitlements "$PACKAGE_DIR/entitlements.plist" --generate-entitlement-der --timestamp \

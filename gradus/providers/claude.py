@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
-from datetime import datetime
 from pathlib import Path
 
 from ..parsing import ClaudeStatus
@@ -17,8 +15,6 @@ from ._base import (
     _remove_private,
     register,
 )
-
-log = logging.getLogger(__name__)
 
 
 @register("Claude")
@@ -36,14 +32,7 @@ class ClaudeHttpProvider:
             self._load_cookies()
 
     def _load_cookies(self) -> None:
-        if self._load_from_cache():
-            return
-        cookies = _base._read_safari_cookies("claude")
-        self._session_key = cookies.get("sessionKey", "")
-        self._cf_clearance = cookies.get("cf_clearance", "")
-        self._org_id = cookies.get("lastActiveOrg", "")
-        if self._session_key and self._org_id:
-            self._save_to_cache()
+        self._load_from_cache()
 
     def _load_from_cache(self) -> bool:
         if not self._CACHE_PATH.exists():
@@ -65,20 +54,6 @@ class ClaudeHttpProvider:
             self._cf_clearance = cf
         _harden_existing(self._CACHE_PATH)
         return True
-
-    def _save_to_cache(self) -> None:
-        if not (self._session_key and self._org_id):
-            return
-        try:
-            payload = {
-                "sessionKey": self._session_key,
-                "cf_clearance": self._cf_clearance,
-                "lastActiveOrg": self._org_id,
-                "cached_at": datetime.now().isoformat(),
-            }
-            _base._write_private(self._CACHE_PATH, json.dumps(payload))
-        except OSError as exc:
-            log.warning("Failed to write Claude cookie cache: %s", exc)
 
     def _clear_cache(self) -> None:
         _remove_private(self._CACHE_PATH)

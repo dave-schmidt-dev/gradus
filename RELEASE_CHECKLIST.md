@@ -7,11 +7,11 @@ The companion policies are [`VERSIONING.md`](VERSIONING.md) and
 [`TESTING.md`](TESTING.md). The generalized Apple-development standard lives
 in the shared `apple_developer` project under `RELEASE_STANDARDS.md`.
 
-## Cross-platform compatibility gate
+## Cross-platform compatibility gate (INV-9)
 
-When a feature requires another feature or platform, ship the dependency and
-the dependent feature together. Do not upload the consumer while leaving the
-producer on an older binary or schema contract.
+When a feature crosses the Mac publisher and iOS consumer, use INV-9's automated
+producer-evidence gate; this checklist records release evidence but does not
+duplicate that invariant's contract.
 
 Before the TestFlight upload:
 
@@ -63,7 +63,8 @@ Before the TestFlight upload:
    bundle is hosted inside a real GradusMac process, so the suite would
    otherwise append its own staged failures here, and it is redirected to a
    temporary directory instead (`GRADUS_MAC_LOG_DIR` overrides the location).
-4. Upload the iOS artifact only after the Mac publish evidence is present.
+4. Confirm `archive-upload-ios.sh` accepts the current machine-written producer
+   evidence for INV-9 before uploading the iOS artifact.
 5. If the Mac artifact itself is being distributed, run the notarization gate
    too; local publisher verification alone is not a distribution artifact.
 6. Record the matching Mac build, iOS build, schema state, and test/upload

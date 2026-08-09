@@ -188,49 +188,49 @@ Example:
 
 A sibling process or router can read `.state/snapshot.json` (schema v1) or `.state/snapshot-v2.json` (schema v2) instantly — no probing, no browser, no credential I/O. Both files are credential-free and gitignored (deliberately not `.cache/`, which holds auth cookies/tokens that a consuming router must never read).
 
+Every committed schema-v2 snapshot is also atomically mirrored to `~/Library/Application Support/Gradus/snapshot-v2.json`. This is the credential-free input for the installed GradusMac app, so opening the menu never requires access to this Documents-backed checkout.
+
 The TUI writes the snapshot on every refresh cycle. The one-shot `--write-snapshot` path and the explicit credential-aware `--refresh-snapshot` observer also write it when invoked. All three persistence paths journal the committed schema-v2 result to the local history store.
 
 **Read-only guarantee.** The `--write-snapshot` path never opens a browser, spawns a subprocess, refreshes a token, evicts a cookie cache, or sends notifications. Providers with missing or expired credentials surface as `ok: false`. It writes v1 first and v2 second; each file is independently atomic, so a partial failure is logged and exits 1 while the successful sibling remains current. History journaling is a separate best-effort output: it is attempted only after a read-back confirms that schema v2 committed, and a history failure never rolls back a valid snapshot.
 
 **Headless coverage.** Codex and any provider whose `.cache/` cookie file is still warm run headlessly — reading a cached cookie file is a benign read, allowed. Antigravity's only credential is an OAuth token read via a `security` subprocess, which the read-only path forbids, so a headless probe reports `auth required: no cached credentials`. When a recent healthy interactive snapshot exists, headless writes carry it forward, including the schema-v2 `Antigravity (Claude)` synthetic entry. Snapshot writers use a per-file lock and reject an older payload, so a slower background refresh cannot replace newer TUI data. Run the TUI once after a fresh install or when the prior snapshot has expired to seed the shared Agy buckets.
 
-**launchd refresher (manual install).** A ~120 s background job keeps the snapshot current without the TUI running.
+**launchd refresher.** A ~120 s background job keeps the snapshot current without the TUI running.
 
 The repository-owned templates in `launchd/` invoke the explicit credential-aware
 `--refresh-snapshot` observer. After installing or changing the wrapper or plist,
 run `gradus --verify-refresh-health --duration 360` and require a successful result
 before relying on unattended refresh.
 
+**Credential bridge (macOS only).** The launchd job never reads Safari directly.
+`GradusCredentialBridge.app` is the single-purpose, Developer-ID-signed app that reads
+Safari's cookie jar and atomically refreshes the four local provider caches; Python only
+consumes those caches. Install it before the launchd job:
+
+```bash
+./app/install-credential-bridge.sh
+# Then manually enable only ~/Applications/GradusCredentialBridge.app in
+# System Settings > Privacy & Security > Full Disk Access.
+./launchd/install.sh
+```
+
+Do not grant Full Disk Access to the repository Python, its virtual environment, the
+launchd wrapper, or GradusMac. The bridge is intentionally installed at
+`~/Applications/GradusCredentialBridge.app` so its approval survives Python/venv rebuilds.
+Because macOS can invalidate this app-only TCC approval when the installed bundle is replaced,
+finish bridge code changes and its automated tests before running the installer; install and approve
+the final bundle once, rather than reinstalling it during intermediate validation.
+`./app/install-credential-bridge.sh --dry-run` builds, Developer-ID signs, and verifies
+the bridge without changing `~/Applications`.
+
 - Wrapper: `~/.launchd/scripts/gradus_snapshot.sh`
 - Plist: `~/Library/LaunchAgents/local.gradus-snapshot.plist` (StartInterval 120, RunAtLoad, Background)
 - Logs: `~/Library/Logs/homelab/gradus-snapshot/`
-- Render and install from the repository checkout (the wrapper template requires the explicit repository-root replacement):
-
-  ```bash
-  cd /Users/dave/Documents/Projects/gradus
-  GRADUS_REPO="$PWD"
-  GRADUS_PYTHON="$GRADUS_REPO/.venv/bin/python3"
-  GRADUS_WRAPPER="$HOME/.launchd/scripts/gradus_snapshot.sh"
-  GRADUS_PLIST="$HOME/Library/LaunchAgents/local.gradus-snapshot.plist"
-  GRADUS_LOG_DIR="$HOME/Library/Logs/homelab/gradus-snapshot"
-  mkdir -p "$(dirname "$GRADUS_WRAPPER")" "$(dirname "$GRADUS_PLIST")" "$GRADUS_LOG_DIR"
-  sed -e "s|__GRADUS_REPO_ROOT__|$GRADUS_REPO|g" \
-      -e "s|__GRADUS_PYTHON_PATH__|$GRADUS_PYTHON|g" \
-      launchd/gradus_snapshot.sh.in > "$GRADUS_WRAPPER"
-  chmod 755 "$GRADUS_WRAPPER"
-  sed -e "s|__GRADUS_WRAPPER_PATH__|$GRADUS_WRAPPER|g" \
-      -e "s|__GRADUS_STDOUT_PATH__|$GRADUS_LOG_DIR/stdout.log|g" \
-      -e "s|__GRADUS_STDERR_PATH__|$GRADUS_LOG_DIR/stderr.log|g" \
-      launchd/local.gradus-snapshot.plist.in > "$GRADUS_PLIST"
-  plutil -lint "$GRADUS_PLIST"
-  GRADUS_DOMAIN="gui/$(id -u)"
-  if launchctl print "$GRADUS_DOMAIN/local.gradus-snapshot" >/dev/null 2>&1; then
-    launchctl bootout "$GRADUS_DOMAIN/local.gradus-snapshot"
-  fi
-  launchctl bootstrap "$GRADUS_DOMAIN" "$GRADUS_PLIST"
-  gradus --verify-refresh-health --duration 360
-  ```
-- Uninstall: `launchctl bootout gui/$(id -u)/local.gradus-snapshot`
+- Install from the repository checkout: `./launchd/install.sh`. It renders both files,
+  idempotently reloads the job, and visibly verifies refresh health for six minutes before
+  reporting success.
+- Uninstall: `./launchd/install.sh uninstall`.
 
 **Schema** (`schema_version: 1`):
 
@@ -289,7 +289,7 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
 - In live mode, press `q` to quit or `r` to trigger an immediate refresh.
 - Cursor and Vibe try Safari cookie extraction first; Vibe also supports Chrome cookie extraction. Cookies are cached locally at `.cache/<provider>_cookies.json` (gitignored) to survive Safari disk-sync lag and reduce spurious re-auth prompts; the cache is evicted on API 400/401/403 errors (Claude also returns 400 when a cached `lastActiveOrg` fails its UUID validator).
-- **Credential storage.** The `.cache/` credential files (provider cookies/tokens) and the Codex `~/.codex/auth.json` are written mode `0600` inside a `0700` directory via a single atomic private-write helper — a `tempfile.mkstemp` temp file (born `0600`, independent of umask) swapped in with `os.replace`, so the file is never world-readable, even momentarily. Pre-existing caches are also tightened to `0600` opportunistically on the next interactive (non-headless) read. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/gradus/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
+- **Credential storage.** `GradusCredentialBridge.app` writes the Safari-derived `.cache/` credential files (provider cookies/tokens) at mode `0600` in a `0700` directory via an atomic temporary-file rename; Python providers only read and opportunistically tighten them. The Codex `~/.codex/auth.json` continues to use the Python private-write helper. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/gradus/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
 - A normalized window warns when the usage-signal ramp classifies it **orange or red** — the same rule that colors the row, not a parallel one. In practice that means depleted, or a finite pace delta below `-0.10`, or (for a window whose payload carries no reset timestamp, so no pace can be computed) below 40% remaining. Every window spec defines a pace source, so the third case is a degraded-data path rather than a normal one. `[!]` badges, one-shot macOS notifications, the Mac menu's "N low" count, the iPhone's warning tier and the CloudKit push subscription all read this one predicate, aggregated the same way: a provider warns when **any** of its windows does. Notifications name the warning window IDs. Antigravity's conditional C+G rows (`cg5`, `cg1w`) participate in this membership. Cursor's `ac` and `ap` pools are evaluated independently in-process and in schema v2, while v1 continues to publish only its `billing_cycle` window.
 - Vibe uses Mistral's `usage_percentage` field as percent used directly. If Mistral shows `1.08% used`, Gradus will render about `99%` remaining after rounding.
 - Cursor reads billing-cycle and usage data from the nested `planUsage` payload. `planUsage` carries three numbers but Cursor only has two real usage pools: `autoPercentUsed` (first-party Auto + Composer) and `apiPercentUsed` (API/third-party pool) are both percent-USED for their own pool; `remaining`/`limit` cents are a dollar-denominated spend meter, not a third pool. The card shows Cursor's two real usage pools: `ac` is the Auto + Composer pool, converted from `autoPercentUsed` (percent used) to remaining capacity; `ap` is the API pool, converted from `apiPercentUsed` (percent used) to remaining capacity the same way. The cents-derived dollar meter (`credit_percent_left`) is computed by the provider and retained as internal metadata, but is no longer displayed, alert-evaluated, or persisted/projected — it doesn't belong under "ap" or any capacity window. Neither `--json` nor the v1/v2 router snapshots emit `credit_percent_left` any longer; the v1 `billing_cycle` window remains sourced from it internally (unchanged), but it no longer appears in the projected `data` block.
@@ -319,7 +319,8 @@ active-first provider sorting, compact exhausted grouping, selectable bucket
 badges, Settings controls for sorting/visibility, and the shared expected-pace
 redline across the TUI, Mac, and iOS surfaces.
 
-- **GradusMac** — a menu-bar app that reads the same `.state/snapshot.json`/`snapshot-v2.json` this CLI writes and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/` or any credential path (INV-7) — its only input is the credential-free snapshot file, threaded through a single injected path dependency. Each publish also carries the Mac's user-visible computer name, short local username, and publish timestamp so iOS can show the connected computer and when it last reported; it never sends an email, serial number, path, or credential. The dropdown shows active providers as name + percentage + usage bar (metadata only where it needs attention) followed by a compact exhausted section — name and earliest reset, one line each. The menu's Settings… row opens a settings window holding the same device-local display preferences iOS has — sort mode, warning threshold, and Show exhausted — alongside the sync and launch-at-login toggles. That window is an `NSWindow` this app builds itself (`SettingsWindow`) rather than SwiftUI's `Settings` scene: on macOS 26.5.2 `showSettingsWindow:` returns `true` and opens nothing, so the idiomatic route fails silently. See `SettingsWindow.swift` for the measurements.
+- **GradusMac** — a menu-bar app that reads the credential-free schema-v2 mirror in `~/Library/Application Support/Gradus/` and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/`, any credential path, or the Documents-backed checkout (INV-7) — its only input is the monitor-owned snapshot copy, threaded through a single injected path dependency. Each publish also carries the Mac's user-visible computer name, short local username, and publish timestamp so iOS can show the connected computer and when it last reported; it never sends an email, serial number, path, or credential. The dropdown shows active providers as name + percentage + usage bar (metadata only where it needs attention) followed by a compact exhausted section — name and earliest reset, one line each. The menu's Settings… row opens a settings window holding the same device-local display preferences iOS has — sort mode, warning threshold, and Show exhausted — alongside the sync and launch-at-login toggles. That window is an `NSWindow` this app builds itself (`SettingsWindow`) rather than SwiftUI's `Settings` scene: on macOS 26.5.2 `showSettingsWindow:` returns `true` and opens nothing, so the idiomatic route fails silently. See `SettingsWindow.swift` for the measurements.
+  - **Debug safety:** Debug GradusMac builds do not read the snapshot mirror or contact CloudKit unless launched with `GRADUS_ENABLE_PIPELINE=1`. This keeps hosted `xcodebuild test` runs hermetic even when a command bypasses the Xcode scheme; `app/test-gate.sh` additionally exports `GRADUS_DISABLE_PIPELINE=1` for its Mac leg. Release/distribution builds start the pipeline normally.
 - Provider ordering is defined **once**, in `app/Shared/ProviderRanking.swift`, which is compiled into both app targets. `rankedPartition()` splits active from exhausted before applying any presentation comparator — so no sort mode can pull a depleted provider back among the actionable ones — then tiers each partition errored → attention-needed → normal and sorts by the chosen mode with a deterministic name tie-break. Each app conforms its own model (`ProviderEntry` on the Mac, `ProviderStatus` on iOS) to `RankableProvider`; the Mac recomputes depletion locally because, unlike the CloudKit model, the snapshot model has no stored `isDepleted`. This lives in `Shared/` rather than `GradusKit` deliberately: the rules are device-local presentation, so putting them in the kit would widen its INV-7-governed scope.
 - **GradusiOS** — a fully-featured mobile dashboard (iOS 17+). Implements the "Zero Delta Design System": a hero-ranked "Now" screen, a Provider Detail drill-in showing all windows per provider, and a functional Settings screen with per-device warning-threshold override and notification toggle. No independent data source — renders whatever the Mac last published, kept current via a `CKRecordZoneSubscription` (silent push, delta sync with `CKFetchRecordZoneChangesOperation`) plus a silent `CKQuerySubscription`; the app compares cached warning state and emits one local notification when a provider enters a warning episode. Uses the shared `rankedPartition()` described above, rendering active providers as full density cards and exhausted ones as compact name + reset cells beneath them.
   - **Design system components**: `ProviderDensityCard` (a provider and every one of its windows, as `WindowRow`s), `ListRow` (generic row with single trailing accessory), `MobileNavBar` (single title + one trailing slot), `IconButton` (44pt minimum tap target). The original `StatTile` — a hero tile plus a compact ranked-list variant, each showing one window per provider behind selection badges — was deleted on 2026-08-06 once both size classes had moved to the dense every-window layout.
@@ -423,6 +424,15 @@ Test” field; keep individual candidate-build details and re-upload reasons in
 
 `install-mac-local.sh` archives, exports, installs into `/Applications`, and relaunches. This is the path for putting a build on this machine; notarization is only for handing the app to someone else, since Gatekeeper enforces it on quarantined files and a bundle built here never carries `com.apple.quarantine`.
 
+**Mac UI handoff rule.** After a change to `app/GradusMac/` that needs visual
+validation on this Mac, the normal finalization step is `./install-mac-local.sh`
+before requesting a screenshot or manual check. Test builds in DerivedData are
+not visual-validation artifacts, and a matching marketing/build version does
+not prove `/Applications/GradusMac.app` contains the current source. Keep the
+test gate hermetic; the installer is the explicit post-test handoff that
+replaces and relaunches the local app. Do this automatically unless David asks
+to defer installation.
+
 ```bash
 cd app
 ./test-install-mac-local.sh   # hermetic; every Xcode/system tool faked, never touches /Applications
@@ -477,11 +487,15 @@ uv run ruff check gradus/ tests/
 uv run ruff format --check gradus/ tests/
 ```
 
+### Agent validation approvals
+
+During one Gradus implementation, repeated in-scope local validation commands should use one narrow reusable approval before their first run, rather than interrupting for every equivalent invocation. Run validation at the relevant phase boundaries; do not defer it all to the end. Require a separate approval for a new dependency or package source, external writes, destructive actions, or any broader command/scope.
+
 ### Project layout
 
 - `gradus/providers/` — provider package:
   - `__init__.py` — re-exports + provider registry
-  - `_base.py` — shared utilities, credential mgmt, headless guard
+  - `_base.py` — shared utilities, private-file helpers, headless guard
   - `_codex_helpers.py` — Codex window helpers
   - `_seroval.py` — SolidStart seroval decoder
   - `antigravity.py`, `claude.py`, `codex.py`, `copilot.py`, `cursor.py`, `opencode_go.py`, `vibe.py`

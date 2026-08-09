@@ -20,6 +20,15 @@ import SwiftUI
 struct MacSettingsView: View {
     @ObservedObject var viewModel: PublisherViewModel
 
+    /// A continuous slider avoids AppKit's secondary tick-mark rail, while
+    /// quantizing at the binding preserves the shared whole-percent contract.
+    var warningThresholdBinding: Binding<Double> {
+        Binding(
+            get: { viewModel.localWarningThresholdPercent },
+            set: { viewModel.localWarningThresholdPercent = Self.wholePercent($0) }
+        )
+    }
+
     var body: some View {
         Form {
             Section("Sync") {
@@ -29,7 +38,7 @@ struct MacSettingsView: View {
                         ? (MenuContentView.lastSyncLabel(viewModel.lastSyncedAt) ?? "Not synced yet")
                         : "Usage data stays on this Mac."
                 )
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
 
                 Toggle(
@@ -49,34 +58,20 @@ struct MacSettingsView: View {
                 }
                 .pickerStyle(.menu)
                 Toggle("Show exhausted", isOn: $viewModel.showExhausted)
-                Text("Exhausted providers always sort to the bottom, in every mode.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                // Same sentence as iOS Settings. Worth stating on both: these
-                // two controls look like the sync settings above them but do
-                // not travel with the account, and finding that out by setting
-                // them twice is a bad way to learn it.
-                Text("Sorting and exhausted-provider visibility are local display choices on this device only.")
-                    .font(.caption)
+                Text("These display choices apply on this Mac only.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
             Section("Warning Threshold") {
-                // Step 1 and a 0...100 range, identical to the iOS slider --
-                // a threshold that means 20% on the phone and 20.4% here would
-                // put the same provider in different tiers on two screens.
                 Slider(
-                    value: $viewModel.localWarningThresholdPercent,
-                    in: 0...100,
-                    step: 1
+                    value: warningThresholdBinding,
+                    in: 0...100
                 ) {
-                    Text("Warn at or below")
+                    Text("Warn at or below \(Int(viewModel.localWarningThresholdPercent))%")
                 }
-                Text("Warn at or below \(Int(viewModel.localWarningThresholdPercent))% remaining.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("A local display choice on this Mac only. It never relaxes the shared pace warning — it can only flag more providers, never fewer.")
-                    .font(.caption)
+                Text("Highlights providers at or below this level.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
@@ -85,8 +80,12 @@ struct MacSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    static func wholePercent(_ value: Double) -> Double {
+        min(100, max(0, value.rounded()))
     }
 
     /// Reads the same two Info.plist keys the iOS About section does, so a

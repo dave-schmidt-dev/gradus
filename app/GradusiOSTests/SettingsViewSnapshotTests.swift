@@ -70,7 +70,10 @@ private func makeViewModel(
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-settings-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
     let cache = FileLocalCacheStore(directory: directory)
-    try? cache.saveCachedStatuses(sampleProviders(), syncedAt: fixedNow)
+    let providers = sampleProviders()
+    #expect(providers.contains { $0.ok && !$0.windows.isEmpty })
+    #expect(providers.contains { !$0.ok && $0.windows.isEmpty })
+    try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
     let defaults = isolatedDefaults()
     defaults.set(syncEnabled, forKey: DashboardViewModel.syncEnabledKey)
     defaults.set(notificationsEnabled, forKey: DashboardViewModel.notificationsEnabledKey)
@@ -93,12 +96,14 @@ private func makeViewModel(
         #expect(defaults.string(forKey: DashboardViewModel.providerSortOptionKey) == option.rawValue)
         #expect(viewModel.providerSortOption == option)
     }
-    #expect(DashboardDensity.allCases.map(\.title) == ["Compact", "Standard", "Large"])
-    for density in DashboardDensity.allCases {
-        viewModel.density = density
-        #expect(defaults.string(forKey: DashboardViewModel.densityKey) == density.rawValue)
-        #expect(viewModel.density == density)
+    #expect(viewModel.cardColumnPreference == 0)
+    for columns in [0, 1, 3] {
+        viewModel.cardColumnPreference = columns
+        #expect(defaults.integer(forKey: DashboardViewModel.cardColumnPreferenceKey) == columns)
+        #expect(viewModel.cardColumnPreference == columns)
     }
+    viewModel.setAvailableCardColumns(4)
+    #expect(viewModel.availableCardColumns == 4)
 
     viewModel.showExhausted = false
 

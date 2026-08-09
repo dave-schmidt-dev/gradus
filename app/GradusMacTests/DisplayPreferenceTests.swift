@@ -77,6 +77,22 @@ struct DisplayPreferenceTests {
         }
     }
 
+    @Test func displayChoicesAdvanceTheMenuPresentationRevision() {
+        withScratchDefaults("revision") { defaults in
+            let viewModel = PublisherViewModel(defaults: defaults)
+            let initial = viewModel.presentationRevision
+
+            viewModel.providerSortOption = .nameAZ
+            #expect(viewModel.presentationRevision == initial + 1)
+
+            viewModel.showExhausted = false
+            #expect(viewModel.presentationRevision == initial + 2)
+
+            viewModel.localWarningThresholdPercent = 35
+            #expect(viewModel.presentationRevision == initial + 3)
+        }
+    }
+
     /// Zero is the value the presence check exists to protect, so it gets its
     /// own case: "warn me about nothing" must round-trip as a real setting and
     /// not be mistaken for an unset key on the next launch.
@@ -87,6 +103,13 @@ struct DisplayPreferenceTests {
 
             #expect(PublisherViewModel(defaults: defaults).localWarningThresholdPercent == 0)
         }
+    }
+
+    @Test func warningThresholdUsesWholePercentsWithoutSliderTickMarks() {
+        #expect(MacSettingsView.wholePercent(20.4) == 20)
+        #expect(MacSettingsView.wholePercent(20.6) == 21)
+        #expect(MacSettingsView.wholePercent(-1) == 0)
+        #expect(MacSettingsView.wholePercent(101) == 100)
     }
 
     @Test func showExhaustedFiltersDepletedProvidersOutOfTheMenu() {

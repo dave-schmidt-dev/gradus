@@ -39,6 +39,11 @@ SCHEMA_VERSION_V2 = 2
 # Contract-mandated, credential-free state directory (NOT `.cache/`).
 SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / ".state" / "snapshot.json"
 SNAPSHOT_V2_PATH = Path(__file__).resolve().parent.parent / ".state" / "snapshot-v2.json"
+# Credential-free v2 mirror read by the installed menu-bar app. Keeping the
+# app out of the Documents-backed repository avoids macOS TCC prompts.
+MAC_APP_SNAPSHOT_V2_PATH = (
+    Path.home() / "Library" / "Application Support" / "Gradus" / "snapshot-v2.json"
+)
 
 # Stop serving cached data after this many seconds (moved from __main__.py).
 STALE_THRESHOLD_SECONDS = 300  # 5 minutes
@@ -270,10 +275,10 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
 # prompt or an `agy` refresh subprocess). Produced ONLY under ``_is_headless()``
 # — see ``providers/_base._auth_required_message`` and
 # ``AntigravityProvider._acquire`` — so it can never appear on the live/
-# interactive probe path. That headless-exclusivity is what makes retaining a
-# recent healthy prior safe here: it cannot mask a genuinely revoked token on
-# the interactive path (which reports "not logged in" / "run agy to sign in"
-# instead, neither of which matches).
+# interactive probe path. That headless-exclusivity is what makes carrying a
+# recent healthy prior's *values* safe here. The failed probe still remains a
+# failure with its actionable reason; only the last known-good values and their
+# true observation time are retained.
 _HEADLESS_DEFERRED_PROBE_MESSAGE = "auth required: no cached credentials"
 
 
@@ -934,6 +939,7 @@ def _sanitize_prior_entry(
     *,
     allowed_window_ids: frozenset[str],
     fallback_observed_at: str | None = None,
+    allow_carried_failure: bool = False,
 ) -> dict | None:
     """Return a fresh, schema-valid retained entry or ``None``.
 
@@ -962,7 +968,11 @@ def _sanitize_prior_entry(
         return None
     if not isinstance(observed_at, str) or _parse_aware_iso_timestamp(observed_at) is None:
         return None
-    if entry["name"] != name or entry["ok"] is not True or entry["error"] is not None:
+    is_healthy_entry = entry["ok"] is True and entry["error"] is None
+    is_carried_failure = (
+        allow_carried_failure and entry["ok"] is False and isinstance(entry["error"], str)
+    )
+    if entry["name"] != name or not (is_healthy_entry or is_carried_failure):
         return None
     data = entry.get("data")
     windows = entry.get("windows")
@@ -1050,6 +1060,21 @@ def _is_fresh_retained_entry(entry: Mapping[str, object], publish_time: datetime
     return 0 <= age < STALE_THRESHOLD_SECONDS
 
 
+def _failure_with_retained_values(retained_entry: Mapping[str, object], error: str | None) -> dict:
+    """Return stale values without hiding the failure that caused them.
+
+    ``_sanitize_prior_entry`` establishes that the retained values came from a
+    healthy observation. A new failed probe must not inherit that entry's
+    ``ok: true`` / ``error: null`` state, though: consumers need both the last
+    known-good values and the provider-authored remedy for why they are stale.
+    """
+    return {
+        **retained_entry,
+        "ok": False,
+        "error": error,
+    }
+
+
 def _build_snapshot_payload(
     snapshots: list[ProviderSnapshot],
     updated_at: datetime,
@@ -1127,9 +1152,10 @@ def _build_snapshot_payload(
                 "data": _project_antigravity_claude_data(snap),
                 "observed_at": updated_at_iso,
             }
-        # ok is False: default to a fresh failure entry, but retain a recent
-        # healthy prior entry for transient errors (CR-6 anti-flap) — mirrors
-        # the primary Antigravity entry's retention logic above. Now that
+        # ok is False: default to a fresh failure entry, but carry a recent
+        # healthy prior entry's values for transient errors (CR-6 anti-flap)
+        # without losing the current failure — mirrors the primary Antigravity
+        # entry's retention logic below. Now that
         # V2_WINDOW_SPECS["Antigravity (Claude)"] is registered (Task A.2),
         # specs_by_provider.get(...) resolves to THIRD_PARTY_WINDOW_SPECS
         # instead of an empty tuple, so retained entries validate correctly.
@@ -1150,11 +1176,12 @@ def _build_snapshot_payload(
                     spec.window_id for spec in specs_by_provider.get("Antigravity (Claude)", ())
                 ),
                 fallback_observed_at=fallback_observed_at,
+                allow_carried_failure=True,
             )
             if retained_entry is not None and _is_fresh_retained_entry(
                 retained_entry, updated_at_aware
             ):
-                entry = retained_entry
+                entry = _failure_with_retained_values(retained_entry, entry["error"])
         return entry
 
     for name in CANONICAL_PROVIDERS():
@@ -1187,8 +1214,9 @@ def _build_snapshot_payload(
             if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
                 providers.append(_antigravity_claude_entry(snap))
             continue
-        # ok is False: default to a fresh failure entry, but retain a recent
-        # healthy prior entry for transient errors (CR-6 anti-flap).
+        # ok is False: default to a fresh failure entry, but carry a recent
+        # healthy prior entry's values for transient errors (CR-6 anti-flap)
+        # without losing the current failure or its remedy.
         entry: dict = {
             "name": name,
             "ok": False,
@@ -1210,11 +1238,12 @@ def _build_snapshot_payload(
                     spec.window_id for spec in specs_by_provider.get(name, ())
                 ),
                 fallback_observed_at=fallback_observed_at,
+                allow_carried_failure=True,
             )
             if retained_entry is not None and _is_fresh_retained_entry(
                 retained_entry, updated_at_aware
             ):
-                entry = retained_entry
+                entry = _failure_with_retained_values(retained_entry, entry["error"])
         providers.append(entry)
         if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
             providers.append(_antigravity_claude_entry(snap))
@@ -1327,7 +1356,7 @@ def write_snapshot(
                 os.replace(tmp, path)
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        return SnapshotWrite.WRITTEN
+        result = SnapshotWrite.WRITTEN
     except Exception:  # noqa: BLE001 - persistence must never crash the caller
         log.warning("failed to write snapshot to %s", path, exc_info=True)
         if tmp is not None:
@@ -1336,6 +1365,15 @@ def write_snapshot(
             except OSError:
                 pass
         return SnapshotWrite.FAILED
+
+    if path == SNAPSHOT_V2_PATH:
+        mirror_result = write_snapshot(payload, MAC_APP_SNAPSHOT_V2_PATH)
+        if mirror_result is SnapshotWrite.FAILED:
+            # The canonical router snapshot is already durable. Keep that
+            # success result while logging a retryable Mac-consumer failure.
+            log.warning("failed to mirror schema-v2 snapshot for GradusMac")
+
+    return result
 
 
 def _acquire_snapshot_lock(

@@ -93,25 +93,25 @@ public final class DashboardViewModel: ObservableObject {
             applyPresentationPreferences()
         }
     }
-    /// How much room each card gets. Device-local like the two above, and for
-    /// the same reason plus a stronger one: density is a function of *this*
-    /// screen's size and how far away it is held. A phone wanting compact and
-    /// an iPad wanting large is the expected configuration, not a conflict to
-    /// reconcile, so syncing it would actively fight the user.
-    ///
-    /// No `applyPresentationPreferences()` — unlike sort and exhausted-hiding,
-    /// density changes nothing about *which* providers are published to the
-    /// view or in what order. It is purely how they are drawn.
-    @Published public var density: DashboardDensity {
-        didSet { userDefaults.set(density.rawValue, forKey: Self.densityKey) }
+    /// `0` is Auto; positive values are explicit feasible column counts. This
+    /// remains device-local: a phone and iPad intentionally have different
+    /// feasible ranges, so syncing this preference would make one device's
+    /// choice invalid on the other.
+    @Published public var cardColumnPreference: Int {
+        didSet { userDefaults.set(cardColumnPreference, forKey: Self.cardColumnPreferenceKey) }
     }
+
+    /// The currently visible dashboard supplies this transient range from its
+    /// own geometry and Dynamic Type environment. It is deliberately not
+    /// persisted and never comes from provider data or CloudKit.
+    @Published public private(set) var availableCardColumns: Int = 1
 
     static let syncEnabledKey = "iCloudSyncEnabled"
     static let notificationsEnabledKey = "warningNotificationsEnabled"
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
     static let providerSortOptionKey = "providerSortOption"
     static let showExhaustedKey = "showExhausted"
-    static let densityKey = "dashboardDensity"
+    static let cardColumnPreferenceKey = "dashboardCardColumnPreference"
     private static let defaultLocalWarningThresholdPercent: Double = 20.0
 
     private let cache: LocalCacheStore
@@ -165,9 +165,7 @@ public final class DashboardViewModel: ObservableObject {
             self.localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
         }
         self.providerSortOption = ProviderSortOption(rawValue: userDefaults.string(forKey: Self.providerSortOptionKey) ?? "") ?? .mostUrgent
-        // Defaults to `.compact`, which is 1.6.0's shipped geometry, so an
-        // upgrading device sees no change until it opts into one.
-        self.density = DashboardDensity(rawValue: userDefaults.string(forKey: Self.densityKey) ?? "") ?? .compact
+        self.cardColumnPreference = max(0, userDefaults.integer(forKey: Self.cardColumnPreferenceKey))
         if userDefaults.object(forKey: Self.showExhaustedKey) != nil {
             self.showExhausted = userDefaults.bool(forKey: Self.showExhaustedKey)
         } else {
@@ -181,6 +179,20 @@ public final class DashboardViewModel: ObservableObject {
             showExhausted: self.showExhausted)
         self.lastSyncedAt = cache.lastSyncedAt()
         updateConnectedSource()
+    }
+
+    /// Updates the Settings slider's device-relative range. A stale explicit
+    /// preference is preserved rather than rewritten; `DashboardContent`
+    /// clamps it against each live geometry pass.
+    public func setAvailableCardColumns(_ maximum: Int) {
+        availableCardColumns = max(1, maximum)
+    }
+
+    /// Resolves Auto (`0`) to the largest feasible count; explicit slider
+    /// stops are clamped to the same device-relative range.
+    static func resolvedCardColumnCount(preference: Int, maximum: Int) -> Int {
+        let maximum = max(1, maximum)
+        return preference == 0 ? maximum : min(max(preference, 1), maximum)
     }
 
     /// P5/T5.1: toggle-on is best-effort/optimistic (mirrors the existing

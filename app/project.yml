@@ -12,6 +12,30 @@ packages:
     url: https://github.com/pointfreeco/swift-snapshot-testing
     exactVersion: 1.19.4
 targets:
+  GradusCredentialBridgeCore:
+    type: library.static
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources: [GradusCredentialBridgeCore]
+
+  GradusCredentialBridge:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources: [GradusCredentialBridge]
+    dependencies:
+      - target: GradusCredentialBridgeCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.credential-bridge
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSUIElement: YES
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+
   GradusMac:
     type: application
     platform: macOS
@@ -29,17 +53,14 @@ targets:
         # publisher stuck at 0.1.0 while the consumer reads 1.6.0 makes the
         # pair impossible to talk about. CURRENT_PROJECT_VERSION stays
         # independent: it is a per-platform upload counter, not a version.
-        MARKETING_VERSION: "1.6.0"
-        # 6, not 1.7.0. The 2026-08-06 Mac pass changed only Mac-side
-        # behavior -- which window the menu row shows, and the app's own
-        # logging -- with no shared-contract change, so it stays on the 1.6.0
-        # train. VERSIONING.md rule 4: a further build on the same train "is
-        # labeled by build number only". It still has to move, because the
-        # installed copy was also 1.6.0 (5) and the version string exists to
-        # answer whether an install has a given change. GradusMac's counter is
-        # not allocated from App Store Connect, so unlike the iOS one it is
-        # bumped here.
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "1.6.7"
+        # 1.6.7 (17) makes Name A-Z and Reset soonest true full-active-list
+        # sorts and prevents a pipeline-disabled test host from creating a
+        # persistent empty status menu that can displace the installed app.
+        # Mac
+        # builds carry a semantic marketing version like iOS; the build number
+        # distinguishes successive local installs of that patch release.
+        CURRENT_PROJECT_VERSION: "17"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
         # Without this the target compiles no app icon at all -- and does so
@@ -62,6 +83,13 @@ targets:
       configs:
         Release:
           CODE_SIGN_ENTITLEMENTS: GradusMac/GradusMacProduction.entitlements
+          # The local installer archives this configuration before exporting a
+          # Developer-ID bundle. Automatic signing can select an Apple
+          # Development certificate instead, which the Developer-ID profile
+          # rejects before the installer can stage its rollback-safe copy.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          PROVISIONING_PROFILE_SPECIFIER: "Gradus Mac Developer ID (API-created)"
 
   GradusiOS:
     type: application
@@ -165,6 +193,19 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 4CJ49V6QHW
 
+  GradusCredentialBridgeTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources: [GradusCredentialBridgeTests]
+    dependencies:
+      - target: GradusCredentialBridgeCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+
   GradusMacUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -230,6 +271,14 @@ targets:
         DEVELOPMENT_TEAM: 4CJ49V6QHW
 
 schemes:
+  GradusCredentialBridge:
+    build:
+      targets:
+        GradusCredentialBridge: all
+    test:
+      targets:
+        - GradusCredentialBridgeTests
+
   GradusMac:
     build:
       targets:
@@ -238,6 +287,7 @@ schemes:
       targets:
         - GradusMacTests
         - GradusMacUITests
+        - GradusCredentialBridgeTests
       # `GradusMacTests` is a hosted bundle, so every test run launches the
       # real app. Without this it starts the live pipeline: it publishes to
       # CloudKit Production and reads the snapshot out of `~/Documents`, which

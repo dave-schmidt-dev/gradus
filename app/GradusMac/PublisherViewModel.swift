@@ -39,19 +39,31 @@ public final class PublisherViewModel: ObservableObject {
     /// property of the usage data, and syncing it would let one device
     /// reorder another's list.
     @Published public var providerSortOption: ProviderSortOption {
-        didSet { defaults.set(providerSortOption.rawValue, forKey: Self.providerSortOptionKey) }
+        didSet {
+            defaults.set(providerSortOption.rawValue, forKey: Self.providerSortOptionKey)
+            advancePresentationRevision()
+        }
     }
     @Published public var localWarningThresholdPercent: Double {
         didSet {
             defaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
+            advancePresentationRevision()
         }
     }
     /// Matches `DashboardViewModel.showExhausted`, including its default of
     /// visible: a provider you can't use is still a provider you asked about,
     /// so hiding it is opt-in.
     @Published public var showExhausted: Bool {
-        didSet { defaults.set(showExhausted, forKey: Self.showExhaustedKey) }
+        didSet {
+            defaults.set(showExhausted, forKey: Self.showExhaustedKey)
+            advancePresentationRevision()
+        }
     }
+    /// Forces the menu's provider subtree to be rebuilt after a device-local
+    /// display choice changes. `MenuBarExtra` keeps its window-hosted content
+    /// alive while Settings is open; merely updating a child initializer did
+    /// not reliably replace that subtree on macOS.
+    @Published private(set) var presentationRevision = 0
     private var syncOperationID: UInt64 = 0
 
     static let syncEnabledKey = "iCloudSyncEnabled"
@@ -110,6 +122,10 @@ public final class PublisherViewModel: ObservableObject {
     public func apply(_ payload: SnapshotPayload) {
         providers = payload.providers
         updatedAt = payload.updatedAt
+    }
+
+    private func advancePresentationRevision() {
+        presentationRevision &+= 1
     }
 
     @discardableResult

@@ -791,7 +791,7 @@ class JwtExpiryTests(unittest.TestCase):
 
 
 class CursorTokenCacheTests(unittest.TestCase):
-    """Regression: gradus must keep working when Safari has lost the cookie."""
+    """Cursor reads its credential cache; the bridge is the only browser reader."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -804,57 +804,33 @@ class CursorTokenCacheTests(unittest.TestCase):
         self._patcher.stop()
         self._tmpdir.cleanup()
 
-    def test_cache_used_when_safari_empty(self) -> None:
-        """If cache has a valid token, Safari is not consulted and no browser opens."""
+    def test_cache_is_the_only_credential_source(self) -> None:
         valid_jwt = _make_jwt(3600)
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
             json.dumps({"access_token": valid_jwt, "refresh_token": "rt"}),
             encoding="utf-8",
         )
-        with (
-            patch("gradus.providers._base._read_safari_cookies", return_value={}) as safari,
-            patch("gradus.providers.subprocess.Popen") as popen,
-        ):
-            provider = CursorProvider()
-            provider._acquire()
+        provider = CursorProvider()
+        provider._acquire()
         self.assertEqual(provider._access_token, valid_jwt)
         self.assertEqual(provider._refresh_token, "rt")
         self.assertEqual(provider._token_source, "cache")
-        safari.assert_not_called()
-        popen.assert_not_called()
 
-    def test_expired_cache_falls_back_to_safari(self) -> None:
-        """Expired cached token is ignored; Safari is consulted instead."""
+    def test_expired_cache_is_not_used(self) -> None:
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
             json.dumps({"access_token": _make_jwt(-3600)}),
             encoding="utf-8",
         )
-        fresh_jwt = _make_jwt(3600)
-        cookie_value = f"user_x%3A%3A{fresh_jwt}"
-        with patch(
-            "gradus.providers._base._read_safari_cookies",
-            return_value={"WorkosCursorSessionToken": cookie_value},
-        ):
-            provider = CursorProvider()
-            provider._acquire()
-        self.assertEqual(provider._access_token, fresh_jwt)
-        self.assertEqual(provider._token_source, "safari")
+        provider = CursorProvider()
+        provider._acquire()
+        self.assertIsNone(provider._access_token)
 
-    def test_safari_read_writes_cache(self) -> None:
-        """First Safari read persists the token for subsequent runs."""
-        fresh_jwt = _make_jwt(3600)
-        cookie_value = f"user_x%3A%3A{fresh_jwt}"
-        with patch(
-            "gradus.providers._base._read_safari_cookies",
-            return_value={"WorkosCursorSessionToken": cookie_value},
-        ):
-            provider = CursorProvider()
-            provider._acquire()
-        self.assertTrue(self._cache_path.exists())
-        cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
-        self.assertEqual(cached["access_token"], fresh_jwt)
+    def test_missing_cache_does_not_create_credentials(self) -> None:
+        provider = CursorProvider()
+        provider._acquire()
+        self.assertFalse(self._cache_path.exists())
 
     def test_401_clears_cache(self) -> None:
         """A rejected token must be evicted so the next startup re-reads from Safari."""
@@ -863,8 +839,7 @@ class CursorTokenCacheTests(unittest.TestCase):
         valid_jwt = _make_jwt(3600)
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(json.dumps({"access_token": valid_jwt}), encoding="utf-8")
-        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
-            provider = CursorProvider()
+        provider = CursorProvider()
         err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
         with patch.object(provider, "_api_post", side_effect=err):
             with self.assertRaises(ProbeFailure):
@@ -873,7 +848,7 @@ class CursorTokenCacheTests(unittest.TestCase):
 
 
 class ClaudeCookieCacheTests(unittest.TestCase):
-    """Same disk-sync-lag fix as Cursor: cache Safari cookies to local file."""
+    """Claude reads bridge-written cache files only."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -885,35 +860,22 @@ class ClaudeCookieCacheTests(unittest.TestCase):
         self._patcher.stop()
         self._tmpdir.cleanup()
 
-    def test_cache_used_when_safari_empty(self) -> None:
+    def test_cache_is_the_only_credential_source(self) -> None:
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
             json.dumps({"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"}),
             encoding="utf-8",
         )
-        with (
-            patch("gradus.providers._base._read_safari_cookies", return_value={}) as safari,
-            patch("gradus.providers.subprocess.Popen") as popen,
-        ):
-            provider = ClaudeHttpProvider()
-            provider._acquire()
+        provider = ClaudeHttpProvider()
+        provider._acquire()
         self.assertEqual(provider._session_key, "sk")
         self.assertEqual(provider._cf_clearance, "cf")
         self.assertEqual(provider._org_id, "org")
-        safari.assert_not_called()
-        popen.assert_not_called()
 
-    def test_safari_read_writes_cache(self) -> None:
-        with patch(
-            "gradus.providers._base._read_safari_cookies",
-            return_value={"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"},
-        ):
-            provider = ClaudeHttpProvider()
-            provider._acquire()
-        self.assertTrue(self._cache_path.exists())
-        cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
-        self.assertEqual(cached["sessionKey"], "sk")
-        self.assertEqual(cached["lastActiveOrg"], "org")
+    def test_missing_cache_does_not_create_credentials(self) -> None:
+        provider = ClaudeHttpProvider()
+        provider._acquire()
+        self.assertFalse(self._cache_path.exists())
 
     def test_403_clears_cache(self) -> None:
         """cf_clearance can expire fast; a 403 must evict the cache to recover."""
@@ -922,8 +884,7 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             json.dumps({"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"}),
             encoding="utf-8",
         )
-        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
-            provider = ClaudeHttpProvider()
+        provider = ClaudeHttpProvider()
         with patch(
             "gradus.providers._base._http_json",
             side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
@@ -943,8 +904,7 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
-            provider = ClaudeHttpProvider()
+        provider = ClaudeHttpProvider()
         with patch(
             "gradus.providers._base._http_json",
             side_effect=ProbeFailure("HTTP 400", ""),
@@ -956,7 +916,7 @@ class ClaudeCookieCacheTests(unittest.TestCase):
 
 
 class VibeCookieCacheTests(unittest.TestCase):
-    """Same disk-sync-lag fix as Cursor: cache Mistral cookies to local file."""
+    """Vibe reads bridge-written cache files only."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -968,7 +928,7 @@ class VibeCookieCacheTests(unittest.TestCase):
         self._patcher.stop()
         self._tmpdir.cleanup()
 
-    def test_cache_used_when_safari_and_chrome_empty(self) -> None:
+    def test_cache_is_the_only_credential_source(self) -> None:
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
             json.dumps(
@@ -976,36 +936,16 @@ class VibeCookieCacheTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        with (
-            patch.object(VibeProvider, "_extract_safari_cookies", return_value=None) as safari,
-            patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None) as chrome,
-            patch("gradus.providers.subprocess.Popen") as popen,
-        ):
-            provider = VibeProvider(project_root=self._tmpdir.name)
-            provider._acquire()
+        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider._acquire()
         self.assertEqual(provider._ory_name, "ory_session_x")
         self.assertEqual(provider._ory_value, "v")
         self.assertEqual(provider._csrf, "c")
-        safari.assert_not_called()
-        chrome.assert_not_called()
-        popen.assert_not_called()
 
-    def test_safari_read_writes_cache(self) -> None:
-        with patch.object(
-            VibeProvider,
-            "_extract_safari_cookies",
-            return_value={
-                "ory_session_name": "ory_session_x",
-                "ory_session_value": "v",
-                "csrftoken": "c",
-            },
-        ):
-            provider = VibeProvider(project_root=self._tmpdir.name)
-            provider._acquire()
-        self.assertTrue(self._cache_path.exists())
-        cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
-        self.assertEqual(cached["ory_session_name"], "ory_session_x")
-        self.assertEqual(cached["csrftoken"], "c")
+    def test_missing_cache_does_not_create_credentials(self) -> None:
+        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider._acquire()
+        self.assertFalse(self._cache_path.exists())
 
     def test_401_clears_cache(self) -> None:
         import urllib.error as ue
@@ -1017,11 +957,7 @@ class VibeCookieCacheTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        with (
-            patch.object(VibeProvider, "_extract_safari_cookies", return_value=None),
-            patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None),
-        ):
-            provider = VibeProvider(project_root=self._tmpdir.name)
+        provider = VibeProvider(project_root=self._tmpdir.name)
         err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
         with patch("urllib.request.urlopen", side_effect=err):
             with self.assertRaises(ProbeFailure):
@@ -1030,7 +966,7 @@ class VibeCookieCacheTests(unittest.TestCase):
 
 
 class CacheResilienceTests(unittest.TestCase):
-    """Edge-cases: corrupted cache files and write failures must not break providers."""
+    """Malformed bridge output must fail closed without browser fallback."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -1050,68 +986,29 @@ class CacheResilienceTests(unittest.TestCase):
             p.stop()
         self._tmpdir.cleanup()
 
-    def test_cursor_corrupted_cache_falls_back_to_safari(self) -> None:
-        """Garbage JSON in cursor cache is silently ignored; Safari is consulted."""
+    def test_cursor_corrupted_cache_is_ignored(self) -> None:
         self._cursor_cache.parent.mkdir(parents=True, exist_ok=True)
         self._cursor_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
-        fresh_jwt = _make_jwt(3600)
-        cookie_value = f"user_x%3A%3A{fresh_jwt}"
-        with patch(
-            "gradus.providers._base._read_safari_cookies",
-            return_value={"WorkosCursorSessionToken": cookie_value},
-        ):
-            provider = CursorProvider()
-            provider._acquire()
-        self.assertEqual(provider._access_token, fresh_jwt)
-        self.assertEqual(provider._token_source, "safari")
+        provider = CursorProvider()
+        provider._acquire()
+        self.assertIsNone(provider._access_token)
 
-    def test_claude_corrupted_cache_falls_back_to_safari(self) -> None:
-        """Garbage JSON in Claude cache is silently ignored; Safari is consulted."""
+    def test_claude_corrupted_cache_is_ignored(self) -> None:
         self._claude_cache.parent.mkdir(parents=True, exist_ok=True)
         self._claude_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
-        with patch(
-            "gradus.providers._base._read_safari_cookies",
-            return_value={"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"},
-        ):
-            provider = ClaudeHttpProvider()
-            provider._acquire()
-        self.assertEqual(provider._session_key, "sk")
-        self.assertEqual(provider._org_id, "org")
+        provider = ClaudeHttpProvider()
+        provider._acquire()
+        self.assertFalse(provider._has_cookies)
 
-    def test_vibe_corrupted_cache_falls_back_to_safari(self) -> None:
-        """Garbage JSON in Vibe cache is silently ignored; Safari is consulted."""
+    def test_vibe_corrupted_cache_is_ignored(self) -> None:
         self._vibe_cache.parent.mkdir(parents=True, exist_ok=True)
         self._vibe_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
-        with patch.object(
-            VibeProvider,
-            "_extract_safari_cookies",
-            return_value={
-                "ory_session_name": "ory_session_x",
-                "ory_session_value": "v",
-                "csrftoken": "c",
-            },
-        ):
-            provider = VibeProvider(project_root=self._tmpdir.name)
-            provider._acquire()
-        self.assertEqual(provider._ory_name, "ory_session_x")
+        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider._acquire()
+        self.assertFalse(provider._has_cookies)
 
-    def test_cursor_save_cache_oserror_does_not_break_provider(self) -> None:
-        """If writing the cache raises OSError, the provider still has a valid token."""
-        fresh_jwt = _make_jwt(3600)
-        cookie_value = f"user_x%3A%3A{fresh_jwt}"
-        with (
-            patch(
-                "gradus.providers._base._read_safari_cookies",
-                return_value={"WorkosCursorSessionToken": cookie_value},
-            ),
-            patch("pathlib.Path.mkdir", side_effect=OSError("no space")),
-        ):
-            provider = CursorProvider()
-            provider._acquire()
-        self.assertEqual(provider._access_token, fresh_jwt)
-
-    def test_cursor_refresh_writes_new_refresh_token_to_cache(self) -> None:
-        """After a token refresh, the updated refresh_token must be persisted."""
+    def test_cursor_refresh_keeps_new_token_in_memory_without_rewriting_bridge_cache(self) -> None:
+        """Provider refreshes must not gain write access to bridge-managed credentials."""
         import urllib.error as ue
 
         valid_jwt = _make_jwt(3600)
@@ -1120,8 +1017,7 @@ class CacheResilienceTests(unittest.TestCase):
             json.dumps({"access_token": valid_jwt, "refresh_token": "old_rt"}),
             encoding="utf-8",
         )
-        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
-            provider = CursorProvider()
+        provider = CursorProvider()
 
         # Simulate: first API call → 401, refresh succeeds with new tokens, retry succeeds
         first_err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
@@ -1158,10 +1054,12 @@ class CacheResilienceTests(unittest.TestCase):
         ):
             provider.fetch()
 
-        # Cache must now contain the new refresh token
+        # The bridge-owned cache remains untouched; the fresh token is only in memory.
         cached = json.loads(self._cursor_cache.read_text(encoding="utf-8"))
-        self.assertEqual(cached["access_token"], new_jwt)
-        self.assertEqual(cached["refresh_token"], "new_rt")
+        self.assertEqual(cached["access_token"], valid_jwt)
+        self.assertEqual(cached["refresh_token"], "old_rt")
+        self.assertEqual(provider._access_token, new_jwt)
+        self.assertEqual(provider._refresh_token, "new_rt")
 
 
 class CodexWindowClassificationTests(unittest.TestCase):
@@ -1738,11 +1636,7 @@ class ClaudeHttpProviderTests(unittest.TestCase):
     }
 
     def setUp(self) -> None:
-        # Isolate _CACHE_PATH: _make_provider mocks _read_safari_cookies with fixture
-        # values, and without this isolation the constructor would write those fixtures
-        # straight to the repo's real .cache/claude_cookies.json — which is exactly how
-        # the 2026-05-30 weekend cache work landed sk-ant-test/org-123 in production
-        # and produced HTTP 400 from Claude's UUID validator.
+        # Isolate bridge-managed cache fixtures from the repository's live cache.
         self._tmpdir = tempfile.TemporaryDirectory()
         self._cache_path = Path(self._tmpdir.name) / "claude_cookies.json"
         self._patcher = patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._cache_path)
@@ -1753,18 +1647,16 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def _make_provider(self) -> ClaudeHttpProvider:
-        # _read_safari_cookies must stay patched beyond this helper: _acquire()
-        # now runs lazily inside fetch() (not __init__), so the mock has to still
-        # be in effect when the caller later invokes provider.fetch(). Stop it
-        # via addCleanup rather than a `with` block that would exit on return.
-        cookies = {
-            "sessionKey": "sk-ant-test",
-            "cf_clearance": "cf_test",
-            "lastActiveOrg": "org-123",
-        }
-        patcher = patch("gradus.providers._base._read_safari_cookies", return_value=cookies)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self._cache_path.write_text(
+            json.dumps(
+                {
+                    "sessionKey": "sk-ant-test",
+                    "cf_clearance": "cf_test",
+                    "lastActiveOrg": "org-123",
+                }
+            ),
+            encoding="utf-8",
+        )
         return ClaudeHttpProvider()
 
     def test_normal_response_field_mapping(self) -> None:
@@ -1797,14 +1689,9 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIn("session expired", str(ctx.exception).lower())
 
     def test_missing_cookies_raises_probe_failure(self) -> None:
-        # Patches must stay active through fetch() so _load_cookies() still finds nothing
-        with (
-            patch("gradus.providers._base._read_safari_cookies", return_value={}),
-            patch("subprocess.Popen"),
-        ):
-            provider = ClaudeHttpProvider()
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
+        provider = ClaudeHttpProvider()
+        with self.assertRaises(ProbeFailure) as ctx:
+            provider.fetch()
         self.assertIn("claude.ai", str(ctx.exception).lower())
 
 
@@ -2511,17 +2398,10 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         self.assertFalse(self._claude_cache.exists())
 
     def test_acquire_never_launches_browser(self) -> None:
-        # Regression guard for the removed auto-open: a credential-less probe is
-        # a pure read and must NEVER launch a browser, in either interactive or
-        # headless mode. The only browser-opening path is the [n] fix-action in
-        # the TUI, and only on an explicit keypress.
+        # A credential-less probe is a pure cache read in either mode.
         try:
             for headless in (False, True):
-                with (
-                    patch("gradus.providers._base._read_safari_cookies", return_value={}),
-                    patch.object(VibeProvider, "_extract_chrome_cookies", return_value=None),
-                    patch("gradus.providers.subprocess.Popen") as popen,
-                ):
+                with patch("gradus.providers.subprocess.Popen") as popen:
                     providers.set_headless(headless)
                     provider = VibeProvider(str(self._root))
                     provider._acquire()
@@ -2529,10 +2409,13 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         finally:
             providers.set_headless(False)
 
-    def test_headless_read_safari_cookies_returns_empty(self) -> None:
-        providers.set_headless(True)
-        self.assertEqual(providers._read_safari_cookies("claude"), {})
-        self.assertIsNone(VibeProvider._extract_chrome_cookies())
+    def test_provider_modules_contain_no_browser_readers(self) -> None:
+        provider_directory = Path(providers.__file__).resolve().parent
+        prohibited = ("Cookies.binarycookies", "Chrome Safe Storage", "state.vscdb")
+        for module in provider_directory.glob("*.py"):
+            source = module.read_text(encoding="utf-8")
+            for value in prohibited:
+                self.assertNotIn(value, source, module.name)
 
 
 class LazyAcquireContractTests(unittest.TestCase):
@@ -2574,7 +2457,6 @@ class LazyAcquireContractTests(unittest.TestCase):
         with (
             patch("gradus.providers.subprocess.run") as mock_run,
             patch("gradus.providers.subprocess.Popen") as mock_popen,
-            patch("gradus.providers._base._read_safari_cookies", return_value={}) as mock_safari,
             patch("gradus.providers._base._write_private") as mock_write,
         ):
             try:
@@ -2588,7 +2470,6 @@ class LazyAcquireContractTests(unittest.TestCase):
 
         mock_run.assert_not_called()
         mock_popen.assert_not_called()
-        mock_safari.assert_not_called()
         mock_write.assert_not_called()
 
     def test_missing_creds_surface_as_auth_snapshot_via_fetch(self) -> None:
@@ -2600,12 +2481,8 @@ class LazyAcquireContractTests(unittest.TestCase):
         case without ever reaching fetch(), or if the lazy _acquire() failure
         path stopped producing a message containing an auth keyword.
         """
-        with (
-            patch("gradus.providers._base._read_safari_cookies", return_value={}),
-            patch("gradus.providers.subprocess.Popen"),
-        ):
-            provider = ClaudeHttpProvider()
-            snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
+        provider = ClaudeHttpProvider()
+        snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
 
         self.assertFalse(snapshot.ok)
         self.assertIsNotNone(snapshot.error)
@@ -2613,12 +2490,7 @@ class LazyAcquireContractTests(unittest.TestCase):
 
 
 class TestCredentialCachePermissions(unittest.TestCase):
-    """INV-6: every credential/secret write must land at mode 0600 inside a
-    0700 directory, via the shared ``_write_private`` helper. Guards against a
-    regression back to a bare ``Path.write_text``, which inherits the process
-    umask (0644 = world-readable). These assertions would FAIL against the
-    pre-fix code.
-    """
+    """Python readers harden bridge-written cache files before use."""
 
     def setUp(self) -> None:
         self._prior_headless = providers._is_headless()
@@ -2631,40 +2503,6 @@ class TestCredentialCachePermissions(unittest.TestCase):
         self.assertTrue(path.exists(), f"{path} was not written")
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(path.parent).st_mode), 0o700)
-
-    def test_credential_artifacts_are_written_private(self) -> None:
-        # Vibe cookie cache — bare instance (no __init__) so construction never
-        # touches Safari/Chrome/the browser; only the write path under test runs.
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / "vibe" / "vibe_cookies.json"
-            with patch.object(VibeProvider, "_CACHE_PATH", cache_path):
-                provider = VibeProvider.__new__(VibeProvider)
-                provider._ory_name = "ory_session_x"
-                provider._ory_value = "v"
-                provider._csrf = "c"
-                provider._save_to_cache()
-            self._assert_private(cache_path)
-
-        # Cursor token cache
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / "cursor" / "cursor_token.json"
-            with patch.object(CursorProvider, "_CACHE_PATH", cache_path):
-                provider = CursorProvider.__new__(CursorProvider)
-                provider._access_token = "at"
-                provider._refresh_token = "rt"
-                provider._save_to_cache()
-            self._assert_private(cache_path)
-
-        # Claude cookie cache
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / "claude" / "claude_cookies.json"
-            with patch.object(ClaudeHttpProvider, "_CACHE_PATH", cache_path):
-                provider = ClaudeHttpProvider.__new__(ClaudeHttpProvider)
-                provider._session_key = "sk"
-                provider._cf_clearance = "cf"
-                provider._org_id = "org"
-                provider._save_to_cache()
-            self._assert_private(cache_path)
 
     def test_debug_dump_is_private_without_hardening_shared_parent(self) -> None:
         """The /tmp debug dump is written 0600 for privacy, but its parent (a
@@ -2701,30 +2539,6 @@ class TestCredentialCachePermissions(unittest.TestCase):
                 result = provider._load_from_cache()
             self.assertTrue(result)
             self.assertEqual(stat.S_IMODE(os.stat(cache_path).st_mode), 0o600)
-
-
-class TestChromeCookieDecrypt(unittest.TestCase):
-    """Pins the in-process AES-128-CBC Chrome v10 cookie decrypt (F3). The key
-    never reaches argv. Known-answer vector generated with the same scheme
-    (key + IV=16x0x20 + PKCS7 padding, v10 prefix)."""
-
-    # 16-byte AES-128 key; v10 blob encrypts "session-token-value-42".
-    KEY = bytes.fromhex("0123456789abcdef0123456789abcdef")
-    V10_BLOB = bytes.fromhex(
-        "7631303f968bc907d80a15a7607391fe1d3b246b64f1b60663a8dcd1cba54defc8e7a7"
-    )
-
-    def test_decrypt_chrome_cookie_known_vector(self) -> None:
-        self.assertEqual(
-            VibeProvider._decrypt_chrome_cookie(self.KEY, self.V10_BLOB),
-            "session-token-value-42",
-        )
-
-    def test_decrypt_chrome_cookie_bad_padding_returns_none(self) -> None:
-        # Wrong key -> PKCS#7 validation fails -> None (openssl's None-on-bad-padding).
-        self.assertIsNone(VibeProvider._decrypt_chrome_cookie(b"\x00" * 16, self.V10_BLOB))
-        # Garbage ciphertext -> None.
-        self.assertIsNone(VibeProvider._decrypt_chrome_cookie(self.KEY, b"v10" + b"\x00" * 16))
 
 
 def _seroval_stream(node_json: str) -> bytes:
@@ -2816,11 +2630,9 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def _provider(self) -> OpenCodeGoProvider:
-        with patch(
-            "gradus.providers._base._read_safari_cookies", return_value={"auth": "cookie-value"}
-        ):
-            provider = OpenCodeGoProvider()
-            provider._acquire()
+        self._cache_path.write_text(json.dumps({"auth": "cookie-value"}), encoding="utf-8")
+        provider = OpenCodeGoProvider()
+        provider._acquire()
         return provider
 
     def test_field_mapping_percent_remaining_and_resets(self) -> None:
@@ -2913,10 +2725,9 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self.assertFalse(self._cache_path.exists())
 
     def test_missing_cookie_raises_auth_message(self) -> None:
-        with patch("gradus.providers._base._read_safari_cookies", return_value={}):
-            provider = OpenCodeGoProvider()
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
+        provider = OpenCodeGoProvider()
+        with self.assertRaises(ProbeFailure) as ctx:
+            provider.fetch()
         self.assertIn("sign in at opencode.ai", str(ctx.exception))
 
     def test_auth_error_routes_to_fix_action(self) -> None:
@@ -2928,28 +2739,17 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         )
         self.assertTrue(_is_auth_error(snap))
 
-    def test_cache_used_when_safari_empty(self) -> None:
+    def test_cache_is_the_only_credential_source(self) -> None:
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(json.dumps({"auth": "cached-cookie"}), encoding="utf-8")
-        with (
-            patch("gradus.providers._base._read_safari_cookies", return_value={}) as safari,
-            patch("gradus.providers.subprocess.Popen") as popen,
-        ):
-            provider = OpenCodeGoProvider()
-            provider._acquire()
+        provider = OpenCodeGoProvider()
+        provider._acquire()
         self.assertEqual(provider._auth_cookie, "cached-cookie")
-        safari.assert_not_called()
-        popen.assert_not_called()
 
-    def test_safari_read_writes_cache(self) -> None:
-        with patch(
-            "gradus.providers._base._read_safari_cookies", return_value={"auth": "safari-cookie"}
-        ):
-            provider = OpenCodeGoProvider()
-            provider._acquire()
-        self.assertTrue(self._cache_path.exists())
-        cached = json.loads(self._cache_path.read_text(encoding="utf-8"))
-        self.assertEqual(cached["auth"], "safari-cookie")
+    def test_missing_cache_does_not_create_credentials(self) -> None:
+        provider = OpenCodeGoProvider()
+        provider._acquire()
+        self.assertFalse(self._cache_path.exists())
 
 
 class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
@@ -2967,10 +2767,9 @@ class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
         self.addCleanup(self._tmpdir.cleanup)
 
     def test_fetch_decodes_wire_payloads(self) -> None:
-        with patch(
-            "gradus.providers._base._read_safari_cookies", return_value={"auth": "cookie-value"}
-        ):
-            provider = OpenCodeGoProvider()
+        cache_path = OpenCodeGoProvider._CACHE_PATH
+        cache_path.write_text(json.dumps({"auth": "cookie-value"}), encoding="utf-8")
+        provider = OpenCodeGoProvider()
         bodies = [
             _seroval_stream(_SEROVAL_WORKSPACES),
         ]
@@ -3000,10 +2799,6 @@ class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
         with (
             patch("gradus.providers.urllib.request.build_opener") as build,
             patch("gradus.providers.urllib.request.urlopen") as urlopen_mock,
-            patch(
-                "gradus.providers._base._read_safari_cookies",
-                return_value={"auth": "cookie-value"},
-            ),
         ):
             opener = MagicMock()
             opener.open.side_effect = responses

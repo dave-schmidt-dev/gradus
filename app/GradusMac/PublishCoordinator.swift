@@ -12,6 +12,13 @@ struct ProviderPublishState: Equatable {
 
 enum PublishCoordinatorError: Error, Equatable {
     case recordFailures(Int)
+    case evidenceWriteFailed
+}
+
+private struct ProducerPublishEvidence: Encodable {
+    let producerBuildNumber: String
+    let cloudKitEnvironment: String
+    let publishedAt: Date
 }
 
 /// Implements `GradusKit.CloudPublisher`: idempotent zone creation (PM-8),
@@ -22,6 +29,9 @@ enum PublishCoordinatorError: Error, Equatable {
 public actor PublishCoordinator: CloudPublisher {
     private let database: CloudDatabase
     private let zoneID: CKRecordZone.ID
+    private let evidencePath: URL?
+    private let producerBuildNumber: String?
+    private let cloudKitEnvironment: String?
     private var state: [String: ProviderPublishState] = [:]
 
     /// Providers whose `isWarning` flipped false→true on the most recently
@@ -32,9 +42,18 @@ public actor PublishCoordinator: CloudPublisher {
     private static let maxBackoffAttempts = 3
     static let maxRetryDelaySeconds = 60.0
 
-    public init(database: CloudDatabase, zoneID: CKRecordZone.ID) {
+    public init(
+        database: CloudDatabase,
+        zoneID: CKRecordZone.ID,
+        evidencePath: URL? = nil,
+        producerBuildNumber: String? = nil,
+        cloudKitEnvironment: String? = nil
+    ) {
         self.database = database
         self.zoneID = zoneID
+        self.evidencePath = evidencePath
+        self.producerBuildNumber = producerBuildNumber
+        self.cloudKitEnvironment = cloudKitEnvironment
     }
 
     /// Read-only snapshot of a provider's last known publish state — used by
@@ -66,6 +85,7 @@ public actor PublishCoordinator: CloudPublisher {
         newlyWarningProviders = newlyWarning
 
         guard !toSave.isEmpty else {
+            try writeProducerEvidenceIfConfigured()
             GradusLog.publish.info(
                 "no changes to publish: all \(statuses.count) provider(s) matched their last saved content hash")
             return
@@ -107,7 +127,43 @@ public actor PublishCoordinator: CloudPublisher {
                 "publish incomplete: \(failedRecordCount) of \(toSave.count) record(s) failed to save")
             throw PublishCoordinatorError.recordFailures(failedRecordCount)
         }
+        try writeProducerEvidenceIfConfigured()
         GradusLog.publish.notice("published \(toSave.count) record(s) successfully")
+    }
+
+    private func writeProducerEvidenceIfConfigured() throws {
+        guard let evidencePath, let producerBuildNumber, let cloudKitEnvironment else { return }
+        do {
+            try Self.writeProducerEvidence(
+                to: evidencePath,
+                producerBuildNumber: producerBuildNumber,
+                cloudKitEnvironment: cloudKitEnvironment
+            )
+        } catch {
+            GradusLog.publish.error("published records but could not write producer evidence")
+            throw PublishCoordinatorError.evidenceWriteFailed
+        }
+    }
+
+    private static func writeProducerEvidence(
+        to path: URL,
+        producerBuildNumber: String,
+        cloudKitEnvironment: String
+    ) throws {
+        let evidence = ProducerPublishEvidence(
+            producerBuildNumber: producerBuildNumber,
+            cloudKitEnvironment: cloudKitEnvironment,
+            publishedAt: Date()
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(evidence)
+        try FileManager.default.createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try data.write(to: path, options: .atomic)
     }
 
     /// Describes a save result for the log by error *code*, not by dumping the

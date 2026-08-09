@@ -99,10 +99,13 @@ struct RankedProviders<P: RankableProvider> {
 ///    threshold can only ever *add* providers to this tier.
 /// 3. OK providers with neither flag set.
 ///
-/// Within tiers 2 and 3: by `sortOption` (a provider with no windows sorts
-/// last within its tier -- no data to rank by). Final deterministic
-/// tie-breaker, applied within every tier including tier 1: ascending
-/// `rankingName`.
+/// `mostUrgent` preserves the three urgency tiers. The other two options are
+/// true ordering modes over the complete partition: `resetSoonest` puts a
+/// missing reset last, and `nameAZ` is alphabetical. The exhausted partition
+/// is still always appended after the active one. "Most urgent" follows the
+/// signal the user can see (red through green), then the lowest remaining
+/// percentage within the same signal. Final deterministic tie-breaker is
+/// ascending `rankingName`.
 func rankedPartition<P: RankableProvider>(
     _ providers: [P],
     localThreshold: Double,
@@ -140,18 +143,21 @@ private func sortPartition<P: RankableProvider>(
     sortOption: ProviderSortOption
 ) -> [P] {
     providers.sorted { lhs, rhs in
-        let lhsTier = attentionTier(for: lhs, localThreshold: localThreshold)
-        let rhsTier = attentionTier(for: rhs, localThreshold: localThreshold)
-        if lhsTier != rhsTier { return lhsTier < rhsTier }
-
-        // No-window providers retain their existing last-within-tier behavior
-        // for every local sort mode. There is no invented percent or reset.
-        let lhsHasWindows = !lhs.rankingWindows.isEmpty
-        let rhsHasWindows = !rhs.rankingWindows.isEmpty
-        if lhsHasWindows != rhsHasWindows { return lhsHasWindows }
-
         switch sortOption {
         case .mostUrgent:
+            let lhsTier = attentionTier(for: lhs, localThreshold: localThreshold)
+            let rhsTier = attentionTier(for: rhs, localThreshold: localThreshold)
+            if lhsTier != rhsTier { return lhsTier < rhsTier }
+
+            // Most-urgent has no useful ordering signal for a provider with
+            // no windows, so those stay at the end of their urgency tier.
+            let lhsHasWindows = !lhs.rankingWindows.isEmpty
+            let rhsHasWindows = !rhs.rankingWindows.isEmpty
+            if lhsHasWindows != rhsHasWindows { return lhsHasWindows }
+
+            let lhsSignal = mostUrgentSignalRank(lhs)
+            let rhsSignal = mostUrgentSignalRank(rhs)
+            if lhsSignal != rhsSignal { return lhsSignal > rhsSignal }
             let lhsPercent = worstPercentForRanking(lhs)
             let rhsPercent = worstPercentForRanking(rhs)
             if lhsPercent != rhsPercent { return lhsPercent < rhsPercent }
@@ -169,11 +175,27 @@ private func sortPartition<P: RankableProvider>(
                 break
             }
         case .nameAZ:
-            break
+            return lhs.rankingName < rhs.rankingName
         }
 
         return lhs.rankingName < rhs.rankingName
     }
+}
+
+/// Sort highest visible severity first without making a yellow row a warning.
+/// Warning eligibility and presentation order answer different questions:
+/// yellow does not notify, but it is still more urgent than green when the
+/// user explicitly chooses the "Most urgent" display order.
+private func mostUrgentSignalRank<P: RankableProvider>(_ provider: P) -> Int {
+    provider.rankingWindows.map { window in
+        switch signalLevel(for: window) {
+        case .red: 4
+        case .orange: 3
+        case .yellow: 2
+        case .green: 1
+        case .unknown: 0
+        }
+    }.max() ?? 0
 }
 
 /// 0 = errored, 1 = ok + attention-needed, 2 = ok + normal.

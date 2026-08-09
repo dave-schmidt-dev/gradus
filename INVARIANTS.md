@@ -5,7 +5,7 @@
 > in this project's CLAUDE.md/README, not globally.
 
 ### INV-1 — The router-facing snapshot contains no credential material and no account PII, and lives in the credential-free .state/ dir
-area: ["gradus/snapshot.py", "gradus/parsing.py", "gradus/providers/*.py", "gradus/history.py"]
+area: ["gradus/snapshot.py", "gradus/parsing.py", "gradus/history.py"]
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
 rationale: The snapshot files are read by a separate repo (review-plugin router). They are written to
@@ -22,6 +22,9 @@ rationale: The snapshot files are read by a separate repo (review-plugin router)
   where that error string is constructed. The history writer accepts only an existing, validated schema-v2
   payload plus fixed provider-owned safe provenance descriptors; it does not widen the allowlist or persist raw
   upstream data.
+  The schema-v2 writer also atomically mirrors that same allowlisted payload to
+  ~/Library/Application Support/Gradus/snapshot-v2.json for GradusMac; this is
+  a consumer copy, not a router input, and it has the identical safe schema.
 
 ### INV-2 — The machine-safe (--json / --write-snapshot) paths have zero credential side effects
 area: ["gradus/providers/*.py", "gradus/__main__.py"]
@@ -44,7 +47,7 @@ to 100 − x at one place. A sign flip or double-normalization would make the ro
 depleted provider — the exact opposite of correct. Every window's percent_left is remaining capacity.
 
 ### INV-4 — pace_delta sign and unit are canonical
-area: ["gradus/snapshot.py", "gradus/ui.py"]
+area: ["gradus/snapshot.py", "tests/test_snapshot.py", "tests/test_ui.py"]
 gate_test: tests/test_snapshot.py::test_pace_delta_unit_and_sign
 threshold: 3
 rationale: pace_delta = (percent_left/100) − (time_remaining/window_total): a signed fraction,
@@ -67,20 +70,19 @@ rationale: The router asserts schema_version. Both versioned files always carry 
   history_schema_version and is not a replacement or redirect for either router schema. Prevents silent schema
   drift that a version-asserting consumer cannot detect.
 
-### INV-6 — All persisted credential material is written mode 0600 inside a 0700 dir, via an atomic temp-file swap
-area: ["gradus/providers/*.py", "gradus/history.py"]
-gate_test: tests/test_providers.py::TestCredentialCachePermissions::test_credential_artifacts_are_written_private
+### INV-6 — Safari-derived credentials cross one app boundary and stay private at rest
+area: ["app/GradusCredentialBridge/**", "gradus/providers/*.py", "launchd/*", "gradus/history.py"]
+gate_test: app/GradusCredentialBridgeTests/BridgeTests.swift::testRefreshWritesOnlyAllowedPayloadsWithPrivateModes
 threshold: 3
-rationale: The provider credential caches (Vibe/Cursor/Claude cookies + tokens) and the Codex auth.json
-  hold live sessionKey/ory_*/csrftoken values and access/refresh tokens; the /tmp debug dump holds raw
-  vendor bodies. A bare Path.write_text inherits the process umask (0644 = world-readable), exposing
-  those secrets to every other local user/process — and, if Desktop&Documents iCloud sync is ever
-  enabled on this tree, replicating live credentials to Apple's cloud. A single choke-point,
-  `_write_private` (tempfile.mkstemp — born 0600, independent of umask — then chmod + os.replace),
-  is the SOLE sanctioned write path for all credential/secret writes, so the mode is never
-  world-readable even momentarily and the contract is enforceable at one site. The credential-free history
-  directory and partitions also default to 0700/0600 as defense in depth, although history rejects
-  credential-like fields and stores no credential material. Prevents F1.
+rationale: Safari-derived provider cookies are read only by the Developer-ID-signed
+  GradusCredentialBridge.app, which atomically writes the fixed allowlisted cache payloads at
+  0600 inside a 0700 .cache directory. Python providers consume those caches only; neither they
+  nor the launchd wrapper may read Safari, Chrome, Desktop databases, or a credential file fallback.
+  This confines Full Disk Access to ~/Applications/GradusCredentialBridge.app rather than a shared
+  Python runtime or shell wrapper. Codex auth.json and debug dumps retain the Python private-write
+  helper. The bridge test proves parser allowlists, payload boundaries, and file modes; provider
+  tests tripwire prohibited browser paths. Prevents private browser state from becoming available to
+  arbitrary Python processes or world-readable at rest.
 
 ### INV-7 — The CloudKit publisher takes its snapshot data through a single injected snapshot-path dependency, and its source references no credential path
 area: ["app/GradusMac/**", "app/GradusKit/**"]
@@ -116,7 +118,8 @@ rationale: GradusiOS is a consumer of the Mac publisher, not an independent data
   is uploaded. A consumer-only TestFlight release can otherwise look healthy while rendering stale
   records, missing required context, or silently dropping the new feature. The release checklist
   makes the dependency decision explicit, requires both sides to pass their gates, and records the
-  producer-publish evidence alongside the consumer upload evidence. A Mac-only local republish does
+  producer-publish evidence alongside the consumer upload evidence. The iOS archive guard rejects missing, mismatched,
+  wrong-build, or stale machine-written evidence before allocating an iOS build number. A Mac-only local republish does
   not require notarization; a Mac artifact distributed to users still follows the notarization gate.
 
 ### INV-10 — Product versions are semantic and Apple build numbers are independent
@@ -136,6 +139,8 @@ threshold: 3
 rationale: Every new behavior has a test at the lowest layer that proves it; new SwiftUI appearance has
   snapshot coverage, new interactive workflows have XCUITest/XCUIAutomation coverage, and shared
   producer/consumer behavior has tests on both sides. Tests must be wired into the runner and gate.
+  Silent-zero execution is a discriminated failure: each counted gate leg must report at least its
+  declared minimum number of tests, and a successful command with no recognized count is not proof.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
 

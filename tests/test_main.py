@@ -1894,8 +1894,9 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             self.assertNotIn("/Users/", content)
             self.assertNotIn("/home/", content)
             self.assertNotIn("account", content.lower())
-            self.assertNotIn("credential", content.lower())
             self.assertNotIn("token", content.lower())
+            self.assertNotIn("Cookies.binarycookies", content)
+        self.assertIn("GradusCredentialBridge.app", wrapper)
 
         readme = (repo_root / "README.md").read_text(encoding="utf-8")
         self.assertIn("gradus --verify-refresh-health --duration 360", readme)
@@ -1991,10 +1992,20 @@ class TestRefreshHealthVerifier(unittest.TestCase):
         self.assertGreaterEqual(statuses.count("waiting 120.0s"), 2)
         self.assertEqual(statuses[-1], "passed")
 
+    def test_threshold_span_is_accepted(self) -> None:
+        result, statuses = self._drive(
+            [self._payload(0), self._payload(60), self._payload(180), self._payload(300)],
+            duration=360,
+            interval=120,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(statuses[-1], "passed")
+
     def test_carried_failed_malformed_missing_and_timeout_samples_fail_safely(self) -> None:
         cases = (
             ([self._payload(0, observed_offset_seconds=-1)], "sample provider observation carried"),
-            ([self._payload(0, ok=False)], "sample provider not healthy"),
+            ([self._payload(0, ok=False)], "sample provider Antigravity not healthy"),
             (
                 [{"schema_version": 2, "updated_at": "not-a-timestamp", "providers": []}],
                 "sample invalid timestamp",
@@ -2184,8 +2195,6 @@ class HeadlessGateTests(unittest.TestCase):
             patch("gradus.providers.copilot.subprocess.Popen") as mock_copilot_popen,
             patch("gradus.providers.antigravity.subprocess.run") as mock_agy_run,
             patch("gradus.providers.antigravity.subprocess.Popen") as mock_agy_popen,
-            patch("gradus.providers.vibe.subprocess.run") as mock_vibe_run,
-            patch("gradus.providers.vibe.subprocess.Popen") as mock_vibe_popen,
             patch("gradus.__main__.subprocess.Popen") as mock_main_popen,
             patch("gradus.__main__.subprocess.run") as mock_main_run,
             patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
@@ -2201,8 +2210,6 @@ class HeadlessGateTests(unittest.TestCase):
         mock_copilot_popen.assert_not_called()
         mock_agy_run.assert_not_called()
         mock_agy_popen.assert_not_called()
-        mock_vibe_run.assert_not_called()
-        mock_vibe_popen.assert_not_called()
         mock_main_popen.assert_not_called()
         mock_main_run.assert_not_called()
         self.assertGreaterEqual(len(captured_payloads), 1)

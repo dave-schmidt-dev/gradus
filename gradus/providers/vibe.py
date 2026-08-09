@@ -3,36 +3,25 @@
 from __future__ import annotations
 
 import json
-import logging
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.padding import PKCS7
-
 from ..parsing import VibeStatus
-from . import _base
 from ._base import (
     ProbeFailure,
     _auth_required_message,
     _harden_existing,
-    _is_headless,
     _remove_private,
     register,
 )
 
-log = logging.getLogger(__name__)
-
 
 @register("Vibe")
 class VibeProvider:
-    COOKIE_FILENAME = ".mistral_cookies.json"
     API_URL = "https://console.mistral.ai/api/billing/v2/vibe-usage"
     _CACHE_PATH = Path(__file__).resolve().parent.parent.parent / ".cache" / "vibe_cookies.json"
 
     def __init__(self, project_root: str) -> None:
-        self._project_root = project_root
         self._ory_name = ""
         self._ory_value = ""
         self._csrf = ""
@@ -42,18 +31,7 @@ class VibeProvider:
             self._load_cookies()
 
     def _load_cookies(self) -> None:
-        if self._load_from_cache():
-            return
-        cookies = self._extract_safari_cookies() or self._extract_chrome_cookies()
-        if cookies is None:
-            cookie_path = Path(self._project_root) / self.COOKIE_FILENAME
-            if cookie_path.exists():
-                cookies = self._load_cookie_file(cookie_path)
-        if cookies:
-            self._ory_name = cookies["ory_session_name"]
-            self._ory_value = cookies["ory_session_value"]
-            self._csrf = cookies["csrftoken"]
-            self._save_to_cache()
+        self._load_from_cache()
 
     def _load_from_cache(self) -> bool:
         if not self._CACHE_PATH.exists():
@@ -80,166 +58,12 @@ class VibeProvider:
         _harden_existing(self._CACHE_PATH)
         return True
 
-    def _save_to_cache(self) -> None:
-        if not (self._ory_name and self._ory_value and self._csrf):
-            return
-        try:
-            payload = {
-                "ory_session_name": self._ory_name,
-                "ory_session_value": self._ory_value,
-                "csrftoken": self._csrf,
-                "cached_at": datetime.now().isoformat(),
-            }
-            _base._write_private(self._CACHE_PATH, json.dumps(payload))
-        except OSError as exc:
-            log.warning("Failed to write Vibe cookie cache: %s", exc)
-
     def _clear_cache(self) -> None:
         _remove_private(self._CACHE_PATH)
 
     @property
     def _has_cookies(self) -> bool:
         return bool(self._ory_name and self._ory_value and self._csrf)
-
-    @staticmethod
-    def _load_cookie_file(cookie_path: Path) -> dict[str, str]:
-        try:
-            data = json.loads(cookie_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            raise ValueError(f"Failed to read Mistral cookies from {cookie_path}: {exc}") from exc
-        ory_name = data.get("ory_session_name", "")
-        ory_value = data.get("ory_session_value", "")
-        csrf = data.get("csrftoken", "")
-        if not ory_name or not ory_value or not csrf:
-            raise ValueError(
-                f"Mistral cookie file {cookie_path} must contain "
-                '"ory_session_name", "ory_session_value", and "csrftoken" keys '
-                "with non-empty values."
-            )
-        return {
-            "ory_session_name": ory_name,
-            "ory_session_value": ory_value,
-            "csrftoken": csrf,
-        }
-
-    @staticmethod
-    def _extract_chrome_cookies() -> dict[str, str] | None:
-        if _is_headless():
-            return None
-
-        import hashlib
-        import sqlite3 as _sqlite3
-
-        chrome_cookies = (
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "Google"
-            / "Chrome"
-            / "Default"
-            / "Cookies"
-        )
-        if not chrome_cookies.exists():
-            return None
-
-        try:
-            result = subprocess.run(
-                [
-                    "security",
-                    "find-generic-password",
-                    "-s",
-                    "Chrome Safe Storage",
-                    "-w",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=True,
-            )
-            chrome_password = result.stdout.strip()
-        except (subprocess.SubprocessError, OSError):
-            return None
-
-        key = hashlib.pbkdf2_hmac(
-            "sha1",
-            chrome_password.encode("utf-8"),
-            b"saltysalt",
-            1003,
-            dklen=16,
-        )
-
-        try:
-            conn = _sqlite3.connect(f"file:{chrome_cookies}?mode=ro", uri=True)
-            try:
-                rows = conn.execute(
-                    "SELECT name, encrypted_value FROM cookies "
-                    "WHERE host_key LIKE '%mistral.ai%' "
-                    "AND (name LIKE 'ory_session_%' OR name = 'csrftoken')"
-                ).fetchall()
-            finally:
-                conn.close()
-        except _sqlite3.Error:
-            return None
-
-        if not rows:
-            return None
-
-        ory_name = ""
-        ory_value = ""
-        csrf = ""
-        for name, encrypted_value in rows:
-            if not encrypted_value:
-                continue
-            decrypted = VibeProvider._decrypt_chrome_cookie(key, encrypted_value)
-            if decrypted is None:
-                continue
-            if name.startswith("ory_session_"):
-                ory_name = name
-                ory_value = decrypted
-            elif name == "csrftoken":
-                csrf = decrypted
-
-        if ory_name and ory_value and csrf:
-            log.debug("Extracted Mistral cookies from Chrome automatically")
-            return {
-                "ory_session_name": ory_name,
-                "ory_session_value": ory_value,
-                "csrftoken": csrf,
-            }
-        return None
-
-    @staticmethod
-    def _extract_safari_cookies() -> dict[str, str] | None:
-        cookies = _base._read_safari_cookies("mistral")
-        ory_name = next((k for k in cookies if k.startswith("ory_session_")), "")
-        ory_value = cookies.get(ory_name, "")
-        csrf = cookies.get("csrftoken", "")
-        if ory_name and ory_value and csrf:
-            log.debug("Extracted Mistral cookies from Safari automatically")
-            return {
-                "ory_session_name": ory_name,
-                "ory_session_value": ory_value,
-                "csrftoken": csrf,
-            }
-        return None
-
-    @staticmethod
-    def _decrypt_chrome_cookie(key: bytes, encrypted_value: bytes) -> str | None:
-        if len(encrypted_value) < 4 or encrypted_value[:3] != b"v10":
-            try:
-                return encrypted_value.decode("utf-8")
-            except UnicodeDecodeError:
-                return None
-
-        ciphertext = encrypted_value[3:]
-        try:
-            decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x20" * 16)).decryptor()
-            padded = decryptor.update(ciphertext) + decryptor.finalize()
-            unpadder = PKCS7(128).unpadder()
-            plain = unpadder.update(padded) + unpadder.finalize()
-            return plain.decode("utf-8")
-        except (ValueError, TypeError, UnicodeDecodeError):
-            return None
 
     def fetch(self) -> VibeStatus:
         import urllib.error

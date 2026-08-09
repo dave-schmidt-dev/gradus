@@ -21,6 +21,74 @@ enum CloudKitRuntimeConfiguration {
     }
 }
 
+enum SampleDataMode {
+    static let launchArgument = "--sample-data"
+    static let bannerText = "Sample data"
+    static let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
+
+    enum Error: Swift.Error {
+        case missingBundledData
+    }
+
+    /// This separate parameter makes the Release exclusion testable from the
+    /// Debug-built unit-test bundle. The production call below supplies the
+    /// compiler-selected value, so a Release artifact cannot enable the mode.
+    static func isEnabled(arguments: [String], isDebugBuild: Bool) -> Bool {
+        isDebugBuild && arguments.contains(launchArgument)
+    }
+
+    static func bundledProviders(bundle: Bundle = .main) throws -> [ProviderStatus] {
+        guard let url = bundle.url(forResource: "SampleData", withExtension: "json") else {
+            throw Error.missingBundledData
+        }
+        return try JSONDecoder().decode([ProviderStatus].self, from: Data(contentsOf: url))
+    }
+}
+
+/// The banner belongs to the screenshot-only launch path rather than Settings:
+/// screenshots need an unmistakable marker, while shipped users get no demo
+/// entry point at all.
+struct SampleDataBanner: View {
+    var body: some View {
+        Text(SampleDataMode.bannerText)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.yellow, in: Capsule())
+            .padding(.top, 8)
+            .accessibilityIdentifier("sample-data-banner")
+    }
+}
+
+struct SampleDataDashboard: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    let now: Date
+    let layout: DashboardLayout?
+    let density: DashboardDensity?
+
+    init(
+        viewModel: DashboardViewModel,
+        now: Date = Date(),
+        layout: DashboardLayout? = nil,
+        density: DashboardDensity? = nil
+    ) {
+        self.viewModel = viewModel
+        self.now = now
+        self.layout = layout
+        self.density = density
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                SampleDataBanner()
+                DashboardContent(viewModel: viewModel, now: now, layout: layout, density: density)
+            }
+        }
+    }
+}
+
 @main
 struct GradusiOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -28,6 +96,7 @@ struct GradusiOSApp: App {
     @Environment(\.scenePhase) private var scenePhase
     private let accountMonitor: AccountStatusMonitor?
     private let subscriptionManager: CKSubscriptionManager?
+    private let sampleDataModeEnabled: Bool
 
     private struct CloudKitDependencies {
         let fetcher: CloudFetcher?
@@ -48,6 +117,8 @@ struct GradusiOSApp: App {
 
         let cache = FileLocalCacheStore(directory: Self.cacheDirectory())
         Self.seedCacheForUITestsIfRequested(into: cache)
+        let sampleDataModeEnabled = Self.seedSampleDataIfRequested(into: cache)
+        self.sampleDataModeEnabled = sampleDataModeEnabled
 
         let dependencies = Self.makeCloudKitDependencies()
         let warningNotificationScheduler = LocalWarningNotificationScheduler()
@@ -64,7 +135,7 @@ struct GradusiOSApp: App {
         // PM-16: mid-session account-status reset (sign-out/switch-account
         // while the app is running), reusing the same actor Phase 2a wired
         // on the Mac side (moved to GradusKit in Phase 3 for exactly this).
-        if let accountSource = dependencies.accountSource {
+        if !sampleDataModeEnabled, let accountSource = dependencies.accountSource {
             self.accountMonitor = AccountStatusMonitor(source: accountSource) { status in
                 Task { @MainActor in viewModel.updateAccountStatus(status) }
             }
@@ -73,19 +144,30 @@ struct GradusiOSApp: App {
         }
 
         appDelegate.onRemoteNotification = {
+            guard !sampleDataModeEnabled else { return }
             await viewModel.handleRemoteNotification()
         }
 
         appDelegate.onAuthorizationResolved = {
+            guard !sampleDataModeEnabled else { return }
             Task { await viewModel.refreshNotificationAuthorization() }
         }
     }
 
     var body: some Scene {
         WindowGroup {
-            DashboardView(viewModel: viewModel)
+            Group {
+                if sampleDataModeEnabled {
+                    SampleDataDashboard(viewModel: viewModel, now: SampleDataMode.fixedNow)
+                } else {
+                    DashboardView(viewModel: viewModel)
+                }
+            }
                 .task {
-                    guard !Self.isUITesting else { return }
+                    guard Self.shouldRunLiveLifecycle(
+                        isUITesting: Self.isUITesting,
+                        sampleDataModeEnabled: sampleDataModeEnabled)
+                    else { return }
                     await viewModel.refreshNotificationAuthorization()
                     await accountMonitor?.start()
                     await viewModel.sync()
@@ -97,11 +179,19 @@ struct GradusiOSApp: App {
                     // exactly when the cached answer can have gone stale --
                     // and re-reading it on every foreground is what makes the
                     // Settings deep link above self-clearing.
-                    guard phase == .active, !Self.isUITesting else { return }
+                    guard phase == .active,
+                          Self.shouldRunLiveLifecycle(
+                              isUITesting: Self.isUITesting,
+                              sampleDataModeEnabled: sampleDataModeEnabled)
+                    else { return }
                     Task { await viewModel.refreshNotificationAuthorization() }
                 }
                 .onChange(of: viewModel.syncEnabled) { enabled in
-                    guard enabled, !Self.isUITesting else { return }
+                    guard enabled,
+                          Self.shouldRunLiveLifecycle(
+                              isUITesting: Self.isUITesting,
+                              sampleDataModeEnabled: sampleDataModeEnabled)
+                    else { return }
                     Task { await subscribeIfEnabled() }
                 }
                 .onChange(of: viewModel.notificationsEnabled) { enabled in
@@ -111,7 +201,11 @@ struct GradusiOSApp: App {
                     // is handled separately, success-gated, by
                     // `DashboardViewModel.setNotificationsEnabled(_:)`
                     // itself calling `unsubscribeFromWarnings()` directly.
-                    guard enabled, !Self.isUITesting else { return }
+                    guard enabled,
+                          Self.shouldRunLiveLifecycle(
+                              isUITesting: Self.isUITesting,
+                              sampleDataModeEnabled: sampleDataModeEnabled)
+                    else { return }
                     Task { await subscribeIfEnabled() }
                 }
         }
@@ -126,6 +220,7 @@ struct GradusiOSApp: App {
     /// drives the offline cache) is independent of the user-visible warning
     /// opt-out and still runs whenever sync is on.
     private func subscribeIfEnabled() async {
+        guard !sampleDataModeEnabled else { return }
         guard viewModel.syncEnabled, viewModel.accountStatus == .available else { return }
         guard let subscriptionManager else { return }
         try? await subscriptionManager.subscribeToZoneChanges()
@@ -166,6 +261,35 @@ struct GradusiOSApp: App {
             let seeded = try? JSONDecoder().decode([ProviderStatus].self, from: data)
         else { return }
         try? cache.saveCachedStatuses(seeded, syncedAt: Date())
+    }
+
+    /// Screenshot-only sample data is compiled out of Release behavior even
+    /// when a caller supplies the launch argument. There is deliberately no
+    /// user-facing toggle or Settings entry point.
+    static func seedSampleDataIfRequested(
+        into cache: FileLocalCacheStore,
+        arguments: [String] = CommandLine.arguments,
+        isDebugBuild: Bool = Self.isDebugBuild,
+        bundle: Bundle = .main
+    ) -> Bool {
+        guard SampleDataMode.isEnabled(arguments: arguments, isDebugBuild: isDebugBuild),
+              let providers = try? SampleDataMode.bundledProviders(bundle: bundle)
+        else { return false }
+
+        guard (try? cache.saveCachedStatuses(providers, syncedAt: SampleDataMode.fixedNow)) != nil else { return false }
+        return true
+    }
+
+    static func shouldRunLiveLifecycle(isUITesting: Bool, sampleDataModeEnabled: Bool) -> Bool {
+        !isUITesting && !sampleDataModeEnabled
+    }
+
+    private static var isDebugBuild: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
     }
 
     /// True whenever a UITest has seeded the offline cache (see above). Also

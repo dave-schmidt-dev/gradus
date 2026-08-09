@@ -1,10 +1,14 @@
 import CloudKit
 import GradusKit
+import Security
 import SwiftUI
 
 @main
 struct GradusMacApp: App {
+    @State private var isMenuBarInserted: Bool
+
     init() {
+        _isMenuBarInserted = State(initialValue: !Self.isTestHost())
         #if DEBUG
         if CommandLine.arguments.contains("--cloudkit-spike") {
             Task { await CloudKitSpike.run() }
@@ -20,42 +24,54 @@ struct GradusMacApp: App {
         }
         #endif
         // `GradusMacTests` is a hosted unit-test bundle, so every
-        // `xcodebuild test` run launches this app for real. Without this
-        // guard the test host started the live pipeline, which did two things
-        // no test should: it read the snapshot out of `~/Documents`, firing a
-        // TCC consent prompt at whoever was sitting at the machine (and,
-        // because the test host is Development-signed while the installed app
-        // is Developer ID, *overwriting* the single TCC grant those two share
-        // -- so the installed app then prompted on its next launch, forever
-        // alternating), and it published to CloudKit **Production**, writing 9
-        // real records during one 2026-08-05 test session. Tests must not
-        // mutate the live zone. Verified by `cloudd` log and by decoding the
-        // TCC `csreq` before and after a run; see `HISTORY.md`.
+        // `xcodebuild test` run launches this app for real. A Debug host must
+        // never start the live pipeline by default: doing so reads the local
+        // snapshot and can mutate
+        // CloudKit. A developer debugging the live pipeline must opt in with
+        // GRADUS_ENABLE_PIPELINE=1; distribution builds remain live by
+        // default. This is deliberately a fail-closed code boundary, not a
+        // convention in an Xcode scheme that an ad-hoc test command can miss.
         guard !Self.pipelineDisabled else { return }
         PublishPipeline.shared.start()
     }
 
     /// True when this launch must not run the live pipeline.
     ///
-    /// The primary signal is `GRADUS_DISABLE_PIPELINE`, set by the GradusMac
-    /// scheme's test action (see `project.yml`). It is deliberately explicit:
-    /// runtime test-detection does **not** work here. `App.init()` runs before
-    /// XCTest injects the test bundle, so `NSClassFromString("XCTestCase")` is
-    /// still nil at the only moment this is consulted — an earlier version of
-    /// this guard relied on exactly that and silently did nothing, which was
-    /// caught by deleting the persisted sync timestamp and watching a test run
-    /// rewrite it with a live `Date()`. `XCTestConfigurationFilePath` is kept
-    /// only as a secondary signal for launches outside the scheme.
+    /// A test can supply `GRADUS_DISABLE_PIPELINE=1`; that remains useful for
+    /// Release-like test artifacts. Debug builds also fail closed unless a
+    /// human explicitly sets `GRADUS_ENABLE_PIPELINE=1`. Runtime XCTest
+    /// detection alone is insufficient because `App.init()` runs before the
+    /// test bundle is injected. `XCTestConfigurationFilePath` remains a
+    /// secondary signal for test launches outside the scheme.
     static var pipelineDisabled: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["GRADUS_DISABLE_PIPELINE"] == "1"
-            || environment["XCTestConfigurationFilePath"] != nil
+        pipelineDisabled(environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func pipelineDisabled(environment: [String: String]) -> Bool {
+        if environment["GRADUS_DISABLE_PIPELINE"] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil {
+            return true
+        }
+
+        #if DEBUG
+        return environment["GRADUS_ENABLE_PIPELINE"] != "1"
+        #else
+        return false
+        #endif
+    }
+
+    /// Hosted unit tests launch this application binary. They must not create
+    /// a status item: the test host has its pipeline disabled and can outlive
+    /// `xcodebuild`, leaving the user a real-looking but permanently empty
+    /// Gradus menu instead of the signed app's live one.
+    static func isTestHost(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
     }
 
     var body: some Scene {
-        MenuBarExtra("Gradus", systemImage: "gauge") {
-            MenuContentView(viewModel: PublishPipeline.shared.viewModel)
-        }
+        MenuBarExtra("Gradus", systemImage: "gauge", isInserted: $isMenuBarInserted) {
+            MenuBarContentRoot(viewModel: PublishPipeline.shared.viewModel)
         // REQUIRED, not cosmetic. `MenuBarExtra` defaults to `.menu`, which
         // does not render SwiftUI: it translates the content into `NSMenu`
         // items, flattening every stack into one item per `Text`, dropping
@@ -67,6 +83,7 @@ struct GradusMacApp: App {
         // it: `ProviderListViewSnapshotTests` renders the subview through
         // `ImageRenderer`, where SwiftUI draws normally, so the baselines were
         // correct and green against a path the user never saw.
+        }
         .menuBarExtraStyle(.window)
 
         // No `Settings` scene here on purpose. Declaring one is the idiomatic
@@ -99,7 +116,23 @@ final class PublishPipeline {
     let viewModel = PublisherViewModel()
 
     static let defaultSnapshotPath = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Documents/Projects/gradus/.state/snapshot-v2.json")
+        .appendingPathComponent("Library/Application Support/Gradus/snapshot-v2.json")
+
+    private static func signedCloudKitEnvironment() -> String {
+        guard let task = SecTaskCreateFromSelf(nil),
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.developer.icloud-container-environment" as CFString,
+                nil
+            ) as? String,
+            !value.isEmpty
+        else {
+            // The Debug entitlement omits this optional key, which means the
+            // app is using CloudKit's Development environment.
+            return "Development"
+        }
+        return value
+    }
 
     /// `snapshotPath` is the publisher's single injected dependency onto the
     /// filesystem (INV-7) -- defaults to the real snapshot location but is
@@ -116,7 +149,22 @@ final class PublishPipeline {
         let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
         let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
         let database = CKDatabaseAdapter(database: container.privateCloudDatabase)
-        let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
+        guard let producerBuildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+        else {
+            GradusLog.app.error("could not resolve signed producer metadata; publishing disabled")
+            return
+        }
+        let cloudKitEnvironment = Self.signedCloudKitEnvironment()
+        let evidencePath = snapshotPath
+            .deletingLastPathComponent()
+            .appendingPathComponent("publish-evidence.json")
+        let coordinator = PublishCoordinator(
+            database: database,
+            zoneID: zoneID,
+            evidencePath: evidencePath,
+            producerBuildNumber: producerBuildNumber,
+            cloudKitEnvironment: cloudKitEnvironment
+        )
         self.coordinator = coordinator
 
         // CV-6: gate publishing on account status rather than let a

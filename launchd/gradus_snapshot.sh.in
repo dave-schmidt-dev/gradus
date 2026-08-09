@@ -5,4 +5,14 @@ REPO_ROOT="__GRADUS_REPO_ROOT__"
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 cd -- "$REPO_ROOT"
+
+BRIDGE="${GRADUS_CREDENTIAL_BRIDGE:-$HOME/Applications/GradusCredentialBridge.app/Contents/MacOS/GradusCredentialBridge}"
+if [[ -x "$BRIDGE" ]]; then
+    if ! "$BRIDGE" --cache-directory "$REPO_ROOT/.cache"; then
+        printf '%s\n' 'gradus_snapshot credential_bridge status=failed' >&2
+    fi
+else
+    printf '%s\n' 'gradus_snapshot credential_bridge status=missing' >&2
+fi
+
 exec "__GRADUS_PYTHON_PATH__" -m gradus --refresh-snapshot

@@ -43,10 +43,14 @@ private func erroredProvider() -> ProviderStatus {
         providerName: "cursor",
         providerDisplayName: "Cursor",
         ok: false,
-        errorMessage: "transient fetch failure",
-        windows: [],
+        errorMessage: "Claude session expired: sign in at claude.ai",
+        windows: [
+            ProviderWindow(
+                id: "five_hour", percentLeft: 62, resetISO: "2026-08-03T01:00:00-04:00",
+                windowHours: 5, paceDelta: -0.05),
+        ],
         data: [:],
-        observedAt: nil,
+        observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-600)),
         snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
         publishedAt: fixedNow
     )
@@ -73,5 +77,5 @@ private func erroredProvider() -> ProviderStatus {
     let view = ProviderDetailView(provider: erroredProvider(), now: fixedNow)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 200), traits: UITraitCollection(userInterfaceStyle: .light)))
+        as: .image(layout: .fixed(width: 390, height: 360), traits: UITraitCollection(userInterfaceStyle: .light)))
 }

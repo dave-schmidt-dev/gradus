@@ -145,7 +145,7 @@ private func makeProvider(
 
 // MARK: - device-local presentation sorts
 
-@Test func sortModesApplyWithinTheActivePartitionBeforeExhaustedProviders() {
+@Test func sortModesReorderTheCompleteActivePartitionAndKeepExhaustedProvidersLast() {
     let error = makeProvider(name: "error", ok: false, errorMessage: "offline")
     let urgent = makeProvider(
         name: "urgent",
@@ -168,10 +168,10 @@ private func makeProvider(
         "error", "urgent", "reset", "no-data", "normal", "aardvark-exhausted",
     ])
     #expect(rankProviders(providers, localThreshold: 20, sortOption: .resetSoonest).map(\.providerName) == [
-        "error", "reset", "urgent", "no-data", "normal", "aardvark-exhausted",
+        "reset", "urgent", "normal", "error", "no-data", "aardvark-exhausted",
     ])
     #expect(rankProviders(providers, localThreshold: 20, sortOption: .nameAZ).map(\.providerName) == [
-        "error", "reset", "urgent", "no-data", "normal", "aardvark-exhausted",
+        "error", "no-data", "normal", "reset", "urgent", "aardvark-exhausted",
     ])
 }
 
@@ -186,4 +186,16 @@ private func makeProvider(
     #expect(noWindow.windows.isEmpty)
     #expect(noWindow.windows.first?.percentLeft == nil)
     #expect(noWindow.windows.first?.resetISO == nil)
+}
+
+@Test func mostUrgentUsesVisibleSignalBeforeRemainingPercentage() {
+    let green = makeProvider(
+        name: "green",
+        windows: [makeWindow(percentLeft: 73, paceDelta: 0.10)])
+    let yellow = makeProvider(
+        name: "yellow",
+        windows: [makeWindow(percentLeft: 92, paceDelta: -0.05)])
+
+    #expect(rankProviders([green, yellow], localThreshold: 20, sortOption: .mostUrgent)
+        .map(\.providerName) == ["yellow", "green"])
 }

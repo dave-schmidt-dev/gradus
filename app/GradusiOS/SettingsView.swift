@@ -80,25 +80,27 @@ struct SettingsView: View {
             }
             .padding(.vertical, 4)
 
-            // Same section, same control type and the same device-local
-            // persistence as the sort picker above. Density belongs to this set
-            // rather than to a nav-bar control: it is a set-once preference,
-            // and `MobileNavBar` is a single title plus one trailing slot by
-            // design-system rule -- a slot `DashboardContent` already spends on
-            // `SyncStatusLine` and the settings button.
             VStack(alignment: .leading, spacing: 8) {
-                Text("Card density")
+                Text("Card size")
                     .font(.headline)
-                Picker("Card density", selection: $dashboardViewModel.density) {
-                    ForEach(DashboardDensity.allCases) { density in
-                        Text(density.title).tag(density)
-                    }
+                HStack {
+                    Text("Small")
+                    Spacer()
+                    Text(cardSizeLabel)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("Large")
                 }
-                .pickerStyle(.segmented)
-                // Says what changes and, just as importantly, what does not:
-                // every density shows all of a provider's windows (INV-12), so
-                // this is not a way to hide pools.
-                Text("Larger cards use bigger text and taller rows. Every density still shows all of a provider's windows.")
+                .font(.caption)
+                Slider(
+                    value: Binding(
+                        get: { Double(dashboardViewModel.cardColumnPreference) },
+                        set: { dashboardViewModel.cardColumnPreference = Int($0.rounded()) }),
+                    in: 0...Double(dashboardViewModel.availableCardColumns),
+                    step: 1
+                )
+                .accessibilityLabel("Card size")
+                Text("Auto uses the most columns that fit this device and text size. Every position keeps all provider windows visible.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -109,6 +111,13 @@ struct SettingsView: View {
                 label: "Show exhausted",
                 isOn: $dashboardViewModel.showExhausted)
         }
+    }
+
+    private var cardSizeLabel: String {
+        let selection = dashboardViewModel.cardColumnPreference
+        if selection == 0 { return "Auto" }
+        let clamped = min(max(selection, 1), dashboardViewModel.availableCardColumns)
+        return clamped == 1 ? "1 column" : "\(clamped) columns"
     }
 
     @ViewBuilder

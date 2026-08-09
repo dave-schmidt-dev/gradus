@@ -1,5 +1,216 @@
+import AppKit
 import GradusKit
 import SwiftUI
+
+/// The geometry used to keep the menu's provider section readable without
+/// exceeding the currently usable display area. These values intentionally
+/// live with the Mac menu instead of an iOS layout helper: this is a vertical,
+/// fixed-width problem, while the iOS helper solves horizontal card packing.
+enum MenuVerticalBudget {
+    static let minimumReferenceHeight: CGFloat = 520
+    /// Use the display's actual usable height before introducing a provider
+    /// scrollbar. The content is a status menu, not a fixed-height panel.
+    static let maximumReferenceHeight: CGFloat = 1_200
+    static let fallbackReferenceHeight: CGFloat = 680
+    static let verticalSafetyMargin: CGFloat = 24
+    /// Menu header, dividers, sync controls, action buttons, and outer padding.
+    static let fixedChromeHeight: CGFloat = MenuContentView.fixedChromeHeight
+    static let columnWidth: CGFloat = MenuContentView.columnWidth
+
+    static func referenceHeight(visibleScreenHeight: CGFloat?) -> CGFloat {
+        guard let visibleScreenHeight, visibleScreenHeight.isFinite else {
+            return fallbackReferenceHeight
+        }
+        return min(
+            maximumReferenceHeight,
+            max(minimumReferenceHeight, visibleScreenHeight - verticalSafetyMargin)
+        )
+    }
+
+    /// `visibleFrame` excludes the Dock and menu bar. Read it as the menu is
+    /// built rather than caching it: displays can be attached or rearranged
+    /// while Gradus is running.
+    static var runtimeReferenceHeight: CGFloat {
+        referenceHeight(visibleScreenHeight: NSScreen.main?.visibleFrame.height)
+    }
+
+    static func providerViewportHeight(for referenceHeight: CGFloat) -> CGFloat {
+        max(240, referenceHeight - fixedChromeHeight)
+    }
+
+    static func requiredRows(for providers: [ProviderEntry]) -> Int {
+        providers.reduce(0) { partial, provider in
+            // One provider heading plus every provider window. Task 9.2 turns
+            // that window count into rendered rows; the budget must already
+            // account for all of them so that change cannot reintroduce clipping.
+            partial + 1 + provider.windows.count
+        }
+    }
+
+    static func resolve(
+        providers: [ProviderEntry],
+        dynamicTypeSize: DynamicTypeSize,
+        referenceHeight: CGFloat
+    ) -> MenuDensityResolution {
+        let rung = MenuDensityRung.standard
+        let rows = requiredRows(for: providers)
+        let height = estimatedProviderHeight(for: providers, density: rung, dynamicTypeSize: dynamicTypeSize)
+            + fixedChromeHeight
+        return MenuDensityResolution(
+            rung: rung,
+            didFit: height <= referenceHeight,
+            requiredRows: rows,
+            intrinsicHeight: height,
+            referenceHeight: referenceHeight
+        )
+    }
+
+    /// Mirrors the single-column menu layout below. Every bucket has persistent
+    /// reset and pace metadata, regardless of its severity color.
+    private static func estimatedProviderHeight(
+        for providers: [ProviderEntry],
+        density: MenuDensityRung,
+        dynamicTypeSize: DynamicTypeSize
+    ) -> CGFloat {
+        let scale = density.dynamicTypeScale(dynamicTypeSize)
+        let active = providers.filter { !$0.rankingIsDepleted }
+        let exhausted = providers.filter(\.rankingIsDepleted)
+        let activeHeight = columnHeight(active, density: density)
+        let exhaustedHeight = exhausted.isEmpty
+            ? 0
+            : density.exhaustionHeadingHeight + density.providerSpacing
+                + columnHeight(exhausted, density: density)
+        let sectionSpacing: CGFloat = active.isEmpty || exhausted.isEmpty ? 0 : density.providerSpacing
+        return (activeHeight + sectionSpacing + exhaustedHeight) * scale
+    }
+
+    private static func columnHeight(_ providers: [ProviderEntry], density: MenuDensityRung) -> CGFloat {
+        let providerHeights = providers.map { providerHeight($0, density: density) }
+        let spacing = CGFloat(max(0, providers.count - 1)) * density.providerSpacing
+        return providerHeights.reduce(0, +) + spacing
+    }
+
+    private static func providerHeight(_ provider: ProviderEntry, density: MenuDensityRung) -> CGFloat {
+        if provider.ok, provider.windows.count <= 1 {
+            return density.singleWindowHeight
+        }
+        let windowsHeight = CGFloat(provider.windows.count) * density.windowHeight
+        let errorHeight = provider.ok ? 0 : density.metadataHeight
+        return density.providerHeaderHeight + windowsHeight + errorHeight
+    }
+}
+
+/// There is deliberately one presentation density. A constrained display can
+/// scroll, but it must not reduce type or bars beneath usable dimensions.
+enum MenuDensityRung: Equatable {
+    case standard
+
+    var rowSpacing: CGFloat { MenuContentView.providerRowSpacing }
+    var barHeight: CGFloat { MenuContentView.providerBarHeight }
+    var providerSpacing: CGFloat { MenuContentView.providerGroupSpacing }
+    var metadataFontKind: MenuMetadataFont { MenuContentView.providerMetadataFont }
+
+    var metadataFont: Font {
+        switch metadataFontKind {
+        case .caption: .caption
+        }
+    }
+
+    var providerHeaderHeight: CGFloat { 20 }
+    var singleWindowHeight: CGFloat { 48 }
+    var windowHeight: CGFloat { 48 }
+    var metadataHeight: CGFloat { 20 }
+    var exhaustionHeadingHeight: CGFloat { 20 }
+
+    func dynamicTypeScale(_ size: DynamicTypeSize) -> CGFloat {
+        switch size {
+        case .xSmall: 0.88
+        case .small: 0.94
+        case .medium: 1
+        case .large: 1.08
+        case .xLarge: 1.16
+        case .xxLarge: 1.24
+        case .xxxLarge: 1.32
+        case .accessibility1: 1.42
+        case .accessibility2: 1.54
+        case .accessibility3: 1.66
+        case .accessibility4: 1.78
+        case .accessibility5: 1.9
+        @unknown default: 1.9
+        }
+    }
+}
+
+enum MenuMetadataFont: Equatable {
+    case caption
+}
+
+struct MenuDensityResolution: Equatable {
+    let rung: MenuDensityRung
+    let didFit: Bool
+    let requiredRows: Int
+    let intrinsicHeight: CGFloat
+    let referenceHeight: CGFloat
+
+    var scrolls: Bool { !didFit }
+}
+
+/// Applies the density decision before the provider content enters the menu.
+/// The false arm deliberately has a fixed viewport: a `ScrollView` allowed to
+/// take its content height would still make the popover overflow.
+struct MenuProviderListView: View {
+    let providers: [ProviderEntry]
+    let now: Date
+    let sortOption: ProviderSortOption
+    let localThreshold: Double
+    let availableMenuHeight: CGFloat?
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    init(
+        providers: [ProviderEntry],
+        now: Date = Date(),
+        sortOption: ProviderSortOption = .mostUrgent,
+        localThreshold: Double = PublisherViewModel.defaultLocalWarningThresholdPercent,
+        availableMenuHeight: CGFloat? = nil
+    ) {
+        self.providers = providers
+        self.now = now
+        self.sortOption = sortOption
+        self.localThreshold = localThreshold
+        self.availableMenuHeight = availableMenuHeight
+    }
+
+    private var resolution: MenuDensityResolution {
+        MenuVerticalBudget.resolve(
+            providers: providers,
+            dynamicTypeSize: dynamicTypeSize,
+            referenceHeight: availableMenuHeight ?? MenuVerticalBudget.runtimeReferenceHeight
+        )
+    }
+
+    var body: some View {
+        if resolution.didFit {
+            providerList
+        } else {
+            ScrollView {
+                providerList.padding(.bottom, 1)
+            }
+            .frame(height: MenuVerticalBudget.providerViewportHeight(for: resolution.referenceHeight))
+            .accessibilityIdentifier("menu-provider-list-scroll")
+        }
+    }
+
+    private var providerList: some View {
+        ProviderListView(
+            providers: providers,
+            now: now,
+            sortOption: sortOption,
+            localThreshold: localThreshold,
+            density: resolution.rung
+        )
+    }
+}
 
 /// The MenuBarExtra's dropdown content: one row per provider plus a settings
 /// section (sync toggle, launch-at-login, quit). Renders entirely from
@@ -17,6 +228,24 @@ import SwiftUI
 /// never once been visible, because `GradusMacApp` declared the scene without
 /// a style. See that file for the regression note.
 struct MenuContentView: View {
+    static let columnWidth: CGFloat = 340
+    static let fixedChromeHeight: CGFloat = 152
+    static let providerRowSpacing: CGFloat = 5
+    static let providerBarHeight: CGFloat = 8
+    static let providerGroupSpacing: CGFloat = 10
+    static let providerMetadataFont: MenuMetadataFont = .caption
+    /// Every capacity bar shares the menu's left rail. Window labels carry
+    /// hierarchy through their text, not by shifting their bar geometry.
+    static let providerBarLeadingInset: CGFloat = 0
+
+    /// A provider remains the heading for a single-window card. Window IDs
+    /// describe quota mechanics (for example `premium` or `billing_cycle`),
+    /// not subscription plans, so they belong in the reset-and-pace context
+    /// rather than being promoted into the provider name.
+    static func compactProviderLabel(providerName: String) -> String {
+        providerName
+    }
+
     @ObservedObject var viewModel: PublisherViewModel
 
     var body: some View {
@@ -26,11 +255,12 @@ struct MenuContentView: View {
                 localThreshold: viewModel.localWarningThresholdPercent
             )
 
-            ProviderListView(
+            MenuProviderListView(
                 providers: visibleProviders,
                 sortOption: viewModel.providerSortOption,
                 localThreshold: viewModel.localWarningThresholdPercent
             )
+            .id(viewModel.presentationRevision)
 
             Divider()
 
@@ -54,7 +284,7 @@ struct MenuContentView: View {
             }
         }
         .padding(12)
-        .frame(width: 280)
+        .frame(width: MenuVerticalBudget.columnWidth)
     }
 
     /// Applied here rather than in `PublisherViewModel.providers`, which is the
@@ -116,6 +346,21 @@ struct MenuContentView: View {
     }
 }
 
+/// The live `MenuBarExtra` root owns observation of the process-lifetime
+/// model. `MenuContentView` remains an observed child because tests construct
+/// it directly, outside a mounted SwiftUI hierarchy.
+struct MenuBarContentRoot: View {
+    @StateObject private var viewModel: PublisherViewModel
+
+    init(viewModel: PublisherViewModel) {
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
+
+    var body: some View {
+        MenuContentView(viewModel: viewModel)
+    }
+}
+
 /// Title plus an at-a-glance count of providers needing attention, so the
 /// answer to "is anything wrong" is available without reading any row.
 struct MenuHeader: View {
@@ -163,64 +408,6 @@ enum ProviderTriage {
         provider.windows.min { $0.percentLeft < $1.percentLeft }
     }
 
-    /// The window the row should actually *show*.
-    ///
-    /// `needsAttention` answers "is something wrong here"; this answers "then
-    /// what do we put on screen", and the two have to agree or the row
-    /// contradicts itself. They didn't. The 2026-08-06 fix moved attention onto
-    /// any-window but left display on worst-by-percentage, so a provider whose
-    /// 5%-left window was on pace and whose 80%-left window was burning drew a
-    /// *green* bar tinted from the fine window with a warning line underneath
-    /// it. Half an aggregation fix reads worse than none: the alert was right
-    /// and everything explaining it pointed at the wrong window.
-    ///
-    /// Rule: among the windows that warn, show the most severe, breaking ties
-    /// by depletion. Ties matter — two red windows are common, one red by pace
-    /// and one by depletion — and the tie-break keeps the older
-    /// worst-by-percentage answer for them, so this changes what the row shows
-    /// only when the severity ordering actually disagrees with the percentage
-    /// ordering.
-    ///
-    /// Falls back to `worstWindow` when nothing warns: there is no triggering
-    /// window to show, so the calm row keeps rendering exactly as it did.
-    static func displayWindow(_ provider: ProviderEntry) -> ProviderWindow? {
-        let warning = provider.windows.filter(windowWarns)
-        guard !warning.isEmpty else { return worstWindow(provider) }
-        // Split across three statements with the tuple type spelled out. As a
-        // single `map { … }.min { … }?.window` chain this failed to compile
-        // with "unable to type-check this expression in reasonable time" —
-        // inference across an unannotated tuple array plus a ternary inside the
-        // comparator is enough to blow the solver's budget. Keep it expanded.
-        let ranked: [(window: ProviderWindow, rank: Int)] = warning.map {
-            (window: $0, rank: attentionRank(signalLevel(for: $0)))
-        }
-        let mostUrgent = ranked.min { lhs, rhs in
-            if lhs.rank != rhs.rank { return lhs.rank > rhs.rank }
-            return lhs.window.percentLeft < rhs.window.percentLeft
-        }
-        return mostUrgent?.window
-    }
-
-    /// How loudly a level asks to be looked at, for ordering only.
-    ///
-    /// `SignalLevel` is deliberately not `Comparable`: conforming it in
-    /// GradusKit would force a public answer for where `.unknown` sorts, which
-    /// no other caller needs and which has no obviously right value. Ranking
-    /// locally keeps that decision in the one place that asks the question.
-    ///
-    /// Levels outside the attention steps share rank 0 rather than being
-    /// excluded, because the filter above uses `windowWarns` — the shared
-    /// predicate — not this function. If GradusKit ever promotes another level
-    /// to `needsAttention`, it starts appearing here ordered by percentage
-    /// instead of silently vanishing from the row.
-    private static func attentionRank(_ level: SignalLevel) -> Int {
-        switch level {
-        case .red: return 2
-        case .orange: return 1
-        case .green, .yellow, .unknown: return 0
-        }
-    }
-
     /// Attention means the shared ramp classified *any* window orange or red.
     /// Deliberately delegates to `signalLevel` rather than testing a
     /// percentage: the ramp classifies by *pace*, so a window at 1% five
@@ -247,29 +434,31 @@ enum ProviderTriage {
 // `rankedPartition` in `Shared/ProviderRanking.swift`; this type keeps only
 // the Mac-specific pace-ramp classification that feeds it.
 
-/// The provider rows, split out from `MenuContentView` so it can be
-/// snapshot-tested standalone. `Toggle` and the native `ProgressView` are
-/// AppKit-representable-backed and don't rasterize under `ImageRenderer`
-/// without a live window (they render as a placeholder glyph offscreen);
-/// this subview sticks to Text and plain SwiftUI shapes, which do render
-/// correctly. The interactive controls stay in `MenuContentView` for the
-/// real app and are covered by the plan's manual status-item check instead.
+/// The provider rows, split out from `MenuContentView` so they can be
+/// snapshot-tested standalone. Multi-window providers use a provider heading
+/// and labeled bucket rows; singleton providers compose both names in one
+/// compact header. The menu stays a single ordered column so the visual order
+/// always matches the selected sort without reserving empty grid cells.
+
 struct ProviderListView: View {
     let providers: [ProviderEntry]
     let now: Date
     let sortOption: ProviderSortOption
     let localThreshold: Double
+    let density: MenuDensityRung
 
     init(
         providers: [ProviderEntry],
         now: Date = Date(),
         sortOption: ProviderSortOption = .mostUrgent,
-        localThreshold: Double = PublisherViewModel.defaultLocalWarningThresholdPercent
+        localThreshold: Double = PublisherViewModel.defaultLocalWarningThresholdPercent,
+        density: MenuDensityRung = .standard
     ) {
         self.providers = providers
         self.now = now
         self.sortOption = sortOption
         self.localThreshold = localThreshold
+        self.density = density
     }
 
     private var ranked: RankedProviders<ProviderEntry> {
@@ -283,145 +472,186 @@ struct ProviderListView: View {
                 .foregroundStyle(.secondary)
         } else {
             let ranked = ranked
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(ranked.active, id: \.name) { provider in
-                    ProviderRow(provider: provider, now: now)
-                }
+            VStack(alignment: .leading, spacing: density.providerSpacing) {
+                activeProviders(ranked.active)
                 if !ranked.exhausted.isEmpty {
-                    ExhaustedProviderSection(providers: ranked.exhausted, now: now)
+                    ExhaustedProviderSection(providers: ranked.exhausted, now: now, density: density)
                 }
             }
         }
     }
+
+    @ViewBuilder
+    private func activeProviders(_ providers: [ProviderEntry]) -> some View {
+        ForEach(providers, id: \.name) { provider in
+            ProviderRow(provider: provider, now: now, density: density)
+        }
+    }
 }
 
-/// Providers with nothing left, in the one place they belong: the bottom, in
-/// the least amount of space that still answers the only question a spent
-/// provider raises -- when does it come back.
-///
-/// A depleted provider is the *least* actionable row in the menu: there is no
-/// pace to correct and no budget to spend. Rendering it with the same name +
-/// percentage + bar + metadata as an active provider spends four lines saying
-/// "0%" and pushes the rows that can still be acted on off the top. Name and
-/// reset time, one line each, is the whole payload.
+/// Providers with nothing left stay at the bottom, but retain the same provider
+/// header and per-window rows as active providers. The menu's information
+/// contract is the same for every provider: one header plus every window.
 private struct ExhaustedProviderSection: View {
     let providers: [ProviderEntry]
     let now: Date
+    let density: MenuDensityRung
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: density.rowSpacing + 1) {
             Divider()
             Text("Exhausted")
-                .font(.caption2.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
             ForEach(providers, id: \.name) { provider in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(provider.name)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 4)
-                    if let reset = earliestResetLabel(provider.windows, now: now) {
-                        Text(reset).monospacedDigit()
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("exhausted-provider-\(provider.name)")
+                ProviderRow(provider: provider, now: now, density: density)
             }
         }
     }
 }
 
-/// One provider. Healthy rows are name + percentage + bar; only rows needing
-/// attention pay for the third metadata line.
-///
-/// The asymmetry is the point. Eight providers at four lines each produced a
-/// menu taller than the screen in which every line was styled identically, so
-/// the one number that mattered (a provider at 0%) looked exactly like the
-/// seven that didn't. Reset time and pace answer "when" and "how fast", which
-/// are only worth screen space once "how much is left" is alarming.
+/// One provider. Every bucket renders the same label, bar, reset, and pace
+/// structure. Severity changes color, never whether a bucket explains itself.
 private struct ProviderRow: View {
     /// Declared here rather than inline because the metadata line below has to
     /// clear the expected-remaining marker, which is deliberately taller than
     /// the bar so it reads as a tick rather than a segment. Without reserving
     /// that overhang the "resets …" text visually touches the marker.
-    private static let barHeight: CGFloat = 8
-
     let provider: ProviderEntry
     let now: Date
+    let density: MenuDensityRung
 
-    /// One window feeds the tint, the bar, the marker and the metadata line, so
-    /// the row can only ever describe a single window — which is why *which*
-    /// one it picks is the whole of row 36.
-    private var displayWindow: ProviderWindow? { ProviderTriage.displayWindow(provider) }
-
+    @ViewBuilder
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if !provider.ok {
-                header(value: "error", tint: SignalColor.forLevel(.red))
-                Text(provider.error ?? "Provider probe failed")
-                    .font(.caption2)
-                    .foregroundStyle(SignalColor.forLevel(.red))
-                    .lineLimit(2)
-            } else if let window = displayWindow {
-                let tint = SignalColor.forWindow(window)
-                header(value: percentDisplay(window.percentLeft), tint: tint)
-                ProgressBar(
-                    fraction: max(0, min(100, window.percentLeft)) / 100,
-                    markerFraction: ProgressBar.expectedRemainingMarkerFraction(
-                        percentLeft: window.percentLeft,
-                        paceDelta: window.paceDelta
-                    ),
-                    tint: tint
-                )
-                .frame(height: Self.barHeight)
-                if ProviderTriage.needsAttention(provider) {
-                    metadata(for: window)
-                        .padding(.top, ProgressBar.markerOverhang(barHeight: Self.barHeight))
-                }
-            } else {
-                header(value: "—", tint: .secondary)
-                Text("no window data")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+        if provider.ok, provider.windows.count == 1 {
+            compactWindow(provider.windows[0])
+        } else {
+            expandedWindows
         }
     }
 
-    /// Name left, value right. The percentage carries the ramp color and the
-    /// heavier weight because it is the number the row exists to communicate;
-    /// monospaced digits keep the column aligned down the whole list.
-    private func header(value: String, tint: Color) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(provider.name)
-                .font(.subheadline)
+    private func compactWindow(_ window: ProviderWindow) -> some View {
+        VStack(alignment: .leading, spacing: density.rowSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(MenuContentView.compactProviderLabel(providerName: provider.name))
+                .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer(minLength: 4)
-            Text(value)
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .foregroundStyle(tint)
+                Spacer(minLength: 4)
+                Text(percentDisplay(window.percentLeft))
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(SignalColor.forWindow(window))
+            }
+
+            ProgressBar(
+                fraction: max(0, min(100, window.percentLeft)) / 100,
+                markerFraction: ProgressBar.expectedRemainingMarkerFraction(
+                    percentLeft: window.percentLeft,
+                    paceDelta: window.paceDelta
+                ),
+                tint: SignalColor.forWindow(window)
+            )
+            .frame(height: density.barHeight)
+
+            MenuWindowMetadata(window: window, now: now, density: density)
         }
     }
 
-    private func metadata(for window: ProviderWindow) -> some View {
+    private var expandedWindows: some View {
+        VStack(alignment: .leading, spacing: density.rowSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(provider.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                if provider.windows.isEmpty {
+                    Text("—")
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(provider.ok ? .secondary : SignalColor.forLevel(.red))
+                }
+            }
+
+            if !provider.ok {
+                Text(provider.error ?? "Provider probe failed")
+                    .font(.caption)
+                    .foregroundStyle(SignalColor.forLevel(.red))
+                    .lineLimit(2)
+            }
+
+            if provider.windows.isEmpty, provider.ok {
+                Text("no window data")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(provider.windows, id: \.id) { window in
+                    MenuWindowRow(provider: provider, window: window, now: now, density: density)
+                }
+            }
+        }
+    }
+
+}
+
+private struct MenuWindowRow: View {
+    let provider: ProviderEntry
+    let window: ProviderWindow
+    let now: Date
+    let density: MenuDensityRung
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: density.rowSpacing) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(ProviderWindowLabel.label(for: window.id))
+                    .font(density.metadataFont.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                Text(percentDisplay(window.percentLeft))
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .foregroundStyle(SignalColor.forWindow(window))
+            }
+
+            ProgressBar(
+                fraction: max(0, min(100, window.percentLeft)) / 100,
+                markerFraction: ProgressBar.expectedRemainingMarkerFraction(
+                    percentLeft: window.percentLeft,
+                    paceDelta: window.paceDelta
+                ),
+                tint: SignalColor.forWindow(window)
+            )
+            .frame(height: density.barHeight)
+
+            MenuWindowMetadata(window: window, now: now, density: density)
+        }
+        .padding(.leading, MenuContentView.providerBarLeadingInset)
+    }
+
+}
+
+struct MenuWindowMetadata: View {
+    let window: ProviderWindow
+    let now: Date
+    let density: MenuDensityRung
+
+    var body: some View {
         HStack(spacing: 8) {
-            if let resetISO = window.resetISO {
-                Text("resets \(friendlyResetDate(resetISO, now: now) ?? resetISO)")
-            }
+            Text(Self.resetLabel(for: window, now: now))
             Spacer(minLength: 4)
-            if let pace = paceLabel(window.paceDelta) {
-                Text(pace)
-            }
+            Text(Self.paceLabel(for: window))
         }
-        .font(.caption2)
+        .font(density.metadataFont)
         .foregroundStyle(.secondary)
+        .padding(.top, ProgressBar.markerOverhang(barHeight: density.barHeight))
     }
 
-    /// "21% behind" reads as a state; "pace -21%" asks the reader to work out
-    /// what the sign means. Same number, no decoding step.
-    private func paceLabel(_ paceDelta: Double?) -> String? {
-        guard let paceDelta, paceDelta.isFinite else { return nil }
+    static func resetLabel(for window: ProviderWindow, now: Date) -> String {
+        guard let resetISO = window.resetISO else { return "reset unavailable" }
+        return "resets \(friendlyResetDate(resetISO, now: now) ?? resetISO)"
+    }
+
+    static func paceLabel(for window: ProviderWindow) -> String {
+        guard let paceDelta = window.paceDelta, paceDelta.isFinite else { return "pace unavailable" }
         let points = abs(paceDelta * 100).rounded()
         if points < 1 { return "on pace" }
         return "\(Int(points))% \(paceDelta < 0 ? "behind" : "ahead")"
@@ -434,19 +664,15 @@ private struct ProviderRow: View {
 /// and under the snapshot gate.
 struct ProgressBar: View {
     private static let markerWidth: CGFloat = 3
-    private static let markerHeight: CGFloat = 14
 
     let fraction: Double
     let markerFraction: Double?
     let tint: Color
 
-    /// How far the marker sticks out past each edge of a bar of the given
-    /// height. Callers stacking content directly under a bar need this as
-    /// padding, otherwise the marker collides with whatever follows -- the
-    /// marker is drawn from the bar's center line and is intentionally taller
-    /// than the bar itself.
+    /// The marker stays inside the bar. A marker taller than its bar made rows
+    /// with a pace reference appear visually thicker than rows without one.
     static func markerOverhang(barHeight: CGFloat) -> CGFloat {
-        max(0, (markerHeight - barHeight) / 2)
+        0
     }
 
     /// The expected-remaining marker uses the shared kit calculation so the
@@ -467,7 +693,7 @@ struct ProgressBar: View {
                 if let markerFraction {
                     Rectangle()
                         .fill(SignalColor.paceMarker)
-                        .frame(width: Self.markerWidth, height: Self.markerHeight)
+                        .frame(width: Self.markerWidth, height: geometry.size.height)
                         .offset(
                             x: markerOffset(
                                 fraction: markerFraction,

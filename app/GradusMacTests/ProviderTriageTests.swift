@@ -16,7 +16,8 @@ struct ProviderTriageTests {
         _ name: String,
         ok: Bool = true,
         percentLeft: Double? = nil,
-        paceDelta: Double? = nil
+        paceDelta: Double? = nil,
+        resetISO: String? = nil
     ) -> ProviderEntry {
         ProviderEntry(
             name: name,
@@ -24,7 +25,7 @@ struct ProviderTriageTests {
             error: ok ? nil : "probe failed",
             windows: percentLeft.map {
                 [ProviderWindow(
-                    id: "5h", percentLeft: $0, resetISO: nil, windowHours: 5, paceDelta: paceDelta
+                    id: "5h", percentLeft: $0, resetISO: resetISO, windowHours: 5, paceDelta: paceDelta
                 )]
             } ?? [],
             data: [:],
@@ -126,6 +127,33 @@ struct ProviderTriageTests {
         ]) == ["Red", "Orange", "Yellow", "Green"])
     }
 
+    @Test func mostUrgentUsesVisibleSignalBeforeRemainingPercentage() {
+        #expect(ranked([
+            provider("Green", percentLeft: 73, paceDelta: 0.10),
+            provider("Yellow", percentLeft: 92, paceDelta: -0.05),
+        ]) == ["Yellow", "Green"])
+    }
+
+    @Test func alternateSortsOverrideUrgencyTiersWithinActiveProviders() {
+        let input = [
+            provider(
+                "Zulu urgent", percentLeft: 10, paceDelta: -0.40,
+                resetISO: "2026-08-10T12:00:00Z"
+            ),
+            provider(
+                "Alpha calm", percentLeft: 90, paceDelta: 0.10,
+                resetISO: "2026-08-11T12:00:00Z"
+            ),
+            provider(
+                "Mike reset", percentLeft: 80, paceDelta: 0.10,
+                resetISO: "2026-08-09T12:00:00Z"
+            ),
+        ]
+
+        #expect(ranked(input, .nameAZ) == ["Alpha calm", "Mike reset", "Zulu urgent"])
+        #expect(ranked(input, .resetSoonest) == ["Mike reset", "Zulu urgent", "Alpha calm"])
+    }
+
     /// Equal-severity rows must not reshuffle between refreshes -- a menu
     /// whose order changes while you read it is worse than an arbitrary but
     /// fixed one.
@@ -221,87 +249,4 @@ struct ProviderTriageTests {
         #expect(ProviderTriage.worstWindow(entry)?.id == "weekly")
     }
 
-    // MARK: - displayWindow
-
-    /// Multi-window fixtures for the display rule. Pace values here are all
-    /// physically reachable — `paceDelta` is `fraction_left` minus
-    /// `fraction_of_window_remaining`, so e.g. 50% left at -0.40 means 90% of
-    /// the window still to run and half the budget already gone. An impossible
-    /// pace would still classify and still pass, while describing a snapshot
-    /// the app can never produce.
-    private func windows(
-        _ specs: [(id: String, percentLeft: Double, paceDelta: Double?)]
-    ) -> ProviderEntry {
-        ProviderEntry(
-            name: "Multi",
-            ok: true,
-            error: nil,
-            windows: specs.map {
-                ProviderWindow(
-                    id: $0.id, percentLeft: $0.percentLeft, resetISO: nil,
-                    windowHours: 5, paceDelta: $0.paceDelta
-                )
-            },
-            data: [:],
-            observedAt: nil
-        )
-    }
-
-    /// Row 36. The same fixture as `attentionAsksAboutEveryWindowNotJustTheWorst`,
-    /// asking the follow-up question: having decided this provider warrants
-    /// attention, which window does the row put on screen? Before this rule it
-    /// drew `five_hour` — 5% left, on pace, green — so the menu alerted and then
-    /// showed a healthy window with "2% ahead" underneath it.
-    @Test func displayWindowShowsTheWindowThatTriggeredAttention() {
-        let entry = windows([
-            ("five_hour", 5, 0.02),   // green: nearly spent, but on pace
-            ("weekly", 70, -0.28),    // red: plenty left, burning far too fast
-        ])
-
-        #expect(ProviderTriage.worstWindow(entry)?.id == "five_hour")
-        #expect(ProviderTriage.displayWindow(entry)?.id == "weekly")
-    }
-
-    /// Severity outranks depletion. This is the only case where the new rule
-    /// and the old one disagree on a provider whose windows all warn, so it is
-    /// the assertion that actually pins the ordering.
-    @Test func displayWindowPrefersSeverityOverDepletion() {
-        let entry = windows([
-            ("low_but_orange", 10, -0.15),  // orange, and the worst by percentage
-            ("high_but_red", 50, -0.40),    // red
-        ])
-
-        #expect(ProviderTriage.worstWindow(entry)?.id == "low_but_orange")
-        #expect(ProviderTriage.displayWindow(entry)?.id == "high_but_red")
-    }
-
-    /// Within one severity step the rule falls back to depletion, which is what
-    /// keeps this change small: two red windows are the common multi-window
-    /// warning shape, and for them the row shows exactly what it always did.
-    @Test func displayWindowBreaksSeverityTiesByDepletion() {
-        let entry = windows([
-            ("red_higher", 30, -0.30),
-            ("red_lower", 5, -0.30),
-        ])
-
-        #expect(ProviderTriage.worstWindow(entry)?.id == "red_lower")
-        #expect(ProviderTriage.displayWindow(entry)?.id == "red_lower")
-    }
-
-    /// Nothing warns, so there is no triggering window and the calm row is
-    /// unchanged. Without this the rule could quietly start returning nil and
-    /// collapse every healthy row to the "no window data" branch.
-    @Test func displayWindowFallsBackToWorstWhenNothingWarns() {
-        let entry = windows([
-            ("healthy_high", 80, 0.30),
-            ("healthy_low", 45, 0.05),
-        ])
-
-        #expect(ProviderTriage.worstWindow(entry)?.id == "healthy_low")
-        #expect(ProviderTriage.displayWindow(entry)?.id == "healthy_low")
-    }
-
-    @Test func displayWindowIsNilOnlyWhenThereAreNoWindows() {
-        #expect(ProviderTriage.displayWindow(provider("Empty")) == nil)
-    }
 }

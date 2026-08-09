@@ -758,7 +758,12 @@ def _health_sample_reason(
     for entry in selected:
         assert isinstance(entry, Mapping)
         if entry.get("ok") is not True:
-            return updated_at, "provider not healthy"
+            # Names come from the fixed required-provider set rather than the
+            # provider's error text: this line is written to a non-private
+            # launchd log and must remain diagnostic without leaking details.
+            name = entry.get("name")
+            assert isinstance(name, str)
+            return updated_at, f"provider {name} not healthy"
         observed_at = _parse_health_timestamp(entry.get("observed_at"))
         if observed_at is None:
             return updated_at, "provider observation unavailable"
@@ -815,7 +820,8 @@ def _verify_refresh_health(
             fresh_samples.append(updated_at)
             if (
                 len(fresh_samples) >= 3
-                and (fresh_samples[-1] - fresh_samples[0]).total_seconds() > STALE_THRESHOLD_SECONDS
+                and (fresh_samples[-1] - fresh_samples[0]).total_seconds()
+                >= STALE_THRESHOLD_SECONDS
             ):
                 status("passed")
                 return True

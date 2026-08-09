@@ -12,10 +12,9 @@ import Testing
 /// evaluated once, before any test code exists, so nothing else can observe
 /// whether it actually fired.
 ///
-/// Without it the test host publishes to CloudKit **Production** and reads the
-/// snapshot from `~/Documents`, firing a TCC prompt at whoever is at the
-/// machine. An earlier version sniffed for XCTest at runtime and silently
-/// never fired, because `App.init()` runs before the test bundle is injected.
+/// Debug builds additionally fail closed unless a human explicitly opts the
+/// live pipeline in. That protects ad-hoc `xcodebuild` invocations that do not
+/// inherit the scheme's environment variables.
 @Suite("Pipeline guard")
 struct PipelineGuardTests {
     @Test func theTestEnvironmentDisablesTheLivePipeline() {
@@ -38,5 +37,35 @@ struct PipelineGuardTests {
             environment["GRADUS_DISABLE_PIPELINE"] == "1",
             "expected the scheme's explicit opt-out; found: \(environment["GRADUS_DISABLE_PIPELINE"] ?? "nil")"
         )
+    }
+
+    @Test func debugBuildCannotReadTheSnapshotWithoutAnExplicitLivePipelineOptIn() {
+        #if DEBUG
+        #expect(GradusMacApp.pipelineDisabled(environment: [:]))
+        #expect(!GradusMacApp.pipelineDisabled(environment: ["GRADUS_ENABLE_PIPELINE": "1"]))
+        #endif
+    }
+
+    @Test func aTestOptOutWinsOverAnAccidentalDebugOptIn() {
+        #expect(
+            GradusMacApp.pipelineDisabled(environment: [
+                "GRADUS_ENABLE_PIPELINE": "1",
+                "GRADUS_DISABLE_PIPELINE": "1",
+            ])
+        )
+    }
+
+    @Test func testHostNeverCreatesTheStatusMenu() {
+        #expect(GradusMacApp.isTestHost(environment: ["XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration"]))
+        #expect(GradusMacApp.isTestHost(environment: ["XCTestBundlePath": "/tmp/GradusMacTests.xctest"]))
+        #expect(!GradusMacApp.isTestHost(environment: [:]))
+    }
+
+    @Test func installedAppReadsTheApplicationSupportSnapshotMirror() {
+        #expect(
+            PublishPipeline.defaultSnapshotPath.path ==
+                NSHomeDirectory() + "/Library/Application Support/Gradus/snapshot-v2.json"
+        )
+        #expect(!PublishPipeline.defaultSnapshotPath.path.contains("/Documents/"))
     }
 }

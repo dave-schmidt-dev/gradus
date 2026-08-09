@@ -16,6 +16,7 @@ build/
 .ai_monitor.json
 .cache/
 .state/
+.state/publish-evidence.json
 .aider.chat.history.md
 .github/
 .superpowers/
