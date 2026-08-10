@@ -142,10 +142,11 @@ create_candidate_workspace() {
 
 failure_hook() {
   local point="$1"
-  [[ "${GRADUS_INJECT_FAILURE:-}" == "$point" ]] && {
+  if [[ "${GRADUS_INJECT_FAILURE:-}" == "$point" ]]; then
     echo "FAIL: injected failure after $point" >&2
     return 97
-  }
+  fi
+  return 0
 }
 
 assert_candidate_not_in_flight() {
@@ -453,7 +454,7 @@ validate_producer_evidence() {
   local evidence_build evidence_environment published_at normalized_timestamp published_epoch age
 
   if [[ ! -f "$evidence_path" ]]; then
-    echo "FAIL: producer evidence is missing" >&2
+    echo "FAIL: producer evidence is missing at '$evidence_path'" >&2
     return 1
   fi
   evidence_build="$(read_evidence_field producerBuildNumber "$evidence_path" 2>/dev/null || true)"
@@ -532,6 +533,17 @@ resolve_user_home() {
   printf '%s\n' "$discovered_home"
 }
 
+resolve_producer_evidence_path() {
+  if [[ -n "${GRADUS_PRODUCER_EVIDENCE_PATH:-}" ]]; then
+    printf '%s\n' "$GRADUS_PRODUCER_EVIDENCE_PATH"
+    return 0
+  fi
+
+  local user_home
+  user_home="$(resolve_user_home)" || return 1
+  printf '%s\n' "$user_home/Library/Application Support/Gradus/$PRODUCER_EVIDENCE_FILENAME"
+}
+
 resolve_uv() {
   local candidate
   candidate="$(command -v uv 2>/dev/null || true)"
@@ -569,13 +581,14 @@ main() {
   local candidate_workspace candidate_ledger_path candidate_evidence_path walkthrough_path candidate_id source_revision producer_published_at
   local producer_evidence_digest artifact_digest marketing_version walkthrough_digest candidate_ipa_path durable_ipa_path prepared_metadata resume_candidate=0
   project_root="$(cd .. && pwd)"
-  evidence_path="${GRADUS_PRODUCER_EVIDENCE_PATH:-$project_root/.state/$PRODUCER_EVIDENCE_FILENAME}"
+  evidence_path="$(resolve_producer_evidence_path)" || return 1
   candidate_ledger_path="${GRADUS_CANDIDATE_LEDGER_PATH:-$project_root/.release-state/candidate.json}"
   candidate_evidence_path="${GRADUS_CANDIDATE_EVIDENCE_PATH:-}"
   walkthrough_path="${GRADUS_WALKTHROUGH_PATH:-}"
   candidate_receipt_path="${GRADUS_CANDIDATE_RECEIPT_PATH:-}"
   expected_mac_build="$(read_mac_build_number project.yml)"
   expected_cloudkit_environment="$(read_cloudkit_environment "$SCRIPT_DIR/GradusMac/GradusMacProduction.entitlements")"
+  echo "==> Reading producer evidence from $evidence_path"
   : "${APP_STORE_CONNECT_API_KEY:?required}"
   : "${APP_STORE_CONNECT_KEY_ID:?required}"
   : "${APP_STORE_CONNECT_ISSUER_ID:?required}"
@@ -629,7 +642,12 @@ main() {
   local uv_bin
   uv_bin="$(resolve_uv)"
 
-  SIGNING_IDENTITY="Apple Distribution"
+  # Pin the certificate fingerprint that is actually embedded in the checked-
+  # in API-created distribution profile.  A bare "Apple Distribution" lets
+  # Xcode choose a different installed distribution certificate when more than
+  # one exists, which the profile rejects.
+  SIGNING_IDENTITY="FD247ACDEBCD05C725AE29B40218FB0F57807A2C"
+  SIGNING_PROFILE_NAME="Gradus iOS App Store (API-created)"
   PROFILE_PATH="${HOME}/Library/MobileDevice/Provisioning Profiles/gradus-ios-app-store.provisionprofile"
   ARCHIVE_PATH="$candidate_script_dir/build/GradusiOS.xcarchive"
   PACKAGE_DIR="$candidate_script_dir/build/package-ios"
@@ -650,7 +668,10 @@ main() {
     -project Gradus.xcodeproj \
     -scheme GradusiOS \
     -archivePath "$ARCHIVE_PATH" \
-    -destination "generic/platform=iOS")
+    -destination "generic/platform=iOS" \
+    CODE_SIGN_STYLE=Manual \
+    CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+    PROVISIONING_PROFILE_SPECIFIER="$SIGNING_PROFILE_NAME")
   failure_hook archive
 
   echo "==> Repackaging for App Store distribution (manual codesign)"

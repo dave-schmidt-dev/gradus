@@ -13,6 +13,43 @@ EXPECTED_HOME="$(
   /usr/bin/id -P | /usr/bin/awk -F: 'NF >= 9 {print $9; exit}'
 )"
 
+unset GRADUS_INJECT_FAILURE
+failure_hook allocation >/dev/null 2>&1 || {
+  echo "FAIL: unset failure hook did not allow the normal path" >&2
+  exit 1
+}
+
+default_evidence_path="$(HOME="$TEST_ROOT" env -u GRADUS_PRODUCER_EVIDENCE_PATH /bin/bash -c 'source "$1"; resolve_producer_evidence_path' bash "$UPLOAD_SCRIPT")"
+[[ "$default_evidence_path" == "$TEST_ROOT/Library/Application Support/Gradus/publish-evidence.json" ]] || {
+  echo "FAIL: default producer evidence path did not target Application Support" >&2
+  exit 1
+}
+override_evidence_path="$TEST_ROOT/override/publish-evidence.json"
+resolved_override_path="$(GRADUS_PRODUCER_EVIDENCE_PATH="$override_evidence_path" /bin/bash -c 'source "$1"; resolve_producer_evidence_path' bash "$UPLOAD_SCRIPT")"
+[[ "$resolved_override_path" == "$override_evidence_path" ]] || {
+  echo "FAIL: explicit producer evidence path override was not preserved" >&2
+  exit 1
+}
+
+set +e
+injected_hook_output="$(GRADUS_INJECT_FAILURE=allocation failure_hook allocation 2>&1)"
+injected_hook_status=$?
+nonmatching_hook_output="$(GRADUS_INJECT_FAILURE=allocation failure_hook archive 2>&1)"
+nonmatching_hook_status=$?
+set -e
+[[ "$injected_hook_status" -eq 97 ]] || {
+  echo "FAIL: matching failure-hook injection returned $injected_hook_status, expected 97" >&2
+  exit 1
+}
+[[ "$injected_hook_output" == *"FAIL: injected failure after allocation"* ]] || {
+  echo "FAIL: matching failure-hook injection message changed" >&2
+  exit 1
+}
+[[ "$nonmatching_hook_status" -eq 0 && -z "$nonmatching_hook_output" ]] || {
+  echo "FAIL: nonmatching failure-hook injection did not allow the normal path" >&2
+  exit 1
+}
+
 explicit_home="$(HOME=/tmp/gradus-test-home /bin/bash -c 'source "$1"; resolve_user_home' bash "$UPLOAD_SCRIPT")"
 [[ "$explicit_home" == "/tmp/gradus-test-home" ]] || {
   echo "FAIL: explicit HOME was not preserved" >&2
@@ -245,6 +282,18 @@ grep -Fq 'set_required_entitlement "$PACKAGE_DIR/entitlements.plist" get-task-al
 }
 grep -Fq 'codesign --verify --deep --strict' "$UPLOAD_SCRIPT" || {
   echo "FAIL: strict codesign verification is missing" >&2
+  exit 1
+}
+grep -Fq 'CODE_SIGN_STYLE=Manual' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: iOS archive signing is not pinned to manual mode" >&2
+  exit 1
+}
+grep -Fq 'CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: iOS archive signing identity is not pinned" >&2
+  exit 1
+}
+grep -Fq 'PROVISIONING_PROFILE_SPECIFIER="$SIGNING_PROFILE_NAME"' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: iOS archive provisioning profile is not pinned" >&2
   exit 1
 }
 
