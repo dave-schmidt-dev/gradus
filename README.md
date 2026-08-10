@@ -1,5 +1,19 @@
 # gradus
 
+Internal TestFlight release candidates use the candidate ledger under
+`app/release_candidate/`. The candidate path is limited to preparation, upload,
+processing/compliance, and assignment to an existing attended internal group;
+App Store submission and public release are separate and excluded. The active
+plan and execution queue are recorded in
+`/Users/dave/Documents/Projects/.plans/gradus/internal-testflight-candidate-migration-2026-08-09-tasks.md`.
+
+The release owner must review a dated, candidate-current walkthrough before the
+TestFlight trigger. `python3 -m release_candidate.walkthrough` binds that
+review to the exact source revision, project/artifact digests, version/build,
+and route manifest, including onboarding, reachable controls, role/permission
+variants, disabled/recovery states, and system-owned sheets. This handoff is
+TestFlight-only; App Store submission remains excluded.
+
 Real-time terminal monitor for local `codex`, `claude`, `agy`, `copilot`, `cursor`, `vibe`, and `opencode go` usage.
 
 Probes provider APIs directly using locally authenticated credentials — no PTY, no CLI scraping. Each provider uses its own HTTP or internal API path, so probes are fast and reliable.
@@ -408,9 +422,11 @@ cd app
 # set the next semantic MARKETING_VERSION before the release gate when the
 # product release changes; archive-upload-ios.sh owns the build counter
 bws-secret-exec app-store-connect-upload --        # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
-# Human-terminal compatibility path remains available:
-# bws-run -- ./archive-upload-ios.sh
-bws-secret-exec app-store-connect-testflight-setup -- <build>  # waits for processing and assigns the build to Internal Testers
+bws-secret-exec app-store-connect-testflight-setup -- <candidate-id> <build> \
+  --group-id <confirmed-internal-group-id> --group-name "<confirmed-group-name>" \
+  --ledger .release-state/candidate.json \
+  --evidence <candidate-state-dir>/candidate-evidence.json \
+  --receipt-journal <candidate-state-dir>/receipt.json
 ```
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
@@ -418,7 +434,10 @@ its release summary and test-focus text into App Store Connect's “What to
 Test” field; keep individual candidate-build details and re-upload reasons in
 `HISTORY.md`.
 
-`archive-upload-ios.sh` prints the exact fixed-consumer follow-up command (with the build number it just uploaded) as its last line.
+The assignment trigger requires the release-owner-confirmed candidate ID,
+internal-group identity, candidate ledger, candidate-specific evidence file,
+and receipt-journal paths. The upload wrapper prints the durable candidate
+state directory and does not guess any of those values.
 
 ### Installing GradusMac locally
 

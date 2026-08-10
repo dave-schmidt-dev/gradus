@@ -24,6 +24,19 @@ visual coordinates or incidental text layout.
 
 ## Release requirements
 
+Internal TestFlight candidate tests must cover the candidate ledger's allowed
+transitions, digest/version predicates, fixture-only ASC pagination and strict
+version policy, and redacted processing/compliance/assignment receipt predicates.
+These checks prove local candidate safety only; they do not prove Apple upload,
+processing, installability, or App Store submission.
+
+`app/test_walkthrough.py` additionally proves that the dated release-owner
+walkthrough is bound to the candidate's source revision, project/artifact
+digests, version/build, and ledger record. It rejects missing route/control,
+role, disabled/recovery, or system-sheet coverage. The walkthrough is a
+TestFlight-only review artifact and does not replace device, account, or Apple
+processing evidence.
+
 - Add the test to the correct Xcode target or Python test runner in the same
   change as the feature.
 - Ensure the test is discovered by `app/test-gate.sh`; an unregistered test

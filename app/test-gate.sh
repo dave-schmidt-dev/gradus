@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 # Phase-gate for the Gradus iOS/macOS work: boots the pinned simulator and
-# runs `xcodebuild test` for both destinations. Exits non-zero on any
+# runs `xcodebuild test` for all pinned destinations. Exits non-zero on any
 # failure (preflight mismatch, build failure, or test failure) so it's safe
 # to wire into CI/pre-push as a hard gate.
 
-EXPECTED_COUNTING_LEG_COUNT=5
+# Keep this manifest aligned with every test command wrapped by
+# `assert_counting_leg`.  The Python paths are intentionally listed here so
+# the self-check can detect a new hermetic suite that is not wired into the
+# canonical gate.
+EXPECTED_COUNTING_LEG_COUNT=11
 COUNTING_LEG_NAMES=(
   "swift-testing"
   "pytest"
   "GradusMac"
   "GradusiOS-iPhone"
   "GradusiOS-iPad"
+  "release-candidate"
+  "release-candidate-validation"
+  "asc-api"
+  "release-reconcile"
+  "testflight-assignment"
+  "candidate-walkthrough"
 )
 COUNTING_LEG_REPORTERS=(
   "swift-testing"
@@ -18,16 +28,36 @@ COUNTING_LEG_REPORTERS=(
   "xctest"
   "xctest"
   "xctest"
+  "pytest"
+  "pytest"
+  "pytest"
+  "pytest"
+  "pytest"
+  "pytest"
 )
-COUNTING_LEG_MINIMUMS=(2 2 2 2 2)
+COUNTING_LEG_MINIMUMS=(2 2 2 2 2 6 5 5 5 5 3)
+COUNTING_LEG_SOURCES=(
+  "GradusKit"
+  "../tests"
+  "GradusMac"
+  "GradusiOS-iPhone"
+  "GradusiOS-iPad"
+  "test_release_candidate.py"
+  "test_release_candidate_validation.py"
+  "test_asc_api.py"
+  "test_release_reconcile.py"
+  "testflight-setup-tests.py"
+  "test_walkthrough.py"
+)
 COUNTING_LEG_RUN_COUNT=0
 
 validate_counting_leg_declarations() {
   local leg_count="${#COUNTING_LEG_NAMES[@]}"
   if [[ "$leg_count" -ne "$EXPECTED_COUNTING_LEG_COUNT" ||
         "${#COUNTING_LEG_REPORTERS[@]}" -ne "$EXPECTED_COUNTING_LEG_COUNT" ||
-        "${#COUNTING_LEG_MINIMUMS[@]}" -ne "$EXPECTED_COUNTING_LEG_COUNT" ]]; then
-    echo "FAIL: counting-leg declarations disagree (expected $EXPECTED_COUNTING_LEG_COUNT, names $leg_count, reporters ${#COUNTING_LEG_REPORTERS[@]}, floors ${#COUNTING_LEG_MINIMUMS[@]})" >&2
+        "${#COUNTING_LEG_MINIMUMS[@]}" -ne "$EXPECTED_COUNTING_LEG_COUNT" ||
+        "${#COUNTING_LEG_SOURCES[@]}" -ne "$EXPECTED_COUNTING_LEG_COUNT" ]]; then
+    echo "FAIL: counting-leg declarations disagree (expected $EXPECTED_COUNTING_LEG_COUNT, names $leg_count, reporters ${#COUNTING_LEG_REPORTERS[@]}, floors ${#COUNTING_LEG_MINIMUMS[@]}, sources ${#COUNTING_LEG_SOURCES[@]})" >&2
     return 1
   fi
 
@@ -138,8 +168,26 @@ echo "==> Hermetic local Mac install behavior tests"
 echo "==> Hermetic credential bridge install behavior tests"
 ./test-install-credential-bridge.sh
 
+echo "==> Hermetic release-candidate ledger tests"
+assert_counting_leg "release-candidate" uv run pytest -q test_release_candidate.py
+
+echo "==> Hermetic release-candidate validation tests"
+assert_counting_leg "release-candidate-validation" uv run pytest -q test_release_candidate_validation.py
+
+echo "==> Hermetic App Store Connect client tests"
+assert_counting_leg "asc-api" uv run pytest -q test_asc_api.py
+
+echo "==> Hermetic release reconciliation tests"
+assert_counting_leg "release-reconcile" uv run pytest -q test_release_reconcile.py
+
+echo "==> Hermetic TestFlight assignment tests"
+assert_counting_leg "testflight-assignment" uv run pytest -q testflight-setup-tests.py
+
+echo "==> Hermetic candidate walkthrough tests"
+assert_counting_leg "candidate-walkthrough" uv run pytest -q test_walkthrough.py
+
 # INV-11 declares `area:` over app/GradusKit/**, gradus/**, and tests/** with
-# this script as its gate_test -- but the two `xcodebuild test` invocations
+# this script as its gate_test -- but the three `xcodebuild test` invocations
 # below cover none of those three. GradusKit is consumed as a SwiftPM package
 # *dependency*, so `xcodebuild test -scheme ...` builds its library product and
 # never its test targets; XcodeGen can't add them to a scheme's `test:` block

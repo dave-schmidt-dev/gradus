@@ -17,6 +17,7 @@ build/
 .cache/
 .state/
 .state/publish-evidence.json
+.release-state/
 .aider.chat.history.md
 .github/
 .superpowers/

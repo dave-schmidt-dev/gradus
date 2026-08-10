@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "testflight_assign", Path(__file__).with_name("testflight-assign.py")
+)
+assert _spec and _spec.loader
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+AssignmentError = _module.AssignmentError
+assign_candidate = _module.assign_candidate
+find_exact_internal_group = _module.find_exact_internal_group
+
+
+class FakeClient:
+    def __init__(self, responses):
+        self.responses = responses
+        self.requests = []
+
+    def request(self, method, path, body=None, **kwargs):
+        self.requests.append((method, path, body))
+        value = self.responses.get((method, path), self.responses.get(path))
+        if callable(value):
+            return value()
+        return value
+
+
+def app():
+    return {"data": [{"id": "app-1", "attributes": {"name": "Gradus"}}]}
+
+
+def groups(items):
+    return {"data": items}
+
+
+def group(gid="group-1", name="Internal Testers"):
+    return {"id": gid, "attributes": {"name": name, "isInternalGroup": True}}
+
+
+def build(state="VALID"):
+    return {"data": [{"id": "build-1", "attributes": {"version": "42", "processingState": state}}]}
+
+
+def valid_client(group_items=None, build_response=None):
+    return FakeClient(
+        {
+            "/apps?filter[bundleId]=com.zerodelta.gradus.ios": app(),
+            "/apps/app-1/betaGroups?limit=200": groups(
+                [group()] if group_items is None else group_items
+            ),
+            "/builds?filter[app]=app-1&filter[version]=42&limit=50": build_response or build(),
+            "/betaGroups/group-1/builds?limit=200": {"data": []},
+        }
+    )
+
+
+def test_exact_group_assignment_succeeds():
+    client = valid_client()
+    result = assign_candidate(
+        client,
+        candidate_id="candidate-1",
+        build="42",
+        group_id="group-1",
+        group_name="Internal Testers",
+        clock=lambda: 0,
+        timeout=1,
+    )
+    assert result["assigned"] is True
+    assert any(item[0] == "POST" for item in client.requests)
+
+
+def test_zero_multiple_renamed_or_mismatched_groups_fail_before_assignment():
+    cases = [
+        [],
+        [group(), group("group-2", "Internal Testers")],
+        [group("group-1", "Renamed")],
+        [group("other", "Internal Testers")],
+    ]
+    for entries in cases:
+        client = valid_client(entries)
+        try:
+            assign_candidate(
+                client,
+                candidate_id="c",
+                build="42",
+                group_id="group-1",
+                group_name="Internal Testers",
+                clock=lambda: 0,
+                timeout=1,
+            )
+        except AssignmentError:
+            pass
+        else:
+            raise AssertionError("ambiguous group accepted")
+        assert not any(item[0] == "POST" for item in client.requests)
+
+
+def test_processing_failures_and_missing_compliance_are_nonzero():
+    for state in ("INVALID", "FAILED", "MISSING_COMPLIANCE"):
+        client = valid_client(build_response=build(state))
+        try:
+            assign_candidate(
+                client,
+                candidate_id="c",
+                build="42",
+                group_id="group-1",
+                group_name="Internal Testers",
+                clock=lambda: 0,
+                timeout=1,
+            )
+        except AssignmentError:
+            pass
+        else:
+            raise AssertionError("unsafe processing state accepted")
+        assert not any(item[0] == "POST" for item in client.requests)
+
+
+def test_timeout_is_nonzero_and_no_assignment():
+    client = valid_client(build_response={"data": []})
+    try:
+        assign_candidate(
+            client,
+            candidate_id="c",
+            build="42",
+            group_id="group-1",
+            group_name="Internal Testers",
+            clock=lambda: 2,
+            timeout=0,
+            interval=0,
+        )
+    except AssignmentError:
+        pass
+    else:
+        raise AssertionError("timeout accepted")
+    assert not any(item[0] == "POST" for item in client.requests)
+
+
+def test_forbidden_mutation_routes_are_absent():
+    source = Path(__file__).with_name("testflight-assign.py").read_text(encoding="utf-8")
+    for forbidden in ("betaTesters", "/users", "/profiles", "DELETE", '"POST", " /betaGroups'):
+        assert forbidden not in source

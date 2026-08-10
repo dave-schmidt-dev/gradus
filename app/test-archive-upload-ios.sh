@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPLOAD_SCRIPT="$SCRIPT_DIR/archive-upload-ios.sh"
+GATE_SCRIPT="$SCRIPT_DIR/test-gate.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gradus-upload-tests.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT INT TERM
 source "$UPLOAD_SCRIPT"
@@ -195,11 +196,181 @@ set -e
   exit 1
 }
 
+PYTHONPATH="$SCRIPT_DIR" python3 - "$SCRIPT_DIR/next-ios-build-number.py" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("next_build", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+pages = [
+    {"data": [{"id": "b1", "attributes": {"version": "9"}}], "links": {"next": "/builds?page=2"}},
+    {"data": [{"id": "b2", "attributes": {"version": "101"}}]},
+]
+assert module.next_build_number(pages) == 102
+for bad in (
+    [{"data": [{"id": "b1", "attributes": {"version": "x"}}]}],
+    [{"data": [{"id": "b1", "attributes": {"version": "2"}}]}, {"data": [{"id": "b2", "attributes": {"version": "2"}}]}],
+    [{"data": [{"id": "b1", "attributes": {"version": "2"}}]}, {"data": [{"id": "b1", "attributes": {"version": "3"}}]}],
+):
+    try:
+        module.next_build_number(bad)
+    except module.BuildHistoryError:
+        pass
+    else:
+        raise AssertionError("malformed/duplicate history was accepted")
+calls = []
+def fetch(path):
+    calls.append(path)
+    return pages[0] if len(calls) == 1 else pages[1]
+module.fetch_all_build_pages(fetch, "app")
+assert calls == ["/builds?filter[app]=app&limit=200", "/builds?page=2"]
+PY
+
+grep -Fq 'PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.ios' "$SCRIPT_DIR/project.yml" || {
+  echo "FAIL: iOS bundle identifier is not pinned" >&2
+  exit 1
+}
+grep -Fq 'validate_common_marketing_version "$SCRIPT_DIR/project.yml"' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: common marketing-version validation is missing" >&2
+  exit 1
+}
+grep -Fq 'set_required_entitlement "$PACKAGE_DIR/entitlements.plist" aps-environment string production' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: production APS entitlement is not explicit" >&2
+  exit 1
+}
+grep -Fq 'set_required_entitlement "$PACKAGE_DIR/entitlements.plist" get-task-allow bool false' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: false get-task-allow entitlement is not explicit" >&2
+  exit 1
+}
+grep -Fq 'codesign --verify --deep --strict' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: strict codesign verification is missing" >&2
+  exit 1
+}
+
 first_xattr_cleanup_line="$(awk '/xattr -cr "\$PACKAGE_DIR\/Payload\/GradusiOS\.app"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
 codesign_line="$(awk '/codesign --force --sign/ {print NR; exit}' "$UPLOAD_SCRIPT")"
 [[ -n "$first_xattr_cleanup_line" && -n "$codesign_line" && "$first_xattr_cleanup_line" -lt "$codesign_line" ]] || {
   echo "FAIL: upload wrapper must clear bundle metadata before codesign" >&2
   exit 1
 }
+
+project_hash_before="$(sha256_file "$SCRIPT_DIR/project.yml")"
+source_hash_before="$(snapshot_source_digest "$(cd "$SCRIPT_DIR/.." && pwd)")"
+candidate_project="$(create_candidate_workspace "$(cd "$SCRIPT_DIR/.." && pwd)")/app/project.yml"
+bump_ios_build_number 99 "$candidate_project"
+[[ "$(sha256_file "$SCRIPT_DIR/project.yml")" == "$project_hash_before" ]] || {
+  echo "FAIL: isolated candidate preparation changed checked-out project.yml" >&2
+  exit 1
+}
+[[ -n "$source_hash_before" && "$(sha256_file "$SCRIPT_DIR/project.yml")" == "$project_hash_before" ]] || {
+  echo "FAIL: source/project baseline was not stable after isolated preparation" >&2
+  exit 1
+}
+
+grep -Eq 'failure_hook (after-allocation|archive|signing|packaging|receipt-persistence|assignment)' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: archive wrapper has no injected boundary-failure hooks" >&2
+  exit 1
+}
+if grep -Eq 'PlistBuddy.*\|\| true' "$UPLOAD_SCRIPT"; then
+  echo "FAIL: required PlistBuddy operation still swallows failure" >&2
+  exit 1
+fi
+grep -Fq 'validate_producer_evidence_boundary' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: producer evidence is not checked at both irreversible boundaries" >&2
+  exit 1
+}
+grep -Fq 'prepare_candidate_ledger' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: archive wrapper does not machine-create the candidate ledger" >&2
+  exit 1
+}
+grep -Fq 'release_candidate.walkthrough' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: archive wrapper does not generate the candidate walkthrough" >&2
+  exit 1
+}
+grep -Fq 'read_prepared_candidate' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: archive wrapper has no prepared-candidate retry path" >&2
+  exit 1
+}
+grep -Fq 'Revalidating fresh producer evidence before resumed upload' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: resumed upload does not require fresh producer evidence" >&2
+  exit 1
+}
+prepare_line="$(grep -n 'Persisting machine-written candidate ledger before walkthrough generation' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+walkthrough_line="$(grep -n -- '-m release_candidate.walkthrough' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+uploading_line="$(grep -n 'transition_candidate_state "\$candidate_ledger_path" uploading' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+[[ -n "$prepare_line" && -n "$walkthrough_line" && -n "$uploading_line" \
+  && "$prepare_line" -lt "$walkthrough_line" && "$walkthrough_line" -lt "$uploading_line" ]] || {
+  echo "FAIL: candidate ledger, walkthrough, and uploading transitions are out of order" >&2
+  exit 1
+}
+
+# A post-prepare interruption must leave one resumable tuple; a retry may not
+# allocate a new build or rebind the IPA digest.
+retry_root="$TEST_ROOT/retry-candidate"
+retry_ipa="$retry_root/GradusiOS.ipa"
+retry_ledger="$retry_root/candidate.json"
+mkdir -p "$retry_root"
+printf 'candidate-ipa' >"$retry_ipa"
+PYTHONPATH="$SCRIPT_DIR" python3 - "$retry_ledger" "$retry_ipa" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+from release_candidate.ledger import CandidateLedger
+
+ledger_path, ipa_path = sys.argv[1:]
+ipa_digest = hashlib.sha256(Path(ipa_path).read_bytes()).hexdigest()
+ledger = CandidateLedger(ledger_path)
+ledger.prepare(
+    "candidate-retry",
+    source_sha256="a" * 64,
+    project_sha256="b" * 64,
+    artifact_sha256=ipa_digest,
+    build=42,
+    marketing_version="1.2.3",
+    metadata={
+        "sourceRevision": "revision-retry",
+        "producerBuild": 7,
+        "producerEvidenceSha256": "c" * 64,
+        "producerPublishedAt": "2026-08-09T23:00:00Z",
+        "iosBuild": 42,
+        "candidateWorkspace": str(Path(ipa_path).parent),
+        "ipaPath": ipa_path,
+    },
+)
+PY
+retry_metadata_before="$(read_prepared_candidate "$retry_ledger")"
+[[ "$retry_metadata_before" == *$'candidateId\tcandidate-retry'* ]] || {
+  echo "FAIL: prepared candidate retry identity was not recovered" >&2
+  exit 1
+}
+set +e
+GRADUS_INJECT_FAILURE=receipt-persistence failure_hook receipt-persistence >/dev/null 2>&1
+retry_failure_status=$?
+set -e
+[[ "$retry_failure_status" -ne 0 ]] || {
+  echo "FAIL: receipt-persistence injection did not fail closed" >&2
+  exit 1
+}
+[[ "$(read_prepared_candidate "$retry_ledger")" == "$retry_metadata_before" ]] || {
+  echo "FAIL: retry path changed the prepared candidate tuple" >&2
+  exit 1
+}
+
+# Keep the upload regression runner coupled to the canonical gate manifest:
+# this script is the first hermetic leg, so it must fail loudly if candidate
+# suites are added without counted invocations in test-gate.sh.
+for candidate_suite in \
+  test_release_candidate.py \
+  test_release_candidate_validation.py \
+  test_asc_api.py \
+  test_release_reconcile.py \
+  testflight-setup-tests.py \
+  test_walkthrough.py; do
+  grep -Fq "\"$candidate_suite\"" "$GATE_SCRIPT" || {
+    echo "FAIL: canonical gate does not declare $candidate_suite" >&2
+    exit 1
+  }
+done
 
 echo "archive-upload-ios.sh HOME fallback and credential guard passed"

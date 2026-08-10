@@ -7,13 +7,43 @@ The companion policies are [`VERSIONING.md`](VERSIONING.md) and
 [`TESTING.md`](TESTING.md). The generalized Apple-development standard lives
 in the shared `apple_developer` project under `RELEASE_STANDARDS.md`.
 
+## Internal TestFlight candidate gate (INV-9)
+
+This is an internal-TestFlight candidate path only. App Store submission,
+public release, external testers, and group creation/deletion are excluded.
+Preparation, upload acceptance, processing/compliance, and assignment are
+separate gates. Keep the candidate record and receipt bound to the exact source,
+artifact, version, build, producer evidence, and walkthrough digests.
+
+### Candidate-current walkthrough and release-owner handoff
+
+Before the release owner authorizes TestFlight, generate the dated walkthrough
+from the exact candidate ledger and IPA. The upload wrapper generates this
+automatically under `.release-state/candidates/<candidate-id>/`; use the paths
+it prints. A manual regeneration has this shape:
+
+```bash
+cd app
+python3 -m release_candidate.walkthrough \
+  --ledger ../.release-state/candidate.json \
+  --artifact <candidate-ipa> \
+  --output <candidate-state-dir>/walkthrough.md
+```
+
+Review onboarding, every reachable screen and control, each role/permission
+variant, disabled and recovery states, and every system-owned sheet against the
+matching TestFlight artifact. The generator records the walkthrough digest in
+the candidate ledger and refuses stale, mismatched, or incomplete coverage.
+This is a human release-owner gate for internal TestFlight only; it is not App
+Store submission or proof of Apple processing/installability.
+
 ## Cross-platform compatibility gate (INV-9)
 
 When a feature crosses the Mac publisher and iOS consumer, use INV-9's automated
 producer-evidence gate; this checklist records release evidence but does not
 duplicate that invariant's contract.
 
-Before the TestFlight upload:
+Before candidate upload:
 
 1. Identify the producer, consumer, and shared contract in the release notes.
 2. Build and test both GradusMac and GradusiOS with `app/test-gate.sh`.
@@ -64,12 +94,28 @@ Before the TestFlight upload:
    otherwise append its own staged failures here, and it is redirected to a
    temporary directory instead (`GRADUS_MAC_LOG_DIR` overrides the location).
 4. Confirm `archive-upload-ios.sh` accepts the current machine-written producer
-   evidence for INV-9 before uploading the iOS artifact.
+   evidence for INV-9 before preparing/uploading the iOS artifact.
 5. If the Mac artifact itself is being distributed, run the notarization gate
    too; local publisher verification alone is not a distribution artifact.
-6. Record the matching Mac build, iOS build, schema state, and test/upload
-   results in local `HISTORY.md`; keep the user-facing `CHANGELOG.md` limited
-   to concise tester-facing notes.
+6. Record the matching Mac build, iOS build, schema state, and candidate
+   preparation/upload results in local `HISTORY.md`; keep the user-facing
+   `CHANGELOG.md` limited to concise tester-facing notes.
+
+After upload, wait for the exact candidate build to process, handle Missing
+Compliance as an explicit human gate, and assign only the attended,
+pre-confirmed internal group. Persist the redacted processing/compliance/
+assignment receipt. This does not submit to the App Store.
+
+The attended assignment trigger has this shape; replace every placeholder only
+after the release owner has reviewed the candidate tuple and group identity:
+
+```bash
+bws-secret-exec app-store-connect-testflight-setup -- <candidate-id> <build> \
+  --group-id <confirmed-internal-group-id> --group-name "<confirmed-group-name>" \
+  --ledger .release-state/candidate.json \
+  --evidence <candidate-state-dir>/candidate-evidence.json \
+  --receipt-journal <candidate-state-dir>/receipt.json
+```
 
 A feature may ship on only one platform when the release notes explicitly
 record that it has no producer/consumer or shared-contract dependency.

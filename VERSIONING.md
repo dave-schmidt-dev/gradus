@@ -45,8 +45,11 @@ the producer/consumer release under `RELEASE_CHECKLIST.md`.
    the same release train and is labeled by build number only.
 5. Small non-blocking changes wait for the next patch release instead of
    creating another overnight TestFlight build.
-6. A release candidate is not uploaded until its code, documentation, review,
-   and required producer/consumer verification are complete.
+6. A release candidate is not prepared or uploaded until its code, documentation,
+   review, and required producer/consumer verification are complete.
+7. The candidate ledger binds one source/project/artifact/version/build tuple;
+   upload acceptance, processing/compliance, and internal-group assignment are
+   separate receipt predicates. A candidate is not an App Store submission.
 
 The Apple upload script owns build-number allocation by querying App Store
 Connect. Never hand-edit a previously used build number or treat the checked-in

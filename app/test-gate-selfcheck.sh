@@ -64,10 +64,24 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
   fail "live expected count does not match live floors"
 [[ "${#COUNTING_LEG_REPORTERS[@]}" -eq "$EXPECTED_COUNTING_LEG_COUNT" ]] ||
   fail "live expected count does not match live reporters"
+[[ "${#COUNTING_LEG_SOURCES[@]}" -eq "$EXPECTED_COUNTING_LEG_COUNT" ]] ||
+  fail "live expected count does not match live sources"
 
 for ((index = 0; index < leg_count; index++)); do
   floor="${COUNTING_LEG_MINIMUMS[index]}"
   [[ "$floor" -gt 1 ]] || fail "${COUNTING_LEG_NAMES[index]} floor is not above a one-test placeholder"
+done
+
+# The new hermetic suites are part of the runner manifest, not merely present
+# in the checkout. Check both the declared source and its counted invocation.
+for ((index = 0; index < leg_count; index++)); do
+  source_name="${COUNTING_LEG_SOURCES[index]}"
+  if [[ "$source_name" == *.py ]]; then
+    [[ -f "$SCRIPT_DIR/$source_name" ]] ||
+      fail "declared hermetic source is missing: $source_name"
+    grep -Fq "assert_counting_leg \"${COUNTING_LEG_NAMES[index]}\"" "$GATE_SCRIPT" ||
+      fail "declared hermetic source has no counted invocation: $source_name"
+  fi
 done
 
 # Every declared leg passes at its live floor, exercising all three reporter

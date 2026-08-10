@@ -109,7 +109,7 @@ rationale: Only the explicit --refresh-snapshot command may use non-headless pro
   implied. Overlap, lock failure, safe status, and one-probe behavior are binary-tested.
 
 ### INV-9 — A cross-platform feature ships its producer and consumer as one compatibility unit
-area: ["app/GradusMac/**", "app/GradusiOS/**", "app/GradusKit/**", "app/project.yml", "app/test-gate.sh", "app/archive-upload-ios.sh", "RELEASE_CHECKLIST.md"]
+area: ["app/GradusMac/**", "app/GradusiOS/**", "app/GradusKit/**", "app/project.yml", "app/test-gate.sh", "app/archive-upload-ios.sh", "app/release_candidate/**", "app/testflight-assign.py", "app/testflight-setup.py", "app/_asc_api.py", "RELEASE_CHECKLIST.md"]
 gate_test: app/test-gate.sh
 threshold: 3
 rationale: GradusiOS is a consumer of the Mac publisher, not an independent data source. If an iOS
@@ -118,8 +118,11 @@ rationale: GradusiOS is a consumer of the Mac publisher, not an independent data
   is uploaded. A consumer-only TestFlight release can otherwise look healthy while rendering stale
   records, missing required context, or silently dropping the new feature. The release checklist
   makes the dependency decision explicit, requires both sides to pass their gates, and records the
-  producer-publish evidence alongside the consumer upload evidence. The iOS archive guard rejects missing, mismatched,
-  wrong-build, or stale machine-written evidence before allocating an iOS build number. A Mac-only local republish does
+  producer-publish evidence alongside the consumer upload evidence. The candidate ledger binds source, project,
+  artifact, version, producer, iOS, IPA, and walkthrough digests and permits only validated state transitions.
+  Preparation and upload are separate operations; upload acceptance is not processing or assignment. Processing,
+  compliance, and internal-group assignment require a candidate-bound receipt with the exact build and redacted
+  predicates. The iOS archive guard rejects missing, mismatched, wrong-build, or stale machine-written evidence before allocating an iOS build number. A Mac-only local republish does
   not require notarization; a Mac artifact distributed to users still follows the notarization gate.
 
 ### INV-10 — Product versions are semantic and Apple build numbers are independent

@@ -14,8 +14,8 @@ Schema confirmed against developer.apple.com's official DocC JSON
 distribution; certificateType DEVELOPER_ID_APPLICATION matches the local
 keychain identity.
 
-Run via:
-    bws-run -- uv run --with pyjwt --with cryptography app/create-developer-id-profile.py
+This is a separate human-only signing-profile utility. It is not part of the
+internal TestFlight candidate path and has no unattended execution trigger.
 """
 
 from __future__ import annotations
