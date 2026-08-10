@@ -57,9 +57,16 @@ public enum DashboardDensity: String, CaseIterable, Identifiable, Sendable {
     /// Returning `didFit` distinguishes a compact card that genuinely clears
     /// the floor from the leanest fallback when no rung can clear it.
     static func resolveRung(
+        preferred: DashboardDensity? = nil,
         fits: (DashboardDensity) -> Bool
     ) -> (rung: DashboardDensity, didFit: Bool) {
-        for rung in Self.allCases.reversed() where fits(rung) {
+        let candidates: [DashboardDensity]
+        if let preferred, let index = Self.allCases.firstIndex(of: preferred) {
+            candidates = Array(Self.allCases.prefix(index + 1))
+        } else {
+            candidates = Array(Self.allCases)
+        }
+        for rung in candidates.reversed() where fits(rung) {
             return (rung, true)
         }
         return (.compact, false)

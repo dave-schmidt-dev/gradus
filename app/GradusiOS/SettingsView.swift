@@ -83,24 +83,34 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Card size")
                     .font(.headline)
+                Toggle("Automatic", isOn: automaticCardSizeBinding)
+                    .accessibilityHint("When on, Gradus chooses the largest card layout that fits this device.")
                 HStack {
                     Text("Small")
                     Spacer()
                     Text(cardSizeLabel)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(cardSizeLabel == "Auto" ? .primary : .secondary)
                     Spacer()
                     Text("Large")
                 }
                 .font(.caption)
-                Slider(
+                QuietDiscreteSlider(
                     value: Binding(
-                        get: { Double(dashboardViewModel.cardColumnPreference) },
+                        get: {
+                            Double(min(max(dashboardViewModel.cardColumnPreference, 1), cardSizeStopCount))
+                        },
                         set: { dashboardViewModel.cardColumnPreference = Int($0.rounded()) }),
-                    in: 0...Double(dashboardViewModel.availableCardColumns),
-                    step: 1
+                    range: 1...Double(cardSizeStopCount),
+                    valueLabel: { value in
+                        if dashboardViewModel.cardColumnPreference == 0 {
+                            return "Auto"
+                        }
+                        return DashboardViewModel.cardSizeLabel(
+                            preference: Int(value.rounded()),
+                            maximumColumns: dashboardViewModel.availableCardColumns)
+                    }
                 )
-                .accessibilityLabel("Card size")
-                Text("Auto uses the most columns that fit this device and text size. Every position keeps all provider windows visible.")
+                Text("Automatic is separate from the size slider. Small uses more columns; Large uses fewer. Every position keeps all provider windows visible.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -114,10 +124,25 @@ struct SettingsView: View {
     }
 
     private var cardSizeLabel: String {
-        let selection = dashboardViewModel.cardColumnPreference
-        if selection == 0 { return "Auto" }
-        let clamped = min(max(selection, 1), dashboardViewModel.availableCardColumns)
-        return clamped == 1 ? "1 column" : "\(clamped) columns"
+        DashboardViewModel.cardSizeLabel(
+            preference: dashboardViewModel.cardColumnPreference,
+            maximumColumns: dashboardViewModel.availableCardColumns)
+    }
+
+    private var cardSizeStopCount: Int {
+        DashboardViewModel.cardSizeStopCount(for: dashboardViewModel.availableCardColumns)
+    }
+
+    private var automaticCardSizeBinding: Binding<Bool> {
+        Binding(
+            get: { dashboardViewModel.cardColumnPreference == 0 },
+            set: { enabled in
+                if enabled {
+                    dashboardViewModel.cardColumnPreference = 0
+                } else if dashboardViewModel.cardColumnPreference == 0 {
+                    dashboardViewModel.cardColumnPreference = 1
+                }
+            })
     }
 
     @ViewBuilder
@@ -209,5 +234,71 @@ struct SettingsView: View {
         let shortVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "\u{2014}"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "\u{2014}"
         return "\(shortVersion) (\(build))"
+    }
+}
+
+/// A discrete UIKit slider keeps the card-size control quiet. SwiftUI's
+/// stepped Slider can opt into system tick feedback on newer iOS releases;
+/// this control has no feedback generator. Its subclass also makes VoiceOver
+/// increment and decrement exactly one whole stop instead of a fractional
+/// UISlider adjustment that can round back to the same value.
+private struct QuietDiscreteSlider: UIViewRepresentable {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let valueLabel: (Double) -> String
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIView(context: Context) -> QuietDiscreteUISlider {
+        let slider = QuietDiscreteUISlider(frame: .zero)
+        slider.minimumValue = Float(range.lowerBound)
+        slider.maximumValue = Float(range.upperBound)
+        slider.addTarget(
+            context.coordinator, action: #selector(Coordinator.valueChanged(_:)), for: .valueChanged)
+        slider.accessibilityLabel = "Card size"
+        update(slider)
+        return slider
+    }
+
+    func updateUIView(_ slider: QuietDiscreteUISlider, context: Context) {
+        context.coordinator.parent = self
+        slider.minimumValue = Float(range.lowerBound)
+        slider.maximumValue = Float(range.upperBound)
+        update(slider)
+    }
+
+    private func update(_ slider: UISlider) {
+        slider.setValue(Float(value), animated: false)
+        slider.accessibilityValue = valueLabel(value)
+    }
+
+    final class Coordinator: NSObject {
+        var parent: QuietDiscreteSlider
+
+        init(_ parent: QuietDiscreteSlider) { self.parent = parent }
+
+        @objc func valueChanged(_ slider: UISlider) {
+            let value = min(max(Double(slider.value).rounded(), parent.range.lowerBound), parent.range.upperBound)
+            slider.setValue(Float(value), animated: false)
+            parent.value = value
+            slider.accessibilityValue = parent.valueLabel(value)
+        }
+    }
+}
+
+final class QuietDiscreteUISlider: UISlider {
+    override func accessibilityIncrement() {
+        adjustAccessibilityValue(by: 1)
+    }
+
+    override func accessibilityDecrement() {
+        adjustAccessibilityValue(by: -1)
+    }
+
+    private func adjustAccessibilityValue(by delta: Float) {
+        let next = min(max(value.rounded() + delta, minimumValue), maximumValue)
+        guard next != value else { return }
+        setValue(next, animated: false)
+        sendActions(for: .valueChanged)
     }
 }

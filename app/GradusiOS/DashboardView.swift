@@ -188,7 +188,12 @@ struct DashboardContent: View {
     private func gridResolution(in contentWidth: CGFloat) -> GridResolution {
         switch layout {
         case .denseSingleColumn:
-            let rung = densityOverride ?? .compact
+            let rung = densityOverride
+                ?? DashboardViewModel.resolvedCardDensity(
+                    preference: viewModel.cardColumnPreference,
+                    sizeStops: DashboardViewModel.cardSizeStopCount(
+                        for: viewModel.availableCardColumns))
+                ?? .compact
             return GridResolution(
                 metrics: rung.metrics, columns: 1, maximumColumns: 1, didFitDensity: true)
         case .denseGrid:
@@ -213,10 +218,15 @@ struct DashboardContent: View {
                 cardGap: compact.cardGap,
                 minimumBarWidth: DensityMetrics.minimumBarWidth)
             let maximum = stops.last ?? 1
+            let sizeStops = DashboardViewModel.cardSizeStopCount(for: maximum)
             let selectedColumns = DashboardViewModel.resolvedCardColumnCount(
                 preference: viewModel.cardColumnPreference,
-                maximum: maximum)
-            let resolution = DashboardDensity.resolveRung { rung in
+                maximum: maximum,
+                sizeStops: sizeStops)
+            let preferred = DashboardViewModel.resolvedCardDensity(
+                preference: viewModel.cardColumnPreference,
+                sizeStops: sizeStops)
+            let resolution = DashboardDensity.resolveRung(preferred: preferred) { rung in
                 let rungMetrics = rung.metrics
                 let width = cardWidth(
                     containerWidth: contentWidth,

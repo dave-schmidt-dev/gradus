@@ -13,11 +13,13 @@ history from the overnight release train. New releases use
 
 ### Added
 
-- A device-relative card-density slider on both iPhone and iPad, under Settings →
-  Local Display. Auto selects the richest feasible layout for the current device;
-  manual stops are the layouts that preserve the minimum usage-bar width. Every
-  position shows every provider window, and the choice is stored per device like
-  sort order and the exhausted-provider toggle.
+- A device-relative card-size slider on both iPhone and iPad, under Settings →
+  Local Display. Automatic is an explicit setting beside the slider; Small is
+  at the left and uses more columns, while Large is at the right and uses
+  fewer. Phones keep one column but still change card density at the explicit
+  stops. Every position shows every provider window, and the choice is stored
+  per device like sort order and the exhausted-provider toggle. Existing
+  column-count preferences are migrated without changing their layout.
 
 ### Fixed
 
@@ -42,8 +44,9 @@ history from the overnight release train. New releases use
 
 ### TestFlight focus
 
-- Move the card-density slider through every offered position on both devices;
-  confirm no provider or window disappears.
+- Toggle Automatic, then move the card-size slider from Small to Large on both
+  devices; confirm cards visibly resize on iPhone and no provider or window
+  disappears.
 - Confirm the selected position survives quitting and reopening the app, and is
   stored separately on each device.
 - At large text sizes, confirm every displayed percentage remains fully legible.

@@ -589,7 +589,8 @@ private func feasibleStops(
     let phoneStops = feasibleStops(for: phone, dynamicTypeSize: .large)
     let padStops = feasibleStops(for: pad, dynamicTypeSize: .large)
 
-    #expect(phoneStops == [1], "iPhone exposes Auto plus one feasible stop")
+    #expect(phoneStops == [1], "iPhone has one feasible column count")
+    #expect(DashboardViewModel.cardSizeStopCount(for: phoneStops.last!) == 3)
     #expect(padStops.count > phoneStops.count, "iPad exposes its wider feasible range")
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
@@ -599,7 +600,7 @@ private func feasibleStops(
             preference: 0, maximum: padStops.last!) == padStops.last!)
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
-            preference: 1, maximum: padStops.last!) == 1)
+            preference: 1, maximum: padStops.last!) == padStops.last!)
 }
 
 /// Selecting `.compact` must reproduce 1.6.0 exactly, so that adding the
@@ -937,7 +938,7 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
 
 /// Device-local, like the sort option and exhausted-visibility controls it sits
 /// beside in Settings' "Local Display" section. `0` is Auto; positive values
-/// are the slider's feasible column stops, which the dashboard clamps against
+/// are the slider's Small-to-Large stops, which the dashboard clamps against
 /// the actual device geometry and Dynamic Type size.
 @MainActor
 @Test func densityPersistsPerDeviceAndDefaultsToCompact() {
@@ -966,6 +967,86 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
     let unknown = DashboardViewModel(
         cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
     #expect(unknown.cardColumnPreference == 0)
+}
+
+@MainActor
+@Test func legacyColumnPreferenceMigratesAfterGeometryIsKnown() {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gradus-density-migration-\(UUID().uuidString)", isDirectory: true)
+    let defaults = UserDefaults(suiteName: "gradus-density-migration-\(UUID().uuidString)")!
+
+    // Build 12 stored a direct column count. Before geometry is available the
+    // new model stays on Auto rather than briefly treating that number as a
+    // size stop; the first dashboard geometry pass translates it exactly.
+    defaults.set(3, forKey: DashboardViewModel.cardColumnPreferenceKey)
+    let viewModel = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+    #expect(viewModel.cardColumnPreference == 0)
+
+    viewModel.setAvailableCardColumns(5)
+    #expect(viewModel.cardColumnPreference == 3, "three old columns should remain three columns")
+    #expect(defaults.integer(forKey: DashboardViewModel.cardColumnPreferenceKey) == 3)
+
+    let relaunched = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+    #expect(relaunched.cardColumnPreference == 3)
+}
+
+@Test func cardSizeStopsKeepAutoExplicitAndInvertLargeToSmall() {
+    // Auto stays a distinct persisted value. Explicit positions run from
+    // the smallest cards on the left to one large card on the right; a phone
+    // gets density-only stops because it cannot add columns.
+    #expect(DashboardViewModel.cardSizeStopCount(for: 1) == 3)
+    #expect(DashboardViewModel.resolvedCardDensity(preference: 0, sizeStops: 3) == nil)
+    #expect(
+        DashboardViewModel.resolvedCardColumnCount(
+            preference: 0, maximum: 1, sizeStops: 3) == 1)
+    #expect(
+        DashboardViewModel.resolvedCardColumnCount(
+            preference: 1, maximum: 1, sizeStops: 3) == 1)
+    #expect(
+        DashboardViewModel.resolvedCardColumnCount(
+            preference: 3, maximum: 1, sizeStops: 3) == 1)
+    #expect(DashboardViewModel.resolvedCardDensity(preference: 1, sizeStops: 3) == .compact)
+    #expect(DashboardViewModel.resolvedCardDensity(preference: 2, sizeStops: 3) == .standard)
+    #expect(DashboardViewModel.resolvedCardDensity(preference: 3, sizeStops: 3) == .large)
+
+    #expect(
+        DashboardViewModel.resolvedCardColumnCount(
+            preference: 1, maximum: 4, sizeStops: 4) == 4)
+    #expect(
+        DashboardViewModel.resolvedCardColumnCount(
+            preference: 4, maximum: 4, sizeStops: 4) == 1)
+    #expect(
+        DashboardViewModel.cardSizeLabel(preference: 0, maximumColumns: 1) == "Auto")
+    #expect(
+        DashboardViewModel.cardSizeLabel(preference: 1, maximumColumns: 4)
+            .hasPrefix("Small · 4 columns"))
+    #expect(
+        DashboardViewModel.cardSizeLabel(preference: 3, maximumColumns: 1)
+            .hasPrefix("Large · 1 column"))
+}
+
+@MainActor
+@Test func cardSizeAccessibilityMovesOneWholeStopAtATime() {
+    let slider = QuietDiscreteUISlider()
+    slider.minimumValue = 1
+    slider.maximumValue = 3
+    slider.value = 1
+
+    slider.accessibilityIncrement()
+    #expect(slider.value == 2)
+    slider.accessibilityIncrement()
+    #expect(slider.value == 3)
+    slider.accessibilityIncrement()
+    #expect(slider.value == 3)
+
+    slider.accessibilityDecrement()
+    #expect(slider.value == 2)
+    slider.accessibilityDecrement()
+    #expect(slider.value == 1)
+    slider.accessibilityDecrement()
+    #expect(slider.value == 1)
 }
 
 /// Asking for compact explicitly remains a stable snapshot fixture while the

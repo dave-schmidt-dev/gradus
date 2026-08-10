@@ -93,12 +93,16 @@ public final class DashboardViewModel: ObservableObject {
             applyPresentationPreferences()
         }
     }
-    /// `0` is Auto; positive values are explicit feasible column counts. This
-    /// remains device-local: a phone and iPad intentionally have different
-    /// feasible ranges, so syncing this preference would make one device's
-    /// choice invalid on the other.
+    /// `0` is Auto; positive values are explicit size stops from Small to
+    /// Large. This remains device-local: a phone and iPad intentionally have
+    /// different feasible ranges, so syncing this preference would make one
+    /// device's choice invalid on the other.
     @Published public var cardColumnPreference: Int {
-        didSet { userDefaults.set(cardColumnPreference, forKey: Self.cardColumnPreferenceKey) }
+        didSet {
+            userDefaults.set(cardColumnPreference, forKey: Self.cardColumnPreferenceKey)
+            userDefaults.set(Self.cardColumnPreferenceFormatVersion, forKey: Self.cardColumnPreferenceFormatKey)
+            pendingLegacyCardColumnPreference = nil
+        }
     }
 
     /// The currently visible dashboard supplies this transient range from its
@@ -112,6 +116,9 @@ public final class DashboardViewModel: ObservableObject {
     static let providerSortOptionKey = "providerSortOption"
     static let showExhaustedKey = "showExhausted"
     static let cardColumnPreferenceKey = "dashboardCardColumnPreference"
+    private static let cardColumnPreferenceFormatKey = "dashboardCardSizePreferenceFormat"
+    private static let cardColumnPreferenceFormatVersion = 1
+    nonisolated static let minimumCardSizeStops = DashboardDensity.allCases.count
     private static let defaultLocalWarningThresholdPercent: Double = 20.0
 
     private let cache: LocalCacheStore
@@ -123,6 +130,10 @@ public final class DashboardViewModel: ObservableObject {
     private let notificationAuthorizationSource: NotificationAuthorizationSource?
     private let userDefaults: UserDefaults
     private var allProviders: [ProviderStatus] = []
+    /// Build 12 stored a direct column count. Keep that value until the first
+    /// geometry pass gives us the device's current maximum, then translate it
+    /// to the new Small-to-Large stop so an upgrade does not change layout.
+    private var pendingLegacyCardColumnPreference: Int?
 
     /// `userDefaults` defaults to `.standard` for production; tests inject
     /// a fresh per-test suite so `syncEnabled` (persisted here) can't leak
@@ -165,7 +176,18 @@ public final class DashboardViewModel: ObservableObject {
             self.localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
         }
         self.providerSortOption = ProviderSortOption(rawValue: userDefaults.string(forKey: Self.providerSortOptionKey) ?? "") ?? .mostUrgent
-        self.cardColumnPreference = max(0, userDefaults.integer(forKey: Self.cardColumnPreferenceKey))
+        let storedCardPreference = max(0, userDefaults.integer(forKey: Self.cardColumnPreferenceKey))
+        if userDefaults.integer(forKey: Self.cardColumnPreferenceFormatKey) >= Self.cardColumnPreferenceFormatVersion {
+            self.cardColumnPreference = storedCardPreference
+            self.pendingLegacyCardColumnPreference = nil
+        } else if storedCardPreference > 0 {
+            self.cardColumnPreference = 0
+            self.pendingLegacyCardColumnPreference = storedCardPreference
+        } else {
+            self.cardColumnPreference = 0
+            self.pendingLegacyCardColumnPreference = nil
+            userDefaults.set(Self.cardColumnPreferenceFormatVersion, forKey: Self.cardColumnPreferenceFormatKey)
+        }
         if userDefaults.object(forKey: Self.showExhaustedKey) != nil {
             self.showExhausted = userDefaults.bool(forKey: Self.showExhaustedKey)
         } else {
@@ -181,18 +203,66 @@ public final class DashboardViewModel: ObservableObject {
         updateConnectedSource()
     }
 
-    /// Updates the Settings slider's device-relative range. A stale explicit
-    /// preference is preserved rather than rewritten; `DashboardContent`
-    /// clamps it against each live geometry pass.
+    /// Updates the Settings slider's device-relative range. A legacy explicit
+    /// column count is translated once the current geometry is known;
+    /// `DashboardContent` then clamps it against each live geometry pass.
     public func setAvailableCardColumns(_ maximum: Int) {
-        availableCardColumns = max(1, maximum)
+        let maximum = max(1, maximum)
+        availableCardColumns = maximum
+        guard let legacyColumns = pendingLegacyCardColumnPreference else { return }
+        pendingLegacyCardColumnPreference = nil
+        let clampedColumns = min(max(legacyColumns, 1), maximum)
+        cardColumnPreference = max(1, maximum - clampedColumns + 1)
     }
 
     /// Resolves Auto (`0`) to the largest feasible count; explicit slider
     /// stops are clamped to the same device-relative range.
-    static func resolvedCardColumnCount(preference: Int, maximum: Int) -> Int {
+    nonisolated static func resolvedCardColumnCount(preference: Int, maximum: Int) -> Int {
+        resolvedCardColumnCount(preference: preference, maximum: maximum, sizeStops: maximum)
+    }
+
+    /// Resolves the persisted slider stop to a column count. The first
+    /// explicit stop is the smallest-card presentation (the maximum feasible
+    /// column count); later stops remove columns toward Large. Phones expose
+    /// additional stops even though their column count remains one so the
+    /// density rung can still respond to the setting.
+    nonisolated static func resolvedCardColumnCount(preference: Int, maximum: Int, sizeStops: Int) -> Int {
         let maximum = max(1, maximum)
-        return preference == 0 ? maximum : min(max(preference, 1), maximum)
+        guard preference != 0 else { return maximum }
+        let position = min(max(preference, 1), maximum)
+        return max(1, maximum - position + 1)
+    }
+
+    /// Number of positions offered by the device-relative card-size slider.
+    /// A one-column phone still gets Large, Standard, and Small positions;
+    /// they differ in density even though they cannot differ in columns.
+    nonisolated static func cardSizeStopCount(for maximumColumns: Int) -> Int {
+        max(minimumCardSizeStops, max(1, maximumColumns))
+    }
+
+    /// Maps an explicit slider stop from Small at the left to Large at the
+    /// right. Auto (`0`) remains separate and is resolved geometrically.
+    nonisolated static func resolvedCardDensity(preference: Int, sizeStops: Int) -> DashboardDensity? {
+        guard preference > 0 else { return nil }
+        let stops = max(minimumCardSizeStops, sizeStops)
+        let position = min(max(preference, 1), stops) - 1
+        let index = Int((Double(position) * 2 / Double(max(1, stops - 1))).rounded())
+        return DashboardDensity.allCases[min(index, DashboardDensity.allCases.count - 1)]
+    }
+
+    nonisolated static func cardSizeLabel(preference: Int, maximumColumns: Int) -> String {
+        guard preference != 0 else { return "Auto" }
+        let stops = cardSizeStopCount(for: maximumColumns)
+        let density = resolvedCardDensity(preference: preference, sizeStops: stops) ?? .large
+        let columns = resolvedCardColumnCount(
+            preference: preference, maximum: maximumColumns, sizeStops: stops)
+        let size = switch density {
+        case .compact: "Small"
+        case .standard: "Medium"
+        case .large: "Large"
+        }
+        let suffix = columns == 1 ? "1 column" : "\(columns) columns"
+        return "\(size) · \(suffix)"
     }
 
     /// P5/T5.1: toggle-on is best-effort/optimistic (mirrors the existing
