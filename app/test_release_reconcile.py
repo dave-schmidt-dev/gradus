@@ -242,6 +242,19 @@ class ReconciliationClient:
                     }
                 ]
             }
+        if path == "/builds/build-marker":
+            return {
+                "data": {
+                    "id": "build-marker",
+                    "attributes": {
+                        "version": "42",
+                        "processingState": "VALID",
+                        "expired": False,
+                        "uploadedDate": "2026-08-09T12:00:00Z",
+                        "expirationDate": "2026-11-07T12:00:00Z",
+                    },
+                }
+            }
         if path == "/betaGroups/group-marker/builds?limit=200":
             return {"data": [{"id": "build-marker"}]} if self.assigned else {"data": []}
         if method == "POST" and path == "/betaGroups/group-marker/relationships/builds":
