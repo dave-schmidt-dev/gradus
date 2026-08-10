@@ -80,41 +80,54 @@ struct SettingsView: View {
             }
             .padding(.vertical, 4)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Card size")
-                    .font(.headline)
-                Toggle("Automatic", isOn: automaticCardSizeBinding)
-                    .accessibilityHint("When on, Gradus chooses the largest card layout that fits this device.")
-                HStack {
-                    Text("Small")
-                    Spacer()
-                    Text(cardSizeLabel)
-                        .foregroundStyle(cardSizeLabel == "Auto" ? .primary : .secondary)
-                    Spacer()
-                    Text("Large")
+            if dashboardViewModel.availableCardColumns <= 1 {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Card size")
+                        .font(.headline)
+                    Text("Automatic · 1 column")
+                    Text("Card size is automatic on this device.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                QuietDiscreteSlider(
-                    value: Binding(
-                        get: {
-                            Double(min(max(dashboardViewModel.cardColumnPreference, 1), cardSizeStopCount))
-                        },
-                        set: { dashboardViewModel.cardColumnPreference = Int($0.rounded()) }),
-                    range: 1...Double(cardSizeStopCount),
-                    valueLabel: { value in
-                        if dashboardViewModel.cardColumnPreference == 0 {
-                            return "Auto"
-                        }
-                        return DashboardViewModel.cardSizeLabel(
-                            preference: Int(value.rounded()),
-                            maximumColumns: dashboardViewModel.availableCardColumns)
+                .padding(.vertical, 4)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Card size")
+                        .font(.headline)
+                    Toggle("Automatic", isOn: automaticCardSizeBinding)
+                        .accessibilityHint("When on, Gradus chooses the largest card layout that fits this device.")
+                    HStack {
+                        Text("Small")
+                        Spacer()
+                        Text(cardSizeLabel)
+                            .foregroundStyle(cardSizeLabel == "Auto" ? .primary : .secondary)
+                        Spacer()
+                        Text("Large")
                     }
-                )
-                Text("Automatic is separate from the size slider. Small uses more columns; Large uses fewer. Every position keeps all provider windows visible.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    QuietDiscreteSlider(
+                        value: Binding(
+                            get: {
+                                Double(min(max(dashboardViewModel.cardColumnPreference, 1), cardSizeStopCount))
+                            },
+                            set: { dashboardViewModel.cardColumnPreference = Int($0.rounded()) }),
+                        range: 1...Double(cardSizeStopCount),
+                        valueLabel: { value in
+                            if dashboardViewModel.cardColumnPreference == 0 {
+                                return "Auto"
+                            }
+                            return DashboardViewModel.cardSizeLabel(
+                                preference: Int(value.rounded()),
+                                maximumColumns: dashboardViewModel.availableCardColumns)
+                        },
+                        isEnabled: cardSizeSliderEnabled
+                    )
+                    Text("Automatic is separate from the size slider. Small uses more columns; Large uses fewer. Every position keeps all provider windows visible.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
 
             ListRow.toggle(
                 icon: Icon.listBullet,
@@ -133,7 +146,7 @@ struct SettingsView: View {
         DashboardViewModel.cardSizeStopCount(for: dashboardViewModel.availableCardColumns)
     }
 
-    private var automaticCardSizeBinding: Binding<Bool> {
+    var automaticCardSizeBinding: Binding<Bool> {
         Binding(
             get: { dashboardViewModel.cardColumnPreference == 0 },
             set: { enabled in
@@ -143,6 +156,11 @@ struct SettingsView: View {
                     dashboardViewModel.cardColumnPreference = 1
                 }
             })
+    }
+
+    var cardSizeSliderEnabled: Bool {
+        dashboardViewModel.availableCardColumns > 1
+            && dashboardViewModel.cardColumnPreference != 0
     }
 
     @ViewBuilder
@@ -246,6 +264,7 @@ private struct QuietDiscreteSlider: UIViewRepresentable {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let valueLabel: (Double) -> String
+    var isEnabled = true
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -268,6 +287,12 @@ private struct QuietDiscreteSlider: UIViewRepresentable {
     }
 
     private func update(_ slider: UISlider) {
+        slider.isEnabled = isEnabled
+        if isEnabled {
+            slider.accessibilityTraits.remove(.notEnabled)
+        } else {
+            slider.accessibilityTraits.insert(.notEnabled)
+        }
         slider.setValue(Float(value), animated: false)
         slider.accessibilityValue = valueLabel(value)
     }
@@ -296,6 +321,7 @@ final class QuietDiscreteUISlider: UISlider {
     }
 
     private func adjustAccessibilityValue(by delta: Float) {
+        guard isEnabled else { return }
         let next = min(max(value.rounded() + delta, minimumValue), maximumValue)
         guard next != value else { return }
         setValue(next, animated: false)

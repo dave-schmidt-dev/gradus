@@ -590,7 +590,7 @@ private func feasibleStops(
     let padStops = feasibleStops(for: pad, dynamicTypeSize: .large)
 
     #expect(phoneStops == [1], "iPhone has one feasible column count")
-    #expect(DashboardViewModel.cardSizeStopCount(for: phoneStops.last!) == 3)
+    #expect(DashboardViewModel.cardSizeStopCount(for: phoneStops.last!) == 1)
     #expect(padStops.count > phoneStops.count, "iPad exposes its wider feasible range")
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
@@ -992,24 +992,35 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
     #expect(relaunched.cardColumnPreference == 3)
 }
 
+@MainActor
+@Test func legacyColumnPreferenceDoesNotRemigrateAfterOneColumnGeometry() {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gradus-density-migration-one-column-\(UUID().uuidString)", isDirectory: true)
+    let defaults = UserDefaults(suiteName: "gradus-density-migration-one-column-\(UUID().uuidString)")!
+    defaults.set(3, forKey: DashboardViewModel.cardColumnPreferenceKey)
+
+    let viewModel = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+    viewModel.setAvailableCardColumns(1)
+    #expect(viewModel.cardColumnPreference == 0)
+    #expect(defaults.integer(forKey: DashboardViewModel.cardColumnPreferenceKey) == 0)
+
+    let relaunched = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+    relaunched.setAvailableCardColumns(4)
+    #expect(relaunched.cardColumnPreference == 2, "three legacy columns should map to two stops from Small")
+}
+
 @Test func cardSizeStopsKeepAutoExplicitAndInvertLargeToSmall() {
     // Auto stays a distinct persisted value. Explicit positions run from
-    // the smallest cards on the left to one large card on the right; a phone
-    // gets density-only stops because it cannot add columns.
-    #expect(DashboardViewModel.cardSizeStopCount(for: 1) == 3)
-    #expect(DashboardViewModel.resolvedCardDensity(preference: 0, sizeStops: 3) == nil)
+    // the smallest cards on the left to one large card on the right. A
+    // one-column device has no manual positions because none can change its
+    // layout.
+    #expect(DashboardViewModel.cardSizeStopCount(for: 1) == 1)
+    #expect(DashboardViewModel.resolvedCardDensity(preference: 0, sizeStops: 1) == nil)
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
-            preference: 0, maximum: 1, sizeStops: 3) == 1)
-    #expect(
-        DashboardViewModel.resolvedCardColumnCount(
-            preference: 1, maximum: 1, sizeStops: 3) == 1)
-    #expect(
-        DashboardViewModel.resolvedCardColumnCount(
-            preference: 3, maximum: 1, sizeStops: 3) == 1)
-    #expect(DashboardViewModel.resolvedCardDensity(preference: 1, sizeStops: 3) == .compact)
-    #expect(DashboardViewModel.resolvedCardDensity(preference: 2, sizeStops: 3) == .standard)
-    #expect(DashboardViewModel.resolvedCardDensity(preference: 3, sizeStops: 3) == .large)
+            preference: 0, maximum: 1, sizeStops: 1) == 1)
 
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
@@ -1024,7 +1035,52 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
             .hasPrefix("Small · 4 columns"))
     #expect(
         DashboardViewModel.cardSizeLabel(preference: 3, maximumColumns: 1)
-            .hasPrefix("Large · 1 column"))
+            == "Auto")
+}
+
+@MainActor
+@Test func oneColumnGeometryForcesAutomaticCardSize() {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gradus-one-column-size-\(UUID().uuidString)", isDirectory: true)
+    let defaults = UserDefaults(suiteName: "gradus-one-column-size-\(UUID().uuidString)")!
+    let viewModel = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+
+    viewModel.setAvailableCardColumns(4)
+    viewModel.cardColumnPreference = 4
+    viewModel.setAvailableCardColumns(1)
+
+    #expect(viewModel.cardColumnPreference == 0)
+    #expect(defaults.integer(forKey: DashboardViewModel.cardColumnPreferenceKey) == 0)
+    #expect(DashboardViewModel.cardSizeStopCount(for: viewModel.availableCardColumns) == 1)
+
+    viewModel.setAvailableCardColumns(4)
+    #expect(viewModel.cardColumnPreference == 4, "the iPad should restore its deferred Large stop")
+}
+
+@MainActor
+@Test func automaticCardSizeDisablesManualSlider() {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gradus-card-size-binding-\(UUID().uuidString)", isDirectory: true)
+    let suite = "gradus-card-size-binding-\(UUID().uuidString)"
+    let viewModel = DashboardViewModel(
+        cache: FileLocalCacheStore(directory: directory),
+        userDefaults: UserDefaults(suiteName: suite)!)
+    viewModel.setAvailableCardColumns(4)
+    let settings = SettingsView(dashboardViewModel: viewModel)
+
+    #expect(settings.cardSizeSliderEnabled == false)
+    settings.automaticCardSizeBinding.wrappedValue = false
+    #expect(viewModel.cardColumnPreference == 1)
+    #expect(settings.cardSizeSliderEnabled)
+
+    settings.automaticCardSizeBinding.wrappedValue = true
+    #expect(viewModel.cardColumnPreference == 0)
+    #expect(settings.cardSizeSliderEnabled == false)
+
+    viewModel.setAvailableCardColumns(1)
+    #expect(viewModel.cardColumnPreference == 0)
+    #expect(settings.cardSizeSliderEnabled == false)
 }
 
 @MainActor
@@ -1045,6 +1101,11 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
     #expect(slider.value == 2)
     slider.accessibilityDecrement()
     #expect(slider.value == 1)
+    slider.accessibilityDecrement()
+    #expect(slider.value == 1)
+
+    slider.isEnabled = false
+    slider.accessibilityIncrement()
     slider.accessibilityDecrement()
     #expect(slider.value == 1)
 }
