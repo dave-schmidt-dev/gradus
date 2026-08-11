@@ -132,7 +132,8 @@ struct SettingsView: View {
             ListRow.toggle(
                 icon: Icon.listBullet,
                 label: "Show exhausted",
-                isOn: $dashboardViewModel.showExhausted)
+                isOn: $dashboardViewModel.showExhausted,
+                accessibilityIdentifier: "show-exhausted-toggle")
         }
     }
 
@@ -166,8 +167,16 @@ struct SettingsView: View {
     @ViewBuilder
     private var syncAndNotificationsSection: some View {
         Section("Sync & Notifications") {
-            ListRow.toggle(icon: Icon.syncing, label: "iCloud Sync", isOn: $dashboardViewModel.syncEnabled)
-            ListRow.toggle(icon: Icon.bell, label: "Notifications", isOn: notificationsBinding)
+            ListRow.toggle(
+                icon: Icon.syncing,
+                label: "iCloud Sync",
+                isOn: $dashboardViewModel.syncEnabled,
+                accessibilityIdentifier: "icloud-sync-toggle")
+            ListRow.toggle(
+                icon: Icon.bell,
+                label: "Notifications",
+                isOn: notificationsBinding,
+                accessibilityIdentifier: "notifications-toggle")
             if let error = dashboardViewModel.notificationsToggleError {
                 Text(error)
                     .font(.caption)
@@ -228,6 +237,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Slider(value: $dashboardViewModel.localWarningThresholdPercent, in: 0...100, step: 1)
+                    .accessibilityIdentifier("warning-threshold-slider")
                 Text(
                     "Highlights providers below this % on this device only -- does not change which alerts get pushed."
                 )

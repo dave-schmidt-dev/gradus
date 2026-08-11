@@ -15,16 +15,37 @@ struct ListRow: View {
     let icon: Image
     let label: String
     fileprivate let accessory: Accessory
+    private let accessibilityIdentifier: String?
 
-    private init(icon: Image, label: String, accessory: Accessory) {
+    private init(
+        icon: Image,
+        label: String,
+        accessory: Accessory,
+        accessibilityIdentifier: String? = nil
+    ) {
         self.icon = icon
         self.label = label
         self.accessory = accessory
+        self.accessibilityIdentifier = accessibilityIdentifier
     }
 
     /// A row with a trailing `Toggle`.
-    static func toggle(icon: Image, label: String, isOn: Binding<Bool>) -> ListRow {
-        ListRow(icon: icon, label: label, accessory: .toggle(isOn))
+    ///
+    /// The visual label remains hidden because the row already renders the
+    /// label beside the control. Keep the label in the accessibility tree,
+    /// however, and expose a stable identifier so UI tests and assistive
+    /// technology do not depend on the row's position in the Settings list.
+    static func toggle(
+        icon: Image,
+        label: String,
+        isOn: Binding<Bool>,
+        accessibilityIdentifier: String? = nil
+    ) -> ListRow {
+        ListRow(
+            icon: icon,
+            label: label,
+            accessory: .toggle(isOn),
+            accessibilityIdentifier: accessibilityIdentifier)
     }
 
     /// A row with a trailing chevron, for navigation rows.
@@ -54,6 +75,9 @@ struct ListRow: View {
         case .toggle(let isOn):
             Toggle(isOn: isOn) { EmptyView() }
                 .labelsHidden()
+                .accessibilityLabel(label)
+                .accessibilityIdentifier(
+                    accessibilityIdentifier ?? accessibilityIdentifier(for: label))
         case .chevron:
             Icon.chevronRight
                 .foregroundStyle(.secondary)
@@ -61,5 +85,15 @@ struct ListRow: View {
             Text(text)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func accessibilityIdentifier(for label: String) -> String {
+        let slug = label
+            .lowercased()
+            .map { character in
+                character.isLetter || character.isNumber ? String(character) : "-"
+            }
+            .joined()
+        return "list-row-toggle-\(slug)"
     }
 }

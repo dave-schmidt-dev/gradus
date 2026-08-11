@@ -158,13 +158,12 @@ final class DashboardXCUITests: XCTestCase {
         XCTAssertTrue(sortName.waitForExistence(timeout: 5))
         sortName.tap()
 
-        // `ListRow.toggle` deliberately hides the Toggle label, so SwiftUI's
-        // accessibility tree exposes these controls as unlabeled switches.
-        // Settings renders them in the fixed section order: sync, warnings,
-        // exhausted visibility. Indexing that contract is more precise than
-        // matching an identifier the production view does not provide.
-        let showExhausted = app.switches.element(boundBy: 2)
-        XCTAssertTrue(showExhausted.exists)
+        // ListRow keeps the visible row label out of the trailing control's
+        // layout, but exposes a stable identifier for the actual switch.
+        // This must not depend on Settings section order: the Automatic card
+        // size control is also a switch on multi-column iPads.
+        let showExhausted = app.switches["show-exhausted-toggle"]
+        XCTAssertTrue(showExhausted.waitForExistence(timeout: 5))
         let initialShowExhausted = switchIsOn(showExhausted)
         showExhausted.tap()
         XCTAssertNotEqual(switchIsOn(showExhausted), initialShowExhausted)
@@ -187,11 +186,20 @@ final class DashboardXCUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         XCTAssertNotEqual(switchIsOn(notifications), initialNotifications)
 
-        let threshold = app.sliders.firstMatch
+        let threshold = app.sliders["warning-threshold-slider"]
         XCTAssertTrue(threshold.exists)
+        var swipeAttempts = 0
+        while !threshold.isHittable && swipeAttempts < 3 {
+            app.swipeUp()
+            swipeAttempts += 1
+        }
+        XCTAssertTrue(threshold.isHittable)
         let initialThreshold = elementValue(threshold)
         let initialThresholdPercent = Int(initialThreshold.dropLast()) ?? 50
+        let thresholdChanged = NSPredicate(format: "value != %@", initialThreshold)
+        expectation(for: thresholdChanged, evaluatedWith: threshold)
         threshold.adjust(toNormalizedSliderPosition: initialThresholdPercent <= 50 ? 1.0 : 0.0)
+        waitForExpectations(timeout: 5)
         XCTAssertNotEqual(elementValue(threshold), initialThreshold)
     }
 
