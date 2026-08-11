@@ -92,6 +92,8 @@ read_evidence_field() {
 
 sha256_file() {
   local path="$1" digest attempt
+  # The loop variable documents the fixed retry count; its value is unused.
+  # shellcheck disable=SC2034
   for attempt in 1 2 3 4 5; do
     if digest="$(/usr/bin/shasum -a 256 "$path" 2>/dev/null | /usr/bin/awk '{print $1}')" \
       && [[ "$digest" =~ ^[[:xdigit:]]{64}$ ]]; then
@@ -732,7 +734,9 @@ main() {
   # The fixed BWS consumer starts children with a minimal environment. Restore
   # HOME from the local account record before uv,
   # xcodebuild, and the provisioning-profile lookup need it.
+  # shellcheck disable=SC2155
   export HOME="$(resolve_user_home)"
+  # shellcheck disable=SC2155
   export USER="$(resolve_user_name)"
   export LOGNAME="$USER"
   local uv_bin

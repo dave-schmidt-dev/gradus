@@ -22,6 +22,7 @@ resolve_uv() {
   printf '%s\n' "$(resolve_user_home)/.local/bin/uv"
 }
 
+# shellcheck disable=SC2155
 export HOME="$(resolve_user_home)"
 export USER="${USER:-$(/usr/bin/id -un)}"
 export LOGNAME="${LOGNAME:-$USER}"

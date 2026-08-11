@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC2034
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GATE_SCRIPT="$SCRIPT_DIR/test-gate.sh"
 failure_count=0
@@ -57,6 +58,7 @@ if ! bash -c '
   fail "sourcing test-gate.sh changed the caller's cwd or shell options"
 fi
 
+# shellcheck source=./test-gate.sh
 source "$GATE_SCRIPT"
 validate_counting_leg_declarations || fail "live counting-leg declarations are invalid"
 validate_density_image_snapshot_selectors || fail "live density image snapshot selectors are invalid"
@@ -195,6 +197,7 @@ grep -Fq 'Leaving pre-existing simulators running' "$GATE_SCRIPT" ||
 
 # Every declared leg passes at its live floor, exercising all three reporter
 # forms and proving the self-check is using the gate's data.
+# shellcheck disable=SC2034
 COUNTING_LEG_RUN_COUNT=0
 for ((index = 0; index < leg_count; index++)); do
   assert_counting_leg \
@@ -222,6 +225,7 @@ done
 
 # A missing invocation is distinct from a zero-count invocation and must fail
 # the expected-leg check.
+# shellcheck disable=SC2034
 COUNTING_LEG_RUN_COUNT=0
 for ((index = 0; index < leg_count - 1; index++)); do
   assert_counting_leg \

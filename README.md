@@ -562,10 +562,10 @@ During one Gradus implementation, repeated in-scope local validation commands sh
 
 ### Git hooks (enforcement)
 
-This project has **no CI** — the local git hooks *are* the gate. They run through
-[`pre-commit`](https://pre-commit.com) using `repo: local` entries, so every hook
-shells out to the same `uv run` tools declared in `pyproject.toml` (no second,
-framework-managed copy that could drift out of version parity).
+This project has **no CI** — the local git hooks *are* the gate. Python hooks run
+through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
+tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
+enforced by `scripts/check-static-tool-versions.sh`.
 
 One-time bootstrap after cloning:
 
@@ -573,11 +573,25 @@ One-time bootstrap after cloning:
 uv run pre-commit install   # installs both pre-commit and pre-push hooks
 ```
 
-- **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files.
+- **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files,
+  plus a fail-closed check requiring SwiftLint 0.65.0, SwiftFormat 0.62.1, and
+  ShellCheck 0.11.0,
+  plus strict SwiftLint and non-mutating SwiftFormat checks on changed Swift
+  files, plus ShellCheck on changed shell scripts. SwiftLint uses the committed `.swiftlint-baseline.json` for the
+  existing debt; any new warning or error fails the hook. SwiftFormat uses the
+  explicit `.swiftformat` policy and `--cache ignore`; it never rewrites files.
+  ShellCheck runs at warning severity, so every finding fails; it never
+  rewrites files.
+  The hook receives only changed Swift paths, so the current legacy formatting
+  debt is not a full-tree waiver and existing sources are not mass-reformatted.
 - **pre-push** (heavier): the full `pytest` suite (~0.2s), so nothing lands on the
   remote without the gate tests passing.
 
-Config lives in `.pre-commit-config.yaml`. Run the checks manually with
+Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
+`.swiftformat`, Swift source scope and generated directory exclusions in
+`.swiftlint.yml`; shell scripts are selected by the ShellCheck hook's
+`types: [shell]` filter (the intentional `monitor` shell/Python polyglot is
+excluded because ShellCheck cannot parse its Python half). Run the checks manually with
 `uv run pre-commit run --all-files`.
 
 Project docs:
@@ -587,3 +601,9 @@ Project docs:
 - **TASKS.md** — backlog and in-progress work
 - **pyproject.toml** — dependencies (`ruff`, `pytest`, `pre-commit`) and tool config
 - **.pre-commit-config.yaml** — local pre-commit/pre-push hook definitions
+- **scripts/check-static-tool-versions.sh** — fail-closed static-tool version gate
+- **.swiftformat** — SwiftFormat version/policy configuration for changed files
+- **.swiftlint.yml** / **.swiftlint-baseline.json** — Swift source scope and
+  current-debt baseline for the strict pre-commit gate
+- **tests/test_shellcheck_gate.py** — ShellCheck hook contract and clean-script
+  self-checks

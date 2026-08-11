@@ -1,16 +1,32 @@
 # Local git hooks — this project has NO CI; these hooks are the enforcement.
 # Split: pre-commit runs fast checks (lint + format), pre-push runs the full test suite.
-# Every hook shells out to `uv run ...` so it uses the project's pinned tool
-# versions (pyproject dev group) — the only ruff/pytest on the machine, no
-# framework-managed second copy that could drift out of version parity.
+# Python hooks use the project's `uv run` tools. SwiftLint, SwiftFormat, and
+# ShellCheck are PATH tools whose exact required versions are fail-closed by
+# `scripts/check-static-tool-versions.sh`.
 #
 # One-time bootstrap after clone:  uv run pre-commit install
 default_install_hook_types: [pre-commit, pre-push]
 
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        types: [yaml]
+        stages: [pre-commit]
+
   - repo: local
     hooks:
       # ---- fast checks: pre-commit ----
+      - id: static-tool-versions
+        name: static tool versions
+        entry: scripts/check-static-tool-versions.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true
+        stages: [pre-commit]
+
       - id: ruff-lint
         name: ruff lint
         entry: uv run ruff check --force-exclude
@@ -24,6 +40,33 @@ repos:
         entry: uv run ruff format --check --force-exclude
         language: system
         types_or: [python, pyi]
+        require_serial: true
+        stages: [pre-commit]
+
+      - id: swiftlint
+        name: swiftlint (strict, baseline)
+        entry: swiftlint lint --strict --no-cache --force-exclude --config .swiftlint.yml --baseline .swiftlint-baseline.json
+        language: system
+        types: [swift]
+        require_serial: true
+        stages: [pre-commit]
+
+      - id: swiftformat
+        name: swiftformat (lint)
+        entry: swiftformat --lint --cache ignore --config .swiftformat
+        language: system
+        types: [swift]
+        require_serial: true
+        stages: [pre-commit]
+
+      - id: shellcheck
+        name: shellcheck (strict)
+        entry: shellcheck --severity=warning
+        language: system
+        types: [shell]
+        # monitor is a deliberate shell/Python polyglot; its Python half is
+        # covered by the Python hooks and cannot be parsed as shell.
+        exclude: ^monitor$
         require_serial: true
         stages: [pre-commit]
 

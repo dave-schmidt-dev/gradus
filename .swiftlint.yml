@@ -1,0 +1,16 @@
+# SwiftLint covers the checked-in Apple sources and tests. Build products,
+# package-manager checkouts, and generated sources are intentionally outside
+# this gate.
+included:
+  - app
+
+excluded:
+  - app/build
+  - app/GradusKit/.build
+  - app/DerivedData
+  - app/.build
+  - app/Pods
+  - app/Carthage
+  - app/Packages
+  - app/Generated
+  - app/**/Generated

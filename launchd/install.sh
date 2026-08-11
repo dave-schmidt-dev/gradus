@@ -7,11 +7,13 @@
 set -euo pipefail
 
 readonly LABEL="local.gradus-snapshot"
+# shellcheck disable=SC2155
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="${GRADUS_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 readonly INSTALL_HOME="${GRADUS_HOME:-$HOME}"
 readonly PYTHON_PATH="${GRADUS_PYTHON_PATH:-$REPO_ROOT/.venv/bin/python3}"
 readonly LAUNCHCTL="${GRADUS_LAUNCHCTL:-launchctl}"
+# shellcheck disable=SC2155
 readonly DOMAIN="gui/$(id -u)"
 readonly JOB="$DOMAIN/$LABEL"
 readonly WRAPPER="$INSTALL_HOME/.launchd/scripts/gradus_snapshot.sh"

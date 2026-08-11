@@ -8,6 +8,7 @@ UPLOAD_SCRIPT="$SCRIPT_DIR/archive-upload-ios.sh"
 GATE_SCRIPT="$SCRIPT_DIR/test-gate.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gradus-upload-tests.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT INT TERM
+# shellcheck source=./archive-upload-ios.sh
 source "$UPLOAD_SCRIPT"
 EXPECTED_HOME="$(
   /usr/bin/id -P | /usr/bin/awk -F: 'NF >= 9 {print $9; exit}'
@@ -243,6 +244,7 @@ printf '%s\n' \
   >"$TEST_ROOT/project.yml"
 (
   cd "$TEST_ROOT"
+  # shellcheck source=./archive-upload-ios.sh
   source "$UPLOAD_SCRIPT"
   bump_ios_build_number 9
 )

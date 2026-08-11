@@ -4,7 +4,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/archive-upload-ios.sh"
+# shellcheck disable=SC2155
 export HOME="$(resolve_user_home)"
+# shellcheck disable=SC2155
 export USER="$(resolve_user_name)"
 export LOGNAME="$USER"
 uv_bin="$(resolve_uv)"
