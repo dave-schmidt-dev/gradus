@@ -28,6 +28,7 @@ from gradus.__main__ import (
     _build_fix_actions,
     _check_warnings,
     _emit_debug_details,
+    _health_sample_reason,
     _is_auth_error,
     _is_transient_probe_error,
     _launch_fix,
@@ -44,7 +45,7 @@ from gradus.__main__ import (
     parse_args,
 )
 from gradus.providers import ProviderSnapshot, set_headless
-from gradus.snapshot import SnapshotWrite
+from gradus.snapshot import ANTIGRAVITY_AUTH_RETRY_MESSAGE, SnapshotWrite
 from gradus.ui import THEME, build_dashboard
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
@@ -721,6 +722,38 @@ class MergeWithPreviousTests(unittest.TestCase):
         self.assertIn("cached", merged[0].source)
         self.assertIsNotNone(merged[0].cached_since)
 
+    def test_auth_grace_is_quiet_but_failed_and_observation_bound(self) -> None:
+        observed = datetime.now(timezone.utc) - timedelta(seconds=30)
+        prior = {
+            "schema_version": 2,
+            "updated_at": observed.isoformat(),
+            "providers": [{"name": "Antigravity", "ok": True, "observed_at": observed.isoformat()}],
+        }
+        failed = ProviderSnapshot(
+            name="Antigravity",
+            ok=False,
+            source="api",
+            error="Antigravity session expired: run `agy` to re-authenticate",
+        )
+        merged = _merge_with_previous(
+            [],
+            [failed],
+            prior_payload=prior,
+            prior_auth_failures=0,
+            now=observed + timedelta(seconds=30),
+        )
+        self.assertFalse(merged[0].ok)
+        self.assertEqual(merged[0].error, ANTIGRAVITY_AUTH_RETRY_MESSAGE)
+        self.assertEqual(merged[0].debug_detail, "auth_failure")
+        expired = _merge_with_previous(
+            [],
+            [failed],
+            prior_payload=prior,
+            prior_auth_failures=0,
+            now=observed + timedelta(seconds=301),
+        )
+        self.assertEqual(expired[0].error, failed.error)
+
     def test_real_read_timeout_serves_cached_data_end_to_end(self) -> None:
         """The whole chain, with no hand-authored error string in it.
 
@@ -1021,6 +1054,54 @@ class WriteSnapshotTests(unittest.TestCase):
             for provider in payload["providers"]:
                 for key in ("name", "ok", "error", "windows", "data"):
                     self.assertIn(key, provider)
+
+    def test_write_snapshot_honors_prior_auth_failure_count_for_both_schemas(self) -> None:
+        """A repeated auth failure must bypass the neutral grace marker everywhere."""
+        when = datetime(2026, 8, 10, 16, tzinfo=timezone.utc)
+        prior_time = when - timedelta(seconds=30)
+        prior = {
+            "schema_version": 2,
+            "updated_at": prior_time.isoformat(),
+            "providers": [
+                {
+                    "name": "Antigravity",
+                    "ok": True,
+                    "error": None,
+                    "observed_at": prior_time.isoformat(),
+                    "windows": [
+                        {"id": "five_hour", "percent_left": 81},
+                        {"id": "weekly", "percent_left": 72},
+                    ],
+                }
+            ],
+        }
+        failed = ProviderSnapshot(
+            name="Antigravity",
+            ok=False,
+            source="api",
+            error="Antigravity session expired: run `agy` to re-authenticate",
+        )
+        captured: list[dict] = []
+
+        def capture(payload: dict, *args: object, **kwargs: object) -> SnapshotWrite:
+            captured.append(payload)
+            return SnapshotWrite.WRITTEN
+
+        with (
+            patch("gradus.__main__.recent_auth_failure_count", return_value=1) as count,
+            patch("gradus.__main__.read_prior_snapshot", return_value=prior),
+            patch("gradus.__main__.write_snapshot", side_effect=capture),
+        ):
+            self.assertEqual(_write_snapshot_versions([failed], when), (True, True))
+
+        count.assert_called_once()
+        self.assertEqual(len(captured), 2)
+        for payload in captured:
+            entry = next(item for item in payload["providers"] if item["name"] == "Antigravity")
+            self.assertEqual(
+                entry["error"], "Antigravity session expired: run `agy` to re-authenticate"
+            )
+            self.assertEqual(entry["windows"], [])
 
 
 class HistoryPersistenceIntegrationTests(unittest.TestCase):
@@ -1943,6 +2024,16 @@ class TestRefreshHealthVerifier(unittest.TestCase):
                 {"name": "Antigravity (Claude)", "ok": ok, "observed_at": observed.isoformat()}
             )
         return {"schema_version": 2, "updated_at": updated.isoformat(), "providers": providers}
+
+    def test_carried_auth_is_non_green_until_fresh_recovery(self) -> None:
+        carried = self._payload(0, ok=False)
+        carried["providers"][0]["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
+        carried["providers"][1]["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
+        _, reason = _health_sample_reason(carried, None, self.BASE + timedelta(seconds=1))
+        self.assertEqual(reason, "carried-auth")
+        fresh = self._payload(120)
+        _, reason = _health_sample_reason(fresh, self.BASE, self.BASE + timedelta(seconds=121))
+        self.assertEqual(reason, "fresh")
 
     @staticmethod
     def _drive(

@@ -8,7 +8,15 @@ cd -- "$REPO_ROOT"
 
 BRIDGE="${GRADUS_CREDENTIAL_BRIDGE:-$HOME/Applications/GradusCredentialBridge.app/Contents/MacOS/GradusCredentialBridge}"
 if [[ -x "$BRIDGE" ]]; then
-    if ! "$BRIDGE" --cache-directory "$REPO_ROOT/.cache"; then
+    if "$BRIDGE" --cache-directory "$REPO_ROOT/.cache"; then
+        # The signed bridge can succeed without producing a provider cache when
+        # Safari has no usable session cookie. Keep that outcome visible; the
+        # Python side remains cache-only and must report the provider as auth
+        # required rather than reading Safari itself.
+        if [[ ! -f "$REPO_ROOT/.cache/opencode_go_cookies.json" ]]; then
+            printf '%s\n' 'gradus_snapshot credential_bridge cache=missing provider=OpenCode Go' >&2
+        fi
+    else
         printf '%s\n' 'gradus_snapshot credential_bridge status=failed' >&2
     fi
 else

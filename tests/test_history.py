@@ -19,6 +19,7 @@ from gradus.history import (
     query_history,
     read_history_evidence,
     read_history_records,
+    recent_auth_failure_count,
 )
 from gradus.providers import ProviderSnapshot
 
@@ -469,6 +470,40 @@ class HistoryQueryTests(unittest.TestCase):
         query_history([first.isoformat()], history_dir=self.history_dir)
         self.assertEqual(stat.S_IMODE(self.history_dir.stat().st_mode), before_dir)
         self.assertEqual(stat.S_IMODE(partition.stat().st_mode), before_file)
+
+
+class AuthFailureJournalTests(unittest.TestCase):
+    def test_counter_reads_prior_auth_failures_only_in_rolling_window(self) -> None:
+        tmpdir = tempfile.TemporaryDirectory()
+        history_dir = Path(tmpdir.name) / "history"
+        try:
+            now = datetime(2026, 1, 8, 12, tzinfo=UTC)
+            for when in (now - timedelta(seconds=600), now - timedelta(seconds=300)):
+                payload = _payload(
+                    when,
+                    [
+                        _entry(
+                            "Antigravity",
+                            when,
+                            ok=False,
+                            error="Antigravity refresh retrying; values may be stale",
+                        )
+                    ],
+                )
+                probe = ProviderSnapshot(
+                    name="Antigravity",
+                    ok=False,
+                    source="api",
+                    error="Antigravity refresh retrying; values may be stale",
+                    debug_detail="auth_failure",
+                )
+                self.assertTrue(HistoryStore(history_dir).append(payload, [probe], now=when))
+            self.assertEqual(
+                recent_auth_failure_count("Antigravity", as_of=now, history_dir=history_dir),
+                1,
+            )
+        finally:
+            tmpdir.cleanup()
 
 
 if __name__ == "__main__":

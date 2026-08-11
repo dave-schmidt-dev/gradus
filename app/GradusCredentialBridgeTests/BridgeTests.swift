@@ -50,6 +50,26 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
 
+    func testMissingOpenCodeCookieLeavesCacheMissingUntilAUsableCookieReturns() throws {
+        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let source = temporary.appendingPathComponent("Cookies.binarycookies")
+        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+
+        try binaryCookies([("console.mistral.ai", "csrftoken", "fixture")]).write(to: source)
+        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: cache.appendingPathComponent("opencode_go_cookies.json").path)
+        )
+
+        try binaryCookies([("opencode.ai", "auth", "restored-cookie")]).write(to: source)
+        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+        let restored = try payload(named: "opencode_go_cookies.json", in: cache)
+        XCTAssertEqual(restored["auth"], "restored-cookie")
+    }
+
     private func payload(named filename: String, in cache: URL) throws -> [String: String] {
         let data = try Data(contentsOf: cache.appendingPathComponent(filename))
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])

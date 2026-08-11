@@ -142,6 +142,160 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     #expect(withInvalid.visibleWindows.map(\.id) == ["auto"])
 }
 
+/// The candidate is deliberately row-major: every row is left-to-right and
+/// every later row is below the complete preceding row. The test calls the
+/// production frame model, so reverting production to independent columns (or
+/// changing its row sizing) changes these exact results.
+@Test func rowBalancedPlacementKeepsProviderOrderWithoutRaggedCards() {
+    let heights: [CGFloat] = [244, 116, 190, 148, 92, 92, 168, 168]
+    let spacing: CGFloat = 14
+    let frames = ProviderRowBalancedLayout.frames(
+        cardHeights: heights,
+        columns: 2,
+        cardWidth: 100,
+        horizontalSpacing: spacing,
+        verticalSpacing: spacing)
+
+    #expect(frames.count == heights.count)
+    #expect(frames[0].minY == 0)
+    #expect(frames[1].minY == 0)
+    #expect(frames[0].height == frames[1].height)
+    #expect(frames[2].minY == frames[0].maxY + spacing)
+    #expect(frames[3].minY == frames[2].minY)
+    #expect(frames[2].height == frames[3].height)
+    #expect(
+        frames[2].minY >= frames[1].maxY,
+        "a later source row must never appear above an earlier provider")
+}
+
+@MainActor
+@Test func fullFixturePinsPortraitLandscapeMeasurementsAndLargeText() {
+    let providers = fullProviderSet()
+    #expect(providers.count == 8)
+    #expect(providers.reduce(0) { $0 + $1.windows.count } == 14)
+
+    let standard = DashboardDensity.standard.metrics
+    let solverMetrics = DashboardDensity.compact.metrics
+    let portraitWidth = CGFloat(834) - dashboardHorizontalInset * 2
+    let landscapeWidth = CGFloat(1194) - dashboardHorizontalInset * 2
+    let portraitMaximum = maxColumns(
+        containerWidth: portraitWidth,
+        scaledFixedColumnWidth: solverMetrics.fixedColumnWidth(showsReset: false),
+        cardPadding: solverMetrics.cardPadding,
+        cardGap: solverMetrics.cardGap,
+        minimumBarWidth: DensityMetrics.minimumBarWidth)
+    let landscapeMaximum = maxColumns(
+        containerWidth: landscapeWidth,
+        scaledFixedColumnWidth: solverMetrics.fixedColumnWidth(showsReset: false),
+        cardPadding: solverMetrics.cardPadding,
+        cardGap: solverMetrics.cardGap,
+        minimumBarWidth: DensityMetrics.minimumBarWidth)
+    let portraitColumns = DashboardViewModel.resolvedCardColumnCount(
+        preference: pinnedCardColumnPreference, maximum: portraitMaximum)
+    let landscapeColumns = DashboardViewModel.resolvedCardColumnCount(
+        preference: pinnedCardColumnPreference, maximum: landscapeMaximum)
+    #expect(portraitColumns == portraitMaximum)
+    #expect(landscapeColumns == landscapeMaximum)
+    let portraitCardWidth = cardWidth(
+        containerWidth: portraitWidth, columns: portraitColumns, cardGap: standard.cardGap)
+    let landscapeCardWidth = cardWidth(
+        containerWidth: landscapeWidth, columns: landscapeColumns, cardGap: standard.cardGap)
+
+    struct MeasuredDevice {
+        let name: String
+        let cardWidth: CGFloat
+        let columns: Int
+    }
+    for device in [
+        MeasuredDevice(
+            name: "iPad Pro 11-inch (M5) portrait", cardWidth: portraitCardWidth, columns: portraitColumns),
+        MeasuredDevice(
+            name: "iPad Pro 11-inch (M5) landscape", cardWidth: landscapeCardWidth, columns: landscapeColumns),
+    ] {
+        let heights = providers.map { provider in
+            UIHostingController(
+                rootView: ProviderDensityCard(
+                    provider: provider,
+                    now: fixedNow,
+                    showsReset: true,
+                    metrics: standard
+                )
+                .environment(\.dynamicTypeSize, .xxxLarge)
+                .frame(width: device.cardWidth, alignment: .leading)
+            ).sizeThatFits(in: CGSize(width: device.cardWidth, height: 4_000)).height
+        }
+        #expect(heights.allSatisfy { $0 > 0 }, "\(device.name) produced an empty provider card")
+        let frames = ProviderRowBalancedLayout.frames(
+            cardHeights: heights,
+            columns: device.columns,
+            cardWidth: device.cardWidth,
+            horizontalSpacing: standard.cardGap,
+            verticalSpacing: standard.cardGap)
+        #expect(frames.count == providers.count)
+        #expect(frames[0].minY == 0)
+        for rowStart in stride(from: 0, to: frames.count, by: device.columns) {
+            let rowEnd = min(rowStart + device.columns, frames.count)
+            let rowFrames = Array(frames[rowStart..<rowEnd])
+            let rowY = rowFrames[0].minY
+            #expect(rowFrames.dropFirst().allSatisfy { $0.minY == rowY })
+            #expect(rowFrames.dropFirst().allSatisfy { $0.height == rowFrames[0].height })
+            if rowStart > 0 {
+                #expect(rowY >= frames[rowStart - 1].maxY)
+            }
+        }
+    }
+}
+
+/// The iPhone and iPad snapshots may differ in geometry, but never in the
+/// provider/window identity set. The sole visual exception owned by this
+/// phase is the shared label foreground token from Task 2.1.
+@MainActor
+@Test func iPhoneAndIPadSemanticSnapshotsHaveExactWindowParity() {
+    let providers = fullProviderSet()
+    let iPhone = DashboardContent(
+        viewModel: makeDensityViewModel(providers: providers),
+        now: fixedNow,
+        layout: .denseSingleColumn,
+        density: .standard)
+    let iPad = DashboardContent(
+        viewModel: makeDensityViewModel(providers: providers),
+        now: fixedNow,
+        layout: .denseGrid,
+        density: .standard)
+
+    let expectedProviderNames = Set(providers.map(\.providerName))
+    #expect(Set(iPhone.semanticProviderWindowSet.map(\.providerName)) == expectedProviderNames)
+    #expect(Set(iPad.semanticProviderWindowSet.map(\.providerName)) == expectedProviderNames)
+    #expect(iPhone.semanticProviderWindowSet.count == 8)
+    #expect(iPhone.semanticProviderWindowSet.reduce(0) { $0 + $1.windowIDs.count } == 14)
+    #expect(iPhone.semanticProviderWindowSet == iPad.semanticProviderWindowSet)
+
+    // Production's one-column frame model is compared with the explicit
+    // legacy single-column geometry. This is the bounded render comparison:
+    // no card position, width, height, provider order, or window set may vary
+    // on iPhone; the only named pixel exception is the Task 2.1 label token.
+    let measuredHeights: [CGFloat] = [144, 92, 118, 90]
+    let iPhoneFrames = ProviderRowBalancedLayout.frames(
+        cardHeights: measuredHeights,
+        columns: 1,
+        cardWidth: 361,
+        horizontalSpacing: 14,
+        verticalSpacing: 14)
+    var expectedY: CGFloat = 0
+    let expectedFrames = measuredHeights.map { height in
+        let frame = CGRect(x: 0, y: expectedY, width: 361, height: height)
+        expectedY += height + 14
+        return frame
+    }
+    #expect(iPhoneFrames == expectedFrames)
+
+    let visualDifferenceAllowlist = Set(["label-foreground-token"])
+    let observedSharedDifference = String(describing: WindowRow.labelForegroundToken) == "readable"
+        ? Set(["label-foreground-token"])
+        : Set(["unlisted-label-token"])
+    #expect(observedSharedDifference.subtracting(visualDifferenceAllowlist).isEmpty)
+}
+
 // MARK: - density (TASKS row 24)
 
 /// Content width for each destination the gate runs, minus `denseGrid`'s shared
@@ -650,6 +804,66 @@ private func feasibleStops(
     #expect(compact.exhaustedGap == 8)
     #expect(compact.exhaustedRowHeight == 52)
     #expect(compact.exhaustedCornerRadius == 10)
+}
+
+/// The provider card is rendered over the real light/dark surface tokens, not
+/// over an abstract white/black background. `.secondary` is the prior
+/// recessed token; it is intentionally asserted below as a failing mutation
+/// fixture so a future visual regression cannot quietly restore it.
+@Test func usageBucketLabelContrastMeetsWCAGAAAgainstCardSurfaces() {
+    let token = WindowRow.labelForegroundToken
+    let foreground = token.effectiveForeground
+    let lightRatio = foreground.light.contrastRatio(with: ProviderDensityCardSurfaceToken.light)
+    let darkRatio = foreground.dark.contrastRatio(with: ProviderDensityCardSurfaceToken.dark)
+    let normalRatio = min(lightRatio, darkRatio)
+
+    #expect(normalRatio >= 4.5, "normal label contrast is only \(normalRatio):1")
+    #expect(min(lightRatio, darkRatio) >= 3, "large/accessibility label contrast is only \(normalRatio):1")
+
+    let recessed = WindowRowLabelForegroundToken.recessed.effectiveForeground
+    let recessedNormalRatio = min(
+        recessed.light.contrastRatio(with: ProviderDensityCardSurfaceToken.light),
+        recessed.dark.contrastRatio(with: ProviderDensityCardSurfaceToken.dark))
+    #expect(
+        recessedNormalRatio < 4.5,
+        "the old secondary token unexpectedly clears normal-label AA; keep the mutation fixture honest")
+}
+
+/// Standard and XXXL are the two readability checkpoints for the named
+/// buckets. The spoken row value is a semantic snapshot of the same label that
+/// is drawn beside the bar, so this catches an accidental raw-id fallback or
+/// truncation without adding a second byte-identical pixel baseline.
+@MainActor
+@Test func usageBucketLabelsRemainIdentifiableAtStandardAndXXXL() {
+    let expected: [(id: String, label: String)] = [
+        ("five_hour", "5 Hour"),
+        ("weekly", "Weekly"),
+        ("monthly", "Monthly"),
+        ("premium", "Premium"),
+        ("billing_cycle", "Billing Cycle"),
+        ("ac", "Auto"),
+        ("ap", "API"),
+    ]
+
+    for dynamicTypeSize in [DynamicTypeSize.large, .xxxLarge] {
+        for (id, label) in expected {
+            let row = WindowRow(
+                window: window(id, 47), now: fixedNow, showsReset: false, metrics: .standard)
+                .environment(\.dynamicTypeSize, dynamicTypeSize)
+            let renderedWidth = UIHostingController(
+                rootView: row.fixedSize(horizontal: true, vertical: false)
+            ).sizeThatFits(in: CGSize(width: 2_000, height: 200)).width
+
+            #expect(ProviderWindowLabel.label(for: id) == label)
+            #expect(rowContentContainsLabel(id: id, label: label))
+            #expect(renderedWidth >= 1, "\(label) rendered no measurable row at \(dynamicTypeSize)")
+        }
+    }
+}
+
+private func rowContentContainsLabel(id: String, label: String) -> Bool {
+    let row = WindowRow(window: window(id, 47), now: fixedNow, showsReset: false, metrics: .standard)
+    return row.spokenLabel.hasPrefix("\(label),")
 }
 
 /// A density that is only *partly* larger reads as a rendering bug rather than

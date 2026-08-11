@@ -279,12 +279,14 @@ struct MenuContentView: View {
             Divider()
 
             Button("Settings…") { SettingsWindow.show(viewModel: viewModel) }
+                .accessibilityIdentifier("menu-settings-button")
             Button("Quit Gradus") {
                 NSApplication.shared.terminate(nil)
             }
         }
         .padding(12)
         .frame(width: MenuVerticalBudget.columnWidth)
+        .accessibilityIdentifier("menu-content")
     }
 
     /// Applied here rather than in `PublisherViewModel.providers`, which is the
@@ -361,6 +363,84 @@ struct MenuBarContentRoot: View {
     }
 }
 
+/// Deterministic DEBUG-only host for Mac XCUITests. It exercises the same
+/// MenuContentView used by MenuBarExtra, without making the production
+/// status-item path test-dependent or reading a user's snapshot/defaults.
+struct MenuUITestFixtureView: View {
+    @StateObject private var viewModel: PublisherViewModel
+
+    init() {
+        let suiteName = "com.zerodelta.gradus.mac.ui-tests"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let viewModel = PublisherViewModel(defaults: defaults)
+        viewModel.apply(
+            SnapshotPayload(
+                schemaVersion: supportedSchemaVersion,
+                updatedAt: "2026-08-10T12:00:00-04:00",
+                providers: [
+                    ProviderEntry(
+                        name: "Codex",
+                        ok: true,
+                        error: nil,
+                        windows: [
+                            ProviderWindow(
+                                id: "five_hour", percentLeft: 72,
+                                resetISO: "2026-08-10T17:00:00-04:00", windowHours: 5,
+                                paceDelta: 0.12),
+                            ProviderWindow(
+                                id: "weekly", percentLeft: 44,
+                                resetISO: "2026-08-12T09:00:00-04:00", windowHours: 168,
+                                paceDelta: -0.02),
+                        ],
+                        data: [:], observedAt: "2026-08-10T12:00:00-04:00"),
+                    ProviderEntry(
+                        name: "Cursor",
+                        ok: true,
+                        error: nil,
+                        windows: [
+                            ProviderWindow(
+                                id: "monthly", percentLeft: 0,
+                                resetISO: "2026-08-31T23:59:00-04:00", windowHours: 720,
+                                paceDelta: -0.5),
+                        ],
+                        data: [:], observedAt: "2026-08-10T12:00:00-04:00"),
+                ]
+            )
+        )
+        _viewModel = StateObject(wrappedValue: viewModel)
+    }
+
+    var body: some View {
+        MenuContentView(viewModel: viewModel)
+            .frame(minHeight: 680)
+            .padding(.top, 1)
+    }
+}
+
+/// DEBUG-only window host for the Mac UI-test fixture. A status-item app has
+/// no normal root window for XCUITest to launch, so the test seam owns one
+/// explicit window while the production MenuBarExtra path remains unchanged.
+#if DEBUG
+enum MenuUITestFixtureWindow {
+    private static var window: NSWindow?
+
+    static func show() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        let hostingController = NSHostingController(rootView: MenuUITestFixtureView())
+        let window = NSWindow(contentViewController: hostingController)
+        window.identifier = NSUserInterfaceItemIdentifier("gradus-ui-test-menu")
+        window.title = "Gradus UI Test Menu"
+        window.setContentSize(NSSize(width: MenuContentView.columnWidth + 24, height: 720))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.center()
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        self.window = window
+    }
+}
+#endif
+
 /// Title plus an at-a-glance count of providers needing attention, so the
 /// answer to "is anything wrong" is available without reading any row.
 struct MenuHeader: View {
@@ -421,6 +501,7 @@ enum ProviderTriage {
     /// any-window, so that provider raised a warning on the phone and none on
     /// the Mac.
     static func needsAttention(_ provider: ProviderEntry) -> Bool {
+        if ProviderRetryAccessibility.isRetrying(provider) { return false }
         if !provider.ok { return true }
         return providerNeedsAttention(provider.windows)
     }
@@ -523,11 +604,14 @@ private struct ProviderRow: View {
 
     @ViewBuilder
     var body: some View {
-        if provider.ok, provider.windows.count == 1 {
-            compactWindow(provider.windows[0])
-        } else {
-            expandedWindows
+        Group {
+            if provider.ok, provider.windows.count == 1 {
+                compactWindow(provider.windows[0])
+            } else {
+                expandedWindows
+            }
         }
+        .accessibilityIdentifier("menu-provider-\(provider.name)")
     }
 
     private func compactWindow(_ window: ProviderWindow) -> some View {
@@ -573,10 +657,19 @@ private struct ProviderRow: View {
             }
 
             if !provider.ok {
-                Text(provider.error ?? "Provider probe failed")
+                let label = ProviderRetryAccessibility.label(for: provider)
+                    ?? provider.error
+                    ?? "Provider probe failed"
+                Text(label)
                     .font(.caption)
-                    .foregroundStyle(SignalColor.forLevel(.red))
+                    .foregroundStyle(
+                        ProviderRetryAccessibility.isRetrying(provider)
+                            ? .secondary
+                            : SignalColor.forLevel(.red)
+                    )
                     .lineLimit(2)
+                    .accessibilityIdentifier("provider-status-\(provider.name)")
+                    .accessibilityLabel(label)
             }
 
             if provider.windows.isEmpty, provider.ok {

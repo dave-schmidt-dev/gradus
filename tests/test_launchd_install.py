@@ -236,6 +236,38 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
         self.assertEqual(result.stderr.strip(), "gradus_snapshot credential_bridge status=failed")
         self.assertIn("--refresh-snapshot", self.python_log.read_text(encoding="utf-8"))
 
+    def test_wrapper_reports_missing_cache_without_reading_safari(self) -> None:
+        environment = self._environment()
+        isolated_repo = self.root / "repo"
+        isolated_repo.mkdir()
+        environment["GRADUS_REPO_ROOT"] = str(isolated_repo)
+        environment["GRADUS_SNAPSHOT_V2_PATH"] = str(self.snapshot_path)
+        installed = subprocess.run(
+            ["bash", str(INSTALLER), "install"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        wrapper = self.home / ".launchd/scripts/gradus_snapshot.sh"
+        environment["GRADUS_CREDENTIAL_BRIDGE"] = str(self.bin_dir / "credential-bridge")
+        result = subprocess.run(
+            ["bash", str(wrapper)],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stderr.strip(),
+            "gradus_snapshot credential_bridge cache=missing provider=OpenCode Go",
+        )
+        self.assertNotIn("Cookies.binarycookies", wrapper.read_text(encoding="utf-8"))
+
     def test_fresh_install_waits_for_run_at_load_before_verifying(self) -> None:
         result = self._run()
         self.assertEqual(result.returncode, 0, result.stderr)

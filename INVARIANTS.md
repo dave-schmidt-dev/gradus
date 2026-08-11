@@ -144,6 +144,8 @@ rationale: Every new behavior has a test at the lowest layer that proves it; new
   producer/consumer behavior has tests on both sides. Tests must be wired into the runner and gate.
   Silent-zero execution is a discriminated failure: each counted gate leg must report at least its
   declared minimum number of tests, and a successful command with no recognized count is not proof.
+  The canonical gate also runs explicit target-level GradusMacUITests and GradusiOSUITests legs with
+  floors above a placeholder-only run, so a broad scheme leg cannot mask a missing UI target.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
 
@@ -161,3 +163,8 @@ rationale: GradusiOS is one artifact with one version, so a size class is a rend
   tablet, and the release notes asked testers to "confirm the iPhone layout is unchanged" — documenting
   the divergence as though it were a decision. Both destinations must be exercised by the gate:
   size-class-gated coverage that runs on only one destination is how this divergence stays invisible.
+  Freeze baseline 2026-08-10: the attended isolated-cache gate passed every
+  counted leg (GradusKit 64, pytest 564, GradusMac 97, GradusiOS unit 120,
+  iPhone UI 2, iPad UI 2). Harvest still reports `frozen: true` with three
+  INV-12 recurrence entries (threshold three). The 2026-08-07 resolution
+  remains unchanged; no closure or backdated resolution is recorded.

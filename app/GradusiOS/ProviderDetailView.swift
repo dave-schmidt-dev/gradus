@@ -63,9 +63,13 @@ struct ProviderDetailView: View {
     }
 
     private var errorText: some View {
-        Text(provider.errorMessage ?? "error")
+        let label = IOSProviderRetryAccessibility.displayLabel(for: provider)
+        return Text(label)
             .font(.subheadline)
-            .foregroundStyle(.red)
+            .foregroundStyle(
+                IOSProviderRetryAccessibility.isRetrying(provider) ? Color.secondary : Color.red
+            )
+            .accessibilityLabel(label)
     }
 
     @ViewBuilder

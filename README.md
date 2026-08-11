@@ -1,5 +1,9 @@
 # gradus
 
+The 2026-08-10 reliability/accessibility/parity reconciliation is recorded in
+the dated Gradus plan under the local `.plans/gradus/` workspace; its live
+queue mapping and explicit future exclusions remain in `TASKS.md`.
+
 Internal TestFlight release candidates use the candidate ledger under
 `app/release_candidate/`. The candidate path is limited to preparation, upload,
 processing/compliance, and assignment to an existing attended internal group;

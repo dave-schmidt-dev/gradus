@@ -18,6 +18,7 @@ from rich.theme import Theme
 
 from .providers import ProviderSnapshot
 from .snapshot import (
+    ANTIGRAVITY_AUTH_RETRY_MESSAGE,
     normalized_warning_windows,
     pace_delta,
     percent_is_depleted,
@@ -901,6 +902,14 @@ def build_provider_panel(
         title_text += f" [text.yellow](offline {age_str})[/]"
 
     if not snapshot.ok:
+        if snapshot.error == ANTIGRAVITY_AUTH_RETRY_MESSAGE:
+            body = Text.from_markup("[text.yellow]retrying[/] [text.muted]— values may be stale[/]")
+            return Panel(
+                body,
+                title=title_text,
+                border_style="text.yellow",
+                padding=(0, 1),
+            )
         # Stale data — distinct from hard errors (yellow, not red)
         if snapshot.error and snapshot.error.startswith("stale"):
             body = Text.from_markup(f"[text.yellow]{snapshot.error}[/]")

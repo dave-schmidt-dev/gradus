@@ -1525,5 +1525,66 @@ class TestCopilotParity(unittest.TestCase):
         self.assertEqual(claude_entry["data"]["session_percent_left"], 80)
 
 
+class TestAntigravityAuthGrace(unittest.TestCase):
+    def _status(
+        self, ok: bool, data: dict | None = None, error: str | None = None
+    ) -> ProviderSnapshot:
+        return _ps("Antigravity", ok, data=data, error=error)
+
+    def test_auth_failure_carries_direct_and_synthetic_values_with_neutral_marker(self) -> None:
+        prior_time = NOW - timedelta(seconds=100)
+        healthy = self._status(
+            True,
+            {
+                "five_hour_percent_left": 81,
+                "weekly_percent_left": 72,
+                "third_party_five_hour_percent_left": 61,
+                "third_party_weekly_percent_left": 53,
+            },
+        )
+        failed = self._status(
+            False, error="Antigravity session expired: run `agy` to re-authenticate"
+        )
+        prior = snap.build_snapshot_v2_payload([healthy], prior_time)
+        current = snap.build_snapshot_v2_payload([failed], NOW, prior=prior)
+        entries = {
+            entry["name"]: entry
+            for entry in current["providers"]
+            if entry["name"].startswith("Antigravity")
+        }
+        self.assertEqual(len(entries["Antigravity"]["windows"]), 2)
+        self.assertEqual(
+            [window["id"] for window in entries["Antigravity"]["windows"]],
+            [window["id"] for window in entries["Antigravity (Claude)"]["windows"]],
+        )
+        self.assertEqual(
+            entries["Antigravity"]["observed_at"], entries["Antigravity (Claude)"]["observed_at"]
+        )
+        self.assertFalse(entries["Antigravity"]["ok"])
+        self.assertEqual(entries["Antigravity"]["error"], snap.ANTIGRAVITY_AUTH_RETRY_MESSAGE)
+        self.assertEqual(entries["Antigravity"]["observed_at"], snap.local_iso(prior_time))
+
+    def test_auth_failure_expires_at_five_minutes_and_escalates_on_prior_failure(self) -> None:
+        healthy = self._status(True, {"five_hour_percent_left": 81, "weekly_percent_left": 72})
+        failed = self._status(
+            False, error="Antigravity session expired: run `agy` to re-authenticate"
+        )
+        prior = snap.build_snapshot_v2_payload([healthy], NOW - timedelta(seconds=300))
+        expired = snap.build_snapshot_v2_payload([failed], NOW, prior=prior)
+        direct = next(item for item in expired["providers"] if item["name"] == "Antigravity")
+        self.assertEqual(
+            direct["error"], "Antigravity session expired: run `agy` to re-authenticate"
+        )
+        self.assertEqual(direct["windows"], [])
+        escalated = snap.build_snapshot_v2_payload(
+            [failed], NOW, prior=prior, prior_auth_failures=1
+        )
+        direct = next(item for item in escalated["providers"] if item["name"] == "Antigravity")
+        self.assertEqual(
+            direct["error"], "Antigravity session expired: run `agy` to re-authenticate"
+        )
+        self.assertEqual(direct["windows"], [])
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -27,7 +27,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 
-from .history import append_history_record, query_history
+from .history import append_history_record, query_history, recent_auth_failure_count
 from .providers import (
     ProviderSnapshot,
     fetch_provider_snapshot,
@@ -35,6 +35,7 @@ from .providers import (
 )
 from .providers._base import _PROVIDER_REGISTRY
 from .snapshot import (
+    ANTIGRAVITY_AUTH_RETRY_MESSAGE,
     SNAPSHOT_PATH,
     SNAPSHOT_V2_PATH,
     STALE_THRESHOLD_SECONDS,
@@ -43,6 +44,7 @@ from .snapshot import (
     _parse_aware_iso_timestamp,
     build_snapshot_payload,
     build_snapshot_v2_payload,
+    is_antigravity_auth_failure,
     read_prior_snapshot,
     warning_membership,
     write_snapshot,
@@ -465,9 +467,25 @@ def _write_snapshot_versions(
 
         return progress
 
+    history_now = when if when.tzinfo is not None else when.astimezone()
+    try:
+        prior_auth_failures = recent_auth_failure_count(
+            "Antigravity",
+            as_of=history_now,
+            window_seconds=600,
+            history_dir=Path(SNAPSHOT_V2_PATH).resolve().parent / "history",
+        )
+    except (OSError, TypeError, ValueError):
+        prior_auth_failures = 0
+
     try:
         v1_result = write_snapshot(
-            build_snapshot_payload(snaps, when, prior=read_prior_snapshot(SNAPSHOT_PATH)),
+            build_snapshot_payload(
+                snaps,
+                when,
+                prior=read_prior_snapshot(SNAPSHOT_PATH),
+                prior_auth_failures=prior_auth_failures,
+            ),
             # Passed explicitly. `write_snapshot`'s default binds `snapshot.py`'s
             # module-level SNAPSHOT_PATH at import, so omitting it made the read
             # above honor a patched `__main__.SNAPSHOT_PATH` while this write
@@ -487,7 +505,10 @@ def _write_snapshot_versions(
     v2_payload: dict | None = None
     try:
         v2_payload = build_snapshot_v2_payload(
-            snaps, when, prior=read_prior_snapshot(SNAPSHOT_V2_PATH)
+            snaps,
+            when,
+            prior=read_prior_snapshot(SNAPSHOT_V2_PATH),
+            prior_auth_failures=prior_auth_failures,
         )
         v2_result = write_snapshot(
             v2_payload,
@@ -758,6 +779,13 @@ def _health_sample_reason(
     for entry in selected:
         assert isinstance(entry, Mapping)
         if entry.get("ok") is not True:
+            if (
+                entry.get("name") == "Antigravity"
+                and entry.get("error") == ANTIGRAVITY_AUTH_RETRY_MESSAGE
+            ):
+                observed_at = _parse_health_timestamp(entry.get("observed_at"))
+                if observed_at is not None and observed_at <= updated_at:
+                    return updated_at, "carried-auth"
             # Names come from the fixed required-provider set rather than the
             # provider's error text: this line is written to a non-private
             # launchd log and must remain diagnostic without leaking details.
@@ -845,11 +873,58 @@ def _verify_refresh_health_once(duration: float, interval: float) -> int:
 def _merge_with_previous(
     previous: list[ProviderSnapshot],
     fresh: list[ProviderSnapshot],
+    *,
+    prior_payload: Mapping[str, object] | None = None,
+    prior_auth_failures: int = 0,
+    now: datetime | None = None,
 ) -> list[ProviderSnapshot]:
+    """Merge transient cache state and bounded Antigravity auth grace."""
     previous_by_name = {snap.name: snap for snap in previous}
+    publish_time = now or datetime.now().astimezone()
+    if publish_time.tzinfo is None or publish_time.utcoffset() is None:
+        publish_time = publish_time.astimezone()
+
+    def auth_prior_is_fresh(name: str) -> bool:
+        if not isinstance(prior_payload, Mapping):
+            return False
+        entries = prior_payload.get("providers")
+        if not isinstance(entries, list):
+            return False
+        prior = next(
+            (
+                entry
+                for entry in entries
+                if isinstance(entry, Mapping) and entry.get("name") == name
+            ),
+            None,
+        )
+        if not isinstance(prior, Mapping) or prior.get("ok") is not True:
+            return False
+        observed_at = _parse_aware_iso_timestamp(prior.get("observed_at"))
+        if observed_at is None:
+            return False
+        try:
+            age = (publish_time - observed_at).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return 0 <= age < STALE_THRESHOLD_SECONDS
+
     merged: list[ProviderSnapshot] = []
     for snapshot in fresh:
         prior = previous_by_name.get(snapshot.name)
+        if (
+            is_antigravity_auth_failure(snapshot)
+            and prior_auth_failures == 0
+            and auth_prior_is_fresh("Antigravity")
+        ):
+            merged.append(
+                replace(
+                    snapshot,
+                    error=ANTIGRAVITY_AUTH_RETRY_MESSAGE,
+                    debug_detail="auth_failure",
+                )
+            )
+            continue
         if prior and prior.ok and _is_transient_probe_error(snapshot):
             cached_since = prior.cached_since or datetime.now()
             stale_seconds = (datetime.now() - cached_since).total_seconds()
@@ -1101,7 +1176,23 @@ def main() -> int:
         for snap in previous:
             if snap.name not in static_names and not snap.ok:
                 fresh.append(snap)
-        return _merge_with_previous(previous, fresh)
+        refresh_time = datetime.now().astimezone()
+        try:
+            prior_auth_failures = recent_auth_failure_count(
+                "Antigravity",
+                as_of=refresh_time,
+                window_seconds=600,
+                history_dir=Path(SNAPSHOT_V2_PATH).resolve().parent / "history",
+            )
+        except (OSError, TypeError, ValueError):
+            prior_auth_failures = 0
+        return _merge_with_previous(
+            previous,
+            fresh,
+            prior_payload=read_prior_snapshot(SNAPSHOT_V2_PATH),
+            prior_auth_failures=prior_auth_failures,
+            now=refresh_time,
+        )
 
     console = Console(theme=THEME)
 

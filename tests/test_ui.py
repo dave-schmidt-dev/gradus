@@ -13,7 +13,13 @@ from rich.console import Console
 from rich.text import Text
 
 from gradus.providers import ProviderSnapshot
-from gradus.snapshot import SAFE_DATA_KEYS, percent_is_depleted, signal_level, window_warns
+from gradus.snapshot import (
+    ANTIGRAVITY_AUTH_RETRY_MESSAGE,
+    SAFE_DATA_KEYS,
+    percent_is_depleted,
+    signal_level,
+    window_warns,
+)
 from gradus.ui import (
     _FILL_GLYPH,
     THEME,
@@ -2127,6 +2133,17 @@ class AuthFixPanelTests(unittest.TestCase):
         self.assertIn("to fix", output)
         # Raw error text should NOT appear
         self.assertNotIn("run agy", output)
+
+    def test_antigravity_retry_marker_is_neutral_and_has_no_cta(self) -> None:
+        snap = ProviderSnapshot(
+            name="Antigravity", ok=False, source="api", error=ANTIGRAVITY_AUTH_RETRY_MESSAGE
+        )
+        panel = build_provider_panel(snap, self.now, auth_fix_key="1")
+        output = _capture(panel, width=70)
+        self.assertIn("retrying", output)
+        self.assertIn("values may be stale", output)
+        self.assertNotIn("auth error", output)
+        self.assertEqual(panel.border_style, "text.yellow")
 
     def test_non_auth_error_shows_raw_error(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=False, source="api", error="connection timeout")

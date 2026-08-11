@@ -84,6 +84,13 @@ for ((index = 0; index < leg_count; index++)); do
   fi
 done
 
+# Target-level UI legs must remain explicit rather than hidden inside a broad
+# scheme invocation.
+grep -Fq -- "-only-testing:GradusMacUITests" "$GATE_SCRIPT" ||
+  fail "Mac UI target-level selector is missing from the canonical gate"
+grep -Fq -- "-only-testing:GradusiOSUITests" "$GATE_SCRIPT" ||
+  fail "iOS UI target-level selector is missing from the canonical gate"
+
 # Every declared leg passes at its live floor, exercising all three reporter
 # forms and proving the self-check is using the gate's data.
 COUNTING_LEG_RUN_COUNT=0

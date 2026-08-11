@@ -6,9 +6,13 @@ import SwiftUI
 @main
 struct GradusMacApp: App {
     @State private var isMenuBarInserted: Bool
+    #if DEBUG
+    @NSApplicationDelegateAdaptor(MenuUITestApplicationDelegate.self)
+    private var uiTestApplicationDelegate
+    #endif
 
     init() {
-        _isMenuBarInserted = State(initialValue: !Self.isTestHost())
+        _isMenuBarInserted = State(initialValue: !Self.isTestHost() && !Self.uiTestMenuFixtureEnabled)
         #if DEBUG
         if CommandLine.arguments.contains("--cloudkit-spike") {
             Task { await CloudKitSpike.run() }
@@ -69,9 +73,24 @@ struct GradusMacApp: App {
             || environment["XCTestBundlePath"] != nil
     }
 
+    /// Debug-only launch seam for GradusMacUITests. The production path is
+    /// still the MenuBarExtra below; this only supplies a deterministic
+    /// window because XCUITest cannot click an LSUIElement status item.
+    static var uiTestMenuFixtureEnabled: Bool {
+        #if DEBUG
+        return CommandLine.arguments.contains("--ui-test-menu-fixture")
+            || ProcessInfo.processInfo.environment["GRADUS_UI_TEST_MENU_FIXTURE"] == "1"
+        #else
+        return false
+        #endif
+    }
+
     var body: some Scene {
         MenuBarExtra("Gradus", systemImage: "gauge", isInserted: $isMenuBarInserted) {
             MenuBarContentRoot(viewModel: PublishPipeline.shared.viewModel)
+        }
+        .menuBarExtraStyle(.window)
+
         // REQUIRED, not cosmetic. `MenuBarExtra` defaults to `.menu`, which
         // does not render SwiftUI: it translates the content into `NSMenu`
         // items, flattening every stack into one item per `Text`, dropping
@@ -83,8 +102,6 @@ struct GradusMacApp: App {
         // it: `ProviderListViewSnapshotTests` renders the subview through
         // `ImageRenderer`, where SwiftUI draws normally, so the baselines were
         // correct and green against a path the user never saw.
-        }
-        .menuBarExtraStyle(.window)
 
         // No `Settings` scene here on purpose. Declaring one is the idiomatic
         // way to get a preferences window, and on macOS 26.5.2 nothing opens
@@ -96,6 +113,18 @@ struct GradusMacApp: App {
         // read as working code.
     }
 }
+
+#if DEBUG
+/// Post-launch seam for the Mac UI test. SwiftUI's `App.init()` is too early
+/// to order an AppKit window reliably; the delegate callback runs after the
+/// application has an active run loop while production remains menu-bar-only.
+private final class MenuUITestApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard GradusMacApp.uiTestMenuFixtureEnabled else { return }
+        MenuUITestFixtureWindow.show()
+    }
+}
+#endif
 
 /// Holds the long-lived publish pipeline (snapshot watcher → CloudKit
 /// publisher) for the app's process lifetime. A `MenuBarExtra` app has no

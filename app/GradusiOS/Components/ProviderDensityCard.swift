@@ -43,11 +43,15 @@ struct ProviderDensityCard: View {
         VStack(alignment: .leading, spacing: metrics.titleGap) {
             Text(provider.providerDisplayName)
                 .font(metrics.titleFont)
-                .lineLimit(1)
+                // The row-balanced layout measures each card at its actual width,
+                // so a large Dynamic Type title can wrap without pushing a
+                // neighbouring column or losing the provider identity.
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
 
             body(for: provider)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .padding(metrics.cardPadding)
         .background(
             .quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: metrics.cornerRadius))
@@ -81,10 +85,14 @@ struct ProviderDensityCard: View {
     }
 
     private var errorText: some View {
-        Text(provider.errorMessage ?? "error")
+        let label = IOSProviderRetryAccessibility.displayLabel(for: provider)
+        return Text(label)
             .font(metrics.labelFont)
-            .foregroundStyle(.red)
+            .foregroundStyle(
+                IOSProviderRetryAccessibility.isRetrying(provider) ? Color.secondary : Color.red
+            )
             .lineLimit(2)
+            .accessibilityLabel(label)
     }
 
     /// Windows whose percentage violates INV-3 are dropped rather than drawn

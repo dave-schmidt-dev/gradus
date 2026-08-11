@@ -45,3 +45,9 @@ struct SyncStatusLine: View {
         }
     }
 }
+
+extension SyncStatusLine {
+    static func providerRetryAccessibilityLabel(for provider: ProviderStatus) -> String? {
+        IOSProviderRetryAccessibility.label(for: provider)
+    }
+}

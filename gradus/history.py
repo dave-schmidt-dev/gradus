@@ -88,6 +88,47 @@ _PROVENANCE_BY_PROVIDER: dict[str, dict[str, Any]] = {
 }
 
 
+def recent_auth_failure_count(
+    provider: str = "Antigravity",
+    *,
+    as_of: datetime | None = None,
+    window_seconds: float = 600.0,
+    history_dir: Path = HISTORY_DIR,
+) -> int:
+    """Count prior auth failures in the rolling credential-free window.
+
+    The current probe is intentionally not an argument: callers count only
+    records already committed to the journal, then decide how to project the
+    current failure. This prevents a healthy/auth alternation from extending
+    grace and keeps process restarts subject to the same observation bound.
+    """
+    if (
+        not isinstance(window_seconds, (int, float))
+        or isinstance(window_seconds, bool)
+        or window_seconds < 0
+    ):
+        return 0
+    current = _utc_now(as_of)
+    cutoff = current - timedelta(seconds=float(window_seconds))
+    records, status = read_history_evidence(history_dir)
+    if status not in {"ok", "empty"}:
+        return 0
+    count = 0
+    for record in records:
+        timestamp = _history_record_timestamp(record)
+        if timestamp is None:
+            continue
+        timestamp = timestamp.astimezone(timezone.utc)
+        if not cutoff < timestamp < current:
+            continue
+        observations = record.get("observations")
+        observation = observations.get(provider) if isinstance(observations, Mapping) else None
+        probe = observation.get("probe") if isinstance(observation, Mapping) else None
+        if isinstance(probe, Mapping) and probe.get("reason") == "auth_failure":
+            count += 1
+    return count
+
+
 def _parse_aware(value: object) -> datetime | None:
     """Parse an ISO timestamp only when it carries a usable offset."""
     if not isinstance(value, str):
@@ -207,6 +248,14 @@ def _probe_metadata(
             return {"attempted": True, "reason": "transient_failure"}
         return {"attempted": True, "reason": "success"}
 
+    # A graced provider carries the raw probe classification in the internal
+    # debug slot while exposing only the neutral consumer marker. The marker is
+    # also accepted for restart/replay fixtures where that slot is unavailable.
+    if snapshot.debug_detail == "auth_failure" or (
+        snapshot.name == "Antigravity"
+        and snapshot.error == "Antigravity refresh retrying; values may be stale"
+    ):
+        return {"attempted": False, "reason": "auth_failure"}
     error = (snapshot.error or "").lower()
     if error.strip() == "provider not enabled":
         return {"attempted": False, "reason": "not_enabled"}
@@ -748,6 +797,7 @@ __all__ = [
     "build_history_record",
     "history_partition_path",
     "query_history",
+    "recent_auth_failure_count",
     "read_history_evidence",
     "read_history_records",
 ]

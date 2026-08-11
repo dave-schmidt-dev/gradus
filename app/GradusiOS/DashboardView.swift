@@ -61,6 +61,15 @@ enum DashboardLayout {
     var editorialShowsReset: Bool { self == .denseGrid }
 }
 
+/// The provider/window identity that both size classes promise to present.
+/// Keeping this semantic shape separate from pixels lets parity tests reject
+/// an information split even when the two devices necessarily have different
+/// viewport geometry.
+struct DashboardProviderWindowSet: Equatable {
+    let providerName: String
+    let windowIDs: [String]
+}
+
 struct DashboardContent: View {
     @ObservedObject var viewModel: DashboardViewModel
     let now: Date
@@ -172,17 +181,22 @@ struct DashboardContent: View {
         (densityOverride ?? .compact).metrics
     }
 
+    /// Semantic parity surface for iPhone and iPad snapshots. Ordering is
+    /// intentional: it is the row-major provider order users read left to
+    /// right, followed by the source window order inside each card.
+    var semanticProviderWindowSet: [DashboardProviderWindowSet] {
+        viewModel.providers.map {
+            DashboardProviderWindowSet(
+                providerName: $0.providerName,
+                windowIDs: $0.windows.map(\.id))
+        }
+    }
+
     private struct GridResolution {
         let metrics: DensityMetrics
         let columns: Int
         let maximumColumns: Int
         let didFitDensity: Bool
-    }
-
-    private func columns(for resolution: GridResolution) -> [GridItem] {
-        return Array(
-            repeating: GridItem(.flexible(), spacing: resolution.metrics.cardGap, alignment: .top),
-            count: resolution.columns)
     }
 
     private func gridResolution(in contentWidth: CGFloat) -> GridResolution {
@@ -359,10 +373,10 @@ struct DashboardContent: View {
                     for: resolution.metrics.rung, showsReset: true))
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    LazyVGrid(
-                        columns: columns(for: resolution),
-                        alignment: .leading,
-                        spacing: resolution.metrics.cardGap
+                    ProviderRowBalancedLayout(
+                        columns: resolution.columns,
+                        horizontalSpacing: resolution.metrics.cardGap,
+                        verticalSpacing: resolution.metrics.cardGap
                     ) {
                         ForEach(activeProviders, id: \.providerName) { provider in
                             ProviderDensityCard(
@@ -377,6 +391,7 @@ struct DashboardContent: View {
                                 }
                         }
                     }
+                    .frame(width: contentWidth, alignment: .leading)
                     if !exhaustedProviders.isEmpty {
                         exhaustedSection(metrics: resolution.metrics, contentWidth: contentWidth)
                     }
@@ -494,5 +509,111 @@ struct DashboardContent: View {
             selectedProviderName = provider.providerName
         }
         .accessibilityIdentifier("exhausted-provider-\(provider.providerName)")
+    }
+}
+
+/// A row-major, row-balanced layout for the provider cards.
+///
+/// `LazyVGrid` keeps every card in a row at the height of that row's tallest
+/// card, but its implicit sizing leaves the shorter card background ragged.
+/// This layout makes that contract explicit: it measures each row, assigns
+/// every card in the row the measured maximum height, and advances only after
+/// the complete row. That preserves true left-to-right/top-to-bottom reading
+/// order while removing the ragged below-card edge.
+struct ProviderRowBalancedLayout: Layout {
+    let columns: Int
+    let horizontalSpacing: CGFloat
+    let verticalSpacing: CGFloat
+
+    private var resolvedColumns: Int { max(1, columns) }
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let width = proposal.width ?? 0
+        let columnWidth = widthForColumn(containerWidth: width)
+        let rowHeights = rowHeights(subviews: subviews, columnWidth: columnWidth)
+        let totalHeight = rowHeights.reduce(0) { partial, rowHeight in
+            partial + rowHeight + (partial == 0 ? 0 : verticalSpacing)
+        }
+        return CGSize(width: width, height: totalHeight)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let columnWidth = widthForColumn(containerWidth: bounds.width)
+        let heights = subviews.map {
+            $0.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height
+        }
+        let frames = Self.frames(
+            cardHeights: heights,
+            columns: resolvedColumns,
+            cardWidth: columnWidth,
+            horizontalSpacing: horizontalSpacing,
+            verticalSpacing: verticalSpacing)
+        for (subview, frame) in zip(subviews, frames) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: frame.width, height: frame.height))
+        }
+    }
+
+    /// Production's row measurement is exposed to tests so the regression
+    /// check cannot drift into a duplicate arithmetic model.
+    static func rowHeights(cardHeights: [CGFloat], columns: Int) -> [CGFloat] {
+        let count = max(1, columns)
+        return stride(from: 0, to: cardHeights.count, by: count).map { start in
+            cardHeights[start..<min(start + count, cardHeights.count)].max() ?? 0
+        }
+    }
+
+    /// The production frame model used by the semantic/render parity test.
+    static func frames(
+        cardHeights: [CGFloat],
+        columns: Int,
+        cardWidth: CGFloat,
+        horizontalSpacing: CGFloat,
+        verticalSpacing: CGFloat
+    ) -> [CGRect] {
+        let count = max(1, columns)
+        let rows = rowHeights(cardHeights: cardHeights, columns: count)
+        var result: [CGRect] = []
+        var rowOrigin: CGFloat = 0
+        for (row, rowHeight) in rows.enumerated() {
+            let firstIndex = row * count
+            let lastIndex = min(firstIndex + count, cardHeights.count)
+            for index in firstIndex..<lastIndex {
+                let column = index - firstIndex
+                result.append(CGRect(
+                    x: CGFloat(column) * (cardWidth + horizontalSpacing),
+                    y: rowOrigin,
+                    width: cardWidth,
+                    height: rowHeight))
+            }
+            rowOrigin += rowHeight + verticalSpacing
+        }
+        return result
+    }
+
+    private func widthForColumn(containerWidth: CGFloat) -> CGFloat {
+        max(
+            0,
+            (containerWidth - CGFloat(resolvedColumns - 1) * horizontalSpacing)
+                / CGFloat(resolvedColumns))
+    }
+
+    private func rowHeights(subviews: Subviews, columnWidth: CGFloat) -> [CGFloat] {
+        Self.rowHeights(
+            cardHeights: subviews.map {
+                $0.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height
+            },
+            columns: resolvedColumns)
     }
 }

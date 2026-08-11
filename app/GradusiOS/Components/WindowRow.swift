@@ -1,6 +1,79 @@
 import GradusKit
 import SwiftUI
 
+/// The label token is intentionally separate from the percentage signal token.
+/// Labels are supporting context, but `.secondary` is too recessed on the
+/// light card surface (the actual `.quaternary.opacity(0.5)` card rasterizes
+/// to approximately `#DDDDDE` in the light snapshot).
+enum WindowRowLabelForegroundToken {
+    case readable
+    /// Retained as a mutation fixture in `DensityLayoutTests`: reverting the
+    /// row to this token must fail the normal-label contrast assertion.
+    case recessed
+
+    var color: Color {
+        switch self {
+        case .readable: .primary.opacity(0.78)
+        case .recessed: .secondary
+        }
+    }
+
+    /// Effective sRGB values at the rendered card surfaces. These are the
+    /// actual light/dark surface tokens from the committed snapshot renderer,
+    /// not a generic black/white contrast assumption.
+    var effectiveForeground: (light: ContrastRGB, dark: ContrastRGB) {
+        switch self {
+        case .readable:
+            return (
+                light: ContrastRGB(49, 49, 49),
+                dark: ContrastRGB(207, 207, 207))
+        case .recessed:
+            return (
+                light: ContrastRGB(131, 131, 135),
+                dark: ContrastRGB(148, 148, 155))
+        }
+    }
+}
+
+/// Small, platform-independent color representation for deterministic WCAG
+/// assertions. SwiftUI's semantic colors are environment-dependent, so tests
+/// use the resolved values from the actual provider-card surfaces.
+struct ContrastRGB: Equatable, Sendable {
+    let red: Double
+    let green: Double
+    let blue: Double
+
+    init(_ red: Double, _ green: Double, _ blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    var relativeLuminance: Double {
+        func linear(_ component: Double) -> Double {
+            let normalized = component / 255
+            return normalized <= 0.03928
+                ? normalized / 12.92
+                : pow((normalized + 0.055) / 1.055, 2.4)
+        }
+
+        return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+
+    func contrastRatio(with other: ContrastRGB) -> Double {
+        let lighter = max(relativeLuminance, other.relativeLuminance)
+        let darker = min(relativeLuminance, other.relativeLuminance)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+}
+
+enum ProviderDensityCardSurfaceToken {
+    /// `.quaternary.opacity(0.5)` over the light system background.
+    static let light = ContrastRGB(221, 221, 222)
+    /// `.quaternary.opacity(0.5)` over the dark system background.
+    static let dark = ContrastRGB(37, 37, 38)
+}
+
 /// One window rendered as a single dense line: label, bar, percentage, reset.
 ///
 /// This is the unit that makes the iPad's Option B layout work — the Now
@@ -15,6 +88,11 @@ import SwiftUI
 /// readability loss when this was prototyped with an intrinsic-width label.
 struct WindowRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// Kept as a view-owned choice so the contrast test observes the exact
+    /// token used by the rendered label. Mutating this back to `.recessed`
+    /// makes the normal-size assertion fail.
+    static let labelForegroundToken = WindowRowLabelForegroundToken.readable
 
     // `relativeTo` is intentionally compile-time. Each density rung uses a
     // different text style for each column, so keep one scaled value for every
@@ -97,10 +175,14 @@ struct WindowRow: View {
 
     private var labelText: some View {
         Text(ProviderWindowLabel.label(for: window.id))
-            .font(metrics.labelFont)
-            .foregroundStyle(.secondary)
+            .font(metrics.labelFont.weight(.medium))
+            .foregroundStyle(Self.labelForegroundToken.color)
             .lineLimit(1)
-            .frame(width: scaledLabelWidth, alignment: .leading)
+            // `Billing Cycle` and the long names must not lose their identity
+            // merely because the percentage column is present. The minimum
+            // holds the intended bar start while leaving the usage bar's
+            // flexible allocation authoritative at narrow widths.
+            .frame(minWidth: scaledLabelWidth, alignment: .leading)
     }
 
     private func percentText(color: Color) -> some View {

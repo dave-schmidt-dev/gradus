@@ -111,4 +111,103 @@ final class DashboardXCUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Gradus"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Codex"].exists)
     }
+
+    func testSettingsControlsUpdateLocalDisplayAndSyncPreferences() throws {
+        let providers = [
+            ProviderStatus(
+                providerName: "active",
+                providerDisplayName: "Active",
+                ok: true,
+                errorMessage: nil,
+                windows: [
+                    ProviderWindow(
+                        id: "weekly", percentLeft: 72,
+                        resetISO: "2026-08-12T05:00:00-04:00", windowHours: 168,
+                        paceDelta: 0.05)
+                ],
+                data: [:], observedAt: "2026-08-10T12:00:00-04:00",
+                snapshotUpdatedAt: "2026-08-10T12:00:00-04:00", publishedAt: Date()),
+            ProviderStatus(
+                providerName: "spent",
+                providerDisplayName: "Spent",
+                ok: true,
+                errorMessage: nil,
+                windows: [
+                    ProviderWindow(
+                        id: "monthly", percentLeft: 0,
+                        resetISO: "2026-08-31T23:59:00-04:00", windowHours: 720,
+                        paceDelta: -0.5)
+                ],
+                data: [:], observedAt: "2026-08-10T12:00:00-04:00",
+                snapshotUpdatedAt: "2026-08-10T12:00:00-04:00", publishedAt: Date()),
+        ]
+        let app = XCUIApplication()
+        app.launchEnvironment["GRADUS_UITEST_SEED_JSON"] = String(
+            data: try JSONEncoder().encode(providers), encoding: .utf8)!
+        app.launch()
+
+        dismissSystemDialogsIfPresent(for: app)
+        XCTAssertTrue(app.staticTexts["Active"].waitForExistence(timeout: 10))
+
+        let dashboardSettings = app.buttons.firstMatch
+        XCTAssertTrue(dashboardSettings.exists)
+        dashboardSettings.tap()
+        XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 5))
+
+        let sortName = app.buttons["Name A-Z"]
+        XCTAssertTrue(sortName.waitForExistence(timeout: 5))
+        sortName.tap()
+
+        // `ListRow.toggle` deliberately hides the Toggle label, so SwiftUI's
+        // accessibility tree exposes these controls as unlabeled switches.
+        // Settings renders them in the fixed section order: sync, warnings,
+        // exhausted visibility. Indexing that contract is more precise than
+        // matching an identifier the production view does not provide.
+        let showExhausted = app.switches.element(boundBy: 2)
+        XCTAssertTrue(showExhausted.exists)
+        let initialShowExhausted = switchIsOn(showExhausted)
+        showExhausted.tap()
+        XCTAssertNotEqual(switchIsOn(showExhausted), initialShowExhausted)
+        showExhausted.tap()
+        XCTAssertEqual(switchIsOn(showExhausted), initialShowExhausted)
+
+        let sync = app.switches.element(boundBy: 0)
+        XCTAssertTrue(sync.exists)
+        let initialSync = switchIsOn(sync)
+        sync.tap()
+        XCTAssertNotEqual(switchIsOn(sync), initialSync)
+
+        let notifications = app.switches.element(boundBy: 1)
+        XCTAssertTrue(notifications.exists)
+        let initialNotifications = switchIsOn(notifications)
+        notifications.tap()
+        let notificationState = NSPredicate(
+            format: "value == %@", initialNotifications ? "0" : "1")
+        expectation(for: notificationState, evaluatedWith: notifications)
+        waitForExpectations(timeout: 5)
+        XCTAssertNotEqual(switchIsOn(notifications), initialNotifications)
+
+        let threshold = app.sliders.firstMatch
+        XCTAssertTrue(threshold.exists)
+        let initialThreshold = elementValue(threshold)
+        let initialThresholdPercent = Int(initialThreshold.dropLast()) ?? 50
+        threshold.adjust(toNormalizedSliderPosition: initialThresholdPercent <= 50 ? 1.0 : 0.0)
+        XCTAssertNotEqual(elementValue(threshold), initialThreshold)
+    }
+
+    private func dismissSystemDialogsIfPresent(for app: XCUIApplication) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for label in ["Allow", "Not Now"] where springboard.buttons[label].exists {
+            springboard.buttons[label].tap()
+        }
+        _ = app
+    }
+
+    private func switchIsOn(_ element: XCUIElement) -> Bool {
+        (element.value as? String) == "1"
+    }
+
+    private func elementValue(_ element: XCUIElement) -> String {
+        element.value as? String ?? String(describing: element.value)
+    }
 }

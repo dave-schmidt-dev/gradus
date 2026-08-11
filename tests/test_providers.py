@@ -2751,6 +2751,22 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         provider._acquire()
         self.assertFalse(self._cache_path.exists())
 
+    def test_missing_cache_fails_then_restored_cache_recovers(self) -> None:
+        provider = OpenCodeGoProvider()
+        with self.assertRaises(ProbeFailure) as missing:
+            provider.fetch()
+        self.assertIn("sign in at opencode.ai", str(missing.exception))
+        self.assertFalse(self._cache_path.exists())
+
+        self._cache_path.write_text(json.dumps({"auth": "restored-cookie"}), encoding="utf-8")
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(provider, "_fetch_subscription", return_value=self.SUBSCRIPTION),
+        ):
+            recovered = provider.fetch()
+        self.assertEqual(recovered.five_hour_percent_left, 75)
+        self.assertEqual(recovered.weekly_percent_left, 90)
+
 
 class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
     """End-to-end: framed seroval wire bodies -> parsed status fields."""

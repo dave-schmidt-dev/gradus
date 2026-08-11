@@ -18,6 +18,9 @@ from ._base import ProbeFailure, _format_reset_time, _is_headless, register
 log = logging.getLogger(__name__)
 
 HISTORY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+# These strings are part of the credential-free producer/consumer contract.
+AUTH_REAUTHENTICATION_ERROR = "Antigravity session expired: run `agy` to re-authenticate"
+AUTH_FAILURE_REASON = "auth_failure"
 HISTORY_PROVENANCE = {
     "provenance_available": True,
     "method": "POST",
@@ -237,7 +240,7 @@ class AntigravityProvider:
         self._acquire()
         if self._token_expired(self._token) and not self._trigger_agy_self_refresh():
             raise ProbeFailure(
-                "Antigravity session expired: run `agy` to re-authenticate",
+                AUTH_REAUTHENTICATION_ERROR,
                 "keychain token past expiry",
             )
 
@@ -252,7 +255,7 @@ class AntigravityProvider:
             if "401" not in str(exc):
                 raise
             reauth = ProbeFailure(
-                "Antigravity session expired: run `agy` to re-authenticate",
+                AUTH_REAUTHENTICATION_ERROR,
                 "keychain token past expiry (401)",
             )
             if not self._trigger_agy_self_refresh():

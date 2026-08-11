@@ -1,6 +1,31 @@
 import Foundation
 import GradusKit
 
+enum IOSProviderRetryAccessibility {
+    static let retryingLabel = "Antigravity refresh retrying; values may be stale"
+    static let reauthenticationLabel = "Antigravity authentication required; run agy to re-authenticate"
+
+    static func label(for provider: ProviderStatus) -> String? {
+        guard provider.providerName == "Antigravity", !provider.ok else { return nil }
+        if provider.errorMessage == retryingLabel { return retryingLabel }
+        guard let error = provider.errorMessage?.lowercased(),
+            error.contains("session expired") || error.contains("re-authenticate") || error.contains("run `agy`")
+        else { return nil }
+        return reauthenticationLabel
+    }
+
+    static func isRetrying(_ provider: ProviderStatus) -> Bool {
+        label(for: provider) == retryingLabel
+    }
+
+    /// Returns the user-facing status text for an errored provider. Retry and
+    /// reauthentication states get the same wording on every iOS surface;
+    /// other failures retain the producer's diagnostic text.
+    static func displayLabel(for provider: ProviderStatus) -> String {
+        label(for: provider) ?? provider.errorMessage ?? "error"
+    }
+}
+
 /// iOS ranks the CloudKit model, which arrives with `isWarning`/`isDepleted`
 /// already stamped on it by the Mac publisher. Both are read straight through
 /// rather than recomputed: the publisher's answer is the one the push
@@ -22,6 +47,7 @@ extension ProviderStatus: RankableProvider {
     /// same function the Mac evaluates locally — so reading it through here is
     /// no longer a *different* answer from the Mac's, just a cheaper one.
     func rankingNeedsAttention(localThreshold: Double) -> Bool {
-        isWarning || windows.contains { localIsUrgent($0, threshold: localThreshold) }
+        if IOSProviderRetryAccessibility.isRetrying(self) { return false }
+        return isWarning || windows.contains { localIsUrgent($0, threshold: localThreshold) }
     }
 }

@@ -21,7 +21,7 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 /// has (Cursor two pools, Antigravity's split Gemini/Claude quotas, Copilot
 /// premium-only, Vibe on a billing cycle).
 @MainActor
-private func fullProviderSet() -> [ProviderStatus] {
+func fullProviderSet() -> [ProviderStatus] {
     func w(_ id: String, _ percent: Double, _ pace: Double?, _ reset: String?) -> ProviderWindow {
         ProviderWindow(id: id, percentLeft: percent, resetISO: reset, windowHours: 168, paceDelta: pace)
     }
@@ -65,6 +65,8 @@ private func fullProviderSet() -> [ProviderStatus] {
     ]
 }
 
+let pinnedCardColumnPreference = 1 // Small: the largest feasible count for each width.
+
 @MainActor
 private func makeViewModel() -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
@@ -72,6 +74,7 @@ private func makeViewModel() -> DashboardViewModel {
     let cache = FileLocalCacheStore(directory: directory)
     let defaults = UserDefaults(suiteName: "gradus-density-snap-\(UUID().uuidString)")!
     defaults.set(true, forKey: DashboardViewModel.showExhaustedKey)
+    defaults.set(pinnedCardColumnPreference, forKey: DashboardViewModel.cardColumnPreferenceKey)
     let providers = fullProviderSet()
     let windows = providers.flatMap(\.windows)
     #expect(windows.contains { ($0.paceDelta ?? 0) > 0 })
@@ -79,7 +82,12 @@ private func makeViewModel() -> DashboardViewModel {
     #expect(windows.contains { $0.percentLeft == 0 })
     #expect(windows.contains { $0.percentLeft == 100 })
     try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
-    return DashboardViewModel(cache: cache, userDefaults: defaults)
+    let viewModel = DashboardViewModel(cache: cache, userDefaults: defaults)
+    // The initializer treats an unversioned stored value as a legacy direct
+    // column count. Set the current slider stop after initialization so every
+    // snapshot actually exercises the pinned candidate rather than Auto.
+    viewModel.cardColumnPreference = pinnedCardColumnPreference
+    return viewModel
 }
 
 @MainActor
@@ -88,7 +96,51 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         viewModel: makeViewModel(), now: fixedNow, layout: .denseGrid, density: density)
 }
 
-// iPad 11" portrait. Two columns at this width; all 8 providers and all 14
+/// Semantic snapshot companion for the standard and XXXL image fixtures below.
+/// Keeping the bucket identifiers explicit here means a contrast/layout edit
+/// cannot make a baseline look plausible while silently replacing one of the
+/// named windows with its raw schema id.
+@MainActor
+@Test func densityLabelFixturesKeepEveryNamedBucketAtStandardAndXXXL() {
+    let expected = [
+        ("five_hour", "5 Hour"),
+        ("weekly", "Weekly"),
+        ("monthly", "Monthly"),
+        ("premium", "Premium"),
+        ("billing_cycle", "Billing Cycle"),
+        ("ac", "Auto"),
+        ("ap", "API"),
+    ]
+    let windows = expected.map { id, _ in
+        ProviderWindow(
+            id: id, percentLeft: 47, resetISO: "2026-08-01T20:00:00-04:00", windowHours: 168,
+            paceDelta: nil)
+    }
+    let fixture = ProviderStatus(
+        providerName: "label-fixture", providerDisplayName: "Label fixture", ok: true,
+        errorMessage: nil, windows: windows, data: [:],
+        observedAt: ISO8601DateFormatter().string(from: fixedNow),
+        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00", publishedAt: fixedNow)
+
+    for dynamicTypeSize in [DynamicTypeSize.large, .xxxLarge] {
+        let rows = fixture.windows.map {
+            WindowRow(window: $0, now: fixedNow, showsReset: false, metrics: .standard)
+        }
+        #expect(rows.count == expected.count)
+        for ((id, label), row) in zip(expected, rows) {
+            #expect(ProviderWindowLabel.label(for: id) == label)
+            #expect(row.spokenLabel.hasPrefix("\(label),"))
+            let renderedWidth = UIHostingController(
+                rootView: row.environment(\.dynamicTypeSize, dynamicTypeSize)
+                    .fixedSize(horizontal: true, vertical: false)
+            ).sizeThatFits(in: CGSize(width: 2_000, height: 200)).width
+            #expect(renderedWidth >= 1, "\(label) rendered no measurable row at \(dynamicTypeSize)")
+        }
+    }
+}
+
+// iPad 11" portrait. The pinned Small preference resolves to the largest
+// feasible compact-solver count at this width; all 8 providers and all 14
 // windows are on screen at once, which is the whole point of Option B.
 @MainActor
 @Test func densePadPortraitLight() {
@@ -110,9 +162,9 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         testName: "densePadPortraitDark")
 }
 
-// Landscape has room for a third column. Fixed two-column layouts stretch
-// cards across the full width, which is the wasted horizontal space this
-// layout exists to remove -- so the column count must actually change here.
+// Landscape resolves to a larger feasible compact-solver count than portrait.
+// Fixed low-column layouts stretch cards across the full width, which is the
+// wasted horizontal space this layout exists to remove.
 @MainActor
 @Test func densePadLandscapeDark() {
     assertSnapshot(

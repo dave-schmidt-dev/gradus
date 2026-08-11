@@ -47,6 +47,31 @@ MAC_APP_SNAPSHOT_V2_PATH = (
 
 # Stop serving cached data after this many seconds (moved from __main__.py).
 STALE_THRESHOLD_SECONDS = 300  # 5 minutes
+AUTH_GRACE_WINDOW_SECONDS = STALE_THRESHOLD_SECONDS
+AUTH_ESCALATION_WINDOW_SECONDS = 600
+ANTIGRAVITY_AUTH_RETRY_MESSAGE = "Antigravity refresh retrying; values may be stale"
+ANTIGRAVITY_AUTH_ERROR_MARKER = "Antigravity session expired"
+
+
+def is_antigravity_auth_failure(snapshot: object) -> bool:
+    """Return whether a probe is the credential failure eligible for grace."""
+    name = getattr(snapshot, "name", None)
+    if name != "Antigravity" or getattr(snapshot, "ok", True):
+        return False
+    if getattr(snapshot, "debug_detail", None) == "auth_failure":
+        return True
+    error = getattr(snapshot, "error", None)
+    if not isinstance(error, str):
+        return False
+    lower = error.lower()
+    return "antigravity" in lower and (
+        "session expired" in lower or "re-authenticate" in lower or "run `agy`" in lower
+    )
+
+
+def is_antigravity_auth_retry(error: object) -> bool:
+    """Return whether ``error`` is the exact neutral grace marker."""
+    return error == ANTIGRAVITY_AUTH_RETRY_MESSAGE
 
 
 class SnapshotWrite(Enum):
@@ -1082,6 +1107,7 @@ def _build_snapshot_payload(
     prior: dict | None = None,
     schema_version: int,
     specs_by_provider: Mapping[str, tuple[WindowSpec, ...]],
+    prior_auth_failures: int = 0,
 ) -> dict:
     """Build one versioned router-facing snapshot payload.
 
@@ -1167,7 +1193,8 @@ def _build_snapshot_payload(
             "data": _project_antigravity_claude_data(snap),
             "observed_at": None,
         }
-        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
+        auth_grace = is_antigravity_auth_failure(snap) and prior_auth_failures == 0
+        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap) or auth_grace:
             prior_entry = prior_by_name.get("Antigravity (Claude)")
             retained_entry = _sanitize_prior_entry(
                 "Antigravity (Claude)",
@@ -1176,12 +1203,21 @@ def _build_snapshot_payload(
                     spec.window_id for spec in specs_by_provider.get("Antigravity (Claude)", ())
                 ),
                 fallback_observed_at=fallback_observed_at,
-                allow_carried_failure=True,
+                allow_carried_failure=not auth_grace,
             )
             if retained_entry is not None and _is_fresh_retained_entry(
                 retained_entry, updated_at_aware
             ):
-                entry = _failure_with_retained_values(retained_entry, entry["error"])
+                entry = _failure_with_retained_values(
+                    retained_entry,
+                    ANTIGRAVITY_AUTH_RETRY_MESSAGE if auth_grace else entry["error"],
+                )
+            else:
+                auth_grace = False
+        if auth_grace and entry["error"] != ANTIGRAVITY_AUTH_RETRY_MESSAGE:
+            # No prior values means the router must still expose the failed
+            # state; only the user-facing wording is neutralized during grace.
+            entry["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
         return entry
 
     for name in CANONICAL_PROVIDERS():
@@ -1229,7 +1265,8 @@ def _build_snapshot_payload(
             "data": project_data(snap),
             "observed_at": None,
         }
-        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
+        auth_grace = is_antigravity_auth_failure(snap) and prior_auth_failures == 0
+        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap) or auth_grace:
             prior_entry = prior_by_name.get(name)
             retained_entry = _sanitize_prior_entry(
                 name,
@@ -1238,12 +1275,19 @@ def _build_snapshot_payload(
                     spec.window_id for spec in specs_by_provider.get(name, ())
                 ),
                 fallback_observed_at=fallback_observed_at,
-                allow_carried_failure=True,
+                allow_carried_failure=not auth_grace,
             )
             if retained_entry is not None and _is_fresh_retained_entry(
                 retained_entry, updated_at_aware
             ):
-                entry = _failure_with_retained_values(retained_entry, entry["error"])
+                entry = _failure_with_retained_values(
+                    retained_entry,
+                    ANTIGRAVITY_AUTH_RETRY_MESSAGE if auth_grace else entry["error"],
+                )
+            else:
+                auth_grace = False
+        if auth_grace and entry["error"] != ANTIGRAVITY_AUTH_RETRY_MESSAGE:
+            entry["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
         providers.append(entry)
         if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
             providers.append(_antigravity_claude_entry(snap))
@@ -1256,7 +1300,11 @@ def _build_snapshot_payload(
 
 
 def build_snapshot_payload(
-    snapshots: list[ProviderSnapshot], updated_at: datetime, *, prior: dict | None = None
+    snapshots: list[ProviderSnapshot],
+    updated_at: datetime,
+    *,
+    prior: dict | None = None,
+    prior_auth_failures: int = 0,
 ) -> dict:
     """Build the stable schema-v1 router snapshot payload."""
     return _build_snapshot_payload(
@@ -1265,11 +1313,16 @@ def build_snapshot_payload(
         prior=prior,
         schema_version=SCHEMA_VERSION,
         specs_by_provider=WINDOW_SPECS,
+        prior_auth_failures=prior_auth_failures,
     )
 
 
 def build_snapshot_v2_payload(
-    snapshots: list[ProviderSnapshot], updated_at: datetime, *, prior: dict | None = None
+    snapshots: list[ProviderSnapshot],
+    updated_at: datetime,
+    *,
+    prior: dict | None = None,
+    prior_auth_failures: int = 0,
 ) -> dict:
     """Build the parallel schema-v2 router snapshot payload."""
     return _build_snapshot_payload(
@@ -1278,6 +1331,7 @@ def build_snapshot_v2_payload(
         prior=prior,
         schema_version=SCHEMA_VERSION_V2,
         specs_by_provider=V2_WINDOW_SPECS,
+        prior_auth_failures=prior_auth_failures,
     )
 
 

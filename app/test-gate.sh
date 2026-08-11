@@ -8,7 +8,7 @@
 # `assert_counting_leg`.  The Python paths are intentionally listed here so
 # the self-check can detect a new hermetic suite that is not wired into the
 # canonical gate.
-EXPECTED_COUNTING_LEG_COUNT=11
+EXPECTED_COUNTING_LEG_COUNT=13
 COUNTING_LEG_NAMES=(
   "swift-testing"
   "pytest"
@@ -21,6 +21,8 @@ COUNTING_LEG_NAMES=(
   "release-reconcile"
   "testflight-assignment"
   "candidate-walkthrough"
+  "GradusMacUI"
+  "GradusiOSUI"
 )
 COUNTING_LEG_REPORTERS=(
   "swift-testing"
@@ -34,8 +36,10 @@ COUNTING_LEG_REPORTERS=(
   "pytest"
   "pytest"
   "pytest"
+  "xctest"
+  "xctest"
 )
-COUNTING_LEG_MINIMUMS=(2 2 2 2 2 6 5 5 5 5 3)
+COUNTING_LEG_MINIMUMS=(2 2 2 2 2 6 5 5 5 5 3 2 3)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -48,6 +52,8 @@ COUNTING_LEG_SOURCES=(
   "test_release_reconcile.py"
   "testflight-setup-tests.py"
   "test_walkthrough.py"
+  "GradusMacUITests"
+  "GradusiOSUITests"
 )
 COUNTING_LEG_RUN_COUNT=0
 
@@ -221,6 +227,36 @@ SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 IPAD_DEVICE_NAME="iPad Pro 11-inch (M5)"
 IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
 
+# A macOS UI-test runner must be signed. `CODE_SIGNING_ALLOWED=NO` leaves an
+# ad-hoc linker signature with no sealed resources; launching that artifact
+# produces macOS's misleading “app is damaged” warning and can kill the
+# XCTest runner before it bootstraps. The production entitlements are not
+# needed for this deterministic local fixture, so the explicit leg signs with
+# an installed Apple Development identity and an empty test-only entitlement
+# set. Callers may pin the identity; otherwise select the first local
+# development certificate without exposing any keychain material.
+mac_ui_code_sign_identity="${GRADUS_MAC_UI_CODE_SIGN_IDENTITY:-}"
+if [[ -z "$mac_ui_code_sign_identity" ]]; then
+  mac_ui_code_sign_identity="$(
+    security find-identity -v -p codesigning 2>/dev/null |
+      awk -F'"' '/Apple Development:/ { print $2; found = 1 } END { if (!found) exit 1 }' || true
+  )"
+fi
+if [[ -z "$mac_ui_code_sign_identity" ]]; then
+  echo "FAIL: GradusMacUITests needs an installed Apple Development signing identity" >&2
+  echo "      set GRADUS_MAC_UI_CODE_SIGN_IDENTITY to the certificate name for this host." >&2
+  exit 1
+fi
+MAC_UI_SIGNING_ARGS=(
+  CODE_SIGNING_ALLOWED=YES
+  CODE_SIGN_STYLE=Manual
+  "CODE_SIGN_IDENTITY=$mac_ui_code_sign_identity"
+  DEVELOPMENT_TEAM=4CJ49V6QHW
+  PROVISIONING_PROFILE_SPECIFIER=
+  CODE_SIGN_ENTITLEMENTS=
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+)
+
 echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
 # One `awk` that reads to EOF, rather than `| head -1 | awk ...`. `head` exits
 # as soon as it has its line, and if `xcodebuild` is still writing it takes
@@ -282,9 +318,13 @@ defaults write com.apple.CrashReporter DialogType none
 # them. Shut the simulator down on every exit path so a gate run never
 # leaves runaway processes behind.
 trap '
-  echo "==> Shutting down simulators to release their background processes"
-  xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true
-  xcrun simctl shutdown "$ipad_udid" >/dev/null 2>&1 || true
+  if [[ "${GRADUS_KEEP_SIMULATORS:-0}" == "1" ]]; then
+    echo "==> Leaving simulators running (GRADUS_KEEP_SIMULATORS=1)"
+  else
+    echo "==> Shutting down simulators to release their background processes"
+    xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true
+    xcrun simctl shutdown "$ipad_udid" >/dev/null 2>&1 || true
+  fi
   if [[ -z "$prior_dialog_type" ]]; then
     defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
   else
@@ -304,6 +344,7 @@ assert_counting_leg "GradusMac" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusMac \
   -destination 'platform=macOS' \
+  -skip-testing:GradusMacUITests \
   CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
@@ -323,6 +364,22 @@ assert_counting_leg "GradusiOS-iPad" xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$ipad_udid" \
+  -only-testing:GradusiOSUITests \
+  CODE_SIGNING_ALLOWED=NO
+
+echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
+assert_counting_leg "GradusMacUI" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
+  -project Gradus.xcodeproj \
+  -scheme GradusMac \
+  -destination 'platform=macOS' \
+  -only-testing:GradusMacUITests \
+  "${MAC_UI_SIGNING_ARGS[@]}"
+
+echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+assert_counting_leg "GradusiOSUI" xcodebuild test \
+  -project Gradus.xcodeproj \
+  -scheme GradusiOS \
+  -destination "platform=iOS Simulator,id=$sim_udid" \
   -only-testing:GradusiOSUITests \
   CODE_SIGNING_ALLOWED=NO
 
