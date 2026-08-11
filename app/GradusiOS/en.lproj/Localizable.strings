@@ -1,2 +1,5 @@
-/* Local warning notification: %@ substitutes the provider display name. */
-"WARN_FMT" = "Gradus: %@ hit a warning";
+/* Local warning notification: provider, window, remaining, threshold. */
+"WARN_TITLE_FMT" = "%@ %@ warning";
+"WARN_BODY_FMT" = "%@%% remaining, below your %@%% warning threshold.";
+"WARN_PROVIDER_TITLE_FMT" = "%@ warning";
+"WARN_PROVIDER_BODY" = "A provider warning was reported. Open Gradus for details.";

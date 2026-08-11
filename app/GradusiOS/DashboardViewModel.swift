@@ -131,6 +131,7 @@ public final class DashboardViewModel: ObservableObject {
     private let subscriptionManager: CKSubscriptionManager?
     private let warningNotificationScheduler: WarningNotificationScheduling?
     private let notificationAuthorizationSource: NotificationAuthorizationSource?
+    private let liveLifecycleGate: LiveLifecycleGate?
     private let userDefaults: UserDefaults
     private var allProviders: [ProviderStatus] = []
     /// Build 12 stored a direct column count. Keep that value until the first
@@ -138,10 +139,17 @@ public final class DashboardViewModel: ObservableObject {
     /// to the new Small-to-Large stop so an upgrade does not change layout.
     private var pendingLegacyCardColumnPreference: Int?
 
+    /// Internal lifecycle proof for the local sample path: a sample view model
+    /// must be constructed without any live CloudKit/account/notification seam.
+    var hasLiveLifecycleDependencies: Bool {
+        fetcher != nil || accountSource != nil || zoneChangesFetcher != nil || subscriptionManager != nil
+            || warningNotificationScheduler != nil || notificationAuthorizationSource != nil
+    }
+
     /// `userDefaults` defaults to `.standard` for production; tests inject
     /// a fresh per-test suite so `syncEnabled` (persisted here) can't leak
     /// state across test cases sharing a process, unlike `.standard`.
-    public init(
+    public convenience init(
         cache: LocalCacheStore,
         fetcher: CloudFetcher? = nil,
         accountSource: AccountStatusSource? = nil,
@@ -151,6 +159,25 @@ public final class DashboardViewModel: ObservableObject {
         notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
         userDefaults: UserDefaults = .standard
     ) {
+        self.init(
+            cache: cache, fetcher: fetcher, accountSource: accountSource,
+            zoneChangesFetcher: zoneChangesFetcher, subscriptionManager: subscriptionManager,
+            warningNotificationScheduler: warningNotificationScheduler,
+            notificationAuthorizationSource: notificationAuthorizationSource,
+            liveLifecycleGate: nil, userDefaults: userDefaults)
+    }
+
+    init(
+        cache: LocalCacheStore,
+        fetcher: CloudFetcher? = nil,
+        accountSource: AccountStatusSource? = nil,
+        zoneChangesFetcher: ZoneChangesFetcher? = nil,
+        subscriptionManager: CKSubscriptionManager? = nil,
+        warningNotificationScheduler: WarningNotificationScheduling? = nil,
+        notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
+        liveLifecycleGate: LiveLifecycleGate?,
+        userDefaults: UserDefaults = .standard
+    ) {
         self.cache = cache
         self.fetcher = fetcher
         self.accountSource = accountSource
@@ -158,6 +185,7 @@ public final class DashboardViewModel: ObservableObject {
         self.subscriptionManager = subscriptionManager
         self.warningNotificationScheduler = warningNotificationScheduler
         self.notificationAuthorizationSource = notificationAuthorizationSource
+        self.liveLifecycleGate = liveLifecycleGate
         self.userDefaults = userDefaults
         // Default OFF: usage data leaves the device only on explicit opt-in.
         let syncEnabledValue = userDefaults.bool(forKey: Self.syncEnabledKey)
@@ -326,13 +354,20 @@ public final class DashboardViewModel: ObservableObject {
             notificationsToggleError = nil
             return
         }
-        do {
-            try await subscriptionManager.unsubscribeFromWarnings()
-            notificationsEnabled = false
-            userDefaults.set(false, forKey: Self.notificationsEnabledKey)
-            notificationsToggleError = nil
-        } catch {
-            notificationsToggleError = "Couldn't turn off notifications -- check your connection and try again."
+        let unsubscribe: () async -> Void = {
+            do {
+                try await subscriptionManager.unsubscribeFromWarnings()
+                self.notificationsEnabled = false
+                self.userDefaults.set(false, forKey: Self.notificationsEnabledKey)
+                self.notificationsToggleError = nil
+            } catch {
+                self.notificationsToggleError = "Couldn't turn off notifications -- check your connection and try again."
+            }
+        }
+        if let liveLifecycleGate {
+            await liveLifecycleGate.withOperation { _ in await unsubscribe() }
+        } else {
+            await unsubscribe()
         }
     }
 
@@ -347,7 +382,14 @@ public final class DashboardViewModel: ObservableObject {
     /// `.notDetermined` is the honest starting point and stays put.
     public func refreshNotificationAuthorization() async {
         guard let notificationAuthorizationSource else { return }
-        systemNotificationAuthorization = await notificationAuthorizationSource.currentAuthorization()
+        let refresh = {
+            self.systemNotificationAuthorization = await notificationAuthorizationSource.currentAuthorization()
+        }
+        if let liveLifecycleGate {
+            await liveLifecycleGate.withOperation { _ in await refresh() }
+        } else {
+            await refresh()
+        }
     }
 
     /// `nil` means "render the populated dashboard" -- there is data (fresh
@@ -372,8 +414,15 @@ public final class DashboardViewModel: ObservableObject {
 
     public func refreshAccountStatus() async {
         guard let accountSource else { return }
-        if let status = try? await accountSource.currentAccountStatus() {
-            accountStatus = status
+        let refresh = {
+            if let status = try? await accountSource.currentAccountStatus() {
+                self.accountStatus = status
+            }
+        }
+        if let liveLifecycleGate {
+            await liveLifecycleGate.withOperation { _ in await refresh() }
+        } else {
+            await refresh()
         }
     }
 
@@ -393,11 +442,31 @@ public final class DashboardViewModel: ObservableObject {
     /// full-fetch path, used on launch/pull-to-refresh).
     public func handleRemoteNotification() async {
         guard syncEnabled, accountStatus == .available, let zoneChangesFetcher else { return }
-        await performIncrementalSync(using: zoneChangesFetcher, token: cache.loadChangeToken(), allowRetryOnExpiredToken: true)
+        let token = cache.loadChangeToken()
+        if let liveLifecycleGate {
+            await liveLifecycleGate.withOperation { operationEpoch in
+                await self.performIncrementalSync(
+                    using: zoneChangesFetcher, token: token, allowRetryOnExpiredToken: true,
+                    lifecycleEpoch: operationEpoch)
+            }
+        } else {
+            await performIncrementalSync(using: zoneChangesFetcher, token: token, allowRetryOnExpiredToken: true)
+        }
     }
 
-    private func performIncrementalSync(using fetcher: ZoneChangesFetcher, token: Data?, allowRetryOnExpiredToken: Bool) async {
-        switch await fetcher.fetchZoneChanges(sinceToken: token) {
+    private func performIncrementalSync(
+        using fetcher: ZoneChangesFetcher,
+        token: Data?,
+        allowRetryOnExpiredToken: Bool,
+        lifecycleEpoch: LiveLifecycleGate.Epoch? = nil
+    ) async {
+        if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) { return }
+        let result = await fetcher.fetchZoneChanges(sinceToken: token)
+        // `LiveLifecycleGate` is re-entrant around the CloudKit await. Sample
+        // entry invalidates the epoch while that request is suspended, so a
+        // late result must not reconcile providers or persist cache state.
+        if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) { return }
+        switch result {
         case .success(let changed, let deletedProviderNames, let newToken):
             reconcile(changed: changed, deletedProviderNames: deletedProviderNames)
             try? cache.saveChangeToken(newToken)
@@ -411,7 +480,9 @@ public final class DashboardViewModel: ObservableObject {
             // not something worth looping on.
             try? cache.saveChangeToken(nil)
             guard allowRetryOnExpiredToken else { return }
-            await performIncrementalSync(using: fetcher, token: nil, allowRetryOnExpiredToken: false)
+            await performIncrementalSync(
+                using: fetcher, token: nil, allowRetryOnExpiredToken: false,
+                lifecycleEpoch: lifecycleEpoch)
         case .zoneNotFound, .zoneDeleted:
             // PM-3: GradusZone is Mac-owned and recreated idempotently on
             // its next publish (T2a.2) -- iOS can't recreate it, so this
@@ -435,7 +506,8 @@ public final class DashboardViewModel: ObservableObject {
         var byName = Dictionary(uniqueKeysWithValues: allProviders.map { ($0.providerName, $0) })
         for status in changed {
             if status.isWarning && !(byName[status.providerName]?.isWarning ?? false), notificationsEnabled {
-                warningNotificationScheduler?.scheduleWarningNotification(for: status)
+                warningNotificationScheduler?.scheduleWarningNotification(
+                    for: status, thresholdPercent: localWarningThresholdPercent)
             }
             byName[status.providerName] = status
         }
@@ -449,7 +521,8 @@ public final class DashboardViewModel: ObservableObject {
         var previousByName = Dictionary(uniqueKeysWithValues: previous.map { ($0.providerName, $0) })
         for status in current {
             if status.isWarning && !(previousByName[status.providerName]?.isWarning ?? false) {
-                warningNotificationScheduler?.scheduleWarningNotification(for: status)
+                warningNotificationScheduler?.scheduleWarningNotification(
+                    for: status, thresholdPercent: localWarningThresholdPercent)
             }
             previousByName[status.providerName] = status
         }
@@ -462,6 +535,14 @@ public final class DashboardViewModel: ObservableObject {
     /// that would just fail.
     public func sync() async {
         guard syncEnabled, accountStatus == .available, let fetcher else { return }
+        if let liveLifecycleGate {
+            await liveLifecycleGate.withOperation { _ in await self.performSync(using: fetcher) }
+        } else {
+            await performSync(using: fetcher)
+        }
+    }
+
+    private func performSync(using fetcher: CloudFetcher) async {
         isSyncing = true
         defer { isSyncing = false }
         guard let fetched = try? await fetcher.fetchAll() else { return }

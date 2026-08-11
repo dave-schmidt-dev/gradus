@@ -19,7 +19,7 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 
 /// Every provider in David's actual set, with the window shape each really
 /// has (Cursor two pools, Antigravity's split Gemini/Claude quotas, Copilot
-/// premium-only, Vibe on a billing cycle).
+/// monthly, Vibe on a monthly bucket).
 @MainActor
 func fullProviderSet() -> [ProviderStatus] {
     func w(_ id: String, _ percent: Double, _ pace: Double?, _ reset: String?) -> ProviderWindow {
@@ -67,6 +67,55 @@ func fullProviderSet() -> [ProviderStatus] {
 
 let pinnedCardColumnPreference = 1 // Small: the largest feasible count for each width.
 
+private let densitySnapshotDisplayScale: CGFloat = 2.0
+
+private enum DensitySnapshotFixture {
+    case pad
+    case phone
+
+    var traits: [UITraitCollection] {
+        switch self {
+        case .pad:
+            return [
+                UITraitCollection(userInterfaceIdiom: .pad),
+                UITraitCollection(horizontalSizeClass: .regular),
+                UITraitCollection(verticalSizeClass: .regular),
+            ]
+        case .phone:
+            return [
+                UITraitCollection(userInterfaceIdiom: .phone),
+                UITraitCollection(horizontalSizeClass: .compact),
+                UITraitCollection(verticalSizeClass: .regular),
+            ]
+        }
+    }
+}
+
+// Opt in only while intentionally refreshing these baselines:
+// OTHER_SWIFT_FLAGS='$(inherited) -D DENSITY_SNAPSHOT_RECORD'
+private let densitySnapshotRecording: SnapshotTestingConfiguration.Record = {
+#if DENSITY_SNAPSHOT_RECORD
+    return .all
+#else
+    return .never
+#endif
+}()
+
+private func densitySnapshotTraits(
+    fixture: DensitySnapshotFixture,
+    style: UIUserInterfaceStyle,
+    contentSizeCategory: UIContentSizeCategory? = nil
+) -> UITraitCollection {
+    var traits = fixture.traits + [
+        UITraitCollection(displayScale: densitySnapshotDisplayScale),
+        UITraitCollection(userInterfaceStyle: style),
+    ]
+    if let contentSizeCategory {
+        traits.append(UITraitCollection(preferredContentSizeCategory: contentSizeCategory))
+    }
+    return UITraitCollection(traitsFrom: traits)
+}
+
 @MainActor
 private func makeViewModel() -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
@@ -106,8 +155,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         ("five_hour", "5 Hour"),
         ("weekly", "Weekly"),
         ("monthly", "Monthly"),
-        ("premium", "Premium"),
-        ("billing_cycle", "Billing Cycle"),
+        ("premium", "Monthly"),
+        ("billing_cycle", "Monthly"),
         ("ac", "Auto"),
         ("ap", "API"),
     ]
@@ -148,7 +197,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(userInterfaceStyle: .light)),
+            traits: densitySnapshotTraits(fixture: .pad, style: .light)),
+        record: densitySnapshotRecording,
         testName: "densePadPortraitLight")
 }
 
@@ -158,7 +208,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(userInterfaceStyle: .dark)),
+            traits: densitySnapshotTraits(fixture: .pad, style: .dark)),
+        record: densitySnapshotRecording,
         testName: "densePadPortraitDark")
 }
 
@@ -171,7 +222,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(),
         as: .image(
             layout: .fixed(width: 1194, height: 834),
-            traits: UITraitCollection(userInterfaceStyle: .dark)),
+            traits: densitySnapshotTraits(fixture: .pad, style: .dark)),
+        record: densitySnapshotRecording,
         testName: "densePadLandscapeDark")
 }
 
@@ -211,7 +263,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(density: .standard),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(userInterfaceStyle: .light)),
+            traits: densitySnapshotTraits(fixture: .pad, style: .light)),
+        record: densitySnapshotRecording,
         testName: "densityStandardPadPortraitLight")
 }
 
@@ -221,7 +274,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(userInterfaceStyle: .light)),
+            traits: densitySnapshotTraits(fixture: .pad, style: .light)),
+        record: densitySnapshotRecording,
         testName: "densityLargePadPortraitLight")
 }
 
@@ -247,10 +301,9 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(traitsFrom: [
-                UITraitCollection(userInterfaceStyle: .light),
-                UITraitCollection(preferredContentSizeCategory: .extraExtraExtraLarge),
-            ])),
+            traits: densitySnapshotTraits(
+                fixture: .pad, style: .light, contentSizeCategory: .extraExtraExtraLarge)),
+        record: densitySnapshotRecording,
         testName: "densityLargePadPortraitExtraExtraExtraLarge")
 }
 
@@ -268,10 +321,9 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(density: .compact),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(traitsFrom: [
-                UITraitCollection(userInterfaceStyle: .light),
-                UITraitCollection(preferredContentSizeCategory: .extraExtraExtraLarge),
-            ])),
+            traits: densitySnapshotTraits(
+                fixture: .pad, style: .light, contentSizeCategory: .extraExtraExtraLarge)),
+        record: densitySnapshotRecording,
         testName: "densityCompactPadPortraitExtraExtraExtraLarge")
 }
 
@@ -292,7 +344,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
             layout: .denseSingleColumn, density: .large),
         as: .image(
             layout: .fixed(width: 393, height: 852),
-            traits: UITraitCollection(userInterfaceStyle: .dark)),
+            traits: densitySnapshotTraits(fixture: .phone, style: .dark)),
+        record: densitySnapshotRecording,
         testName: "densityLargePhoneDark")
 }
 
@@ -307,10 +360,9 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
             layout: .denseSingleColumn, density: .compact),
         as: .image(
             layout: .fixed(width: 393, height: 852),
-            traits: UITraitCollection(traitsFrom: [
-                UITraitCollection(userInterfaceStyle: .light),
-                UITraitCollection(preferredContentSizeCategory: .accessibilityMedium),
-            ])),
+            traits: densitySnapshotTraits(
+                fixture: .phone, style: .light, contentSizeCategory: .accessibilityMedium)),
+        record: densitySnapshotRecording,
         testName: "densityCompactPhoneAccessibility1")
 }
 
@@ -322,10 +374,9 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
             layout: .denseSingleColumn, density: .compact),
         as: .image(
             layout: .fixed(width: 393, height: 852),
-            traits: UITraitCollection(traitsFrom: [
-                UITraitCollection(userInterfaceStyle: .light),
-                UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge),
-            ])),
+            traits: densitySnapshotTraits(
+                fixture: .phone, style: .light, contentSizeCategory: .accessibilityExtraExtraExtraLarge)),
+        record: densitySnapshotRecording,
         testName: "densityCompactPhoneAccessibility5")
 }
 
@@ -335,10 +386,9 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(traitsFrom: [
-                UITraitCollection(userInterfaceStyle: .light),
-                UITraitCollection(preferredContentSizeCategory: .accessibilityMedium),
-            ])),
+            traits: densitySnapshotTraits(
+                fixture: .pad, style: .light, contentSizeCategory: .accessibilityMedium)),
+        record: densitySnapshotRecording,
         testName: "densityLargePadPortraitAccessibility1")
 }
 
@@ -348,9 +398,8 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
-            traits: UITraitCollection(traitsFrom: [
-                UITraitCollection(userInterfaceStyle: .light),
-                UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge),
-            ])),
+            traits: densitySnapshotTraits(
+                fixture: .pad, style: .light, contentSizeCategory: .accessibilityExtraExtraExtraLarge)),
+        record: densitySnapshotRecording,
         testName: "densityLargePadPortraitAccessibility5")
 }

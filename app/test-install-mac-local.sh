@@ -152,11 +152,16 @@ expect_eq() {
 # observed in one can have been produced by another.
 setup_case() {
   CASE_ROOT="$TEST_ROOT/case-$1"
+  CASE_INSTALL_SCRIPT="$CASE_ROOT/install-mac-local.sh"
   INSTALL_DIR="$CASE_ROOT/Applications"
   BUILD_DIR="$CASE_ROOT/build"
   FAKE_RUNTIME="$CASE_ROOT/runtime"
   mkdir -p "$INSTALL_DIR" "$BUILD_DIR" "$FAKE_RUNTIME"
+  cp "$INSTALL_SCRIPT" "$CASE_INSTALL_SCRIPT"
+  cp "$SCRIPT_DIR/project.yml" "$CASE_ROOT/project.yml"
+  chmod 700 "$CASE_INSTALL_SCRIPT"
   export INSTALL_DIR BUILD_DIR FAKE_RUNTIME
+  export GRADUS_SOURCE_REVISION=fixture-revision
   export PLIST_BUDDY="$FAKE_BIN/plistbuddy"
   export QUIT_TIMEOUT_SECONDS=1
   unset FAKE_CODESIGN_FAIL_SUBSTR FAKE_XATTR_FAIL_SUBSTR FAKE_APP_RUNNING_FLAG
@@ -176,7 +181,7 @@ make_bundle() {
 
 run_install() {
   set +e
-  PATH="$FAKE_BIN:$PATH" "$INSTALL_SCRIPT" "$@" >"$FAKE_RUNTIME/stdout" 2>"$FAKE_RUNTIME/stderr"
+  PATH="$FAKE_BIN:$PATH" "$CASE_INSTALL_SCRIPT" "$@" >"$FAKE_RUNTIME/stdout" 2>"$FAKE_RUNTIME/stderr"
   local status=$?
   set -e
   return "$status"
@@ -300,6 +305,16 @@ status=0
 run_install --skip-build || status=$?
 expect_eq "$status" "66" "a missing export should exit 66"
 [[ ! -e "$INSTALL_DIR/GradusMac.app" ]] || fail "installed something with no export present"
+end
+
+begin "a non-Git fixture without provenance fails closed"
+setup_case missing-provenance
+unset GRADUS_SOURCE_REVISION
+status=0
+run_install --skip-build || status=$?
+expect_eq "$status" "1" "missing provenance should exit 1"
+grep -q "source revision is unavailable" "$FAKE_RUNTIME/stderr" ||
+  fail "missing provenance did not name the source revision requirement"
 end
 
 begin "the build path archives and exports before installing"

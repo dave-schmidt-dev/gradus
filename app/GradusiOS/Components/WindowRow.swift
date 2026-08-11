@@ -178,7 +178,7 @@ struct WindowRow: View {
             .font(metrics.labelFont.weight(.medium))
             .foregroundStyle(Self.labelForegroundToken.color)
             .lineLimit(1)
-            // `Billing Cycle` and the long names must not lose their identity
+            // `Monthly` and the long names must not lose their identity
             // merely because the percentage column is present. The minimum
             // holds the intended bar start while leaving the usage bar's
             // flexible allocation authoritative at narrow widths.

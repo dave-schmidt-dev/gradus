@@ -6,10 +6,11 @@ import base64
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -171,6 +172,28 @@ class FetchProviderSnapshotTests(unittest.TestCase):
         ):
             payload_json = json.dumps(build_payload([snapshot], datetime(2026, 1, 1)))
             self.assertNotIn(sentinel, payload_json)
+
+    def test_subprocess_timeout_keeps_debug_detail_off_the_snapshot_surface(self) -> None:
+        """A CLI timeout is retryable, with command detail debug-only."""
+        sentinel = "credential-helper-timeout-detail"
+
+        class FakeProvider:
+            def fetch(self) -> None:
+                raise subprocess.TimeoutExpired(["provider", sentinel], timeout=7)
+
+        snapshot = fetch_provider_snapshot("Copilot", FakeProvider(), debug=True)
+
+        self.assertFalse(snapshot.ok)
+        self.assertEqual(snapshot.error, "provider probe timed out")
+        self.assertIn(sentinel, snapshot.debug_detail or "")
+        self.assertNotIn(sentinel, snapshot.error or "")
+
+        quiet_snapshot = fetch_provider_snapshot("Copilot", FakeProvider(), debug=False)
+        self.assertIsNone(quiet_snapshot.debug_detail)
+        payload_json = json.dumps(
+            snapshot_module.build_snapshot_payload([snapshot], datetime(2026, 1, 1))
+        )
+        self.assertNotIn(sentinel, payload_json)
 
     def test_headless_debug_detail_omits_the_dump_hint_it_cannot_honor(self) -> None:
         """Don't name a dump file that was never written.
@@ -505,6 +528,86 @@ class CopilotHttpProviderTests(unittest.TestCase):
     def _make_provider(self) -> CopilotHttpProvider:
         with patch("shutil.which", return_value="/usr/bin/gh"):
             return CopilotHttpProvider()
+
+    def test_token_fallback_timeout_is_transient_and_retains_recent_prior(self) -> None:
+        """A ``gh auth token`` timeout must retain the last healthy Copilot window.
+
+        This exercises the complete seam: the token fallback raises
+        ``subprocess.TimeoutExpired``, the provider wrapper maps it to a safe
+        transient error, and snapshot retention carries the recent prior
+        values while preserving the current failure state.
+        """
+        provider = self._make_provider()
+        timeout = subprocess.TimeoutExpired(["gh", "auth", "token"], timeout=10)
+        with (
+            patch.object(provider, "_read_hosts_yml", return_value=None),
+            patch("gradus.providers.copilot._is_headless", return_value=False),
+            patch("subprocess.run", side_effect=timeout),
+        ):
+            current = fetch_provider_snapshot("Copilot", provider, debug=False)
+
+        self.assertFalse(current.ok)
+        self.assertEqual(current.error, "provider probe timed out")
+        self.assertTrue(_is_transient_probe_error(current))
+
+        observed_at = datetime(2026, 1, 1, 12, 0, 0)
+        prior = snapshot_module.build_snapshot_payload(
+            [
+                ProviderSnapshot(
+                    name="Copilot",
+                    ok=True,
+                    source="api",
+                    data={"premium_percent_left": 82, "premium_reset": "in 5d"},
+                )
+            ],
+            observed_at,
+        )
+        payload = snapshot_module.build_snapshot_payload(
+            [current], observed_at + timedelta(seconds=100), prior=prior
+        )
+        copilot = next(entry for entry in payload["providers"] if entry["name"] == "Copilot")
+        self.assertFalse(copilot["ok"])
+        self.assertEqual(copilot["error"], "provider probe timed out")
+        self.assertEqual(copilot["windows"][0]["percent_left"], 82)
+
+    def test_token_fallback_timeout_stops_retaining_prior_at_stale_boundary(self) -> None:
+        """Retention is strict: age 299s carries, age 300s expires."""
+        provider = self._make_provider()
+        timeout = subprocess.TimeoutExpired(["gh", "auth", "token"], timeout=10)
+        with (
+            patch.object(provider, "_read_hosts_yml", return_value=None),
+            patch("gradus.providers.copilot._is_headless", return_value=False),
+            patch("subprocess.run", side_effect=timeout),
+        ):
+            current = fetch_provider_snapshot("Copilot", provider, debug=False)
+
+        observed_at = datetime(2026, 1, 1, 12, 0, 0)
+        for age in (299, 300):
+            with self.subTest(age=age):
+                prior = snapshot_module.build_snapshot_payload(
+                    [
+                        ProviderSnapshot(
+                            name="Copilot",
+                            ok=True,
+                            source="api",
+                            data={"premium_percent_left": 82, "premium_reset": "in 5d"},
+                        )
+                    ],
+                    observed_at,
+                )
+                payload = snapshot_module.build_snapshot_payload(
+                    [current], observed_at + timedelta(seconds=age), prior=prior
+                )
+                copilot = next(
+                    entry for entry in payload["providers"] if entry["name"] == "Copilot"
+                )
+                self.assertFalse(copilot["ok"])
+                self.assertEqual(copilot["error"], "provider probe timed out")
+                if age < snapshot_module.STALE_THRESHOLD_SECONDS:
+                    self.assertEqual(copilot["windows"][0]["percent_left"], 82)
+                else:
+                    self.assertEqual(copilot["windows"], [])
+                    self.assertIsNone(copilot["observed_at"])
 
     def test_paid_tier_field_mapping(self) -> None:
         provider = self._make_provider()

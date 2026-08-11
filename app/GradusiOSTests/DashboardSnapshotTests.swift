@@ -14,7 +14,17 @@ import XCTest
 // target doesn't link against the app's compiled code at all, so
 // `@testable import GradusiOS` type-checks there but fails at link time.
 
-private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)  // 2026-08-02T20:00:00-04:00-ish, matches fixture below
+private let fixedNow = Date(timeIntervalSince1970: 1_786_219_200)  // Matches SampleData.json publication timestamp.
+
+// Opt in only while intentionally refreshing these baselines:
+// OTHER_SWIFT_FLAGS='$(inherited) -D DASHBOARD_SNAPSHOT_RECORD'
+private let dashboardSnapshotRecording: SnapshotTestingConfiguration.Record = {
+#if DASHBOARD_SNAPSHOT_RECORD
+    return .all
+#else
+    return .never
+#endif
+}()
 
 private func sampleProviders() -> [ProviderStatus] {
     [
@@ -238,6 +248,7 @@ func testDashboardRendersDenseCardsCompactLight() {
     assertSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: dashboardSnapshotRecording,
         testName: "dashboardRendersDenseCardsCompactLight")
 }
 
@@ -251,6 +262,7 @@ func testDashboardRendersDenseCardsCompactDark() {
     assertSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        record: dashboardSnapshotRecording,
         testName: "dashboardRendersDenseCardsCompactDark")
 }
 
@@ -273,6 +285,7 @@ func testDashboardColorsByPaceNotByPercentageRemaining() {
     assertSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 393, height: 400), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: dashboardSnapshotRecording,
         testName: "dashboardColorsByPaceNotByPercentageRemaining")
 }
 
@@ -307,6 +320,7 @@ func testDashboardTruncatesPercentagesRatherThanRounding() {
     assertSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 393, height: 520), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: dashboardSnapshotRecording,
         testName: "dashboardTruncatesPercentagesRatherThanRounding")
 }
 
@@ -358,6 +372,7 @@ func testDashboardRendersExhaustedProvidersAsCompactCells() {
             layout: .denseSingleColumn,
             density: .compact),
         as: .image(layout: .fixed(width: 393, height: 760), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: dashboardSnapshotRecording,
         testName: "exhaustedCompactCellsPhone")
 
     assertSnapshot(
@@ -367,6 +382,7 @@ func testDashboardRendersExhaustedProvidersAsCompactCells() {
             layout: .denseGrid,
             density: .compact),
         as: .image(layout: .fixed(width: 1024, height: 600), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: dashboardSnapshotRecording,
         testName: "exhaustedCompactCellsPad")
 }
 
@@ -383,7 +399,7 @@ func testDashboardHidesExhaustedCellsWhenPreferenceIsOff() {
 }
 
 /// Screenshot fixtures exercise the same bundled payload and banner used by
-/// the Debug-only launch path. Each supported App Store device class gets a
+/// the normal Explore Sample path. Each supported App Store device class gets a
 /// distinct frame so a marker or populated card cannot be cropped away.
 @MainActor
 func testSampleDataDashboardAtAppStoreScreenshotSizes() throws {
@@ -409,14 +425,22 @@ func testSampleDataDashboardAtAppStoreScreenshotSizes() throws {
             as: .image(
                 layout: .fixed(width: width, height: height),
                 traits: UITraitCollection(userInterfaceStyle: .light)),
+            record: dashboardSnapshotRecording,
             testName: name)
     }
 }
 
-func testSampleDataModeIsDebugLaunchArgumentOnly() {
+func testSampleDataModeKeepsLegacyLaunchArgumentDebugOnly() {
     XCTAssertTrue(SampleDataMode.isEnabled(arguments: ["GradusiOS", SampleDataMode.launchArgument], isDebugBuild: true))
     XCTAssertFalse(SampleDataMode.isEnabled(arguments: ["GradusiOS", SampleDataMode.launchArgument], isDebugBuild: false))
     XCTAssertFalse(SampleDataMode.isEnabled(arguments: ["GradusiOS"], isDebugBuild: true))
+}
+
+func testFreshInstallDefersLiveLifecycleUntilSyncIsEnabled() {
+    XCTAssertFalse(GradusiOSApp.shouldRunLiveLifecycle(
+        isUITesting: false, sampleDataModeEnabled: false, syncEnabled: false))
+    XCTAssertTrue(GradusiOSApp.shouldRunLiveLifecycle(
+        isUITesting: false, sampleDataModeEnabled: false, syncEnabled: true))
 }
 
 func testSampleDataModeDisablesLiveLifecycle() {
@@ -426,25 +450,70 @@ func testSampleDataModeDisablesLiveLifecycle() {
 }
 
 func testSampleDataBannerUsesFixedLabel() {
-    XCTAssertEqual(SampleDataMode.bannerText, "Sample data")
+    XCTAssertEqual(SampleDataMode.bannerText, "Explore Sample")
+    XCTAssertEqual(SampleDataMode.bannerDetail, "Local-only sample data")
+    XCTAssertEqual(SampleDataBanner.minimumHeight, 60)
+    XCTAssertNil(SampleDataBanner.maximumHeight)
+}
+
+@MainActor
+func testSampleDataSessionIsolatedAndResettable() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gradus-sample-session-\(UUID().uuidString)", isDirectory: true)
+    let liveDirectory = root.appendingPathComponent("Live", isDirectory: true)
+    let sampleDirectory = SampleDataMode.storageDirectory(baseDirectory: root)
+    let liveCache = FileLocalCacheStore(directory: liveDirectory)
+    let defaultsName = "gradus-sample-session-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: defaultsName)!
+    let liveStatus = sampleProviders()[0]
+    try liveCache.saveCachedStatuses([liveStatus], syncedAt: fixedNow)
+
+    let session = SampleDataSession(
+        directory: sampleDirectory,
+        bundle: Bundle(for: AppDelegate.self),
+        defaults: defaults,
+        preferencesSuiteName: defaultsName)
+    XCTAssertFalse(session.viewModel.hasLiveLifecycleDependencies)
+    XCTAssertFalse(sampleDirectory == liveDirectory)
+    XCTAssertFalse(session.viewModel.providers.isEmpty)
+    XCTAssertEqual(liveCache.loadCachedStatuses(), [liveStatus])
+
+    try FileLocalCacheStore(directory: sampleDirectory).saveCachedStatuses([liveStatus], syncedAt: fixedNow)
+    session.reset()
+    XCTAssertEqual(
+        FileLocalCacheStore(directory: sampleDirectory).loadCachedStatuses().map(\.providerName),
+        try bundledSampleProviders().map(\.providerName))
+    XCTAssertEqual(liveCache.loadCachedStatuses(), [liveStatus])
 }
 
 
 @MainActor
 func testEmptyStateNotSignedIn() {
     let view = EmptyStateView(state: .notSignedIn)
-    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)), testName: "emptyStateNotSignedIn")
+    assertSnapshot(
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 400)),
+        record: dashboardSnapshotRecording,
+        testName: "emptyStateNotSignedIn")
 }
 
 @MainActor
 func testEmptyStateSyncDisabled() {
     let view = EmptyStateView(state: .syncDisabled)
-    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)), testName: "emptyStateSyncDisabled")
+    assertSnapshot(
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 400)),
+        record: dashboardSnapshotRecording,
+        testName: "emptyStateSyncDisabled")
 }
 
 @MainActor
 func testEmptyStateWaitingForFirstPublish() {
     let view = EmptyStateView(state: .waitingForFirstPublish)
-    assertSnapshot(of: view, as: .image(layout: .fixed(width: 390, height: 400)), testName: "emptyStateWaitingForFirstPublish")
+    assertSnapshot(
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 400)),
+        record: dashboardSnapshotRecording,
+        testName: "emptyStateWaitingForFirstPublish")
 }
 }

@@ -58,6 +58,13 @@ public actor AccountStatusMonitor {
     private let onChange: @Sendable (CKAccountStatus) -> Void
     public private(set) var lastKnownStatus: CKAccountStatus = .couldNotDetermine
     private var observerToken: ObserverToken?
+    /// Set by `stopObserving()` before sample-mode entry waits for this actor.
+    /// Already-running account requests are awaited by the actor; callbacks
+    /// queued after the stop are rejected before touching CloudKit.
+    private var refreshesSuspended = false
+    /// Invalidates an in-flight refresh even if a new live lifecycle starts
+    /// before that old request returns.
+    private var lifecycleGeneration: UInt64 = 0
 
     /// - Parameter notificationCenter: Injectable so tests can post
     ///   `.CKAccountChanged` to an isolated center. Sharing the process-wide
@@ -77,7 +84,11 @@ public actor AccountStatusMonitor {
     /// Fetch the current status once and begin observing `.CKAccountChanged`
     /// for the rest of the process lifetime.
     public func start() async {
+        lifecycleGeneration &+= 1
+        let generation = lifecycleGeneration
+        refreshesSuspended = false
         await refresh()
+        guard !refreshesSuspended, generation == lifecycleGeneration else { return }
         startObserving()
     }
 
@@ -86,8 +97,14 @@ public actor AccountStatusMonitor {
     /// `onChange` is NOT called — callers should treat "no update" as "still
     /// whatever it was."
     public func refresh() async {
+        guard !refreshesSuspended else { return }
+        let generation = lifecycleGeneration
         do {
             let status = try await source.currentAccountStatus()
+            // Actor reentrancy permits `stopObserving()` to run while the
+            // account request is suspended. Do not publish a result from a
+            // request that completed after observation was stopped.
+            guard !refreshesSuspended, generation == lifecycleGeneration else { return }
             lastKnownStatus = status
             onChange(status)
         } catch {
@@ -130,6 +147,8 @@ public actor AccountStatusMonitor {
     }
 
     public func stopObserving() {
+        refreshesSuspended = true
+        lifecycleGeneration &+= 1
         observerToken?.remove()
         observerToken = nil
     }

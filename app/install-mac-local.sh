@@ -50,6 +50,25 @@ BUILD_DIR="${BUILD_DIR:-build}"
 ARCHIVE_PATH="$BUILD_DIR/GradusMac.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 APP_PATH="$EXPORT_PATH/$APP_NAME.app"
+resolve_source_revision() {
+  local injected="${GRADUS_SOURCE_REVISION:-}" revision
+  if revision="$(/usr/bin/git rev-parse HEAD 2>/dev/null)"; then
+    if [[ -n "$(/usr/bin/git status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+      echo "FAIL: source checkout is dirty; install producer provenance from a clean revision" >&2
+      return 1
+    fi
+    printf '%s\n' "$revision"
+    return 0
+  fi
+  if [[ -n "${injected//[[:space:]]/}" ]]; then
+    printf '%s\n' "$injected"
+    return 0
+  fi
+  echo "FAIL: source revision is unavailable (set GRADUS_SOURCE_REVISION for a non-Git fixture)" >&2
+  return 1
+}
+SOURCE_REVISION="$(resolve_source_revision)"
+PROJECT_SHA256="$(/usr/bin/shasum -a 256 project.yml | /usr/bin/awk '{print $1}')"
 
 INSTALLED_APP="$INSTALL_DIR/$APP_NAME.app"
 STAGED_APP="$INSTALL_DIR/.$APP_NAME.app.incoming"
@@ -137,7 +156,9 @@ if ((skip_build == 0)); then
     -project Gradus.xcodeproj \
     -scheme "$APP_NAME" \
     -archivePath "$ARCHIVE_PATH" \
-    -destination "generic/platform=macOS"
+    -destination "generic/platform=macOS" \
+    GRADUS_SOURCE_REVISION="$SOURCE_REVISION" \
+    GRADUS_PROJECT_SHA256="$PROJECT_SHA256"
 
   echo "==> Exporting for Developer ID distribution"
   # Export the same Developer ID-signed artifact that is installed locally.

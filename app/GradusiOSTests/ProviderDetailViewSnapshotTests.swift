@@ -14,6 +14,16 @@ import Testing
 
 private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 
+// Opt in only while intentionally refreshing the carried-failure baseline:
+// OTHER_SWIFT_FLAGS='$(inherited) -D PROVIDER_DETAIL_SNAPSHOT_RECORD'
+private let providerDetailSnapshotRecording: SnapshotTestingConfiguration.Record = {
+#if PROVIDER_DETAIL_SNAPSHOT_RECORD
+    return .all
+#else
+    return .never
+#endif
+}()
+
 private func multiWindowProvider() -> ProviderStatus {
     ProviderStatus(
         providerName: "opencode-go",
@@ -77,5 +87,6 @@ private func erroredProvider() -> ProviderStatus {
     let view = ProviderDetailView(provider: erroredProvider(), now: fixedNow)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 360), traits: UITraitCollection(userInterfaceStyle: .light)))
+        as: .image(layout: .fixed(width: 390, height: 360), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: providerDetailSnapshotRecording)
 }

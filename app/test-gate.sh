@@ -29,7 +29,7 @@ COUNTING_LEG_REPORTERS=(
   "pytest"
   "xctest"
   "xctest"
-  "xctest"
+  "aggregate-xctest-swift"
   "pytest"
   "pytest"
   "pytest"
@@ -39,7 +39,10 @@ COUNTING_LEG_REPORTERS=(
   "xctest"
   "xctest"
 )
-COUNTING_LEG_MINIMUMS=(2 2 2 2 2 6 5 5 5 5 3 2 3)
+# The iPad leg includes the 12 canonical image tests below as well as the
+# three GradusiOSUITests workflows. Its floor must exceed the image-only
+# result, or a zero-test UI target could be hidden by the snapshot count.
+COUNTING_LEG_MINIMUMS=(2 2 2 2 15 6 5 5 5 5 4 2 3)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -54,6 +57,23 @@ COUNTING_LEG_SOURCES=(
   "test_walkthrough.py"
   "GradusMacUITests"
   "GradusiOSUITests"
+)
+
+# These are pixel baselines, not every test in DensityLayoutSnapshotTests.
+# The label-fixture semantic test remains in the ordinary iPhone unit suite.
+DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS=(
+  "GradusiOSTests/densePadPortraitLight()"
+  "GradusiOSTests/densePadPortraitDark()"
+  "GradusiOSTests/densePadLandscapeDark()"
+  "GradusiOSTests/densityStandardPadPortraitLight()"
+  "GradusiOSTests/densityLargePadPortraitLight()"
+  "GradusiOSTests/densityLargePadPortraitExtraExtraExtraLarge()"
+  "GradusiOSTests/densityCompactPadPortraitExtraExtraExtraLarge()"
+  "GradusiOSTests/densityLargePhoneDark()"
+  "GradusiOSTests/densityCompactPhoneAccessibility1()"
+  "GradusiOSTests/densityCompactPhoneAccessibility5()"
+  "GradusiOSTests/densityLargePadPortraitAccessibility1()"
+  "GradusiOSTests/densityLargePadPortraitAccessibility5()"
 )
 COUNTING_LEG_RUN_COUNT=0
 
@@ -71,6 +91,20 @@ validate_counting_leg_declarations() {
   for ((index = 0; index < leg_count; index++)); do
     if ! [[ "${COUNTING_LEG_MINIMUMS[index]}" =~ ^[1-9][0-9]*$ ]]; then
       echo "FAIL: counting leg '${COUNTING_LEG_NAMES[index]}' has invalid minimum '${COUNTING_LEG_MINIMUMS[index]}'" >&2
+      return 1
+    fi
+  done
+}
+
+validate_density_image_snapshot_selectors() {
+  local selector
+  if [[ "${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}" -ne 12 ]]; then
+    echo "FAIL: expected 12 canonical density image snapshots, found ${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}" >&2
+    return 1
+  fi
+  for selector in "${DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"; do
+    if [[ ! "$selector" =~ ^GradusiOSTests/[A-Za-z0-9_]+\(\)$ ]]; then
+      echo "FAIL: invalid density image snapshot selector '$selector'" >&2
       return 1
     fi
   done
@@ -106,8 +140,30 @@ assert_counting_leg() {
     return "$command_status"
   fi
 
-  local reported_count
-  reported_count="$(awk '
+  local reported_count reporter
+  reporter="${COUNTING_LEG_REPORTERS[leg_index]}"
+  if [[ "$reporter" == "aggregate-xctest-swift" ]]; then
+    reported_count="$(awk '
+      function number(value) {
+        gsub(/[^0-9]/, "", value)
+        return value
+      }
+      {
+        if (match($0, /Test run with [0-9]+ tests?/)) {
+          value = number(substr($0, RSTART, RLENGTH))
+          if (value > swift_testing) swift_testing = value
+        }
+        if (match($0, /Executed [0-9]+ tests?/)) {
+          value = substr($0, RSTART, RLENGTH)
+          sub(/^Executed /, "", value)
+          value = number(value)
+          if (value > xctest) xctest = value
+        }
+      }
+      END { if (swift_testing || xctest) print swift_testing + xctest }
+    ' "$output_file")"
+  else
+    reported_count="$(awk '
     function record(value) {
       gsub(/[^0-9]/, "", value)
       if (value != "" && value > maximum) maximum = value
@@ -129,7 +185,8 @@ assert_counting_leg() {
       }
     }
     END { if (found) print maximum }
-  ' "$output_file")"
+    ' "$output_file")"
+  fi
   rm -f "$output_file"
 
   if [[ -z "$reported_count" ]]; then
@@ -158,6 +215,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 validate_counting_leg_declarations
+validate_density_image_snapshot_selectors
 
 echo "==> Hermetic notarization script behavior tests"
 ./test-notary-scripts.sh
@@ -215,47 +273,23 @@ SIM_RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 
 # The iPad destination exists because it is the only one where the adaptive
-# grid resolves to more than one column -- the iPhone now runs the same dense
+# grid resolves to more than one column -- the iPhone runs the same dense
 # cards in a single column (INV-12), so both destinations execute
 # `DensityLayoutXCUITests` for real and neither is proven by the other.
+# Image baselines are iPad-canonical because they require fixed 834x1194 host
+# geometry; iPhone coverage remains UI tests and non-snapshot units.
 # Pinned to the 11-inch (834x1194 points) because that is exactly the geometry
 # `DensityLayoutSnapshotTests` records its baselines at; a different iPad
 # would still be "regular width" but would no longer describe the same layout
-# the snapshots do. Only `GradusiOSUITests` runs here -- rerunning the whole
-# iOS suite on a second simulator would roughly double the gate's slowest
-# phase to re-prove device-independent behavior.
+# the snapshots do. The iPad leg selects the UI tests and the 12 canonical
+# image snapshot functions; rerunning the whole iOS suite on a second simulator
+# would roughly double the gate's slowest phase.
 IPAD_DEVICE_NAME="iPad Pro 11-inch (M5)"
 IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
 
-# A macOS UI-test runner must be signed. `CODE_SIGNING_ALLOWED=NO` leaves an
-# ad-hoc linker signature with no sealed resources; launching that artifact
-# produces macOS's misleading “app is damaged” warning and can kill the
-# XCTest runner before it bootstraps. The production entitlements are not
-# needed for this deterministic local fixture, so the explicit leg signs with
-# an installed Apple Development identity and an empty test-only entitlement
-# set. Callers may pin the identity; otherwise select the first local
-# development certificate without exposing any keychain material.
-mac_ui_code_sign_identity="${GRADUS_MAC_UI_CODE_SIGN_IDENTITY:-}"
-if [[ -z "$mac_ui_code_sign_identity" ]]; then
-  mac_ui_code_sign_identity="$(
-    security find-identity -v -p codesigning 2>/dev/null |
-      awk -F'"' '/Apple Development:/ { print $2; found = 1 } END { if (!found) exit 1 }' || true
-  )"
-fi
-if [[ -z "$mac_ui_code_sign_identity" ]]; then
-  echo "FAIL: GradusMacUITests needs an installed Apple Development signing identity" >&2
-  echo "      set GRADUS_MAC_UI_CODE_SIGN_IDENTITY to the certificate name for this host." >&2
-  exit 1
-fi
-MAC_UI_SIGNING_ARGS=(
-  CODE_SIGNING_ALLOWED=YES
-  CODE_SIGN_STYLE=Manual
-  "CODE_SIGN_IDENTITY=$mac_ui_code_sign_identity"
-  DEVELOPMENT_TEAM=4CJ49V6QHW
-  PROVISIONING_PROFILE_SPECIFIER=
-  CODE_SIGN_ENTITLEMENTS=
-  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
-)
+# The deterministic local Mac UI fixture uses the same unsigned Debug
+# configuration as every other test target. Archive/export scripts retain
+# their independent signing and entitlement checks for release artifacts.
 
 echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
 # One `awk` that reads to EOF, rather than `| head -1 | awk ...`. `head` exits
@@ -285,10 +319,12 @@ echo "==> Regenerating Xcode project from project.yml"
 xcodegen generate
 
 echo "==> Ensuring the pinned simulator exists: $SIM_DEVICE_NAME / iOS $SIM_OS_VERSION"
+simulator_created=0
 sim_udid="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep "$SIM_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)"
 if [[ -z "$sim_udid" ]]; then
   echo "    Creating $SIM_DEVICE_NAME (iOS $SIM_OS_VERSION) simulator..."
   sim_udid="$(xcrun simctl create "$SIM_DEVICE_NAME" "$SIM_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
+  simulator_created=1
 fi
 echo "    Simulator UDID: $sim_udid"
 
@@ -296,10 +332,12 @@ echo "==> Ensuring the pinned iPad exists: $IPAD_DEVICE_NAME / iOS $SIM_OS_VERSI
 # -F: the device name contains literal parentheses. The trailing " (" anchors
 # the match to the UDID column so a same-prefix variant (e.g. the "(16GB)"
 # device type) can't be picked up by accident.
+ipad_simulator_created=0
 ipad_udid="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep -F "$IPAD_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)"
 if [[ -z "$ipad_udid" ]]; then
   echo "    Creating $IPAD_DEVICE_NAME (iOS $SIM_OS_VERSION) simulator..."
   ipad_udid="$(xcrun simctl create "$IPAD_DEVICE_NAME" "$IPAD_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
+  ipad_simulator_created=1
 fi
 echo "    iPad UDID: $ipad_udid"
 
@@ -311,19 +349,22 @@ echo "    iPad UDID: $ipad_udid"
 prior_dialog_type="$(defaults read com.apple.CrashReporter DialogType 2>/dev/null || true)"
 defaults write com.apple.CrashReporter DialogType none
 
-# Bug fix: the gate previously left the simulator running after tests
-# finished (any exit path, including failures). Background simulator
-# daemons (e.g. mediaanalysisd re-indexing the simulated Photos library)
-# can then spin at 800%+ CPU indefinitely with nothing to notice or stop
-# them. Shut the simulator down on every exit path so a gate run never
-# leaves runaway processes behind.
+# Preserve a developer's already-running simulator and its account/share state.
+# A gate-created disposable simulator can still be stopped after the run to
+# avoid leaving a new background workload behind.
 trap '
   if [[ "${GRADUS_KEEP_SIMULATORS:-0}" == "1" ]]; then
     echo "==> Leaving simulators running (GRADUS_KEEP_SIMULATORS=1)"
   else
-    echo "==> Shutting down simulators to release their background processes"
-    xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true
-    xcrun simctl shutdown "$ipad_udid" >/dev/null 2>&1 || true
+    if [[ "$simulator_created" == "1" ]]; then
+      xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true
+    fi
+    if [[ "$ipad_simulator_created" == "1" ]]; then
+      xcrun simctl shutdown "$ipad_udid" >/dev/null 2>&1 || true
+    fi
+    if [[ "$simulator_created" != "1" && "$ipad_simulator_created" != "1" ]]; then
+      echo "==> Leaving pre-existing simulators running"
+    fi
   fi
   if [[ -z "$prior_dialog_type" ]]; then
     defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
@@ -343,16 +384,29 @@ echo "==> xcodebuild test — GradusMac (platform=macOS)"
 assert_counting_leg "GradusMac" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusMac \
-  -destination 'platform=macOS' \
+  -destination 'platform=macOS,arch=arm64' \
   -skip-testing:GradusMacUITests \
   CODE_SIGNING_ALLOWED=NO
+
+density_snapshot_skip_args=()
+density_snapshot_only_args=()
+for selector in "${DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"; do
+  density_snapshot_skip_args+=("-skip-testing:$selector")
+  density_snapshot_only_args+=("-only-testing:$selector")
+done
 
 echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$sim_udid" \
+  -skip-testing:GradusiOSUITests \
+  "${density_snapshot_skip_args[@]}" \
   CODE_SIGNING_ALLOWED=NO
+
+# GradusiOSUITests has its own named iPhone leg below. Keeping it out of this
+# broad unit-test pass prevents Xcode from bootstrapping the same UI runner
+# twice, while the dedicated leg still makes loss of UI coverage visible.
 
 # `DensityLayoutXCUITests` runs on the iPhone destination above too, but only
 # here does the adaptive grid resolve to multiple columns. The test carries no
@@ -365,15 +419,16 @@ assert_counting_leg "GradusiOS-iPad" xcodebuild test \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$ipad_udid" \
   -only-testing:GradusiOSUITests \
+  "${density_snapshot_only_args[@]}" \
   CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
 assert_counting_leg "GradusMacUI" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
   -scheme GradusMac \
-  -destination 'platform=macOS' \
+  -destination 'platform=macOS,arch=arm64' \
   -only-testing:GradusMacUITests \
-  "${MAC_UI_SIGNING_ARGS[@]}"
+  CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOSUI" xcodebuild test \

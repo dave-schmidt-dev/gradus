@@ -719,12 +719,14 @@ release_root="$TEST_ROOT/release"
 release_app="$release_root/app"
 mkdir -p "$release_app" "$release_root/.state" "$TEST_ROOT/release-tmp"
 cp "$SCRIPT_DIR/notarize-mac.sh" "$SCRIPT_DIR/notary-status.sh" "$release_app/"
+cp "$SCRIPT_DIR/project.yml" "$release_app/"
 chmod 700 "$release_app/notarize-mac.sh" "$release_app/notary-status.sh"
 rm -f "$FAKE_RUNTIME/info-count"
 set +e
 (
   cd "$release_app"
   PATH="$FAKE_BIN:/usr/bin:/bin" \
+  GRADUS_SOURCE_REVISION=fixture-revision \
   FAKE_NOTARY_SCENARIO=watch \
   FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
   FAKE_EXPECT_LEDGER="$release_root/.state/notary-submissions.tsv" \
@@ -782,12 +784,14 @@ for adversarial_scenario in pending terminal; do
   adversarial_app="$adversarial_root/app"
   mkdir -p "$adversarial_app" "$TEST_ROOT/adversarial-tmp-$adversarial_scenario"
   cp "$SCRIPT_DIR/notarize-mac.sh" "$adversarial_app/"
+  cp "$SCRIPT_DIR/project.yml" "$adversarial_app/"
   chmod 700 "$adversarial_app/notarize-mac.sh"
   rm -f "$FAKE_RUNTIME/stapled" "$FAKE_RUNTIME/info-count"
   set +e
   last_output="$(
     cd "$adversarial_app" && \
     PATH="$FAKE_BIN:/usr/bin:/bin" \
+    GRADUS_SOURCE_REVISION=fixture-revision \
     FAKE_NOTARY_SCENARIO="$adversarial_scenario" \
     FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
     NOTARY_STATUS_SCRIPT="$FAKE_BIN/false-status-helper" \
@@ -829,12 +833,14 @@ run_release_audit_case() {
   local case_tmp="$TEST_ROOT/audit-tmp-$scenario"
   mkdir -p "$case_app" "$case_tmp"
   cp "$SCRIPT_DIR/notarize-mac.sh" "$SCRIPT_DIR/notary-status.sh" "$case_app/"
+  cp "$SCRIPT_DIR/project.yml" "$case_app/"
   chmod 700 "$case_app/notarize-mac.sh" "$case_app/notary-status.sh"
   rm -f "$FAKE_RUNTIME/stapled" "$FAKE_RUNTIME/info-count"
   set +e
   last_output="$(
     cd "$case_app" && \
     PATH="$FAKE_BIN:/usr/bin:/bin" \
+    GRADUS_SOURCE_REVISION=fixture-revision \
     FAKE_NOTARY_SCENARIO="$scenario" \
     FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
     PLIST_BUDDY="$FAKE_BIN/PlistBuddy" \

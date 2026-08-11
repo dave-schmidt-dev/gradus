@@ -9,7 +9,9 @@ import SwiftUI
 /// single generic "no data" view.
 struct EmptyStateView: View {
     let state: DashboardEmptyState
+    var onExploreSample: (() -> Void)?
     var onEnableSync: (() -> Void)?
+    var isExploreSampleInProgress = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -22,6 +24,21 @@ struct EmptyStateView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             actionButton
+            Button {
+                onExploreSample?()
+            } label: {
+                HStack(spacing: 8) {
+                    if isExploreSampleInProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(Self.exploreSampleButtonTitle(isInProgress: isExploreSampleInProgress))
+                }
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("explore-sample")
+            .accessibilityValue(isExploreSampleInProgress ? "In progress" : "")
+            .disabled(isExploreSampleInProgress)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,5 +89,9 @@ struct EmptyStateView: View {
         case .waitingForFirstPublish:
             EmptyView()
         }
+    }
+
+    static func exploreSampleButtonTitle(isInProgress: Bool) -> String {
+        isInProgress ? "Entering Sample…" : "Explore Sample"
     }
 }

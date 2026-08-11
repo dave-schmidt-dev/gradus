@@ -7,14 +7,14 @@ enum ProviderWindowLabel {
         "five_hour": "5 Hour",
         "weekly": "Weekly",
         "monthly": "Monthly",
-        "premium": "Premium",
+        "premium": "Monthly",
         "ac": "Auto",
         "ap": "API",
         "cg5": "5 Hour (CG)",
         "cg1w": "Weekly (CG)",
         "cg_five_hour": "5 Hour (CG)",
         "cg_weekly": "Weekly (CG)",
-        "billing_cycle": "Billing Cycle",
+        "billing_cycle": "Monthly",
     ]
 
     /// Retain an unfamiliar identifier rather than hiding data or failing.

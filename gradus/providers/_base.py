@@ -201,8 +201,13 @@ def _safe_probe_error(exc: BaseException) -> str:
         A message safe to publish, chosen so retryable failures classify as
         transient. Anything unrecognized stays the opaque generic string.
     """
+    import subprocess
     import urllib.error
 
+    if isinstance(exc, subprocess.TimeoutExpired):
+        # `gh auth token` runs through subprocess and its timeout exception
+        # must retain the last-known-good values just like network timeouts.
+        return "provider probe timed out"
     if isinstance(exc, TimeoutError):
         # A urllib *read* timeout is a bare TimeoutError, not a URLError, so
         # `_http_json`'s URLError branch never sees it and it lands here. This

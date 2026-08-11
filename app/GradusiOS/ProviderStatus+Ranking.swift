@@ -18,11 +18,18 @@ enum IOSProviderRetryAccessibility {
         label(for: provider) == retryingLabel
     }
 
-    /// Returns the user-facing status text for an errored provider. Retry and
-    /// reauthentication states get the same wording on every iOS surface;
-    /// other failures retain the producer's diagnostic text.
-    static func displayLabel(for provider: ProviderStatus) -> String {
-        label(for: provider) ?? provider.errorMessage ?? "error"
+    /// Only the explicitly-proven Antigravity retry state may quiet a failed
+    /// provider with retained windows. Other failures keep their remedy and
+    /// urgency visible even when cached readings are present.
+    static func isCarriedFailure(_ provider: ProviderStatus) -> Bool {
+        isRetrying(provider)
+    }
+
+    /// Returns the user-facing status text for an errored provider. Only the
+    /// proven retry state is quiet; all other failures retain diagnostics.
+    static func displayLabel(for provider: ProviderStatus) -> String? {
+        guard !isCarriedFailure(provider) else { return nil }
+        return label(for: provider) ?? provider.errorMessage ?? "error"
     }
 }
 
@@ -35,7 +42,7 @@ extension ProviderStatus: RankableProvider {
 
     var rankingWindows: [ProviderWindow] { windows }
 
-    var rankingIsOK: Bool { ok }
+    var rankingIsOK: Bool { ok || IOSProviderRetryAccessibility.isCarriedFailure(self) }
 
     var rankingIsDepleted: Bool { isDepleted }
 
@@ -47,6 +54,7 @@ extension ProviderStatus: RankableProvider {
     /// same function the Mac evaluates locally — so reading it through here is
     /// no longer a *different* answer from the Mac's, just a cheaper one.
     func rankingNeedsAttention(localThreshold: Double) -> Bool {
+        if IOSProviderRetryAccessibility.isCarriedFailure(self) { return false }
         if IOSProviderRetryAccessibility.isRetrying(self) { return false }
         return isWarning || windows.contains { localIsUrgent($0, threshold: localThreshold) }
     }

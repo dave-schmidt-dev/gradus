@@ -16,8 +16,29 @@ import UIKit
 ///
 struct SettingsView: View {
     @ObservedObject var dashboardViewModel: DashboardViewModel
+    let isSampleMode: Bool
+    let onExploreSample: () -> Void
+    let onExitSample: () -> Void
+    let onResetSample: () -> Void
+    let isSampleEntryInProgress: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+
+    init(
+        dashboardViewModel: DashboardViewModel,
+        isSampleMode: Bool = false,
+        onExploreSample: @escaping () -> Void = {},
+        onExitSample: @escaping () -> Void = {},
+        onResetSample: @escaping () -> Void = {},
+        isSampleEntryInProgress: Bool = false
+    ) {
+        self.dashboardViewModel = dashboardViewModel
+        self.isSampleMode = isSampleMode
+        self.onExploreSample = onExploreSample
+        self.onExitSample = onExitSample
+        self.onResetSample = onResetSample
+        self.isSampleEntryInProgress = isSampleEntryInProgress
+    }
 
     /// Custom binding, not a direct `$dashboardViewModel.notificationsEnabled`
     /// binding: `notificationsEnabled` is `private(set)` precisely because
@@ -42,7 +63,12 @@ struct SettingsView: View {
             }
 
             List {
-                syncAndNotificationsSection
+                if isSampleMode {
+                    sampleSection
+                } else {
+                    syncAndNotificationsSection
+                    exploreSampleSection
+                }
                 connectedComputerSection
                 localDisplaySection
                 warningThresholdSection
@@ -50,6 +76,46 @@ struct SettingsView: View {
             }
             .listStyle(.plain)
         }
+    }
+
+    @ViewBuilder
+    private var sampleSection: some View {
+        Section("Explore Sample") {
+            Text("This is local-only sample data. It does not use iCloud, notifications, or provider connections.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Reset Sample Data", action: onResetSample)
+                .accessibilityIdentifier("sample-data-reset-settings")
+            Button("Exit Explore Sample", action: onExitSample)
+                .accessibilityIdentifier("sample-data-exit-settings")
+        }
+    }
+
+    @ViewBuilder
+    private var exploreSampleSection: some View {
+        Section("Explore Sample") {
+            Text("See a complete dashboard using local-only sample data. Your iCloud data stays unchanged.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button {
+                onExploreSample()
+            } label: {
+                HStack(spacing: 8) {
+                    if isSampleEntryInProgress {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(Self.exploreSampleButtonTitle(isInProgress: isSampleEntryInProgress))
+                }
+            }
+                .accessibilityIdentifier("explore-sample-settings")
+                .accessibilityValue(isSampleEntryInProgress ? "In progress" : "")
+                .disabled(isSampleEntryInProgress)
+        }
+    }
+
+    static func exploreSampleButtonTitle(isInProgress: Bool) -> String {
+        isInProgress ? "Entering Sample…" : "Explore Sample"
     }
 
     @ViewBuilder

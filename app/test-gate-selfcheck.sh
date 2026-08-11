@@ -27,6 +27,9 @@ emit_report() {
     swift-testing) printf 'Test run with %s tests\n' "$count" ;;
     pytest) printf '%s passed\n' "$count" ;;
     xctest) printf 'Executed %s tests\n** TEST SUCCEEDED **\n' "$count" ;;
+    aggregate-xctest-swift)
+      printf 'Test run with %s tests\nExecuted 3 tests\n** TEST SUCCEEDED **\n' "$((count - 3))"
+      ;;
     *)
       echo "FAIL: unknown reporter '$reporter'" >&2
       return 1
@@ -56,6 +59,73 @@ fi
 
 source "$GATE_SCRIPT"
 validate_counting_leg_declarations || fail "live counting-leg declarations are invalid"
+validate_density_image_snapshot_selectors || fail "live density image snapshot selectors are invalid"
+
+# The one semantic density-label assertion stays in the iPhone unit suite.
+# Every selected canonical image test must contain one image assertion, and the
+# gate must derive both destination selectors from this single list.
+snapshot_test_names="$(awk '
+  /^@Test func / {
+    if (name != "" && has_image_assertion) print name
+    name = $3
+    sub(/\(\).*/, "", name)
+    has_image_assertion = 0
+    next
+  }
+  /assertSnapshot\(/ { has_image_assertion = 1 }
+  END { if (name != "" && has_image_assertion) print name }
+' "$SCRIPT_DIR/GradusiOSTests/DensityLayoutSnapshotTests.swift")"
+snapshot_test_count="$(printf '%s\n' "$snapshot_test_names" | sed '/^$/d' | wc -l | tr -d ' ')"
+[[ "$snapshot_test_count" -eq "${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}" ]] ||
+  fail "density image selector count does not match image assertion count"
+snapshot_selector_names="$(printf '%s\n' "${DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}" |
+  sed -E 's#^GradusiOSTests/##; s/\(\)$//' | sort)"
+if [[ "$(printf '%s\n' "$snapshot_test_names" | sed '/^$/d' | sort)" != "$snapshot_selector_names" ]]; then
+  fail "density image selectors do not exactly match source image assertions"
+fi
+grep -Fq '"${density_snapshot_skip_args[@]}"' "$GATE_SCRIPT" ||
+  fail "iPhone does not derive density snapshot exclusions from the shared selector list"
+grep -Fq '"${density_snapshot_only_args[@]}"' "$GATE_SCRIPT" ||
+  fail "iPad does not derive density snapshot inclusions from the shared selector list"
+
+# The two iOS destinations are separate evidence, not interchangeable labels.
+# Keep the destination contract structural so a copied iPhone command cannot
+# silently make the iPad leg green (or vice versa).
+validate_ios_destination_contract() {
+  local gate_path="$1"
+  local iphone_block ipad_block iphone_ui_block
+  iphone_block="$(sed -n '/assert_counting_leg "GradusiOS-iPhone"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+  ipad_block="$(sed -n '/assert_counting_leg "GradusiOS-iPad"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+  iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+
+  [[ "$iphone_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
+    return 1
+  [[ "$ipad_block" == *'-destination "platform=iOS Simulator,id=$ipad_udid"'* ]] ||
+    return 1
+  [[ "$iphone_ui_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
+    return 1
+  [[ "$iphone_ui_block" == *'-only-testing:GradusiOSUITests'* ]] ||
+    return 1
+  [[ "$ipad_block" == *'-only-testing:GradusiOSUITests'* ]] ||
+    return 1
+  [[ "$iphone_block" == *'"${density_snapshot_skip_args[@]}"'* ]] ||
+    return 1
+  [[ "$ipad_block" == *'"${density_snapshot_only_args[@]}"'* ]] ||
+    return 1
+}
+
+validate_ios_destination_contract "$GATE_SCRIPT" ||
+  fail "iPhone/iPad destination or UI-selector contract is incomplete"
+
+# Prove the contract rejects a destination copy/paste regression, not just
+# that the current source happens to contain the expected strings.
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-gate-contract.XXXXXX")"
+sed 's/platform=iOS Simulator,id=\$ipad_udid/platform=iOS Simulator,id=\$sim_udid/g' \
+  "$GATE_SCRIPT" > "$mutated_gate"
+if validate_ios_destination_contract "$mutated_gate"; then
+  fail "destination contract accepted an iPad leg pointed at the iPhone simulator"
+fi
+rm -f "$mutated_gate"
 
 leg_count="${#COUNTING_LEG_NAMES[@]}"
 [[ "$leg_count" -eq "$EXPECTED_COUNTING_LEG_COUNT" ]] ||
@@ -66,6 +136,23 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
   fail "live expected count does not match live reporters"
 [[ "${#COUNTING_LEG_SOURCES[@]}" -eq "$EXPECTED_COUNTING_LEG_COUNT" ]] ||
   fail "live expected count does not match live sources"
+
+# The iPad leg also carries the 12 canonical image snapshots. Its aggregate
+# floor must therefore include every image plus every shipped iOS UI test;
+# otherwise the image count can hide a zero-test UI target.
+snapshot_count="${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"
+ios_ui_test_count="$(rg --no-heading '^\s*func test' "$SCRIPT_DIR/GradusiOSUITests" -g '*.swift' | wc -l | tr -d ' ')"
+ipad_leg_index=-1
+for ((index = 0; index < leg_count; index++)); do
+  if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOS-iPad" ]]; then
+    ipad_leg_index="$index"
+    break
+  fi
+done
+if [[ "$ipad_leg_index" -lt 0 ||
+      "${COUNTING_LEG_MINIMUMS[ipad_leg_index]}" -lt $((snapshot_count + ios_ui_test_count)) ]]; then
+  fail "iPad aggregate floor does not protect its UI target from snapshot masking"
+fi
 
 for ((index = 0; index < leg_count; index++)); do
   floor="${COUNTING_LEG_MINIMUMS[index]}"
@@ -90,6 +177,21 @@ grep -Fq -- "-only-testing:GradusMacUITests" "$GATE_SCRIPT" ||
   fail "Mac UI target-level selector is missing from the canonical gate"
 grep -Fq -- "-only-testing:GradusiOSUITests" "$GATE_SCRIPT" ||
   fail "iOS UI target-level selector is missing from the canonical gate"
+
+iphone_unit_block="$(sed -n '/assert_counting_leg "GradusiOS-iPhone"/,/CODE_SIGNING_ALLOWED=NO/p' "$GATE_SCRIPT")"
+[[ "$iphone_unit_block" == *"-skip-testing:GradusiOSUITests"* ]] ||
+  fail "iPhone unit leg must leave UI tests to their dedicated gate"
+iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALLOWED=NO/p' "$GATE_SCRIPT")"
+[[ "$iphone_ui_block" == *"-only-testing:GradusiOSUITests"* ]] ||
+  fail "dedicated iPhone UI leg is missing its explicit selector"
+grep -Fq -- "-destination 'platform=macOS,arch=arm64'" "$GATE_SCRIPT" ||
+  fail "Mac UI leg must pin the Apple-silicon destination"
+grep -Fq 'simulator_created=0' "$GATE_SCRIPT" ||
+  fail "gate must track whether the iPhone simulator pre-existed"
+grep -Fq 'ipad_simulator_created=0' "$GATE_SCRIPT" ||
+  fail "gate must track whether the iPad simulator pre-existed"
+grep -Fq 'Leaving pre-existing simulators running' "$GATE_SCRIPT" ||
+  fail "gate must preserve pre-existing simulators"
 
 # Every declared leg passes at its live floor, exercising all three reporter
 # forms and proving the self-check is using the gate's data.

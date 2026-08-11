@@ -58,6 +58,34 @@ def test_current_walkthrough_is_dated_hashed_and_bound_to_ledger(tmp_path):
     assert "Onboarding" in text and "Reachable screens and controls" in text
     assert "Role and permission differences" in text and "System-owned sheets" in text
     assert "App Store submission and public release are excluded" in text
+    assert "Explicit live-mode opt-in" in text
+    assert "Allow notifications after sync is enabled" in text
+    assert "first launch" not in text.lower()
+
+
+def test_default_manifest_covers_visible_explore_sample_flow():
+    manifest = validate_manifest(default_manifest())
+    routes = {
+        route["id"]: {control["id"] for control in route["controls"]}
+        for route in manifest["screens"]
+    }
+
+    assert {"explore-sample"} <= routes["empty-state"]
+    assert {"sample-data-banner", "sample-data-reset", "sample-data-exit"} <= routes[
+        "sample-dashboard"
+    ]
+    assert {"explore-sample-settings"} <= routes["ios-settings"]
+    assert {"sample-data-reset-settings", "sample-data-exit-settings"} <= routes[
+        "ios-settings-sample"
+    ]
+    assert any(
+        control["state"] == "disabled"
+        for route in manifest["screens"]
+        for control in route["controls"]
+    )
+    assert any(
+        control.get("recovery") for route in manifest["screens"] for control in route["controls"]
+    )
 
 
 def test_missing_coverage_and_mismatched_tuple_fail_without_claim(tmp_path):
@@ -90,6 +118,22 @@ def test_missing_coverage_and_mismatched_tuple_fail_without_claim(tmp_path):
             manifest=manifest,
             output_path=tmp_path / "incomplete.md",
         )
+    manifest = default_manifest()
+    manifest["screens"] = [
+        {
+            **screen,
+            "controls": [
+                control
+                for control in screen["controls"]
+                if not (screen["id"] == "sample-dashboard" and control["id"] == "sample-data-exit")
+            ],
+        }
+        for screen in manifest["screens"]
+    ]
+    with pytest.raises(WalkthroughError, match="visible sample coverage"):
+        validate_manifest(manifest)
+    with pytest.raises(WalkthroughError, match="cannot read source"):
+        validate_manifest(default_manifest(), source_root=tmp_path)
     assert not (tmp_path / "wrong.md").exists()
 
 

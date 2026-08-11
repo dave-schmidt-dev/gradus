@@ -49,12 +49,17 @@ struct ProviderDetailView: View {
                 ForEach(Array(provider.windows.enumerated()), id: \.offset) { _, window in
                     windowCard(window)
                 }
-                if !provider.ok {
+                if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
                     errorText
                 }
             }
-        } else if !provider.ok {
+        } else if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
             errorText
+        } else if IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+            // A nonempty window list is retained transient data. The real
+            // error remains in ProviderStatus for diagnostics/CloudKit, but
+            // must not compete with the reading in the user-facing detail.
+            EmptyView()
         } else {
             Text("no window data")
                 .font(.subheadline)
@@ -63,7 +68,7 @@ struct ProviderDetailView: View {
     }
 
     private var errorText: some View {
-        let label = IOSProviderRetryAccessibility.displayLabel(for: provider)
+        let label = IOSProviderRetryAccessibility.displayLabel(for: provider) ?? "error"
         return Text(label)
             .font(.subheadline)
             .foregroundStyle(

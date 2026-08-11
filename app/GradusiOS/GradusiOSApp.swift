@@ -2,6 +2,76 @@ import CloudKit
 import GradusKit
 import SwiftUI
 
+/// Serializes live lifecycle work with the local sample transition.
+///
+/// The epoch invalidates a suspended operation before it can start its next
+/// seam call. The active-operation count lets sample entry wait for a call
+/// already in flight to return before the sample UI becomes visible.
+@MainActor
+final class LiveLifecycleGate {
+    typealias Epoch = UInt64
+
+    private(set) var isSuspended: Bool
+    private var epoch: Epoch = 0
+    private var activeOperations = 0
+    private var quiescenceWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(initiallySuspended: Bool = false) {
+        self.isSuspended = initiallySuspended
+    }
+
+    var isLive: Bool { !isSuspended }
+
+    func begin() -> Epoch? {
+        guard !isSuspended else { return nil }
+        activeOperations += 1
+        return epoch
+    }
+
+    func finish() {
+        guard activeOperations > 0 else { return }
+        activeOperations -= 1
+        guard activeOperations == 0 else { return }
+        let waiters = quiescenceWaiters
+        quiescenceWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    func isCurrent(_ operationEpoch: Epoch) -> Bool {
+        !isSuspended && operationEpoch == epoch
+    }
+
+    func withOperation<T>(_ operation: (Epoch) async -> T) async -> T? {
+        guard let operationEpoch = begin() else { return nil }
+        defer { finish() }
+        return await operation(operationEpoch)
+    }
+
+    /// Invalidates new work immediately, then waits for calls that started
+    /// before this transition to finish. The caller may safely present local
+    /// sample data after this returns.
+    func suspend() async {
+        if isSuspended {
+            guard activeOperations > 0 else { return }
+            await withCheckedContinuation { continuation in
+                quiescenceWaiters.append(continuation)
+            }
+            return
+        }
+        isSuspended = true
+        epoch &+= 1
+        guard activeOperations > 0 else { return }
+        await withCheckedContinuation { continuation in
+            quiescenceWaiters.append(continuation)
+        }
+    }
+
+    func resume() {
+        isSuspended = false
+        epoch &+= 1
+    }
+}
+
 enum CloudKitRuntimeConfiguration {
     /// CloudKit is available on a simulator only when that simulator build
     /// carries the container entitlement. The current generated debug
@@ -23,16 +93,20 @@ enum CloudKitRuntimeConfiguration {
 
 enum SampleDataMode {
     static let launchArgument = "--sample-data"
-    static let bannerText = "Sample data"
-    static let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
+    static let bannerText = "Explore Sample"
+    static let bannerDetail = "Local-only sample data"
+    /// Pinned to the bundled fixture's publication timestamp so reset labels
+    /// and age indicators are deterministic without aging between launches.
+    static let fixedNow = Date(timeIntervalSince1970: 1_786_219_200)
+    static let storageDirectoryName = "Sample"
+    static let preferencesSuiteName = "com.zerodelta.gradus.sample-preferences"
 
     enum Error: Swift.Error {
         case missingBundledData
     }
 
-    /// This separate parameter makes the Release exclusion testable from the
-    /// Debug-built unit-test bundle. The production call below supplies the
-    /// compiler-selected value, so a Release artifact cannot enable the mode.
+    /// The legacy launch argument remains Debug-only; the normal shipped path
+    /// enters through the visible Explore Sample controls instead.
     static func isEnabled(arguments: [String], isDebugBuild: Bool) -> Bool {
         isDebugBuild && arguments.contains(launchArgument)
     }
@@ -43,21 +117,82 @@ enum SampleDataMode {
         }
         return try JSONDecoder().decode([ProviderStatus].self, from: Data(contentsOf: url))
     }
+
+    static func storageDirectory(baseDirectory: URL) -> URL {
+        baseDirectory.appendingPathComponent(storageDirectoryName, isDirectory: true)
+    }
 }
 
-/// The banner belongs to the screenshot-only launch path rather than Settings:
-/// screenshots need an unmistakable marker, while shipped users get no demo
-/// entry point at all.
+/// Owns the sample cache and preferences independently from the live iCloud
+/// cache. It deliberately has no CloudKit, account, subscription, or
+/// notification dependencies, so entering this path cannot start live work.
+@MainActor
+final class SampleDataSession: ObservableObject {
+    @Published private(set) var viewModel: DashboardViewModel
+    private let cache: FileLocalCacheStore
+    private let bundle: Bundle
+    private let defaults: UserDefaults
+    private let preferencesSuiteName: String
+
+    init(
+        directory: URL,
+        bundle: Bundle = .main,
+        defaults: UserDefaults = UserDefaults(suiteName: SampleDataMode.preferencesSuiteName)!,
+        preferencesSuiteName: String = SampleDataMode.preferencesSuiteName
+    ) {
+        self.cache = FileLocalCacheStore(directory: directory)
+        self.bundle = bundle
+        self.defaults = defaults
+        self.preferencesSuiteName = preferencesSuiteName
+        Self.seed(cache: cache, bundle: bundle)
+        self.viewModel = DashboardViewModel(cache: cache, userDefaults: defaults)
+    }
+
+    func reset() {
+        try? cache.clear()
+        defaults.removePersistentDomain(forName: preferencesSuiteName)
+        Self.seed(cache: cache, bundle: bundle)
+        viewModel = DashboardViewModel(cache: cache, userDefaults: defaults)
+    }
+
+    private static func seed(cache: FileLocalCacheStore, bundle: Bundle) {
+        guard let providers = try? SampleDataMode.bundledProviders(bundle: bundle) else { return }
+        try? cache.saveCachedStatuses(providers, syncedAt: SampleDataMode.fixedNow)
+    }
+}
+
+/// The banner makes the local-only state and its reversible controls visible
+/// on both iPhone and iPad, including in screenshot/test builds.
 struct SampleDataBanner: View {
+    /// A minimum keeps the marker legible at standard text sizes; there is no
+    /// upper bound so Dynamic Type can expand the banner instead of clipping
+    /// its disclosure or controls.
+    static let minimumHeight: CGFloat = 60
+    static let maximumHeight: CGFloat? = nil
+
+    let onExit: () -> Void
+    let onReset: () -> Void
+
     var body: some View {
-        Text(SampleDataMode.bannerText)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.black)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.yellow, in: Capsule())
-            .padding(.top, 8)
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(SampleDataMode.bannerText)
+                    .font(.caption.weight(.semibold))
+                Text(SampleDataMode.bannerDetail)
+                    .font(.caption2)
+            }
+            .accessibilityElement(children: .combine)
             .accessibilityIdentifier("sample-data-banner")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Reset", action: onReset)
+                .accessibilityIdentifier("sample-data-reset")
+            Button("Exit", action: onExit)
+                .accessibilityIdentifier("sample-data-exit")
+        }
+        .foregroundStyle(.black)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: Self.minimumHeight, maxHeight: Self.maximumHeight)
+        .background(.yellow)
     }
 }
 
@@ -66,24 +201,32 @@ struct SampleDataDashboard: View {
     let now: Date
     let layout: DashboardLayout?
     let density: DashboardDensity?
+    let onExit: () -> Void
+    let onReset: () -> Void
 
     init(
         viewModel: DashboardViewModel,
         now: Date = Date(),
         layout: DashboardLayout? = nil,
-        density: DashboardDensity? = nil
+        density: DashboardDensity? = nil,
+        onExit: @escaping () -> Void = {},
+        onReset: @escaping () -> Void = {}
     ) {
         self.viewModel = viewModel
         self.now = now
         self.layout = layout
         self.density = density
+        self.onExit = onExit
+        self.onReset = onReset
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                SampleDataBanner()
-                DashboardContent(viewModel: viewModel, now: now, layout: layout, density: density)
+                SampleDataBanner(onExit: onExit, onReset: onReset)
+                DashboardContent(
+                    viewModel: viewModel, now: now, layout: layout, density: density,
+                    isSampleMode: true, onExitSample: onExit, onResetSample: onReset)
             }
         }
     }
@@ -93,10 +236,13 @@ struct SampleDataDashboard: View {
 struct GradusiOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var viewModel: DashboardViewModel
+    @StateObject private var sampleSession: SampleDataSession
+    @State private var sampleModeActive: Bool
+    @State private var sampleEntryInProgress = false
     @Environment(\.scenePhase) private var scenePhase
+    private let liveLifecycleGate: LiveLifecycleGate
     private let accountMonitor: AccountStatusMonitor?
     private let subscriptionManager: CKSubscriptionManager?
-    private let sampleDataModeEnabled: Bool
 
     private struct CloudKitDependencies {
         let fetcher: CloudFetcher?
@@ -115,41 +261,49 @@ struct GradusiOSApp: App {
         }
         #endif
 
+        let launchSampleMode = SampleDataMode.isEnabled(arguments: CommandLine.arguments, isDebugBuild: Self.isDebugBuild)
+        let liveLifecycleGate = LiveLifecycleGate(initiallySuspended: launchSampleMode)
+        self.liveLifecycleGate = liveLifecycleGate
+        _sampleModeActive = State(initialValue: launchSampleMode)
+        _sampleSession = StateObject(wrappedValue: SampleDataSession(directory: Self.sampleCacheDirectory()))
+
         let cache = FileLocalCacheStore(directory: Self.cacheDirectory())
         Self.seedCacheForUITestsIfRequested(into: cache)
-        let sampleDataModeEnabled = Self.seedSampleDataIfRequested(into: cache)
-        self.sampleDataModeEnabled = sampleDataModeEnabled
 
-        let dependencies = Self.makeCloudKitDependencies()
+        let dependencies = launchSampleMode ? CloudKitDependencies.offline : Self.makeCloudKitDependencies()
         let warningNotificationScheduler = LocalWarningNotificationScheduler()
 
         let viewModel = DashboardViewModel(
             cache: cache, fetcher: dependencies.fetcher, accountSource: dependencies.accountSource,
             zoneChangesFetcher: dependencies.zoneChangesFetcher, subscriptionManager: dependencies.subscriptionManager,
             warningNotificationScheduler: warningNotificationScheduler,
-            notificationAuthorizationSource: SystemNotificationAuthorizationSource())
+            notificationAuthorizationSource: SystemNotificationAuthorizationSource(),
+            liveLifecycleGate: liveLifecycleGate)
         _viewModel = StateObject(wrappedValue: viewModel)
-
-        self.subscriptionManager = dependencies.subscriptionManager
 
         // PM-16: mid-session account-status reset (sign-out/switch-account
         // while the app is running), reusing the same actor Phase 2a wired
         // on the Mac side (moved to GradusKit in Phase 3 for exactly this).
-        if !sampleDataModeEnabled, let accountSource = dependencies.accountSource {
-            self.accountMonitor = AccountStatusMonitor(source: accountSource) { status in
+        let accountMonitor: AccountStatusMonitor?
+        if !launchSampleMode, let accountSource = dependencies.accountSource {
+            accountMonitor = AccountStatusMonitor(source: accountSource) { status in
                 Task { @MainActor in viewModel.updateAccountStatus(status) }
             }
         } else {
-            self.accountMonitor = nil
+            accountMonitor = nil
         }
+        self.accountMonitor = accountMonitor
+        self.subscriptionManager = dependencies.subscriptionManager
 
-        appDelegate.onRemoteNotification = {
-            guard !sampleDataModeEnabled else { return }
+        let delegate = appDelegate
+        delegate.liveActivitySuppressed = launchSampleMode
+        delegate.onRemoteNotification = {
+            guard !delegate.liveActivitySuppressed else { return }
             await viewModel.handleRemoteNotification()
         }
 
-        appDelegate.onAuthorizationResolved = {
-            guard !sampleDataModeEnabled else { return }
+        delegate.onAuthorizationResolved = {
+            guard !delegate.liveActivitySuppressed else { return }
             Task { await viewModel.refreshNotificationAuthorization() }
         }
     }
@@ -157,21 +311,32 @@ struct GradusiOSApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if sampleDataModeEnabled {
-                    SampleDataDashboard(viewModel: viewModel, now: SampleDataMode.fixedNow)
+                if sampleModeActive {
+                    SampleDataDashboard(
+                        viewModel: sampleSession.viewModel,
+                        now: SampleDataMode.fixedNow,
+                        onExit: exitSample,
+                        onReset: resetSample)
                 } else {
-                    DashboardView(viewModel: viewModel)
+                    DashboardView(
+                        viewModel: viewModel,
+                        onExploreSample: enterSample,
+                        isSampleEntryInProgress: sampleEntryInProgress)
                 }
-            }
+                }
                 .task {
                     guard Self.shouldRunLiveLifecycle(
                         isUITesting: Self.isUITesting,
-                        sampleDataModeEnabled: sampleDataModeEnabled)
+                        sampleDataModeEnabled: sampleModeActive,
+                        syncEnabled: viewModel.syncEnabled)
                     else { return }
-                    await viewModel.refreshNotificationAuthorization()
-                    await accountMonitor?.start()
-                    await viewModel.sync()
-                    await subscribeIfEnabled()
+                    await startLiveLifecycle()
+                }
+                .onChange(of: sampleModeActive) { active in
+                    appDelegate.liveActivitySuppressed = active
+                    guard !active, !Self.isUITesting else { return }
+                    liveLifecycleGate.resume()
+                    Task { await startLiveLifecycle() }
                 }
                 .onChange(of: scenePhase) { phase in
                     // The only way to change notification permission is to
@@ -182,7 +347,8 @@ struct GradusiOSApp: App {
                     guard phase == .active,
                           Self.shouldRunLiveLifecycle(
                               isUITesting: Self.isUITesting,
-                              sampleDataModeEnabled: sampleDataModeEnabled)
+                              sampleDataModeEnabled: sampleModeActive,
+                              syncEnabled: viewModel.syncEnabled)
                     else { return }
                     Task { await viewModel.refreshNotificationAuthorization() }
                 }
@@ -190,9 +356,10 @@ struct GradusiOSApp: App {
                     guard enabled,
                           Self.shouldRunLiveLifecycle(
                               isUITesting: Self.isUITesting,
-                              sampleDataModeEnabled: sampleDataModeEnabled)
+                              sampleDataModeEnabled: sampleModeActive,
+                              syncEnabled: true)
                     else { return }
-                    Task { await subscribeIfEnabled() }
+                    Task { await startLiveLifecycle() }
                 }
                 .onChange(of: viewModel.notificationsEnabled) { enabled in
                     // P5/T5.1: re-runs `subscribeIfEnabled()` when
@@ -204,7 +371,8 @@ struct GradusiOSApp: App {
                     guard enabled,
                           Self.shouldRunLiveLifecycle(
                               isUITesting: Self.isUITesting,
-                              sampleDataModeEnabled: sampleDataModeEnabled)
+                              sampleDataModeEnabled: sampleModeActive,
+                              syncEnabled: viewModel.syncEnabled)
                     else { return }
                     Task { await subscribeIfEnabled() }
                 }
@@ -220,12 +388,39 @@ struct GradusiOSApp: App {
     /// drives the offline cache) is independent of the user-visible warning
     /// opt-out and still runs whenever sync is on.
     private func subscribeIfEnabled() async {
-        guard !sampleDataModeEnabled else { return }
+        guard !sampleModeActive else { return }
         guard viewModel.syncEnabled, viewModel.accountStatus == .available else { return }
         guard let subscriptionManager else { return }
-        try? await subscriptionManager.subscribeToZoneChanges()
-        guard viewModel.notificationsEnabled else { return }
-        try? await subscriptionManager.subscribeToWarnings()
+        await liveLifecycleGate.withOperation { operationEpoch in
+            guard liveLifecycleGate.isCurrent(operationEpoch) else { return }
+            try? await subscriptionManager.subscribeToZoneChanges()
+            guard liveLifecycleGate.isCurrent(operationEpoch), viewModel.notificationsEnabled else { return }
+            try? await subscriptionManager.subscribeToWarnings()
+        }
+    }
+
+    /// Re-enters the same live sequence after leaving the local sample. This
+    /// is explicit because changing the sample state is not guaranteed to
+    /// recreate the surrounding scene task.
+    private func startLiveLifecycle() async {
+        guard !sampleModeActive, liveLifecycleGate.isLive else { return }
+        await liveLifecycleGate.withOperation { operationEpoch in
+            guard liveLifecycleGate.isCurrent(operationEpoch) else { return }
+            appDelegate.beginLiveLifecycle()
+            await appDelegate.awaitAuthorizationResolution()
+        }
+        await viewModel.refreshNotificationAuthorization()
+        guard !sampleModeActive, liveLifecycleGate.isLive else { return }
+        await liveLifecycleGate.withOperation { operationEpoch in
+            guard liveLifecycleGate.isCurrent(operationEpoch) else { return }
+            await accountMonitor?.stopObserving()
+            guard liveLifecycleGate.isCurrent(operationEpoch) else { return }
+            await accountMonitor?.start()
+        }
+        guard !sampleModeActive, liveLifecycleGate.isLive else { return }
+        await viewModel.sync()
+        guard !sampleModeActive, liveLifecycleGate.isLive else { return }
+        await subscribeIfEnabled()
     }
 
     private static func makeCloudKitDependencies() -> CloudKitDependencies {
@@ -250,6 +445,40 @@ struct GradusiOSApp: App {
         return base.appendingPathComponent("Gradus", isDirectory: true)
     }
 
+    private static func sampleCacheDirectory() -> URL {
+        SampleDataMode.storageDirectory(baseDirectory: cacheDirectory())
+    }
+
+    private func enterSample() {
+        guard !sampleModeActive, !sampleEntryInProgress else { return }
+        sampleEntryInProgress = true
+        appDelegate.liveActivitySuppressed = true
+        Task { @MainActor in
+            defer {
+                sampleEntryInProgress = false
+                if !sampleModeActive {
+                    appDelegate.liveActivitySuppressed = false
+                    liveLifecycleGate.resume()
+                }
+            }
+            await liveLifecycleGate.suspend()
+            guard !Task.isCancelled else { return }
+            await accountMonitor?.stopObserving()
+            guard !Task.isCancelled else { return }
+            sampleModeActive = true
+        }
+    }
+
+    private func exitSample() {
+        sampleModeActive = false
+        appDelegate.liveActivitySuppressed = false
+        liveLifecycleGate.resume()
+    }
+
+    private func resetSample() {
+        sampleSession.reset()
+    }
+
     /// T3.5's XCUITest asserts the dashboard renders from a seeded offline
     /// cache without needing a live CloudKit round-trip in CI. The XCUITest
     /// passes fixture JSON via `launchEnvironment`; this writes it straight
@@ -263,9 +492,8 @@ struct GradusiOSApp: App {
         try? cache.saveCachedStatuses(seeded, syncedAt: Date())
     }
 
-    /// Screenshot-only sample data is compiled out of Release behavior even
-    /// when a caller supplies the launch argument. There is deliberately no
-    /// user-facing toggle or Settings entry point.
+    /// Legacy launch-argument seeding remains available for Debug screenshot
+    /// launches. The shipped user path uses `SampleDataSession` instead.
     static func seedSampleDataIfRequested(
         into cache: FileLocalCacheStore,
         arguments: [String] = CommandLine.arguments,
@@ -280,8 +508,12 @@ struct GradusiOSApp: App {
         return true
     }
 
-    static func shouldRunLiveLifecycle(isUITesting: Bool, sampleDataModeEnabled: Bool) -> Bool {
-        !isUITesting && !sampleDataModeEnabled
+    static func shouldRunLiveLifecycle(
+        isUITesting: Bool,
+        sampleDataModeEnabled: Bool,
+        syncEnabled: Bool = true
+    ) -> Bool {
+        !isUITesting && !sampleDataModeEnabled && syncEnabled
     }
 
     private static var isDebugBuild: Bool {

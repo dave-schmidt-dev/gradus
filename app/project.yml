@@ -63,6 +63,8 @@ targets:
         CURRENT_PROJECT_VERSION: "17"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_GRADUS_SOURCE_REVISION: "$(GRADUS_SOURCE_REVISION)"
+        INFOPLIST_KEY_GRADUS_PROJECT_SHA256: "$(GRADUS_PROJECT_SHA256)"
         # Without this the target compiles no app icon at all -- and does so
         # silently, with no build warning: the shipped bundle had an empty
         # Contents/Resources and no CFBundleIconName, so macOS fell back to the

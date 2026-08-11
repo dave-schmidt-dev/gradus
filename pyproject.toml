@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Terminal monitor for Codex and Claude usage."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["rich>=15.0", "cryptography>=42"]
+dependencies = ["rich>=15.0"]
 
 [project.scripts]
 gradus = "gradus.__main__:main"

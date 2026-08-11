@@ -95,7 +95,9 @@ enum MenuVerticalBudget {
             return density.singleWindowHeight
         }
         let windowsHeight = CGFloat(provider.windows.count) * density.windowHeight
-        let errorHeight = provider.ok ? 0 : density.metadataHeight
+        let errorHeight = provider.ok || ProviderRetryAccessibility.isCarriedFailure(provider)
+            ? 0
+            : density.metadataHeight
         return density.providerHeaderHeight + windowsHeight + errorHeight
     }
 }
@@ -413,7 +415,10 @@ struct MenuUITestFixtureView: View {
 
     var body: some View {
         MenuContentView(viewModel: viewModel)
-            .frame(minHeight: 680)
+            // The fixture must leave room for the bottom controls' hit
+            // targets. A 680-point minimum in a 720-point host intermittently
+            // exposed the toggle but clipped its clickable bounds.
+            .frame(minHeight: 760, alignment: .top)
             .padding(.top, 1)
     }
 }
@@ -431,7 +436,7 @@ enum MenuUITestFixtureWindow {
         let window = NSWindow(contentViewController: hostingController)
         window.identifier = NSUserInterfaceItemIdentifier("gradus-ui-test-menu")
         window.title = "Gradus UI Test Menu"
-        window.setContentSize(NSSize(width: MenuContentView.columnWidth + 24, height: 720))
+        window.setContentSize(NSSize(width: MenuContentView.columnWidth + 24, height: 800))
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.center()
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -501,6 +506,7 @@ enum ProviderTriage {
     /// any-window, so that provider raised a warning on the phone and none on
     /// the Mac.
     static func needsAttention(_ provider: ProviderEntry) -> Bool {
+        if ProviderRetryAccessibility.isCarriedFailure(provider) { return false }
         if ProviderRetryAccessibility.isRetrying(provider) { return false }
         if !provider.ok { return true }
         return providerNeedsAttention(provider.windows)
@@ -656,9 +662,8 @@ private struct ProviderRow: View {
                 }
             }
 
-            if !provider.ok {
-                let label = ProviderRetryAccessibility.label(for: provider)
-                    ?? provider.error
+            if !provider.ok && !ProviderRetryAccessibility.isCarriedFailure(provider) {
+                let label = ProviderRetryAccessibility.displayLabel(for: provider)
                     ?? "Provider probe failed"
                 Text(label)
                     .font(.caption)

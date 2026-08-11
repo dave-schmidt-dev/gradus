@@ -163,6 +163,18 @@ final class PublishPipeline {
         return value
     }
 
+    private static func producerProvenance() -> (sourceRevision: String, projectSha256: String)? {
+        guard let sourceRevision = Bundle.main.infoDictionary?["GRADUS_SOURCE_REVISION"] as? String,
+              !sourceRevision.isEmpty,
+              !sourceRevision.contains("$("),
+              let projectSha256 = Bundle.main.infoDictionary?["GRADUS_PROJECT_SHA256"] as? String,
+              projectSha256.range(of: "^[0-9a-fA-F]{64}$", options: .regularExpression) != nil
+        else {
+            return nil
+        }
+        return (sourceRevision, projectSha256.lowercased())
+    }
+
     /// `snapshotPath` is the publisher's single injected dependency onto the
     /// filesystem (INV-7) -- defaults to the real snapshot location but is
     /// overridable, so nothing downstream needs to compute or guess a path.
@@ -183,6 +195,10 @@ final class PublishPipeline {
             GradusLog.app.error("could not resolve signed producer metadata; publishing disabled")
             return
         }
+        guard let provenance = Self.producerProvenance() else {
+            GradusLog.app.error("could not resolve signed source/project provenance; publishing disabled")
+            return
+        }
         let cloudKitEnvironment = Self.signedCloudKitEnvironment()
         let evidencePath = snapshotPath
             .deletingLastPathComponent()
@@ -192,7 +208,9 @@ final class PublishPipeline {
             zoneID: zoneID,
             evidencePath: evidencePath,
             producerBuildNumber: producerBuildNumber,
-            cloudKitEnvironment: cloudKitEnvironment
+            cloudKitEnvironment: cloudKitEnvironment,
+            producerSourceRevision: provenance.sourceRevision,
+            producerProjectSha256: provenance.projectSha256
         )
         self.coordinator = coordinator
 

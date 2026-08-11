@@ -17,6 +17,18 @@ enum ProviderRetryAccessibility {
     static func isRetrying(_ provider: ProviderEntry) -> Bool {
         label(for: provider) == retryingLabel
     }
+
+    /// Only the explicitly-proven Antigravity retry state may quiet a failed
+    /// provider with retained windows. Other failures keep their remedy and
+    /// urgency visible even when cached readings are present.
+    static func isCarriedFailure(_ provider: ProviderEntry) -> Bool {
+        isRetrying(provider)
+    }
+
+    static func displayLabel(for provider: ProviderEntry) -> String? {
+        guard !isCarriedFailure(provider) else { return nil }
+        return label(for: provider) ?? provider.error ?? "Provider probe failed"
+    }
 }
 
 /// The Mac ranks the snapshot model, which -- unlike `ProviderStatus` -- has
@@ -27,7 +39,7 @@ extension ProviderEntry: RankableProvider {
 
     var rankingWindows: [ProviderWindow] { windows }
 
-    var rankingIsOK: Bool { ok }
+    var rankingIsOK: Bool { ok || ProviderRetryAccessibility.isCarriedFailure(self) }
 
     /// Recomputed with exactly the expression `CloudKitMapping` uses as its own
     /// default for the stored field (`windows.contains { percentIsDepleted(...) }`).
@@ -45,6 +57,7 @@ extension ProviderEntry: RankableProvider {
     /// Unioning the local threshold on top can only add providers to the tier,
     /// never demote one the ramp already placed there.
     func rankingNeedsAttention(localThreshold: Double) -> Bool {
+        if ProviderRetryAccessibility.isCarriedFailure(self) { return false }
         if ProviderRetryAccessibility.isRetrying(self) { return false }
         return ProviderTriage.needsAttention(self)
             || windows.contains { localIsUrgent($0, threshold: localThreshold) }

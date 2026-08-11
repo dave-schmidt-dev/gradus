@@ -25,6 +25,27 @@ private actor MockAccountStatusSource: AccountStatusSource {
     }
 }
 
+private actor DelayedAccountStatusSource: AccountStatusSource {
+    private var continuation: CheckedContinuation<CKAccountStatus, Never>?
+    private(set) var requestStarted = false
+
+    func currentAccountStatus() async throws -> CKAccountStatus {
+        requestStarted = true
+        return await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilRequestStarts() async {
+        while !requestStarted { await Task.yield() }
+    }
+
+    func release(_ status: CKAccountStatus) {
+        continuation?.resume(returning: status)
+        continuation = nil
+    }
+}
+
 // MARK: - publishingState classifier (CV-6)
 
 @Test func onlyAvailableIsReady() {
@@ -77,6 +98,26 @@ func everyNonAvailableStatusIsBlocked(_ status: CKAccountStatus) {
 
     #expect(await monitor.lastKnownStatus == .available)  // unchanged, not silently "blocked" or reset
     #expect(await reported.values == [.available])  // no spurious onChange for the failed refresh
+}
+
+@Test func refreshCompletedAfterStopDoesNotPublishOrMutateStatus() async {
+    let source = DelayedAccountStatusSource()
+    let reported = ReportedStatuses()
+    let monitor = AccountStatusMonitor(source: source, notificationCenter: NotificationCenter()) { status in
+        Task { await reported.append(status) }
+    }
+
+    let refreshTask = Task { await monitor.refresh() }
+    await source.waitUntilRequestStarts()
+    await monitor.stopObserving()
+    await source.release(.available)
+    await refreshTask.value
+
+    // Give a buggy post-await callback a chance to run; the stopped monitor
+    // must neither publish the late result nor update its cached status.
+    try? await Task.sleep(nanoseconds: 50_000_000)
+    #expect(await monitor.lastKnownStatus == .couldNotDetermine)
+    #expect(await reported.values.isEmpty)
 }
 
 @Test func accountChangedNotificationTriggersARefresh() async {

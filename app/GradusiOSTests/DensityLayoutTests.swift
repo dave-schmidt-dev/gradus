@@ -168,6 +168,27 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
         "a later source row must never appear above an earlier provider")
 }
 
+@Test func singleColumnPlacementRemainsContentDriven() {
+    let heights: [CGFloat] = [144, 92, 118, 90]
+
+    #expect(
+        ProviderRowBalancedLayout.rowHeights(cardHeights: heights, columns: 1) == heights,
+        "iPhone cards must retain their measured content heights")
+    #expect(
+        ProviderRowBalancedLayout.frames(
+            cardHeights: heights,
+            columns: 1,
+            cardWidth: 361,
+            horizontalSpacing: 14,
+            verticalSpacing: 14
+        ).map(\.height) == heights)
+}
+
+@Test func providerCardBorderIsFixedStructuralNavy() {
+    #expect(ProviderDensityCardStructuralToken.navyHex == 0x00005F)
+    #expect(ProviderDensityCardStructuralToken.opacity == 0.55)
+}
+
 @MainActor
 @Test func fullFixturePinsPortraitLandscapeMeasurementsAndLargeText() {
     let providers = fullProviderSet()
@@ -839,8 +860,8 @@ private func feasibleStops(
         ("five_hour", "5 Hour"),
         ("weekly", "Weekly"),
         ("monthly", "Monthly"),
-        ("premium", "Premium"),
-        ("billing_cycle", "Billing Cycle"),
+        ("premium", "Monthly"),
+        ("billing_cycle", "Monthly"),
         ("ac", "Auto"),
         ("ap", "API"),
     ]

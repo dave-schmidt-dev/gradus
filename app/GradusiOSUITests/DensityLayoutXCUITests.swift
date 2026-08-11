@@ -122,7 +122,7 @@ final class DensityLayoutXCUITests: XCTestCase {
         // matched everything. These two prove it actually discriminates: a
         // window this provider does not have, and the right window at the wrong
         // value, must both be absent.
-        XCTAssertFalse(rowExists(labeled: "Premium,"), "row query matches windows that aren't there")
+        XCTAssertFalse(rowExists(labeled: "Monthly, 100 percent"), "row query matches windows that aren't there")
         XCTAssertFalse(rowExists(labeled: "Weekly, 62 percent"), "row query ignores the percentage")
 
         // The second provider is a peer card, not a badge or a drill-in.

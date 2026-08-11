@@ -24,15 +24,28 @@ let dashboardHorizontalInset: CGFloat = 16
 struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
     let now: Date
+    let onExploreSample: () -> Void
+    let isSampleEntryInProgress: Bool
 
-    init(viewModel: DashboardViewModel, now: Date = Date()) {
+    init(
+        viewModel: DashboardViewModel,
+        now: Date = Date(),
+        onExploreSample: @escaping () -> Void = {},
+        isSampleEntryInProgress: Bool = false
+    ) {
         self.viewModel = viewModel
         self.now = now
+        self.onExploreSample = onExploreSample
+        self.isSampleEntryInProgress = isSampleEntryInProgress
     }
 
     var body: some View {
         NavigationStack {
-            DashboardContent(viewModel: viewModel, now: now)
+            DashboardContent(
+                viewModel: viewModel,
+                now: now,
+                onExploreSample: onExploreSample,
+                isSampleEntryInProgress: isSampleEntryInProgress)
         }
     }
 }
@@ -98,6 +111,11 @@ struct DashboardContent: View {
     /// Settings to participate in the same navigation stack as provider
     /// detail drill-in.
     @State private var showingSettings = false
+    let isSampleMode: Bool
+    let onExploreSample: () -> Void
+    let onExitSample: () -> Void
+    let onResetSample: () -> Void
+    let isSampleEntryInProgress: Bool
 
     // The grid must resolve its column count before the child WindowRows are
     // installed. Keep the same compile-time style mapping as WindowRow here;
@@ -117,12 +135,22 @@ struct DashboardContent: View {
         viewModel: DashboardViewModel,
         now: Date = Date(),
         layout: DashboardLayout? = nil,
-        density: DashboardDensity? = nil
+        density: DashboardDensity? = nil,
+        isSampleMode: Bool = false,
+        onExploreSample: @escaping () -> Void = {},
+        onExitSample: @escaping () -> Void = {},
+        onResetSample: @escaping () -> Void = {},
+        isSampleEntryInProgress: Bool = false
     ) {
         self.viewModel = viewModel
         self.now = now
         self.layoutOverride = layout
         self.densityOverride = density
+        self.isSampleMode = isSampleMode
+        self.onExploreSample = onExploreSample
+        self.onExitSample = onExitSample
+        self.onResetSample = onResetSample
+        self.isSampleEntryInProgress = isSampleEntryInProgress
     }
 
     var layout: DashboardLayout {
@@ -150,9 +178,11 @@ struct DashboardContent: View {
 
             Group {
                 if let emptyState = viewModel.emptyState {
-                    EmptyStateView(state: emptyState) {
-                        viewModel.syncEnabled = true
-                    }
+                    EmptyStateView(
+                        state: emptyState,
+                        onExploreSample: onExploreSample,
+                        onEnableSync: { viewModel.syncEnabled = true },
+                        isExploreSampleInProgress: isSampleEntryInProgress)
                 } else {
                     denseGrid
                 }
@@ -164,7 +194,13 @@ struct DashboardContent: View {
             }
         }
         .sheet(isPresented: $showingSettings) {
-            SettingsView(dashboardViewModel: viewModel)
+            SettingsView(
+                dashboardViewModel: viewModel,
+                isSampleMode: isSampleMode,
+                onExploreSample: onExploreSample,
+                onExitSample: onExitSample,
+                onResetSample: onResetSample,
+                isSampleEntryInProgress: isSampleEntryInProgress)
         }
     }
 
@@ -569,6 +605,11 @@ struct ProviderRowBalancedLayout: Layout {
     /// check cannot drift into a duplicate arithmetic model.
     static func rowHeights(cardHeights: [CGFloat], columns: Int) -> [CGFloat] {
         let count = max(1, columns)
+        // A compact iPhone is one column: preserve each card's measured
+        // content height rather than turning the layout into a fixed-height
+        // stack. Multi-column iPad rows are the only case that needs the
+        // tallest-card rule.
+        guard count > 1 else { return cardHeights }
         return stride(from: 0, to: cardHeights.count, by: count).map { start in
             cardHeights[start..<min(start + count, cardHeights.count)].max() ?? 0
         }

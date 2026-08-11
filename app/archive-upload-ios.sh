@@ -117,6 +117,29 @@ sha256_tree() {
 
 snapshot_source_digest() { sha256_tree "$1"; }
 snapshot_project_digest() { sha256_file "$1"; }
+snapshot_source_revision() {
+  local injected="${GRADUS_SOURCE_REVISION:-}" revision
+  if revision="$(/usr/bin/git -C "$1" rev-parse HEAD 2>/dev/null)"; then
+    if [[ -n "$(/usr/bin/git -C "$1" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+      echo "FAIL: source checkout is dirty; publish provenance from a clean revision" >&2
+      return 1
+    fi
+    [[ -n "$revision" ]] || {
+      echo "FAIL: source revision is empty" >&2
+      return 1
+    }
+    printf '%s\n' "$revision"
+    return 0
+  fi
+  if [[ -n "${injected//[[:space:]]/}" ]]; then
+    printf '%s\n' "$injected"
+    return 0
+  fi
+  {
+    echo "FAIL: source revision is unavailable (set GRADUS_SOURCE_REVISION for a non-Git checkout)" >&2
+    return 1
+  }
+}
 
 assert_digest_unchanged() {
   local label="$1" path="$2" expected="$3" actual
@@ -493,21 +516,21 @@ validate_producer_evidence() {
 validate_producer_evidence_boundary() {
   local evidence_path="$1" expected_build="$2" expected_environment="$3"
   local expected_source="${4:-}" expected_project="${5:-}" actual_source actual_project
+  [[ -n "$expected_source" && -n "$expected_project" ]] || {
+    echo "FAIL: producer evidence boundary is missing source/project expectations" >&2
+    return 1
+  }
   validate_producer_evidence "$evidence_path" "$expected_build" "$expected_environment"
-  if [[ -n "$expected_source" ]]; then
-    actual_source="$(read_evidence_field sourceRevision "$evidence_path" 2>/dev/null || true)"
-    [[ -z "$actual_source" || "$actual_source" == "$expected_source" ]] || {
-      echo "FAIL: producer evidence source revision mismatch" >&2
-      return 1
-    }
-  fi
-  if [[ -n "$expected_project" ]]; then
-    actual_project="$(read_evidence_field projectSha256 "$evidence_path" 2>/dev/null || true)"
-    [[ -z "$actual_project" || "$actual_project" == "$expected_project" ]] || {
-      echo "FAIL: producer evidence project digest mismatch" >&2
-      return 1
-    }
-  fi
+  actual_source="$(read_evidence_field sourceRevision "$evidence_path" 2>/dev/null || true)"
+  [[ -n "$actual_source" && "$actual_source" == "$expected_source" ]] || {
+    echo "FAIL: producer evidence source revision is missing or mismatched" >&2
+    return 1
+  }
+  actual_project="$(read_evidence_field projectSha256 "$evidence_path" 2>/dev/null || true)"
+  [[ -n "$actual_project" && "$actual_project" == "$expected_project" ]] || {
+    echo "FAIL: producer evidence project digest is missing or mismatched" >&2
+    return 1
+  }
 }
 
 resolve_user_home() {
@@ -626,8 +649,12 @@ main() {
   if [[ "$resume_candidate" -eq 0 ]]; then
   baseline_source_digest="$(snapshot_source_digest "$project_root")"
   baseline_project_digest="$(snapshot_project_digest "$SCRIPT_DIR/project.yml")"
+  source_revision="$(snapshot_source_revision "$project_root")" || {
+    echo "FAIL: could not resolve the checked-out source revision" >&2
+    return 1
+  }
   echo "==> Validating producer evidence before candidate allocation"
-  validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "" "$baseline_project_digest"
+  validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "$source_revision" "$baseline_project_digest"
   candidate_root="$(create_candidate_workspace "$project_root")"
   candidate_workspace="$(dirname "$candidate_root")"
   candidate_script_dir="$candidate_root/app"
@@ -737,7 +764,7 @@ main() {
     return 1
   }
   echo "==> Revalidating producer evidence immediately before upload"
-  validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "" "$baseline_project_digest"
+  validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "$source_revision" "$baseline_project_digest"
 
   artifact_digest="$(sha256_file "$IPA_PATH")"
   candidate_id="${GRADUS_CANDIDATE_ID:-gradus-ios-${NEXT_BUILD}-${artifact_digest:0:16}}"
@@ -752,8 +779,6 @@ main() {
   IPA_PATH="$durable_ipa_path"
   candidate_evidence_path="${candidate_evidence_path:-$candidate_workspace/candidate-evidence.json}"
   walkthrough_path="${walkthrough_path:-$candidate_workspace/walkthrough.md}"
-  source_revision="$(read_evidence_field sourceRevision "$evidence_path" 2>/dev/null || true)"
-  [[ -n "$source_revision" ]] || source_revision="$baseline_source_digest"
   producer_published_at="$(read_evidence_field publishedAt "$evidence_path")"
   producer_evidence_digest="$(sha256_file "$evidence_path")"
   marketing_version="$(read_marketing_version "$candidate_script_dir/project.yml" GradusiOS)"

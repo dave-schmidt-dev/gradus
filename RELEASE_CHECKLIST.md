@@ -18,8 +18,10 @@ Before that trigger, the release owner must verify:
 
 1. A normal Release `Explore Sample` path works on a clean iPhone/iPad install
    without GradusMac or pre-existing CloudKit data. It is labelled as sample
-   data, exercises the normal dashboard, writes nothing to CloudKit, and has a
-   clear exit/reset path.
+   data, exercises the normal dashboard, writes nothing to CloudKit, waits for
+   live lifecycle work to quiesce before entry, suppresses remote pushes and
+   notification registration while active, and has reset/exit paths from both
+   the sample dashboard and its Settings variant.
 2. The Antigravity card no longer reports a transient error during a healthy
    refresh cycle; a regression test and live health-window evidence exist.
 3. The data-flow/security audit records each outbound data path, CloudKit
@@ -62,8 +64,11 @@ python3 -m release_candidate.walkthrough \
 
 Review onboarding, every reachable screen and control, each role/permission
 variant, disabled and recovery states, and every system-owned sheet against the
-matching TestFlight artifact. The generator records the walkthrough digest in
-the candidate ledger and refuses stale, mismatched, or incomplete coverage.
+matching TestFlight artifact. The source-backed manifest must include the empty
+state's Explore Sample entry, the sample dashboard banner/reset/exit controls,
+and the sample Settings reset/exit variant. The generator records the
+walkthrough digest in the candidate ledger and refuses stale, mismatched, or
+incomplete coverage.
 This is a human release-owner gate for internal TestFlight only; it is not App
 Store submission or proof of Apple processing/installability.
 

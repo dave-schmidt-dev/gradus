@@ -62,6 +62,56 @@ discovered_home="$(env -u HOME /bin/bash -c 'source "$1"; resolve_user_home' bas
   exit 1
 }
 
+non_git_source="$TEST_ROOT/non-git-source"
+mkdir -p "$non_git_source"
+injected_revision="$(GRADUS_SOURCE_REVISION=fixture-revision /bin/bash -c \
+  'source "$1"; snapshot_source_revision "$2"' bash "$UPLOAD_SCRIPT" "$non_git_source")"
+[[ "$injected_revision" == "fixture-revision" ]] || {
+  echo "FAIL: injected source revision was not used for a non-Git checkout" >&2
+  exit 1
+}
+
+clean_git_source="$TEST_ROOT/clean-git-source"
+mkdir -p "$clean_git_source"
+git -C "$clean_git_source" init -q
+git -C "$clean_git_source" config user.name GradusTest
+git -C "$clean_git_source" config user.email gradus-test@example.invalid
+printf 'clean\n' >"$clean_git_source/source.txt"
+git -C "$clean_git_source" add source.txt
+git -C "$clean_git_source" commit -qm initial
+clean_revision="$(snapshot_source_revision "$clean_git_source")"
+[[ "$clean_revision" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "FAIL: clean Git checkout did not resolve a revision" >&2
+  exit 1
+}
+printf 'dirty\n' >>"$clean_git_source/source.txt"
+set +e
+dirty_revision_output="$(snapshot_source_revision "$clean_git_source" 2>&1)"
+dirty_revision_status=$?
+set -e
+[[ "$dirty_revision_status" -ne 0 && "$dirty_revision_output" == *"source checkout is dirty"* ]] || {
+  echo "FAIL: dirty Git checkout did not fail closed" >&2
+  exit 1
+}
+set +e
+dirty_injected_output="$(GRADUS_SOURCE_REVISION=fixture-revision snapshot_source_revision "$clean_git_source" 2>&1)"
+dirty_injected_status=$?
+set -e
+[[ "$dirty_injected_status" -ne 0 && "$dirty_injected_output" == *"source checkout is dirty"* ]] || {
+  echo "FAIL: injected source revision bypassed dirty Git state" >&2
+  exit 1
+}
+
+set +e
+non_git_revision_output="$(env -u GRADUS_SOURCE_REVISION /bin/bash -c \
+  'source "$1"; snapshot_source_revision "$2"' bash "$UPLOAD_SCRIPT" "$non_git_source" 2>&1)"
+non_git_revision_status=$?
+set -e
+[[ "$non_git_revision_status" -ne 0 && "$non_git_revision_output" == *"source revision is unavailable"* ]] || {
+  echo "FAIL: non-Git checkout without injected source revision did not fail closed" >&2
+  exit 1
+}
+
 resolved_uv="$(PATH=/usr/bin:/bin HOME="$EXPECTED_HOME" /bin/bash -c 'source "$1"; resolve_uv' bash "$UPLOAD_SCRIPT")"
 [[ "$resolved_uv" == "$EXPECTED_HOME/.local/bin/uv" ]] || {
   echo "FAIL: uv fallback resolved to '$resolved_uv'" >&2
@@ -101,6 +151,8 @@ printf '%s\n' \
 
 EXPECTED_MAC_BUILD="$(read_mac_build_number "$SCRIPT_DIR/project.yml")"
 EXPECTED_CLOUDKIT_ENVIRONMENT="$(read_cloudkit_environment "$SCRIPT_DIR/GradusMac/GradusMacProduction.entitlements")"
+EXPECTED_SOURCE_REVISION="fixture-revision"
+EXPECTED_PROJECT_SHA256="$(sha256_file "$SCRIPT_DIR/project.yml")"
 [[ "$EXPECTED_CLOUDKIT_ENVIRONMENT" == "Production" ]] || {
   echo "FAIL: release entitlements do not declare the production CloudKit environment" >&2
   exit 1
@@ -141,9 +193,11 @@ write_evidence_fixture() {
   local build="$2"
   local environment="$3"
   local timestamp="$4"
+  local source_revision="${5:-}"
+  local project_sha256="${6:-}"
   mkdir -p "$(dirname "$path")"
-  printf '{"cloudKitEnvironment":"%s","producerBuildNumber":"%s","publishedAt":"%s"}\n' \
-    "$environment" "$build" "$timestamp" >"$path"
+  printf '{"cloudKitEnvironment":"%s","producerBuildNumber":"%s","publishedAt":"%s","sourceRevision":"%s","projectSha256":"%s"}\n' \
+    "$environment" "$build" "$timestamp" "$source_revision" "$project_sha256" >"$path"
 }
 
 now_timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -158,22 +212,50 @@ assert_evidence_refused() {
   fi
 }
 
+assert_boundary_refused() {
+  local name="$1"
+  local path="$2"
+  if validate_producer_evidence_boundary "$path" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" \
+    "$EXPECTED_SOURCE_REVISION" "$EXPECTED_PROJECT_SHA256"; then
+    echo "FAIL: producer evidence boundary accepted $name evidence" >&2
+    exit 1
+  fi
+}
+
 assert_evidence_refused missing "$TEST_ROOT/missing/publish-evidence.json"
 
-write_evidence_fixture "$TEST_ROOT/mismatched.json" "$EXPECTED_MAC_BUILD" Development "$now_timestamp"
+write_evidence_fixture "$TEST_ROOT/mismatched.json" "$EXPECTED_MAC_BUILD" Development "$now_timestamp" \
+  "$EXPECTED_SOURCE_REVISION" "$EXPECTED_PROJECT_SHA256"
 assert_evidence_refused mismatched "$TEST_ROOT/mismatched.json"
 
-write_evidence_fixture "$TEST_ROOT/wrong-build.json" 0 "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp"
+write_evidence_fixture "$TEST_ROOT/wrong-build.json" 0 "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp" \
+  "$EXPECTED_SOURCE_REVISION" "$EXPECTED_PROJECT_SHA256"
 assert_evidence_refused wrong-build "$TEST_ROOT/wrong-build.json"
 
-write_evidence_fixture "$TEST_ROOT/stale.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$stale_timestamp"
+write_evidence_fixture "$TEST_ROOT/stale.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$stale_timestamp" \
+  "$EXPECTED_SOURCE_REVISION" "$EXPECTED_PROJECT_SHA256"
 assert_evidence_refused stale "$TEST_ROOT/stale.json"
 
-write_evidence_fixture "$TEST_ROOT/matching.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp"
+write_evidence_fixture "$TEST_ROOT/matching.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp" \
+  "$EXPECTED_SOURCE_REVISION" "$EXPECTED_PROJECT_SHA256"
 validate_producer_evidence "$TEST_ROOT/matching.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" || {
   echo "FAIL: matching producer evidence was refused" >&2
   exit 1
 }
+validate_producer_evidence_boundary "$TEST_ROOT/matching.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" \
+  "$EXPECTED_SOURCE_REVISION" "$EXPECTED_PROJECT_SHA256" || {
+  echo "FAIL: matching producer evidence boundary was refused" >&2
+  exit 1
+}
+
+write_evidence_fixture "$TEST_ROOT/missing-fields.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp"
+assert_boundary_refused missing-fields "$TEST_ROOT/missing-fields.json"
+write_evidence_fixture "$TEST_ROOT/mismatched-source.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp" \
+  "different-source" "$EXPECTED_PROJECT_SHA256"
+assert_boundary_refused mismatched-source "$TEST_ROOT/mismatched-source.json"
+write_evidence_fixture "$TEST_ROOT/mismatched-project.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp" \
+  "$EXPECTED_SOURCE_REVISION" "$(printf 'b%.0s' {1..64})"
+assert_boundary_refused mismatched-project "$TEST_ROOT/mismatched-project.json"
 
 guard_line="$(awk '/validate_producer_evidence "\$evidence_path"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
 next_build_line="$(awk '/NEXT_BUILD=.*next-ios-build-number.py/ {print NR; exit}' "$UPLOAD_SCRIPT")"

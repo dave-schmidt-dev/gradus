@@ -1,6 +1,18 @@
 import GradusKit
 import SwiftUI
 
+/// A quiet structural edge for the card surface. This is deliberately a
+/// fixed design token rather than a provider or health accent: window signal
+/// remains encoded by the bars and status text inside the card.
+enum ProviderDensityCardStructuralToken {
+    static let navyHex: UInt32 = 0x00005F
+    static let opacity = 0.55
+
+    static var color: Color {
+        Color(red: 0, green: 0, blue: 95.0 / 255.0).opacity(opacity)
+    }
+}
+
 /// A provider and *every* one of its windows, as one card (iPad Option B).
 ///
 /// Deliberately not a variant of the superseded `StatTile` (deleted
@@ -55,6 +67,10 @@ struct ProviderDensityCard: View {
         .padding(metrics.cardPadding)
         .background(
             .quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: metrics.cornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: metrics.cornerRadius)
+                .strokeBorder(ProviderDensityCardStructuralToken.color, lineWidth: 1)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("provider-card-\(provider.providerName)")
     }
@@ -69,11 +85,11 @@ struct ProviderDensityCard: View {
                     WindowRow(
                         window: window, now: now, showsReset: showsReset, metrics: metrics)
                 }
-                if !provider.ok {
+                if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
                     errorText
                 }
             }
-        } else if !provider.ok {
+        } else if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
             errorText
                 .frame(height: metrics.rowHeight, alignment: .leading)
         } else {
@@ -85,7 +101,7 @@ struct ProviderDensityCard: View {
     }
 
     private var errorText: some View {
-        let label = IOSProviderRetryAccessibility.displayLabel(for: provider)
+        let label = IOSProviderRetryAccessibility.displayLabel(for: provider) ?? "error"
         return Text(label)
             .font(metrics.labelFont)
             .foregroundStyle(

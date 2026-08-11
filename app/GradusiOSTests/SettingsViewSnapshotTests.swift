@@ -14,6 +14,16 @@ import Testing
 
 private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 
+// Opt in only while intentionally refreshing these baselines:
+// OTHER_SWIFT_FLAGS='$(inherited) -D SETTINGS_SNAPSHOT_RECORD'
+private let settingsSnapshotRecording: SnapshotTestingConfiguration.Record = {
+#if SETTINGS_SNAPSHOT_RECORD
+    return .all
+#else
+    return .never
+#endif
+}()
+
 /// A fresh suite per call, matching `DashboardViewModelSyncTests.swift`'s
 /// `isolatedDefaults()` -- `syncEnabled`/`notificationsEnabled` persist to
 /// `UserDefaults`, and `.standard` is shared process-wide.
@@ -136,7 +146,8 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: settingsSnapshotRecording)
 }
 
 @MainActor
@@ -144,7 +155,8 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        record: settingsSnapshotRecording)
 }
 
 @MainActor
@@ -152,7 +164,8 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(syncEnabled: false, notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: settingsSnapshotRecording)
 }
 
 @MainActor
@@ -160,7 +173,8 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(syncEnabled: false, notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        record: settingsSnapshotRecording)
 }
 
 /// The state that shipped invisible in 1.6.0: our toggle on, iOS refusing to
@@ -175,7 +189,8 @@ private let settingsSnapshotHeight: CGFloat = 1150
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: settingsSnapshotRecording)
 }
 
 @MainActor
@@ -185,7 +200,8 @@ private let settingsSnapshotHeight: CGFloat = 1150
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        record: settingsSnapshotRecording)
 }
 
 /// Same permission denial, but with our own toggle off -- the warning must not
@@ -199,5 +215,6 @@ private let settingsSnapshotHeight: CGFloat = 1150
     #expect(!viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: settingsSnapshotRecording)
 }

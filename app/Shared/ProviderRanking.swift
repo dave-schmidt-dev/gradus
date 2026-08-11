@@ -52,7 +52,9 @@ protocol RankableProvider {
     /// Deterministic final tie-breaker, and the identity shown to the user.
     var rankingName: String { get }
     var rankingWindows: [ProviderWindow] { get }
-    /// `false` means the provider's probe failed; those sort first.
+    /// `false` means the provider's probe failed without retained windows;
+    /// carried failures keep their `ok:false` payload for diagnostics but do
+    /// not sort as actionable errors while a reading remains available.
     var rankingIsOK: Bool { get }
     /// Whether this provider belongs in the exhausted partition at the bottom.
     var rankingIsDepleted: Bool { get }

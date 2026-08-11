@@ -230,7 +230,7 @@ public struct DensityMetrics: Equatable, Sendable {
     /// Between the two. Type steps up one notch (`.caption` -> `.footnote`,
     /// 12pt -> 13pt), so the fixed columns grow by roughly that ratio with a
     /// point of slack — measured, not scaled blindly, since these widths were
-    /// originally set against specific strings ("Billing Cycle", "Aug 23, 9:30
+    /// originally set against specific strings ("Monthly", "Aug 23, 9:30
     /// PM") rather than against the font's em width.
     public static let standard = DensityMetrics(
         rung: .standard,

@@ -195,7 +195,7 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
 
 @Test func menuUsesHumanReadableWindowLabels() {
     #expect(ProviderWindowLabel.label(for: "five_hour") == "5 Hour")
-    #expect(ProviderWindowLabel.label(for: "billing_cycle") == "Billing Cycle")
+    #expect(ProviderWindowLabel.label(for: "billing_cycle") == "Monthly")
     #expect(ProviderWindowLabel.label(for: "future_window") == "future_window")
 }
 

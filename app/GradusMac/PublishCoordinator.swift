@@ -18,6 +18,8 @@ enum PublishCoordinatorError: Error, Equatable {
 private struct ProducerPublishEvidence: Encodable {
     let producerBuildNumber: String
     let cloudKitEnvironment: String
+    let sourceRevision: String
+    let projectSha256: String
     let publishedAt: Date
 }
 
@@ -32,6 +34,8 @@ public actor PublishCoordinator: CloudPublisher {
     private let evidencePath: URL?
     private let producerBuildNumber: String?
     private let cloudKitEnvironment: String?
+    private let producerSourceRevision: String?
+    private let producerProjectSha256: String?
     private var state: [String: ProviderPublishState] = [:]
 
     /// Providers whose `isWarning` flipped false→true on the most recently
@@ -47,13 +51,17 @@ public actor PublishCoordinator: CloudPublisher {
         zoneID: CKRecordZone.ID,
         evidencePath: URL? = nil,
         producerBuildNumber: String? = nil,
-        cloudKitEnvironment: String? = nil
+        cloudKitEnvironment: String? = nil,
+        producerSourceRevision: String? = nil,
+        producerProjectSha256: String? = nil
     ) {
         self.database = database
         self.zoneID = zoneID
         self.evidencePath = evidencePath
         self.producerBuildNumber = producerBuildNumber
         self.cloudKitEnvironment = cloudKitEnvironment
+        self.producerSourceRevision = producerSourceRevision
+        self.producerProjectSha256 = producerProjectSha256
     }
 
     /// Read-only snapshot of a provider's last known publish state — used by
@@ -132,12 +140,24 @@ public actor PublishCoordinator: CloudPublisher {
     }
 
     private func writeProducerEvidenceIfConfigured() throws {
-        guard let evidencePath, let producerBuildNumber, let cloudKitEnvironment else { return }
+        guard let evidencePath else { return }
+        guard let producerBuildNumber,
+              let cloudKitEnvironment,
+              let producerSourceRevision,
+              let producerProjectSha256,
+              !producerSourceRevision.isEmpty,
+              !producerProjectSha256.isEmpty
+        else {
+            GradusLog.publish.error("published records but producer provenance metadata is missing")
+            throw PublishCoordinatorError.evidenceWriteFailed
+        }
         do {
             try Self.writeProducerEvidence(
                 to: evidencePath,
                 producerBuildNumber: producerBuildNumber,
-                cloudKitEnvironment: cloudKitEnvironment
+                cloudKitEnvironment: cloudKitEnvironment,
+                sourceRevision: producerSourceRevision,
+                projectSha256: producerProjectSha256
             )
         } catch {
             GradusLog.publish.error("published records but could not write producer evidence")
@@ -148,11 +168,15 @@ public actor PublishCoordinator: CloudPublisher {
     private static func writeProducerEvidence(
         to path: URL,
         producerBuildNumber: String,
-        cloudKitEnvironment: String
+        cloudKitEnvironment: String,
+        sourceRevision: String,
+        projectSha256: String
     ) throws {
         let evidence = ProducerPublishEvidence(
             producerBuildNumber: producerBuildNumber,
             cloudKitEnvironment: cloudKitEnvironment,
+            sourceRevision: sourceRevision,
+            projectSha256: projectSha256,
             publishedAt: Date()
         )
         let encoder = JSONEncoder()

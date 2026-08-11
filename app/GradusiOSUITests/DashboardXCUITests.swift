@@ -154,6 +154,25 @@ final class DashboardXCUITests: XCTestCase {
         dashboardSettings.tap()
         XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 5))
 
+        let sync = app.switches["icloud-sync-toggle"]
+        XCTAssertTrue(sync.waitForExistence(timeout: 5))
+        let initialSync = switchIsOn(sync)
+        sync.tap()
+        let syncState = NSPredicate(format: "value == %@", initialSync ? "0" : "1")
+        expectation(for: syncState, evaluatedWith: sync)
+        waitForExpectations(timeout: 5)
+        XCTAssertNotEqual(switchIsOn(sync), initialSync)
+
+        let notifications = app.switches["notifications-toggle"]
+        XCTAssertTrue(notifications.waitForExistence(timeout: 5))
+        let initialNotifications = switchIsOn(notifications)
+        notifications.tap()
+        let notificationState = NSPredicate(
+            format: "value == %@", initialNotifications ? "0" : "1")
+        expectation(for: notificationState, evaluatedWith: notifications)
+        waitForExpectations(timeout: 5)
+        XCTAssertNotEqual(switchIsOn(notifications), initialNotifications)
+
         let sortName = app.buttons["Name A-Z"]
         XCTAssertTrue(sortName.waitForExistence(timeout: 5))
         sortName.tap()
@@ -163,36 +182,26 @@ final class DashboardXCUITests: XCTestCase {
         // This must not depend on Settings section order: the Automatic card
         // size control is also a switch on multi-column iPads.
         let showExhausted = app.switches["show-exhausted-toggle"]
-        XCTAssertTrue(showExhausted.waitForExistence(timeout: 5))
+        var swipeAttempts = 0
+        while (!showExhausted.exists || !showExhausted.isHittable) && swipeAttempts < 5 {
+            app.swipeUp()
+            swipeAttempts += 1
+        }
+        XCTAssertTrue(showExhausted.exists)
+        XCTAssertTrue(showExhausted.isHittable)
         let initialShowExhausted = switchIsOn(showExhausted)
         showExhausted.tap()
         XCTAssertNotEqual(switchIsOn(showExhausted), initialShowExhausted)
         showExhausted.tap()
         XCTAssertEqual(switchIsOn(showExhausted), initialShowExhausted)
 
-        let sync = app.switches.element(boundBy: 0)
-        XCTAssertTrue(sync.exists)
-        let initialSync = switchIsOn(sync)
-        sync.tap()
-        XCTAssertNotEqual(switchIsOn(sync), initialSync)
-
-        let notifications = app.switches.element(boundBy: 1)
-        XCTAssertTrue(notifications.exists)
-        let initialNotifications = switchIsOn(notifications)
-        notifications.tap()
-        let notificationState = NSPredicate(
-            format: "value == %@", initialNotifications ? "0" : "1")
-        expectation(for: notificationState, evaluatedWith: notifications)
-        waitForExpectations(timeout: 5)
-        XCTAssertNotEqual(switchIsOn(notifications), initialNotifications)
-
         let threshold = app.sliders["warning-threshold-slider"]
-        XCTAssertTrue(threshold.exists)
-        var swipeAttempts = 0
-        while !threshold.isHittable && swipeAttempts < 3 {
+        swipeAttempts = 0
+        while (!threshold.exists || !threshold.isHittable) && swipeAttempts < 5 {
             app.swipeUp()
             swipeAttempts += 1
         }
+        XCTAssertTrue(threshold.exists)
         XCTAssertTrue(threshold.isHittable)
         let initialThreshold = elementValue(threshold)
         let initialThresholdPercent = Int(initialThreshold.dropLast()) ?? 50

@@ -168,3 +168,7 @@ rationale: GradusiOS is one artifact with one version, so a size class is a rend
   iPhone UI 2, iPad UI 2). Harvest still reports `frozen: true` with three
   INV-12 recurrence entries (threshold three). The 2026-08-07 resolution
   remains unchanged; no closure or backdated resolution is recorded.
+  The current 13-leg manifest keeps the iPhone UI target explicit and combines
+  the iPad UI target with its 12 canonical image snapshots; its aggregate floor
+  is therefore 15, and `test-gate-selfcheck.sh` rejects a snapshot-only iPad
+  result or either destination pointed at the other simulator.

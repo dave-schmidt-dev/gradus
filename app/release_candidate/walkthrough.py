@@ -29,6 +29,67 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _VERSION = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
 _TERMINAL_STATES = frozenset({"failed", "abandoned", "superseded"})
 _REQUIRED_MANIFEST_SECTIONS = ("onboarding", "screens", "roles", "states", "systemOwnedSheets")
+_REQUIRED_VISIBLE_SAMPLE_CONTROLS = {
+    "empty-state": frozenset({"explore-sample"}),
+    "sample-dashboard": frozenset({"sample-data-banner", "sample-data-reset", "sample-data-exit"}),
+    "ios-settings": frozenset({"explore-sample-settings"}),
+    "ios-settings-sample": frozenset({"sample-data-reset-settings", "sample-data-exit-settings"}),
+}
+_SOURCE_ROUTE_MARKERS = {
+    "live-mode-opt-in": ("GradusiOS/AppDelegate.swift", "beginLiveLifecycle"),
+    "empty-state": ("GradusiOS/EmptyStateView.swift", "struct EmptyStateView"),
+    "sample-dashboard": ("GradusiOS/GradusiOSApp.swift", "struct SampleDataDashboard"),
+    "ios-settings": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
+    "ios-settings-sample": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
+}
+_SOURCE_CONTROL_MARKERS = {
+    "live-mode-opt-in": {
+        "enable-sync": ("GradusiOS/AppDelegate.swift", "liveModeEnabled()"),
+        "request-notifications": (
+            "GradusiOS/AppDelegate.swift",
+            "requestNotificationAuthorization",
+        ),
+    },
+    "empty-state": {
+        "explore-sample": (
+            "GradusiOS/EmptyStateView.swift",
+            'accessibilityIdentifier("explore-sample")',
+        ),
+        "open-settings": ("GradusiOS/EmptyStateView.swift", 'Button("Open Settings")'),
+        "enable-sync": ("GradusiOS/EmptyStateView.swift", 'Button("Enable iCloud Sync")'),
+    },
+    "sample-dashboard": {
+        "sample-data-banner": ("GradusiOS/GradusiOSApp.swift", "struct SampleDataBanner"),
+        "sample-data-reset": (
+            "GradusiOS/GradusiOSApp.swift",
+            'accessibilityIdentifier("sample-data-reset")',
+        ),
+        "sample-data-exit": (
+            "GradusiOS/GradusiOSApp.swift",
+            'accessibilityIdentifier("sample-data-exit")',
+        ),
+    },
+    "ios-settings": {
+        "explore-sample-settings": (
+            "GradusiOS/SettingsView.swift",
+            'accessibilityIdentifier("explore-sample-settings")',
+        ),
+        "sample-entry-in-progress": (
+            "GradusiOS/SettingsView.swift",
+            ".disabled(isSampleEntryInProgress)",
+        ),
+    },
+    "ios-settings-sample": {
+        "sample-data-reset-settings": (
+            "GradusiOS/SettingsView.swift",
+            'accessibilityIdentifier("sample-data-reset-settings")',
+        ),
+        "sample-data-exit-settings": (
+            "GradusiOS/SettingsView.swift",
+            'accessibilityIdentifier("sample-data-exit-settings")',
+        ),
+    },
+}
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -155,11 +216,17 @@ def default_manifest() -> dict[str, Any]:
     return {
         "onboarding": [
             {
-                "id": "first-launch",
-                "title": "First launch",
+                "id": "live-mode-opt-in",
+                "title": "Explicit live-mode opt-in",
                 "controls": [
-                    control("request-notifications", "Allow notifications", state="permission"),
-                    control("enable-sync", "Enable iCloud Sync", state="permission"),
+                    control(
+                        "enable-sync", "Enable iCloud Sync to start live mode", state="permission"
+                    ),
+                    control(
+                        "request-notifications",
+                        "Allow notifications after sync is enabled",
+                        state="permission",
+                    ),
                 ],
             }
         ],
@@ -173,6 +240,26 @@ def default_manifest() -> dict[str, Any]:
                 ],
             },
             {
+                "id": "empty-state",
+                "title": "Empty state",
+                "controls": [
+                    control("explore-sample", "Explore Sample"),
+                    control("open-settings", "Open Settings", state="recovery", recovery=True),
+                    control("enable-sync", "Enable iCloud Sync", state="permission"),
+                ],
+            },
+            {
+                "id": "sample-dashboard",
+                "title": "Explore Sample dashboard",
+                "controls": [
+                    control("sample-data-banner", "Explore Sample banner"),
+                    control("sample-data-reset", "Reset sample data"),
+                    control("sample-data-exit", "Exit Explore Sample"),
+                    control("provider-row", "Open provider details"),
+                    control("settings", "Open Settings"),
+                ],
+            },
+            {
                 "id": "provider-detail",
                 "title": "Provider detail",
                 "controls": [control("back", "Back")],
@@ -181,14 +268,38 @@ def default_manifest() -> dict[str, Any]:
                 "id": "ios-settings",
                 "title": "Settings",
                 "controls": [
+                    control("close", "Close Settings"),
                     control("sort-providers", "Sort providers"),
+                    control("automatic-card-size", "Automatic card size"),
+                    control("card-size-slider", "Card size", state="disabled"),
                     control("show-exhausted", "Show exhausted"),
                     control("warning-threshold", "Warning threshold"),
                     control("notifications", "Notifications", state="permission"),
                     control(
-                        "open-ios-settings", "Open iOS Settings", state="disabled", recovery=True
+                        "open-ios-settings", "Open iOS Settings", state="recovery", recovery=True
                     ),
                     control("sync", "Enable iCloud Sync", state="permission"),
+                    control("explore-sample-settings", "Explore Sample"),
+                    control(
+                        "sample-entry-in-progress",
+                        "Entering Sample…",
+                        state="disabled",
+                        recovery=True,
+                    ),
+                ],
+            },
+            {
+                "id": "ios-settings-sample",
+                "title": "Settings (Explore Sample)",
+                "controls": [
+                    control("close", "Close Settings"),
+                    control("sample-data-reset-settings", "Reset Sample Data"),
+                    control("sample-data-exit-settings", "Exit Explore Sample"),
+                    control("sort-providers", "Sort providers"),
+                    control("automatic-card-size", "Automatic card size"),
+                    control("card-size-slider", "Card size", state="disabled"),
+                    control("show-exhausted", "Show exhausted"),
+                    control("warning-threshold", "Warning threshold"),
                 ],
             },
             {
@@ -234,7 +345,7 @@ def default_manifest() -> dict[str, Any]:
             {
                 "id": "notification-permission",
                 "owner": "iOS",
-                "trigger": "first launch notification request",
+                "trigger": "first explicit live-mode opt-in after sync is enabled",
             },
             {
                 "id": "icloud-settings",
@@ -254,7 +365,9 @@ def _items(value: Any, section: str) -> list[Mapping[str, Any]]:
     return list(value)
 
 
-def validate_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+def validate_manifest(
+    manifest: Mapping[str, Any], *, source_root: str | Path | None = None
+) -> dict[str, Any]:
     """Validate route/control, role, state, and system-sheet completeness."""
     if not isinstance(manifest, Mapping):
         raise WalkthroughError("walkthrough manifest must be an object")
@@ -299,11 +412,62 @@ def validate_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
                 )
             if control["state"] not in state_ids:
                 raise WalkthroughError(f"control references unknown state: {control['state']}")
+    route_controls = {
+        route["id"]: {control["id"] for control in route["controls"]} for route in screens
+    }
+    for route_id, required_controls in _REQUIRED_VISIBLE_SAMPLE_CONTROLS.items():
+        missing_controls = required_controls - route_controls.get(route_id, set())
+        if missing_controls:
+            raise WalkthroughError(
+                f"visible sample coverage is missing from {route_id}: "
+                f"{', '.join(sorted(missing_controls))}"
+            )
+    _validate_source_markers(
+        manifest,
+        Path(source_root) if source_root is not None else Path(__file__).resolve().parents[1],
+    )
     for sheet in sheets:
         _text(sheet, "id", label="system-sheet id")
         _text(sheet, "owner", label="system-sheet owner")
         _text(sheet, "trigger", label="system-sheet trigger")
     return json.loads(json.dumps(manifest, sort_keys=True, separators=(",", ":")))
+
+
+def _validate_source_markers(manifest: Mapping[str, Any], source_root: Path) -> None:
+    """Reject a route inventory that drifts from the shipped iOS source."""
+    routes = {route["id"]: route for route in [*manifest["onboarding"], *manifest["screens"]]}
+    for route_id, (relative_path, marker) in _SOURCE_ROUTE_MARKERS.items():
+        route = routes.get(route_id)
+        if route is None:
+            raise WalkthroughError(f"source-backed route is missing from manifest: {route_id}")
+        source_path = source_root / relative_path
+        try:
+            source = source_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise WalkthroughError(
+                f"cannot read source for route {route_id}: {source_path}"
+            ) from exc
+        if marker not in source:
+            raise WalkthroughError(f"source route marker is missing for {route_id}: {marker}")
+        route_control_ids = {control["id"] for control in route["controls"]}
+        for control_id, (control_path, control_marker) in _SOURCE_CONTROL_MARKERS.get(
+            route_id, {}
+        ).items():
+            if control_id not in route_control_ids:
+                raise WalkthroughError(
+                    f"source-backed control is missing from {route_id}: {control_id}"
+                )
+            path = source_root / control_path
+            try:
+                control_source = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise WalkthroughError(
+                    f"cannot read source for control {control_id}: {path}"
+                ) from exc
+            if control_marker not in control_source:
+                raise WalkthroughError(
+                    f"source control marker is missing for {route_id}/{control_id}: {control_marker}"
+                )
 
 
 def _load_manifest(path: str | Path | None) -> Mapping[str, Any]:

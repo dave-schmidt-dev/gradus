@@ -9,14 +9,14 @@ import Testing
     #expect(ProviderWindowLabel.label(for: "five_hour") == "5 Hour")
     #expect(ProviderWindowLabel.label(for: "weekly") == "Weekly")
     #expect(ProviderWindowLabel.label(for: "monthly") == "Monthly")
-    #expect(ProviderWindowLabel.label(for: "premium") == "Premium")
+    #expect(ProviderWindowLabel.label(for: "premium") == "Monthly")
     #expect(ProviderWindowLabel.label(for: "ac") == "Auto")
     #expect(ProviderWindowLabel.label(for: "ap") == "API")
     #expect(ProviderWindowLabel.label(for: "cg5") == "5 Hour (CG)")
     #expect(ProviderWindowLabel.label(for: "cg1w") == "Weekly (CG)")
     #expect(ProviderWindowLabel.label(for: "cg_five_hour") == "5 Hour (CG)")
     #expect(ProviderWindowLabel.label(for: "cg_weekly") == "Weekly (CG)")
-    #expect(ProviderWindowLabel.label(for: "billing_cycle") == "Billing Cycle")
+    #expect(ProviderWindowLabel.label(for: "billing_cycle") == "Monthly")
 }
 
 @Test func providerWindowLabelFallsBackToRawIdForUnknownId() {
