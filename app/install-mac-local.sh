@@ -50,13 +50,29 @@ BUILD_DIR="${BUILD_DIR:-build}"
 ARCHIVE_PATH="$BUILD_DIR/GradusMac.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 APP_PATH="$EXPORT_PATH/$APP_NAME.app"
+ALLOWED_UNTRACKED_SOURCE_REPORT="verifications/2026-08-09-internal-testflight-candidate-migration-verification.md"
+assert_source_checkout_clean() {
+  local root="$1" status_output status_line dirty=0
+  if ! status_output="$(/usr/bin/git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+    echo "FAIL: could not inspect source checkout status" >&2
+    return 1
+  fi
+  while IFS= read -r status_line; do
+    [[ -z "$status_line" ]] && continue
+    if [[ "$status_line" != "?? $ALLOWED_UNTRACKED_SOURCE_REPORT" ]]; then
+      dirty=1
+      break
+    fi
+  done <<< "$status_output"
+  if (( dirty )); then
+    echo "FAIL: source checkout is dirty; install producer provenance from a clean revision" >&2
+    return 1
+  fi
+}
 resolve_source_revision() {
   local injected="${GRADUS_SOURCE_REVISION:-}" revision
   if revision="$(/usr/bin/git rev-parse HEAD 2>/dev/null)"; then
-    if [[ -n "$(/usr/bin/git status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
-      echo "FAIL: source checkout is dirty; install producer provenance from a clean revision" >&2
-      return 1
-    fi
+    assert_source_checkout_clean "." || return 1
     printf '%s\n' "$revision"
     return 0
   fi

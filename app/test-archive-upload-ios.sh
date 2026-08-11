@@ -101,6 +101,112 @@ set -e
   echo "FAIL: injected source revision bypassed dirty Git state" >&2
   exit 1
 }
+report_git_source="$TEST_ROOT/report-git-source"
+mkdir -p "$report_git_source/verifications"
+git -C "$report_git_source" init -q
+git -C "$report_git_source" config user.name GradusTest
+git -C "$report_git_source" config user.email gradus-test@example.invalid
+printf 'clean\n' >"$report_git_source/source.txt"
+git -C "$report_git_source" add source.txt
+git -C "$report_git_source" commit -qm initial
+printf 'candidate verification\n' >"$report_git_source/verifications/2026-08-09-internal-testflight-candidate-migration-verification.md"
+report_revision="$(snapshot_source_revision "$report_git_source")"
+[[ "$report_revision" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "FAIL: exact internal-TestFlight verification report was not accepted" >&2
+  exit 1
+}
+resumed_revision="$(validate_resumed_source_revision "$report_git_source" "$report_revision" 2>&1 || true)"
+[[ -z "$resumed_revision" ]] || {
+  echo "FAIL: matching resumed source revision was rejected" >&2
+  exit 1
+}
+set +e
+resumed_drift_output="$(validate_resumed_source_revision "$report_git_source" "0000000000000000000000000000000000000000" 2>&1)"
+resumed_drift_status=$?
+set -e
+[[ "$resumed_drift_status" -ne 0 && "$resumed_drift_output" == *"source revision changed"* ]] || {
+  echo "FAIL: resumed source revision drift was accepted" >&2
+  exit 1
+}
+printf 'unexpected\n' >"$report_git_source/unexpected.txt"
+set +e
+other_untracked_output="$(snapshot_source_revision "$report_git_source" 2>&1)"
+other_untracked_status=$?
+set -e
+[[ "$other_untracked_status" -ne 0 && "$other_untracked_output" == *"source checkout is dirty"* ]] || {
+  echo "FAIL: unrelated untracked source file did not fail closed" >&2
+  exit 1
+}
+
+assert_upload_argument_rejected() {
+  local label="$1" expected="$2"
+  shift 2
+  set +e
+  local output
+  output="$($UPLOAD_SCRIPT "$@" 2>&1)"
+  local status=$?
+  set -e
+  [[ "$status" -ne 0 && "$output" == *"$expected"* ]] || {
+    echo "FAIL: $label did not fail with '$expected'" >&2
+    echo "$output" >&2
+    exit 1
+  }
+}
+assert_upload_argument_rejected "rollover without reason" "requires --supersession-reason" --rollover-assigned
+assert_upload_argument_rejected "reason without rollover" "requires --rollover-assigned" --supersession-reason correction
+assert_upload_argument_rejected "whitespace reason" "requires --supersession-reason" \
+  --rollover-assigned --supersession-reason "   "
+assert_upload_argument_rejected "unknown argument" "unknown argument" --unexpected-flag
+
+rollover_root="$TEST_ROOT/rollover"
+rollover_ledger="$rollover_root/candidate.json"
+rollover_workspace="$rollover_root/candidates/old"
+mkdir -p "$rollover_workspace"
+printf '{"candidateId":"old"}\n' >"$rollover_workspace/candidate-evidence.json"
+printf '{"candidate_id":"old"}\n' >"$rollover_workspace/receipt.json"
+PYTHONPATH="$SCRIPT_DIR" python3 - "$rollover_ledger" "$rollover_workspace" <<'PY'
+import sys
+from release_candidate.ledger import CandidateLedger, CandidateState
+
+ledger = CandidateLedger(sys.argv[1])
+ledger.prepare(
+    "old", source_sha256="a" * 64, project_sha256="b" * 64, artifact_sha256="c" * 64,
+    build=7, marketing_version="1.2.3", metadata={"candidateWorkspace": sys.argv[2]},
+)
+for state in (CandidateState.UPLOADING, CandidateState.UPLOADED_UNASSIGNED, CandidateState.ASSIGNED):
+    ledger.transition(state)
+PY
+set +e
+no_rollover_output="$(assert_candidate_not_in_flight "$rollover_ledger" 2>&1)"
+no_rollover_status=$?
+set -e
+[[ "$no_rollover_status" -ne 0 && "$no_rollover_output" == *"already in state assigned"* ]] || {
+  echo "FAIL: assigned candidate rolled over without explicit request" >&2
+  exit 1
+}
+assert_candidate_not_in_flight "$rollover_ledger" 1
+replacement_workspace="$rollover_root/candidates/new"
+archive_output="$(prepare_candidate_ledger "$rollover_ledger" new dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+  eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \
+  ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff 8 1.2.3 revision 9 \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2026-08-11T00:00:00Z "$replacement_workspace" "$replacement_workspace/GradusiOS.ipa" \
+  "release-blocking correction" "$rollover_root/archived" 2>&1)"
+[[ "$archive_output" == *"Archiving assigned candidate old workspace and receipt journal"* \
+  && "$archive_output" == *"Assigned candidate archive complete"* ]] || {
+  echo "FAIL: assigned-candidate archive did not emit operation progress" >&2
+  echo "$archive_output" >&2
+  exit 1
+}
+PYTHONPATH="$SCRIPT_DIR" python3 - "$rollover_ledger" "$rollover_root/archived/old/candidate.json" <<'PY'
+import sys
+from release_candidate.ledger import CandidateLedger, CandidateState
+
+active = CandidateLedger(sys.argv[1]).load()
+archived = CandidateLedger(sys.argv[2]).load()
+assert active.candidate_id == "new" and active.state == CandidateState.PREPARED
+assert archived.state == CandidateState.SUPERSEDED
+assert archived.metadata["supersededReason"] == "release-blocking correction"
+PY
 
 set +e
 non_git_revision_output="$(env -u GRADUS_SOURCE_REVISION /bin/bash -c \

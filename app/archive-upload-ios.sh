@@ -21,11 +21,15 @@
 #   bws-secret-exec app-store-connect-upload --
 # Human-attended invocation uses the same fixed consumer:
 #   bws-secret-exec app-store-connect-upload -- app/archive-upload-ios.sh
+# Assigned candidates are never replaced implicitly. An attended rollover must
+# be explicit and include a non-empty reason:
+#   app/archive-upload-ios.sh --rollover-assigned --supersession-reason "<reason>"
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUDKIT_ENVIRONMENT_KEY="com.apple.developer.icloud-container-environment"
 PRODUCER_EVIDENCE_FILENAME="publish-evidence.json"
+ALLOWED_UNTRACKED_SOURCE_REPORT="verifications/2026-08-09-internal-testflight-candidate-migration-verification.md"
 # The snapshot refresher runs every 120 seconds. Five missed refresh intervals
 # are enough to reject a quiet producer without making the upload race a normal
 # refresh delay.
@@ -117,13 +121,28 @@ sha256_tree() {
 
 snapshot_source_digest() { sha256_tree "$1"; }
 snapshot_project_digest() { sha256_file "$1"; }
+assert_source_checkout_clean() {
+  local root="$1" status_output status_line dirty=0
+  if ! status_output="$(/usr/bin/git -C "$root" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+    echo "FAIL: could not inspect source checkout status" >&2
+    return 1
+  fi
+  while IFS= read -r status_line; do
+    [[ -z "$status_line" ]] && continue
+    if [[ "$status_line" != "?? $ALLOWED_UNTRACKED_SOURCE_REPORT" ]]; then
+      dirty=1
+      break
+    fi
+  done <<< "$status_output"
+  if (( dirty )); then
+    echo "FAIL: source checkout is dirty; publish provenance from a clean revision" >&2
+    return 1
+  fi
+}
 snapshot_source_revision() {
   local injected="${GRADUS_SOURCE_REVISION:-}" revision
   if revision="$(/usr/bin/git -C "$1" rev-parse HEAD 2>/dev/null)"; then
-    if [[ -n "$(/usr/bin/git -C "$1" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
-      echo "FAIL: source checkout is dirty; publish provenance from a clean revision" >&2
-      return 1
-    fi
+    assert_source_checkout_clean "$1" || return 1
     [[ -n "$revision" ]] || {
       echo "FAIL: source revision is empty" >&2
       return 1
@@ -137,6 +156,14 @@ snapshot_source_revision() {
   fi
   {
     echo "FAIL: source revision is unavailable (set GRADUS_SOURCE_REVISION for a non-Git checkout)" >&2
+    return 1
+  }
+}
+validate_resumed_source_revision() {
+  local project_root="$1" expected_revision="$2" actual_revision
+  actual_revision="$(snapshot_source_revision "$project_root")" || return 1
+  [[ "$actual_revision" == "$expected_revision" ]] || {
+    echo "FAIL: checked-out source revision changed since the prepared candidate" >&2
     return 1
   }
 }
@@ -173,17 +200,20 @@ failure_hook() {
 }
 
 assert_candidate_not_in_flight() {
-  local ledger_path="$1"
-  /usr/bin/python3 - "$SCRIPT_DIR" "$ledger_path" <<'PY'
+  local ledger_path="$1" allow_assigned="${2:-0}"
+  /usr/bin/python3 - "$SCRIPT_DIR" "$ledger_path" "$allow_assigned" <<'PY'
 import sys
 
-script_dir, ledger_path = sys.argv[1:]
+script_dir, ledger_path, allow_assigned = sys.argv[1:]
 sys.path.insert(0, script_dir)
 from release_candidate.ledger import CandidateLedger, CandidateError  # noqa: E402
 
 try:
     record = CandidateLedger(ledger_path).load()
-    if record is not None and record.state in {"uploading", "uploaded_unassigned", "assigned"}:
+    blocked = {"uploading", "uploaded_unassigned"}
+    if allow_assigned != "1":
+        blocked.add("assigned")
+    if record is not None and record.state in blocked:
         raise CandidateError(f"candidate is already in state {record.state}; reconcile it before retrying")
 except CandidateError as exc:
     print(f"FAIL: {exc}", file=sys.stderr)
@@ -401,14 +431,16 @@ prepare_candidate_ledger() {
   local ledger_path="$1" candidate_id="$2" source_digest="$3" project_digest="$4"
   local artifact_digest="$5" build="$6" marketing_version="$7" source_revision="$8" producer_build="$9"
   local producer_evidence_digest="${10}" producer_published_at="${11}" candidate_workspace="${12}" ipa_path="${13}"
+  local supersedes_reason="${14:-}" archive_root="${15:-}"
   /usr/bin/python3 - "$SCRIPT_DIR" "$ledger_path" "$candidate_id" "$source_digest" "$project_digest" \
     "$artifact_digest" "$build" "$marketing_version" "$source_revision" "$producer_build" \
-    "$producer_evidence_digest" "$producer_published_at" "$candidate_workspace" "$ipa_path" <<'PY'
+    "$producer_evidence_digest" "$producer_published_at" "$candidate_workspace" "$ipa_path" \
+    "$supersedes_reason" "$archive_root" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from release_candidate.ledger import CandidateError, CandidateLedger  # noqa: E402
 
-_, _, ledger_path, candidate_id, source_digest, project_digest, artifact_digest, build, marketing_version, source_revision, producer_build, producer_evidence_digest, producer_published_at, candidate_workspace, ipa_path = sys.argv
+_, _, ledger_path, candidate_id, source_digest, project_digest, artifact_digest, build, marketing_version, source_revision, producer_build, producer_evidence_digest, producer_published_at, candidate_workspace, ipa_path, supersedes_reason, archive_root = sys.argv
 try:
     CandidateLedger(ledger_path).prepare(
         candidate_id,
@@ -426,6 +458,8 @@ try:
             "candidateWorkspace": candidate_workspace,
             "ipaPath": ipa_path,
         },
+        supersedes_reason=supersedes_reason or None,
+        archive_root=archive_root or None,
     )
 except (CandidateError, ValueError) as exc:
     print(f"FAIL: candidate ledger preparation: {exc}", file=sys.stderr)
@@ -598,6 +632,40 @@ bump_ios_build_number() {
 }
 
 main() {
+  local rollover_assigned=0 supersession_reason=""
+  while (($# > 0)); do
+    case "$1" in
+      --rollover-assigned) rollover_assigned=1 ;;
+      --supersession-reason)
+        (($# >= 2)) || {
+          echo "FAIL: --supersession-reason requires a non-empty reason" >&2
+          return 64
+        }
+        supersession_reason="$2"
+        shift
+        ;;
+      -h | --help)
+        sed -n '2,28p' "${BASH_SOURCE[0]}"
+        echo "Options:"
+        echo "  --rollover-assigned                         archive the assigned candidate before replacement"
+        echo "  --supersession-reason <reason>              record why the assigned candidate is superseded"
+        return 0
+        ;;
+      *)
+        echo "FAIL: unknown argument: $1" >&2
+        return 64
+        ;;
+    esac
+    shift
+  done
+  if (( rollover_assigned )) && [[ -z "${supersession_reason//[[:space:]]/}" ]]; then
+    echo "FAIL: --rollover-assigned requires --supersession-reason" >&2
+    return 64
+  fi
+  if (( ! rollover_assigned )) && [[ -n "$supersession_reason" ]]; then
+    echo "FAIL: --supersession-reason requires --rollover-assigned" >&2
+    return 64
+  fi
   cd "$SCRIPT_DIR"
   local project_root evidence_path expected_mac_build expected_cloudkit_environment
   local baseline_source_digest baseline_project_digest current_project_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path
@@ -616,7 +684,7 @@ main() {
   : "${APP_STORE_CONNECT_KEY_ID:?required}"
   : "${APP_STORE_CONNECT_ISSUER_ID:?required}"
   validate_common_marketing_version "$SCRIPT_DIR/project.yml"
-  assert_candidate_not_in_flight "$candidate_ledger_path"
+  assert_candidate_not_in_flight "$candidate_ledger_path" "$rollover_assigned"
   prepared_metadata="$(read_prepared_candidate "$candidate_ledger_path")"
   if [[ -n "$prepared_metadata" ]]; then
     resume_candidate=1
@@ -643,6 +711,7 @@ main() {
       echo "FAIL: prepared candidate metadata is incomplete" >&2
       return 1
     }
+    validate_resumed_source_revision "$project_root" "$source_revision" || return 1
     IPA_PATH="$candidate_ipa_path"
     echo "==> Resuming prepared candidate $candidate_id build $NEXT_BUILD"
   fi
@@ -785,7 +854,8 @@ main() {
   echo "==> Persisting machine-written candidate ledger before walkthrough generation"
   prepare_candidate_ledger "$candidate_ledger_path" "$candidate_id" "$baseline_source_digest" "$baseline_project_digest" \
     "$artifact_digest" "$NEXT_BUILD" "$marketing_version" "$source_revision" "$expected_mac_build" "$producer_evidence_digest" \
-    "$producer_published_at" "$candidate_workspace" "$IPA_PATH"
+    "$producer_published_at" "$candidate_workspace" "$IPA_PATH" "$supersession_reason" \
+    "$project_root/.release-state/archived"
   echo "==> Generating candidate-current walkthrough"
   PYTHONPATH="$SCRIPT_DIR" /usr/bin/python3 -m release_candidate.walkthrough \
     --ledger "$candidate_ledger_path" --artifact "$IPA_PATH" \

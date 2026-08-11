@@ -436,12 +436,23 @@ cd app
 # set the next semantic MARKETING_VERSION before the release gate when the
 # product release changes; archive-upload-ios.sh owns the build counter
 bws-secret-exec app-store-connect-upload --        # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
+# An assigned candidate is never replaced implicitly. Rollover is attended and
+# must name the release-blocking reason; the old ledger/evidence/receipts are
+# archived under .release-state/archived/<candidate-id>/ first.
+# The rollover emits archive-start and archive-complete progress before the
+# replacement is prepared.
+bws-secret-exec app-store-connect-upload -- ./archive-upload-ios.sh \
+  --rollover-assigned --supersession-reason "release-blocking correction"
 bws-secret-exec app-store-connect-testflight-setup -- <candidate-id> <build> \
   --group-id <confirmed-internal-group-id> --group-name "<confirmed-group-name>" \
   --ledger .release-state/candidate.json \
   --evidence <candidate-state-dir>/candidate-evidence.json \
   --receipt-journal <candidate-state-dir>/receipt.json
 ```
+
+Resuming a prepared upload rechecks the checkout's Git revision and clean
+status against the candidate ledger before any upload work; source drift or
+an unrelated untracked file fails closed.
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
 its release summary and test-focus text into App Store Connect's “What to
@@ -450,8 +461,15 @@ Test” field; keep individual candidate-build details and re-upload reasons in
 
 The assignment trigger requires the release-owner-confirmed candidate ID,
 internal-group identity, candidate ledger, candidate-specific evidence file,
-and receipt-journal paths. The upload wrapper prints the durable candidate
-state directory and does not guess any of those values.
+and a receipt journal inside that candidate's workspace. The assignment tool
+records that workspace-local receipt path before it can transition the ledger
+to `assigned`; external receipt-journal paths are rejected. The upload wrapper
+prints the durable candidate state directory and does not guess any of those
+values. During rollover it reports archive start/completion on stderr.
+
+The source checkout must be clean for upload, local installation, and
+notarization. The only allowed untracked path is the exact internal verification
+report `verifications/2026-08-09-internal-testflight-candidate-migration-verification.md`.
 
 ### Installing GradusMac locally
 

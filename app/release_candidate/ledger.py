@@ -11,8 +11,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 try:
     from enum import StrEnum
@@ -391,10 +394,26 @@ class CandidateLedger:
         build: int,
         marketing_version: str,
         metadata: Mapping[str, Any],
+        supersedes_reason: str | None = None,
+        archive_root: str | Path | None = None,
     ) -> CandidateRecord:
-        """Create or resume a local candidate through the prepared state."""
+        """Create or resume a local candidate through the prepared state.
+
+        ``supersedes_reason`` and ``archive_root`` are both required when the
+        active record is ``assigned``. In that case the old candidate is
+        archived with the reason before this method creates the replacement.
+        """
 
         current = self.load()
+        if current is not None and current.state == CandidateState.ASSIGNED:
+            if not supersedes_reason or archive_root is None:
+                raise CandidateError(
+                    "assigned candidate requires an explicit supersession reason and archive root"
+                )
+            if candidate_id == current.candidate_id:
+                raise CandidateError("replacement candidate must have a new candidate ID")
+            self.archive_assigned(archive_root, supersedes_reason)
+            current = None
         if current is None:
             self.create(
                 candidate_id,
@@ -440,6 +459,100 @@ class CandidateLedger:
         if current.state == CandidateState.VALIDATED:
             current = self.transition(CandidateState.PREPARED)
         return self.extend_metadata(metadata)
+
+    def archive_assigned(
+        self,
+        archive_root: str | Path,
+        reason: str,
+        *,
+        superseded_at: str | None = None,
+    ) -> CandidateRecord:
+        """Archive an assigned candidate before allocating its replacement.
+
+        The candidate workspace (including evidence and receipt files) is copied
+        into a candidate-specific archive, and the archived ledger is marked
+        ``superseded`` with the operator-supplied reason.  The active ledger is
+        removed only after the archive is complete so a failed copy cannot
+        silently discard the assigned candidate.
+        """
+
+        current = self.load()
+        if current is None or current.state != CandidateState.ASSIGNED:
+            raise CandidateError("only an assigned candidate can be rolled over")
+        if not isinstance(reason, str) or not reason.strip():
+            raise CandidateError("supersession reason is required")
+        if any(character in reason for character in "\r\n\t"):
+            raise CandidateError("supersession reason contains a control character")
+        if len(reason) > 500:
+            raise CandidateError("supersession reason is too long")
+
+        metadata = dict(current.metadata or {})
+        workspace_value = metadata.get("candidateWorkspace")
+        if not isinstance(workspace_value, str) or not workspace_value.strip():
+            raise CandidateError("assigned candidate is missing its workspace")
+        workspace = Path(workspace_value)
+        if not workspace.is_dir():
+            raise CandidateError(f"assigned candidate workspace is missing: {workspace}")
+        root = Path(archive_root)
+        destination = root / current.candidate_id
+        if destination.exists():
+            raise CandidateError(f"candidate archive already exists: {destination}")
+
+        receipt_value = metadata.get("receiptJournalPath")
+        archived_receipt_path: str | None = None
+        if receipt_value is not None:
+            if not isinstance(receipt_value, str) or not receipt_value.strip():
+                raise CandidateError("assigned candidate receipt journal path is invalid")
+            receipt_path = Path(receipt_value).expanduser().resolve()
+            try:
+                receipt_relative = receipt_path.relative_to(workspace.resolve())
+            except ValueError as exc:
+                raise CandidateError(
+                    "receipt journal must be inside the candidate workspace"
+                ) from exc
+            archived_receipt_path = str(destination / "candidate-workspace" / receipt_relative)
+
+        archived_at = superseded_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        additions = {
+            "supersededAt": archived_at,
+            "supersededReason": reason,
+            "archivePath": str(destination),
+        }
+        if archived_receipt_path is not None:
+            additions["archivedReceiptJournalPath"] = archived_receipt_path
+        archived_metadata = _extend_metadata(
+            metadata,
+            additions,
+        )
+        archived = CandidateRecord(
+            current.candidate_id,
+            CandidateState.SUPERSEDED.value,
+            current.source_sha256,
+            current.project_sha256,
+            current.artifact_sha256,
+            current.build,
+            current.marketing_version,
+            archived_metadata,
+        )
+
+        destination.mkdir(mode=0o700, parents=True)
+        try:
+            print(
+                f"==> Archiving assigned candidate {current.candidate_id} workspace and receipt journal",
+                file=sys.stderr,
+                flush=True,
+            )
+            shutil.copytree(workspace, destination / "candidate-workspace")
+            CandidateLedger(destination / "candidate.json").write(archived)
+            print("    Assigned candidate archive complete", file=sys.stderr, flush=True)
+        except Exception:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise
+        # This is the final operation. If unlink reports an error after the
+        # filesystem has removed the active ledger, preserve the archive so the
+        # assigned candidate remains recoverable and auditable.
+        self.path.unlink()
+        return archived
 
     def allocate_replacement(self, *args: Any, **kwargs: Any) -> CandidateRecord:
         current = self.load()

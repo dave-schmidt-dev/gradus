@@ -47,6 +47,18 @@ Preparation, upload acceptance, processing/compliance, and assignment are
 separate gates. Keep the candidate record and receipt bound to the exact source,
 artifact, version, build, producer evidence, and walkthrough digests.
 
+An assigned candidate is immutable. To prepare a replacement for a
+release-blocking correction, run the upload wrapper from `app/` with
+`--rollover-assigned --supersession-reason "<reason>"`. The wrapper archives the
+old candidate workspace, evidence, and receipt under
+`.release-state/archived/<candidate-id>/` before creating the replacement; an
+assigned candidate is otherwise a hard stop. Upload, local-install, and
+notarization provenance checks allow only the exact untracked verification
+report `verifications/2026-08-09-internal-testflight-candidate-migration-verification.md`.
+The receipt journal must be inside the candidate workspace; rollover emits
+archive-start and archive-complete progress and preserves that journal in the
+archived workspace.
+
 ### Candidate-current walkthrough and release-owner handoff
 
 Before the release owner authorizes TestFlight, generate the dated walkthrough

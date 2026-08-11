@@ -436,6 +436,30 @@ def _load_evidence(path: str) -> CandidateEvidence:
         raise AssignmentError("candidate evidence is invalid") from exc
 
 
+def _resolve_receipt_journal_path(ledger: CandidateLedger, requested: str) -> Path:
+    """Require the assignment receipt journal to live in the candidate workspace."""
+
+    record = ledger.load()
+    if record is None:
+        raise AssignmentError("candidate ledger is missing")
+    workspace_value = (record.metadata or {}).get("candidateWorkspace")
+    if not isinstance(workspace_value, str) or not workspace_value.strip():
+        raise AssignmentError("candidate workspace is missing from the ledger")
+    workspace = Path(workspace_value).expanduser().resolve()
+    journal = Path(requested).expanduser().resolve()
+    try:
+        journal.relative_to(workspace)
+    except ValueError as exc:
+        raise AssignmentError("receipt journal must be inside the candidate workspace") from exc
+    if journal == workspace:
+        raise AssignmentError("receipt journal must be a file inside the candidate workspace")
+    if journal.exists() and not journal.is_file():
+        raise AssignmentError("receipt journal must be a regular file")
+    if not journal.parent.is_dir():
+        raise AssignmentError("receipt journal parent directory is invalid")
+    return journal
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("candidate_id")
@@ -464,8 +488,10 @@ def main() -> int:
     args = parse_args()
     try:
         ledger = CandidateLedger(args.ledger)
+        receipt_path = _resolve_receipt_journal_path(ledger, args.receipt_journal)
+        ledger.extend_metadata({"receiptJournalPath": str(receipt_path)})
         evidence = _load_evidence(args.evidence)
-        journal = ReceiptJournal(args.receipt_journal)
+        journal = ReceiptJournal(receipt_path)
         result = run_assignment_with_reconciliation(
             ASCClient(make_token_provider()),
             ledger=ledger,

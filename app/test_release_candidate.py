@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 from release_candidate.ledger import CandidateError, CandidateLedger, CandidateState
@@ -160,3 +161,166 @@ def test_restart_preserves_uploaded_unassigned_and_rejects_replacement(tmp_path)
     assert restarted.load().state == "uploaded_unassigned"
     with pytest.raises(CandidateError):
         restarted.allocate_replacement("candidate-2", source="x", project="y", artifact="z")
+
+
+def test_assigned_rollover_archives_workspace_and_creates_fresh_candidate(tmp_path):
+    ledger = _ledger(tmp_path)
+    workspace = tmp_path / ".release-state" / "candidates" / "candidate-1"
+    workspace.mkdir(parents=True)
+    (workspace / "candidate-evidence.json").write_text('{"candidateId":"candidate-1"}\n')
+    (workspace / "receipt.json").write_text('{"candidate_id":"candidate-1"}\n')
+    ledger.prepare(
+        "candidate-1",
+        source_sha256="a" * 64,
+        project_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+        build=7,
+        marketing_version="1.2.3",
+        metadata={
+            "candidateWorkspace": str(workspace),
+            "receiptJournalPath": str(workspace / "receipt.json"),
+        },
+    )
+    ledger.transition(CandidateState.UPLOADING)
+    ledger.transition(CandidateState.UPLOADED_UNASSIGNED)
+    ledger.transition(CandidateState.ASSIGNED)
+
+    replacement_workspace = tmp_path / ".release-state" / "candidates" / "candidate-2"
+    replacement = ledger.prepare(
+        "candidate-2",
+        source_sha256="d" * 64,
+        project_sha256="e" * 64,
+        artifact_sha256="f" * 64,
+        build=8,
+        marketing_version="1.2.3",
+        metadata={"candidateWorkspace": str(replacement_workspace)},
+        supersedes_reason="release-blocking correction",
+        archive_root=tmp_path / ".release-state" / "archived",
+    )
+
+    assert replacement.state == CandidateState.PREPARED
+    assert ledger.load().candidate_id == "candidate-2"
+    archived = tmp_path / ".release-state" / "archived" / "candidate-1"
+    archived_record = CandidateLedger(archived / "candidate.json").load()
+    assert archived_record.state == CandidateState.SUPERSEDED
+    assert archived_record.metadata["supersededReason"] == "release-blocking correction"
+    assert archived_record.metadata["archivedReceiptJournalPath"].endswith(
+        "candidate-workspace/receipt.json"
+    )
+    assert (archived / "candidate-workspace" / "candidate-evidence.json").is_file()
+    assert (archived / "candidate-workspace" / "receipt.json").is_file()
+
+
+def test_assigned_rollover_requires_explicit_reason_and_archive_root(tmp_path):
+    ledger = _ledger(tmp_path)
+    workspace = tmp_path / "candidate"
+    workspace.mkdir()
+    ledger.prepare(
+        "candidate-1",
+        source_sha256="a" * 64,
+        project_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+        build=7,
+        marketing_version="1.2.3",
+        metadata={"candidateWorkspace": str(workspace)},
+    )
+    for state in (
+        CandidateState.UPLOADING,
+        CandidateState.UPLOADED_UNASSIGNED,
+        CandidateState.ASSIGNED,
+    ):
+        ledger.transition(state)
+    with pytest.raises(CandidateError, match="explicit supersession reason"):
+        ledger.prepare(
+            "candidate-2",
+            source_sha256="d" * 64,
+            project_sha256="e" * 64,
+            artifact_sha256="f" * 64,
+            build=8,
+            marketing_version="1.2.3",
+            metadata={},
+        )
+
+
+@pytest.mark.parametrize("reason", ["", "   ", "bad\nreason", "x" * 501])
+def test_assigned_rollover_rejects_invalid_reason(tmp_path, reason):
+    ledger = _ledger(tmp_path)
+    workspace = tmp_path / "candidate"
+    workspace.mkdir()
+    ledger.prepare(
+        "candidate-1",
+        source_sha256="a" * 64,
+        project_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+        build=7,
+        marketing_version="1.2.3",
+        metadata={"candidateWorkspace": str(workspace)},
+    )
+    for state in (
+        CandidateState.UPLOADING,
+        CandidateState.UPLOADED_UNASSIGNED,
+        CandidateState.ASSIGNED,
+    ):
+        ledger.transition(state)
+    with pytest.raises(CandidateError):
+        ledger.archive_assigned(tmp_path / ".release-state" / "archived", reason)
+
+
+def test_assigned_rollover_rejects_archive_collision(tmp_path):
+    ledger = _ledger(tmp_path)
+    workspace = tmp_path / "candidate"
+    workspace.mkdir()
+    ledger.prepare(
+        "candidate-1",
+        source_sha256="a" * 64,
+        project_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+        build=7,
+        marketing_version="1.2.3",
+        metadata={"candidateWorkspace": str(workspace)},
+    )
+    for state in (
+        CandidateState.UPLOADING,
+        CandidateState.UPLOADED_UNASSIGNED,
+        CandidateState.ASSIGNED,
+    ):
+        ledger.transition(state)
+    archive_root = tmp_path / ".release-state" / "archived"
+    (archive_root / "candidate-1").mkdir(parents=True)
+    with pytest.raises(CandidateError, match="archive already exists"):
+        ledger.archive_assigned(archive_root, "release-blocking correction")
+    assert ledger.load().state == CandidateState.ASSIGNED
+
+
+def test_archive_failure_after_active_unlink_preserves_archive(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    workspace = tmp_path / "candidate"
+    workspace.mkdir()
+    ledger.prepare(
+        "candidate-1",
+        source_sha256="a" * 64,
+        project_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+        build=7,
+        marketing_version="1.2.3",
+        metadata={"candidateWorkspace": str(workspace)},
+    )
+    for state in (
+        CandidateState.UPLOADING,
+        CandidateState.UPLOADED_UNASSIGNED,
+        CandidateState.ASSIGNED,
+    ):
+        ledger.transition(state)
+    original_unlink = Path.unlink
+
+    def unlink_then_fail(path, *args, **kwargs):
+        original_unlink(path, *args, **kwargs)
+        raise OSError("simulated post-unlink failure")
+
+    monkeypatch.setattr(Path, "unlink", unlink_then_fail)
+    archive_root = tmp_path / ".release-state" / "archived"
+    with pytest.raises(OSError, match="post-unlink"):
+        ledger.archive_assigned(archive_root, "release-blocking correction")
+    archived = archive_root / "candidate-1"
+    assert (archived / "candidate.json").is_file()
+    assert not ledger.path.exists()

@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 
+import pytest
 from _asc_api import ASCOutcome, PermanentASCError
+from release_candidate.ledger import CandidateLedger
 
 _spec = importlib.util.spec_from_file_location(
     "testflight_assign", Path(__file__).with_name("testflight-assign.py")
@@ -19,6 +22,7 @@ confirm_exact_build = _module.confirm_exact_build
 add_build_to_group = _module.add_build_to_group
 find_exact_internal_group = _module.find_exact_internal_group
 load_evidence = _module._load_evidence
+resolve_receipt_journal_path = _module._resolve_receipt_journal_path
 
 
 class FakeClient:
@@ -235,3 +239,31 @@ def test_exact_build_is_rechecked_before_mutation():
     }
     result = confirm_exact_build(client, "build-1", "42")
     assert result["id"] == "build-1"
+
+
+def test_receipt_journal_must_be_workspace_local_and_is_recorded(tmp_path):
+    workspace = tmp_path / "candidate-workspace"
+    workspace.mkdir()
+    ledger = CandidateLedger(tmp_path / "candidate.json")
+    ledger.create(
+        "candidate-1",
+        source=b"source",
+        project=b"project",
+        artifact=b"artifact",
+        metadata={"candidateWorkspace": str(workspace)},
+    )
+    receipt = resolve_receipt_journal_path(ledger, str(workspace / "receipt.json"))
+    ledger.extend_metadata({"receiptJournalPath": str(receipt)})
+    assert ledger.load().metadata["receiptJournalPath"] == str(receipt)
+    with pytest.raises(AssignmentError, match="inside the candidate workspace"):
+        resolve_receipt_journal_path(ledger, str(tmp_path / "external-receipt.json"))
+    (workspace / "receipt-dir").mkdir()
+    with pytest.raises(AssignmentError, match="regular file"):
+        resolve_receipt_journal_path(ledger, str(workspace / "receipt-dir"))
+    missing_parent = workspace / "missing" / "receipt.json"
+    with pytest.raises(AssignmentError, match="parent directory"):
+        resolve_receipt_journal_path(ledger, str(missing_parent))
+    fifo = workspace / "receipt.fifo"
+    os.mkfifo(fifo)
+    with pytest.raises(AssignmentError, match="regular file"):
+        resolve_receipt_journal_path(ledger, str(fifo))
