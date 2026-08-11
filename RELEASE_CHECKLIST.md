@@ -7,6 +7,36 @@ The companion policies are [`VERSIONING.md`](VERSIONING.md) and
 [`TESTING.md`](TESTING.md). The generalized Apple-development standard lives
 in the shared `apple_developer` project under `RELEASE_STANDARDS.md`.
 
+## App Store publication roadmap (planned; not submission-authorized)
+
+The current release path ends at internal TestFlight. Public App Store
+submission is a later, human-authorized trigger. Gradus is free end-to-end: the
+Mac publisher is not a paid prerequisite, and this version has no subscription
+or In-App Purchase.
+
+Before that trigger, the release owner must verify:
+
+1. A normal Release `Explore Sample` path works on a clean iPhone/iPad install
+   without GradusMac or pre-existing CloudKit data. It is labelled as sample
+   data, exercises the normal dashboard, writes nothing to CloudKit, and has a
+   clear exit/reset path.
+2. The Antigravity card no longer reports a transient error during a healthy
+   refresh cycle; a regression test and live health-window evidence exist.
+3. The data-flow/security audit records each outbound data path, CloudKit
+   permission, diagnostic/provider destination, retention/deletion behavior,
+   credential boundary, and encryption classification.
+4. Dead code, UI/gate coverage, public docs, release walkthrough, and provider
+   branding/claims are clean.
+5. App Store Connect metadata and evidence are complete: screenshots, age
+   rating, privacy policy and App Privacy answers, support/marketing URLs,
+   export compliance, copyright, review contact/notes, and the selected signed
+   build. See Apple's [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/),
+   [App Privacy](https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy),
+   and [export-compliance overview](https://developer.apple.com/help/app-store-connect/manage-app-information/overview-of-export-compliance).
+
+No item in this section submits an app; the final submission remains a separate
+release-owner decision after the evidence is reviewed.
+
 ## Internal TestFlight candidate gate (INV-9)
 
 This is an internal-TestFlight candidate path only. App Store submission,

@@ -4,11 +4,12 @@ The 2026-08-10 reliability/accessibility/parity reconciliation is recorded in
 the dated Gradus plan under the local `.plans/gradus/` workspace; its live
 queue mapping and explicit future exclusions remain in `TASKS.md`.
 
-Internal TestFlight release candidates use the candidate ledger under
-`app/release_candidate/`. The candidate path is limited to preparation, upload,
-processing/compliance, and assignment to an existing attended internal group;
-App Store submission and public release are separate and excluded. The active
-plan and execution queue are recorded in
+The current release is internal TestFlight **1.6.7 (16)**. Its candidate path is
+limited to preparation, upload, processing/compliance, and assignment to an
+existing attended internal group. App Store submission is planned but not yet
+authorized; the publication roadmap and evidence gates are in
+`RELEASE_CHECKLIST.md`, and the live queue is in `TASKS.md`. The active internal
+TestFlight plan and execution queue are recorded in
 `/Users/dave/Documents/Projects/.plans/gradus/internal-testflight-candidate-migration-2026-08-09-tasks.md`.
 
 The release owner must review a dated, candidate-current walkthrough before the
@@ -16,9 +17,15 @@ TestFlight trigger. `python3 -m release_candidate.walkthrough` binds that
 review to the exact source revision, project/artifact digests, version/build,
 and route manifest, including onboarding, reachable controls, role/permission
 variants, disabled/recovery states, and system-owned sheets. This handoff is
-TestFlight-only; App Store submission remains excluded.
+TestFlight-only; App Store submission remains a separate human-gated step.
 
-Real-time terminal monitor for local `codex`, `claude`, `agy`, `copilot`, `cursor`, `vibe`, and `opencode go` usage.
+Gradus has three surfaces over the same usage data: a terminal monitor, a
+macOS menu-bar publisher, and an iPhone/iPad consumer. The iOS/iPadOS
+publication path will include a clearly labelled, local-only `Explore Sample`
+flow so a clean install is useful without a Mac or pre-existing CloudKit data.
+
+The terminal surface monitors local `codex`, `claude`, `agy`, `copilot`, `cursor`,
+`vibe`, and `opencode go` usage.
 
 Probes provider APIs directly using locally authenticated credentials — no PTY, no CLI scraping. Each provider uses its own HTTP or internal API path, so probes are fast and reliable.
 
