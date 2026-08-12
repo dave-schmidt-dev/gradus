@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusMac
+import Testing
 
 /// Locks the guard that keeps `xcodebuild test` from running the live publish
 /// pipeline.
@@ -41,21 +40,17 @@ struct PipelineGuardTests {
 
     @Test func debugBuildCannotReadTheSnapshotWithoutAnExplicitLivePipelineOptIn() {
         #if DEBUG
-        #expect(GradusMacApp.pipelineDisabled(environment: [:]))
-        #expect(!GradusMacApp.pipelineDisabled(environment: ["GRADUS_ENABLE_PIPELINE": "1"]))
+            #expect(GradusMacApp.pipelineDisabled(environment: [:]))
+            #expect(!GradusMacApp.pipelineDisabled(environment: ["GRADUS_ENABLE_PIPELINE": "1"]))
         #endif
     }
 
     @Test func aTestOptOutWinsOverAnAccidentalDebugOptIn() {
-        #expect(
-            GradusMacApp.pipelineDisabled(environment: [
-                "GRADUS_ENABLE_PIPELINE": "1",
-                "GRADUS_DISABLE_PIPELINE": "1",
-            ])
-        )
+        let environment = ["GRADUS_ENABLE_PIPELINE": "1", "GRADUS_DISABLE_PIPELINE": "1"]
+        #expect(GradusMacApp.pipelineDisabled(environment: environment))
     }
 
-    @Test func testHostNeverCreatesTheStatusMenu() {
+    @Test func hostNeverCreatesTheStatusMenu() {
         #expect(GradusMacApp.isTestHost(environment: ["XCTestConfigurationFilePath": "/tmp/test.xctestconfiguration"]))
         #expect(GradusMacApp.isTestHost(environment: ["XCTestBundlePath": "/tmp/GradusMacTests.xctest"]))
         #expect(!GradusMacApp.isTestHost(environment: [:]))
@@ -67,5 +62,16 @@ struct PipelineGuardTests {
                 NSHomeDirectory() + "/Library/Application Support/Gradus/snapshot-v2.json"
         )
         #expect(!PublishPipeline.defaultSnapshotPath.path.contains("/Documents/"))
+    }
+
+    @MainActor
+    @Test func installedAppWritesPublishEvidenceBesideTheApplicationSupportSnapshotMirror() {
+        let evidencePath = PublishPipeline.publishEvidencePath(for: PublishPipeline.defaultSnapshotPath)
+        let applicationSupportEvidencePath = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/Gradus/publish-evidence.json")
+
+        #expect(evidencePath == applicationSupportEvidencePath)
+        #expect(evidencePath.path.hasSuffix("/Library/Application Support/Gradus/publish-evidence.json"))
+        #expect(!evidencePath.path.contains("/.state/"))
     }
 }

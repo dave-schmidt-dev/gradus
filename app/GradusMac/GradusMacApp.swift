@@ -7,25 +7,25 @@ import SwiftUI
 struct GradusMacApp: App {
     @State private var isMenuBarInserted: Bool
     #if DEBUG
-    @NSApplicationDelegateAdaptor(MenuUITestApplicationDelegate.self)
-    private var uiTestApplicationDelegate
+        @NSApplicationDelegateAdaptor(MenuUITestApplicationDelegate.self)
+        private var uiTestApplicationDelegate
     #endif
 
     init() {
         _isMenuBarInserted = State(initialValue: !Self.isTestHost() && !Self.uiTestMenuFixtureEnabled)
         #if DEBUG
-        if CommandLine.arguments.contains("--cloudkit-spike") {
-            Task { await CloudKitSpike.run() }
-            return
-        }
-        if CommandLine.arguments.contains("--t1-7-gate") {
-            Task { await T17SeamGate.run() }
-            return
-        }
-        if CommandLine.arguments.contains("--t2-5-schema-gate") {
-            Task { await T25SchemaGate.run() }
-            return
-        }
+            if CommandLine.arguments.contains("--cloudkit-spike") {
+                Task { await CloudKitSpike.run() }
+                return
+            }
+            if CommandLine.arguments.contains("--t1-7-gate") {
+                Task { await T17SeamGate.run() }
+                return
+            }
+            if CommandLine.arguments.contains("--t2-5-schema-gate") {
+                Task { await T25SchemaGate.run() }
+                return
+            }
         #endif
         // `GradusMacTests` is a hosted unit-test bundle, so every
         // `xcodebuild test` run launches this app for real. A Debug host must
@@ -52,15 +52,14 @@ struct GradusMacApp: App {
     }
 
     static func pipelineDisabled(environment: [String: String]) -> Bool {
-        if environment["GRADUS_DISABLE_PIPELINE"] == "1"
-            || environment["XCTestConfigurationFilePath"] != nil {
+        if environment["GRADUS_DISABLE_PIPELINE"] == "1" || environment["XCTestConfigurationFilePath"] != nil {
             return true
         }
 
         #if DEBUG
-        return environment["GRADUS_ENABLE_PIPELINE"] != "1"
+            return environment["GRADUS_ENABLE_PIPELINE"] != "1"
         #else
-        return false
+            return false
         #endif
     }
 
@@ -78,10 +77,10 @@ struct GradusMacApp: App {
     /// window because XCUITest cannot click an LSUIElement status item.
     static var uiTestMenuFixtureEnabled: Bool {
         #if DEBUG
-        return CommandLine.arguments.contains("--ui-test-menu-fixture")
-            || ProcessInfo.processInfo.environment["GRADUS_UI_TEST_MENU_FIXTURE"] == "1"
+            return CommandLine.arguments.contains("--ui-test-menu-fixture")
+                || ProcessInfo.processInfo.environment["GRADUS_UI_TEST_MENU_FIXTURE"] == "1"
         #else
-        return false
+            return false
         #endif
     }
 
@@ -115,15 +114,15 @@ struct GradusMacApp: App {
 }
 
 #if DEBUG
-/// Post-launch seam for the Mac UI test. SwiftUI's `App.init()` is too early
-/// to order an AppKit window reliably; the delegate callback runs after the
-/// application has an active run loop while production remains menu-bar-only.
-private final class MenuUITestApplicationDelegate: NSObject, NSApplicationDelegate {
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        guard GradusMacApp.uiTestMenuFixtureEnabled else { return }
-        MenuUITestFixtureWindow.show()
+    /// Post-launch seam for the Mac UI test. SwiftUI's `App.init()` is too early
+    /// to order an AppKit window reliably; the delegate callback runs after the
+    /// application has an active run loop while production remains menu-bar-only.
+    private final class MenuUITestApplicationDelegate: NSObject, NSApplicationDelegate {
+        func applicationDidFinishLaunching(_: Notification) {
+            guard GradusMacApp.uiTestMenuFixtureEnabled else { return }
+            MenuUITestFixtureWindow.show()
+        }
     }
-}
 #endif
 
 /// Holds the long-lived publish pipeline (snapshot watcher → CloudKit
@@ -133,6 +132,12 @@ private final class MenuUITestApplicationDelegate: NSObject, NSApplicationDelega
 /// a process-lifetime singleton started from `init()` instead.
 @MainActor
 final class PublishPipeline {
+    private struct ProducerMetadata {
+        let buildNumber: String
+        let sourceRevision: String
+        let projectSha256: String
+    }
+
     static let shared = PublishPipeline()
 
     private var coordinator: PublishCoordinator?
@@ -147,14 +152,20 @@ final class PublishPipeline {
     static let defaultSnapshotPath = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Application Support/Gradus/snapshot-v2.json")
 
+    static func publishEvidencePath(for snapshotPath: URL) -> URL {
+        snapshotPath
+            .deletingLastPathComponent()
+            .appendingPathComponent("publish-evidence.json")
+    }
+
     private static func signedCloudKitEnvironment() -> String {
         guard let task = SecTaskCreateFromSelf(nil),
-            let value = SecTaskCopyValueForEntitlement(
-                task,
-                "com.apple.developer.icloud-container-environment" as CFString,
-                nil
-            ) as? String,
-            !value.isEmpty
+              let value = SecTaskCopyValueForEntitlement(
+                  task,
+                  "com.apple.developer.icloud-container-environment" as CFString,
+                  nil
+              ) as? String,
+              !value.isEmpty
         else {
             // The Debug entitlement omits this optional key, which means the
             // app is using CloudKit's Development environment.
@@ -190,40 +201,62 @@ final class PublishPipeline {
         let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
         let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
         let database = CKDatabaseAdapter(database: container.privateCloudDatabase)
-        guard let producerBuildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-        else {
-            GradusLog.app.error("could not resolve signed producer metadata; publishing disabled")
-            return
-        }
-        guard let provenance = Self.producerProvenance() else {
-            GradusLog.app.error("could not resolve signed source/project provenance; publishing disabled")
-            return
-        }
-        let cloudKitEnvironment = Self.signedCloudKitEnvironment()
-        let evidencePath = snapshotPath
-            .deletingLastPathComponent()
-            .appendingPathComponent("publish-evidence.json")
+        guard let producer = Self.producerMetadata() else { return }
         let coordinator = PublishCoordinator(
             database: database,
             zoneID: zoneID,
-            evidencePath: evidencePath,
-            producerBuildNumber: producerBuildNumber,
-            cloudKitEnvironment: cloudKitEnvironment,
-            producerSourceRevision: provenance.sourceRevision,
-            producerProjectSha256: provenance.projectSha256
+            evidencePath: Self.publishEvidencePath(for: snapshotPath),
+            producerBuildNumber: producer.buildNumber,
+            cloudKitEnvironment: Self.signedCloudKitEnvironment(),
+            producerSourceRevision: producer.sourceRevision,
+            producerProjectSha256: producer.projectSha256
         )
         self.coordinator = coordinator
 
+        let accountMonitor = makeAccountMonitor()
+        self.accountMonitor = accountMonitor
+        Task { await accountMonitor.start() }
+
+        let watcher = makeWatcher(
+            snapshotPath: snapshotPath,
+            coordinator: coordinator,
+            accountMonitor: accountMonitor
+        )
+        self.watcher = watcher
+        Task { await watcher.start() }
+    }
+
+    private static func producerMetadata() -> ProducerMetadata? {
+        guard let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String else {
+            GradusLog.app.error("could not resolve signed producer metadata; publishing disabled")
+            return nil
+        }
+        guard let provenance = producerProvenance() else {
+            GradusLog.app.error("could not resolve signed source/project provenance; publishing disabled")
+            return nil
+        }
+        return ProducerMetadata(
+            buildNumber: buildNumber,
+            sourceRevision: provenance.sourceRevision,
+            projectSha256: provenance.projectSha256
+        )
+    }
+
+    private func makeAccountMonitor() -> AccountStatusMonitor {
         // CV-6: gate publishing on account status rather than let a
         // signed-out/restricted account surface as an opaque CloudKit error
         // on every upsert.
         let accountSource = ContainerAccountStatusSource(containerIdentifier: CloudKitConstants.containerIdentifier)
-        let accountMonitor = AccountStatusMonitor(source: accountSource) { _ in }
-        self.accountMonitor = accountMonitor
-        Task { await accountMonitor.start() }
+        return AccountStatusMonitor(source: accountSource) { _ in }
+    }
 
+    private func makeWatcher(
+        snapshotPath: URL,
+        coordinator: PublishCoordinator,
+        accountMonitor: AccountStatusMonitor
+    ) -> SnapshotWatcher {
         let viewModel = viewModel
-        let watcher = SnapshotWatcher(path: snapshotPath) { payload in
+        return SnapshotWatcher(path: snapshotPath) { payload in
             Task {
                 // Local display always reflects the on-device snapshot --
                 // only the CloudKit publish is gated on opt-in sync.
@@ -254,7 +287,5 @@ final class PublishPipeline {
                 }
             }
         }
-        self.watcher = watcher
-        Task { await watcher.start() }
     }
 }
