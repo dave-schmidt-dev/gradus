@@ -14,9 +14,14 @@ import UserNotifications
 /// respectively), so they read as `authorized` -- treating them as denied would
 /// show a "notifications are off" warning to someone who is receiving them.
 public enum NotificationAuthorization: Equatable, Sendable {
-    /// Authorization has not been requested yet, or the request is in flight.
-    /// Not a problem state: `AppDelegate` asks on first launch.
+    /// The user-visible Warning alerts control is off. This is not a system
+    /// denial and does not affect remote registration or CloudKit sync.
+    case off
+    /// Authorization has not been requested yet. The app requests it only
+    /// after the user explicitly turns on Warning alerts.
     case notDetermined
+    /// A system permission request is currently displayed.
+    case requesting
     /// The user declined, or turned the app's notifications off in iOS
     /// Settings. Warnings are scheduled and silently dropped.
     case denied

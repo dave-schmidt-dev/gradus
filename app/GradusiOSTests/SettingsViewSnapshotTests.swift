@@ -1,32 +1,31 @@
+@testable import GradusiOS
 import GradusKit
 import SnapshotTesting
 import SwiftUI
 import Testing
 
-@testable import GradusiOS
-
 // P5/T5.3 gate: four-group `SettingsView` layout (Sync & Notifications,
-// Local Display, Warning Threshold, About), toggle-on/off states, light+dark -- following
+// Local Display, Warning Threshold, About), notification-on/off states, light+dark -- following
 // `DashboardSnapshotTests.swift`'s exact `.image(layout: .fixed)` pattern.
 // No live CloudKit: `DashboardViewModel` is built without a
-// `subscriptionManager`, so the toggles render straight from seeded
+// `subscriptionManager`, so the notification control renders straight from seeded
 // `UserDefaults` state.
 
 private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 
-// Opt in only while intentionally refreshing these baselines:
-// OTHER_SWIFT_FLAGS='$(inherited) -D SETTINGS_SNAPSHOT_RECORD'
+/// Opt in only while intentionally refreshing these baselines:
+/// OTHER_SWIFT_FLAGS='$(inherited) -D SETTINGS_SNAPSHOT_RECORD'
 private let settingsSnapshotRecording: SnapshotTestingConfiguration.Record = {
-#if SETTINGS_SNAPSHOT_RECORD
-    return .all
-#else
-    return .never
-#endif
+    #if SETTINGS_SNAPSHOT_RECORD
+        return .all
+    #else
+        return .never
+    #endif
 }()
 
 /// A fresh suite per call, matching `DashboardViewModelSyncTests.swift`'s
-/// `isolatedDefaults()` -- `syncEnabled`/`notificationsEnabled` persist to
-/// `UserDefaults`, and `.standard` is shared process-wide.
+/// `isolatedDefaults()` -- `notificationsEnabled` persists to `UserDefaults`,
+/// and `.standard` is shared process-wide.
 private func isolatedDefaults() -> UserDefaults {
     UserDefaults(suiteName: "gradus-settings-snapshot-tests-\(UUID().uuidString)")!
 }
@@ -41,7 +40,8 @@ private func sampleProviders() -> [ProviderStatus] {
             windows: [
                 ProviderWindow(
                     id: "weekly", percentLeft: 62, resetISO: "2026-08-08T05:00:00-04:00", windowHours: 168,
-                    paceDelta: -0.05)
+                    paceDelta: -0.05
+                ),
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-30)),
@@ -70,12 +70,14 @@ private func sampleProviders() -> [ProviderStatus] {
 private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let authorization: NotificationAuthorization
 
-    func currentAuthorization() async -> NotificationAuthorization { authorization }
+    func currentAuthorization() async -> NotificationAuthorization {
+        authorization
+    }
 }
 
 @MainActor
 private func makeViewModel(
-    syncEnabled: Bool, notificationsEnabled: Bool, systemAuthorization: NotificationAuthorization? = nil
+    notificationsEnabled: Bool, systemAuthorization: NotificationAuthorization? = nil
 ) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-settings-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
@@ -85,12 +87,12 @@ private func makeViewModel(
     #expect(providers.contains { !$0.ok && $0.windows.isEmpty })
     try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
     let defaults = isolatedDefaults()
-    defaults.set(syncEnabled, forKey: DashboardViewModel.syncEnabledKey)
     defaults.set(notificationsEnabled, forKey: DashboardViewModel.notificationsEnabledKey)
     return DashboardViewModel(
         cache: cache,
         notificationAuthorizationSource: systemAuthorization.map { StubAuthorizationSource(authorization: $0) },
-        userDefaults: defaults)
+        userDefaults: defaults
+    )
 }
 
 @MainActor
@@ -121,6 +123,20 @@ private func makeViewModel(
     #expect(viewModel.showExhausted == false)
 }
 
+@Test func warningAlertsCopyIsExplicitlyOptionalAndIndependentOfICloudSync() {
+    #expect(
+        SettingsView.warningAlertsDescription
+            == "Notifies you when a provider reaches your warning threshold. Optional; iCloud syncing is unaffected."
+    )
+    #expect(SettingsView.warningAlertsRequestingDescription.contains("iCloud syncing continues"))
+}
+
+@Test func deniedWarningAlertsKeepICloudSyncSeparate() {
+    #expect(SettingsView.warningAlertsDescription.contains("iCloud syncing is unaffected"))
+    #expect(SettingsView.warningAlertsRequestingDescription.contains("iCloud syncing continues"))
+    #expect(NotificationAuthorization.denied == .denied)
+}
+
 /// Tall enough to contain every control, including the last one.
 ///
 /// Raised from 500 when the density picker was added (2026-08-06): at 500 the
@@ -142,39 +158,43 @@ private func makeViewModel(
 private let settingsSnapshotHeight: CGFloat = 1150
 
 @MainActor
-@Test func settingsViewAllTogglesOnLight() {
-    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true)
+@Test func settingsViewNotificationsOnLight() {
+    let viewModel = makeViewModel(notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
-        record: settingsSnapshotRecording)
+        record: settingsSnapshotRecording
+    )
 }
 
 @MainActor
-@Test func settingsViewAllTogglesOnDark() {
-    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true)
+@Test func settingsViewNotificationsOnDark() {
+    let viewModel = makeViewModel(notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
-        record: settingsSnapshotRecording)
+        record: settingsSnapshotRecording
+    )
 }
 
 @MainActor
-@Test func settingsViewTogglesOffLight() {
-    let viewModel = makeViewModel(syncEnabled: false, notificationsEnabled: false)
+@Test func settingsViewNotificationsOffLight() {
+    let viewModel = makeViewModel(notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
-        record: settingsSnapshotRecording)
+        record: settingsSnapshotRecording
+    )
 }
 
 @MainActor
-@Test func settingsViewTogglesOffDark() {
-    let viewModel = makeViewModel(syncEnabled: false, notificationsEnabled: false)
+@Test func settingsViewNotificationsOffDark() {
+    let viewModel = makeViewModel(notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
-        record: settingsSnapshotRecording)
+        record: settingsSnapshotRecording
+    )
 }
 
 /// The state that shipped invisible in 1.6.0: our toggle on, iOS refusing to
@@ -184,37 +204,24 @@ private let settingsSnapshotHeight: CGFloat = 1150
 /// went green without covering a pixel of it.
 @MainActor
 @Test func settingsViewWarnsWhenSystemNotificationsAreDeniedLight() async {
-    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true, systemAuthorization: .denied)
+    let viewModel = makeViewModel(notificationsEnabled: true, systemAuthorization: .denied)
     await viewModel.refreshNotificationAuthorization()
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
-        record: settingsSnapshotRecording)
+        record: settingsSnapshotRecording
+    )
 }
 
 @MainActor
 @Test func settingsViewWarnsWhenSystemNotificationsAreDeniedDark() async {
-    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: true, systemAuthorization: .denied)
+    let viewModel = makeViewModel(notificationsEnabled: true, systemAuthorization: .denied)
     await viewModel.refreshNotificationAuthorization()
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
         of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
-        record: settingsSnapshotRecording)
-}
-
-/// Same permission denial, but with our own toggle off -- the warning must not
-/// appear, because nothing the user asked for is being dropped. Pairs with the
-/// two above so a change that renders the warning unconditionally fails here
-/// instead of quietly passing.
-@MainActor
-@Test func settingsViewStaysQuietWhenDeniedButOptedOut() async {
-    let viewModel = makeViewModel(syncEnabled: true, notificationsEnabled: false, systemAuthorization: .denied)
-    await viewModel.refreshNotificationAuthorization()
-    #expect(!viewModel.notificationsSuppressedBySystem)
-    let view = SettingsView(dashboardViewModel: viewModel)
-    assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
-        record: settingsSnapshotRecording)
+        record: settingsSnapshotRecording
+    )
 }

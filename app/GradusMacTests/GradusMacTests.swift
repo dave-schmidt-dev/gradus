@@ -1,9 +1,8 @@
 import CloudKit
 import Foundation
 import GradusKit
-import Testing
-
 @testable import GradusMac
+import Testing
 
 // MARK: - Mock CloudDatabase (CV-4 / PM-17)
 
@@ -24,14 +23,16 @@ actor MockCloudDatabase: CloudDatabase {
     }
 
     func modifyRecords(
-        toSave records: [CKRecord], savePolicy: CKModifyRecordsOperation.RecordSavePolicy
+        toSave records: [CKRecord], savePolicy _: CKModifyRecordsOperation.RecordSavePolicy
     ) async -> RecordSaveOutcome {
         recordsPerCall.append(records)
         defer { modifyCallCount += 1 }
 
         guard !scriptedResponses.isEmpty else {
             var results: [CKRecord.ID: Result<CKRecord, Error>] = [:]
-            for record in records { results[record.recordID] = .success(record) }
+            for record in records {
+                results[record.recordID] = .success(record)
+            }
             return RecordSaveOutcome(results: results)
         }
         let index = min(modifyCallCount, scriptedResponses.count - 1)
@@ -84,13 +85,14 @@ private func recordID(_ name: String) -> CKRecord.ID {
     let entry = ProviderEntry(
         name: "Codex", ok: true, error: nil,
         windows: [ProviderWindow(id: "weekly", percentLeft: 40.0, resetISO: nil, windowHours: nil, paceDelta: nil)],
-        data: ["weekly_percent_left": .double(40.0)], observedAt: "2026-08-02T20:00:00-04:00")
+        data: ["weekly_percent_left": .double(40.0)], observedAt: "2026-08-02T20:00:00-04:00"
+    )
     let publishedAt = Date(timeIntervalSince1970: 1_700_000_000)
 
     let mapped = try makeProviderStatus(from: entry, snapshotUpdatedAt: "2026-08-02T20:05:00-04:00", publishedAt: publishedAt)
 
     #expect(mapped.providerName == "Codex")
-    #expect(mapped.providerDisplayName == "Codex")  // no separate display-name table — the producer's name IS the display name
+    #expect(mapped.providerDisplayName == "Codex") // no separate display-name table — the producer's name IS the display name
     #expect(mapped.observedAt == "2026-08-02T20:00:00-04:00")
     #expect(mapped.snapshotUpdatedAt == "2026-08-02T20:05:00-04:00")
     #expect(mapped.publishedAt == publishedAt)
@@ -126,7 +128,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
         "premium_reset": .string("in 10d"),
     ]
 
-    let expectedProducerKeys: Set<String> = [
+    let expectedProducerKeys: Set = [
         "credits",
         "five_hour_percent_left",
         "weekly_percent_left",
@@ -163,11 +165,12 @@ private func recordID(_ name: String) -> CKRecord.ID {
         try validatedSnapshotData(["unexpected": .string("value")])
     }
     #expect(throws: SnapshotDataValidationError.valueTooLarge("credits")) {
-        try validatedSnapshotData(["credits": .string(String(repeating: "x", count: 4_097))])
+        try validatedSnapshotData(["credits": .string(String(repeating: "x", count: 4097))])
     }
     let entry = ProviderEntry(
-        name: "Codex", ok: false, error: String(repeating: "x", count: 4_097),
-        windows: [], data: [:], observedAt: nil)
+        name: "Codex", ok: false, error: String(repeating: "x", count: 4097),
+        windows: [], data: [:], observedAt: nil
+    )
     #expect(throws: SnapshotDataValidationError.errorMessageTooLarge) {
         try makeProviderStatus(from: entry, snapshotUpdatedAt: "2026-08-02T20:05:00-04:00", publishedAt: Date())
     }
@@ -180,7 +183,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     let data = Dictionary(uniqueKeysWithValues: [
         "credits", "five_hour_reset", "weekly_reset", "primary_reset",
         "secondary_reset", "opus_reset", "reset_at", "start_date", "end_date",
-    ].map { ($0, JSONValue.string(String(repeating: "x", count: 4_000))) })
+    ].map { ($0, JSONValue.string(String(repeating: "x", count: 4000))) })
     #expect(throws: SnapshotDataValidationError.aggregateTooLarge) {
         try validatedSnapshotData(data)
     }
@@ -192,7 +195,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     // writing state the real menu then reports as fact.
     let suite = "com.zerodelta.gradus.mac.tests.cloudSyncFailure"
     let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+    defer { defaults.removePersistentDomain(forName: suite) }
 
     let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = true
@@ -214,7 +217,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     // list someone has to remember to extend.
     let suite = "com.zerodelta.gradus.mac.tests.staleCloudSync"
     let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+    defer { defaults.removePersistentDomain(forName: suite) }
 
     let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = true
@@ -238,7 +241,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     // writing state the real menu then reports as fact.
     let suite = "com.zerodelta.gradus.mac.tests.syncDisabled"
     let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+    defer { defaults.removePersistentDomain(forName: suite) }
 
     let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = false
@@ -258,7 +261,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     try await coordinator.upsert([status(name: "Codex", publishedAt: Date(timeIntervalSince1970: 1_700_000_200))])
 
     let callCount = await database.modifyCallCount
-    #expect(callCount == 1)  // gate: 2 identical builds -> 0 saves on the second
+    #expect(callCount == 1) // gate: 2 identical builds -> 0 saves on the second
 }
 
 @Test func changedContentTriggersASecondSave() async throws {
@@ -280,7 +283,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
         [
             recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A"))),
             recordID("B"): .failure(CKError(.zoneNotFound)),
-        ]
+        ],
     ])
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
     let publishedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -295,12 +298,12 @@ private func recordID(_ name: String) -> CKRecord.ID {
     let stateA = await coordinator.publishState(for: "A")
     let stateB = await coordinator.publishState(for: "B")
     #expect(stateA?.lastSuccessfulPublishedAt == publishedAt)
-    #expect(stateB?.lastSuccessfulPublishedAt == nil)  // failed: no prior success to keep, stays nil not corrupted
+    #expect(stateB?.lastSuccessfulPublishedAt == nil) // failed: no prior success to keep, stays nil not corrupted
 
     // Next cycle: A unchanged (suppressed), B retried because its hash was
     // never recorded as saved.
     await database.setScriptedResponses([
-        [recordID("B"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("B")))]
+        [recordID("B"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("B")))],
     ])
     try await coordinator.upsert([status(name: "A", publishedAt: publishedAt), status(name: "B", publishedAt: publishedAt)])
     let secondCallRecords = await database.recordsPerCall[1]
@@ -320,7 +323,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     }
 
     let callCount = await database.modifyCallCount
-    #expect(callCount == 1)  // no blind retry loop for a non-retryable code
+    #expect(callCount == 1) // no blind retry loop for a non-retryable code
     let state = await coordinator.publishState(for: "A")
     #expect(state?.lastSuccessfulPublishedAt == nil)
 }
@@ -352,14 +355,14 @@ private func recordID(_ name: String) -> CKRecord.ID {
         [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))],
     ])
     let serverRecord = CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A"))
-    await database.setFetchRecordHandler({ _ in serverRecord })
+    await database.setFetchRecordHandler { _ in serverRecord }
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
     let publishedAt = Date(timeIntervalSince1970: 1_700_000_000)
 
     try await coordinator.upsert([status(name: "A", publishedAt: publishedAt)])
 
     let callCount = await database.modifyCallCount
-    #expect(callCount == 2)  // initial attempt + one fetch-merge-resave retry
+    #expect(callCount == 2) // initial attempt + one fetch-merge-resave retry
     let state = await coordinator.publishState(for: "A")
     #expect(state?.lastSuccessfulPublishedAt == publishedAt)
 }
@@ -403,8 +406,8 @@ private func recordID(_ name: String) -> CKRecord.ID {
 @Test func backoffGivesUpAfterMaxAttemptsAndStaysFailed() async throws {
     let database = MockCloudDatabase()
     await database.setScriptedResponses([
-        [recordID("A"): .failure(CKError(.zoneBusy, userInfo: [CKErrorRetryAfterKey: 0.01]))]
-    ])  // every call (script repeats) fails the same way
+        [recordID("A"): .failure(CKError(.zoneBusy, userInfo: [CKErrorRetryAfterKey: 0.01]))],
+    ]) // every call (script repeats) fails the same way
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
 
     do {
@@ -415,13 +418,13 @@ private func recordID(_ name: String) -> CKRecord.ID {
     }
 
     let callCount = await database.modifyCallCount
-    #expect(callCount == 4)  // 1 initial + 3 bounded backoff attempts, then give up
+    #expect(callCount == 4) // 1 initial + 3 bounded backoff attempts, then give up
     let state = await coordinator.publishState(for: "A")
     #expect(state?.lastSuccessfulPublishedAt == nil)
 }
 
 @Test func retryDelayCapsServerHintsAndFallbacks() {
-    #expect(PublishCoordinator.retryDelaySeconds(retryAfter: [3_600], attempt: 1) == 60)
+    #expect(PublishCoordinator.retryDelaySeconds(retryAfter: [3600], attempt: 1) == 60)
     #expect(PublishCoordinator.retryDelaySeconds(retryAfter: [-1, .infinity, .nan], attempt: 100) == 60)
     #expect(PublishCoordinator.retryDelaySeconds(retryAfter: [0.25, 2], attempt: 1) == 2)
 }
@@ -432,19 +435,19 @@ private func recordID(_ name: String) -> CKRecord.ID {
     let database = MockCloudDatabase()
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
 
-    try await coordinator.upsert([status(name: "A", percentLeft: 80.0)])  // not warning
+    try await coordinator.upsert([status(name: "A", percentLeft: 80.0)]) // not warning
     #expect(await coordinator.newlyWarningProviders.isEmpty)
 
-    try await coordinator.upsert([status(name: "A", percentLeft: 0.0)])  // depleted -> warning, edge fires
+    try await coordinator.upsert([status(name: "A", percentLeft: 0.0)]) // depleted -> warning, edge fires
     #expect(await coordinator.newlyWarningProviders == ["A"])
 
-    try await coordinator.upsert([status(name: "A", percentLeft: 0.0)])  // still warning, no new edge
+    try await coordinator.upsert([status(name: "A", percentLeft: 0.0)]) // still warning, no new edge
     #expect(await coordinator.newlyWarningProviders.isEmpty)
 
-    try await coordinator.upsert([status(name: "A", percentLeft: 80.0)])  // recovers
+    try await coordinator.upsert([status(name: "A", percentLeft: 80.0)]) // recovers
     #expect(await coordinator.newlyWarningProviders.isEmpty)
 
-    try await coordinator.upsert([status(name: "A", percentLeft: 0.0)])  // re-arms after recovery
+    try await coordinator.upsert([status(name: "A", percentLeft: 0.0)]) // re-arms after recovery
     #expect(await coordinator.newlyWarningProviders == ["A"])
 }
 
@@ -508,14 +511,16 @@ private func recordID(_ name: String) -> CKRecord.ID {
 @Test func failureDescriptionDoesNotLeakTheRecordOrItsUserInfo() {
     let record = CKRecord(
         recordType: "ProviderStatus",
-        recordID: CKRecord.ID(recordName: "Codex", zoneID: CKRecordZone.ID(zoneName: "GradusZone")))
+        recordID: CKRecord.ID(recordName: "Codex", zoneID: CKRecordZone.ID(zoneName: "GradusZone"))
+    )
     record["secretish"] = "weekly_percent_left=3"
     let error = CKError(
         .serverRejectedRequest,
         userInfo: [
             NSLocalizedDescriptionKey: "rejected: weekly_percent_left=3",
             CKRecordChangedErrorServerRecordKey: record,
-        ])
+        ]
+    )
 
     let described = PublishCoordinator.describe(.failure(error))
     #expect(described.contains("serverRejectedRequest"))

@@ -12,7 +12,7 @@ public struct ContainerAccountStatusSource: AccountStatusSource {
     private let container: CKContainer
 
     public init(containerIdentifier: String) {
-        self.container = CKContainer(identifier: containerIdentifier)
+        container = CKContainer(identifier: containerIdentifier)
     }
 
     public func currentAccountStatus() async throws -> CKAccountStatus {
@@ -56,6 +56,7 @@ public actor AccountStatusMonitor {
     private let source: AccountStatusSource
     private let notificationCenter: NotificationCenter
     private let onChange: @Sendable (CKAccountStatus) -> Void
+    private let onRefreshFailure: @Sendable () -> Void
     public private(set) var lastKnownStatus: CKAccountStatus = .couldNotDetermine
     private var observerToken: ObserverToken?
     /// Set by `stopObserving()` before sample-mode entry waits for this actor.
@@ -74,11 +75,13 @@ public actor AccountStatusMonitor {
     public init(
         source: AccountStatusSource,
         notificationCenter: NotificationCenter = .default,
-        onChange: @escaping @Sendable (CKAccountStatus) -> Void
+        onChange: @escaping @Sendable (CKAccountStatus) -> Void,
+        onRefreshFailure: @escaping @Sendable () -> Void = {}
     ) {
         self.source = source
         self.notificationCenter = notificationCenter
         self.onChange = onChange
+        self.onRefreshFailure = onRefreshFailure
     }
 
     /// Fetch the current status once and begin observing `.CKAccountChanged`
@@ -87,7 +90,7 @@ public actor AccountStatusMonitor {
         lifecycleGeneration &+= 1
         let generation = lifecycleGeneration
         refreshesSuspended = false
-        await refresh()
+        await refresh(retryTemporaryState: true)
         guard !refreshesSuspended, generation == lifecycleGeneration else { return }
         startObserving()
     }
@@ -97,6 +100,13 @@ public actor AccountStatusMonitor {
     /// `onChange` is NOT called — callers should treat "no update" as "still
     /// whatever it was."
     public func refresh() async {
+        await refresh(retryTemporaryState: false)
+    }
+
+    /// Performs one status request. Bootstrap gets one bounded retry for a
+    /// transient account result or transport failure; explicit refreshes do
+    /// not loop and instead leave the caller a retryable status surface.
+    private func refresh(retryTemporaryState: Bool) async {
         guard !refreshesSuspended else { return }
         let generation = lifecycleGeneration
         do {
@@ -105,11 +115,26 @@ public actor AccountStatusMonitor {
             // account request is suspended. Do not publish a result from a
             // request that completed after observation was stopped.
             guard !refreshesSuspended, generation == lifecycleGeneration else { return }
+            if retryTemporaryState,
+               status == .couldNotDetermine || status == .temporarilyUnavailable
+            {
+                await refresh(retryTemporaryState: false)
+                return
+            }
             lastKnownStatus = status
             onChange(status)
+            if status == .couldNotDetermine || status == .temporarilyUnavailable {
+                onRefreshFailure()
+            }
         } catch {
-            // Leave lastKnownStatus untouched; a future refresh (e.g. the
-            // next `.CKAccountChanged` notification) may succeed.
+            guard !refreshesSuspended, generation == lifecycleGeneration else { return }
+            if retryTemporaryState {
+                await refresh(retryTemporaryState: false)
+            } else {
+                // Leave lastKnownStatus untouched; a future refresh (e.g. the
+                // next `.CKAccountChanged` notification) may succeed.
+                onRefreshFailure()
+            }
         }
     }
 

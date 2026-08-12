@@ -36,18 +36,24 @@ _REQUIRED_VISIBLE_SAMPLE_CONTROLS = {
     "ios-settings-sample": frozenset({"sample-data-reset-settings", "sample-data-exit-settings"}),
 }
 _SOURCE_ROUTE_MARKERS = {
-    "live-mode-opt-in": ("GradusiOS/AppDelegate.swift", "beginLiveLifecycle"),
+    "required-icloud-lifecycle": ("GradusiOS/EmptyStateView.swift", "struct EmptyStateView"),
     "empty-state": ("GradusiOS/EmptyStateView.swift", "struct EmptyStateView"),
     "sample-dashboard": ("GradusiOS/GradusiOSApp.swift", "struct SampleDataDashboard"),
     "ios-settings": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
     "ios-settings-sample": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
+    "mac-menu": ("GradusMac/MenuContentView.swift", "struct MenuContentView"),
+    "mac-settings": ("GradusMac/MacSettingsView.swift", "struct MacSettingsView"),
 }
 _SOURCE_CONTROL_MARKERS = {
-    "live-mode-opt-in": {
-        "enable-sync": ("GradusiOS/AppDelegate.swift", "liveModeEnabled()"),
-        "request-notifications": (
-            "GradusiOS/AppDelegate.swift",
-            "requestNotificationAuthorization",
+    "required-icloud-lifecycle": {
+        "checking-icloud": ("GradusiOS/EmptyStateView.swift", 'ProgressView("Checking iCloud")'),
+        "continue-required-icloud": (
+            "GradusiOS/EmptyStateView.swift",
+            "case .syncDisabled, .awaitingConfirmation:",
+        ),
+        "retry-icloud": (
+            "GradusiOS/EmptyStateView.swift",
+            "case .tryAgain, .notSignedIn, .restricted:",
         ),
     },
     "empty-state": {
@@ -55,8 +61,6 @@ _SOURCE_CONTROL_MARKERS = {
             "GradusiOS/EmptyStateView.swift",
             'accessibilityIdentifier("explore-sample")',
         ),
-        "open-settings": ("GradusiOS/EmptyStateView.swift", 'Button("Open Settings")'),
-        "enable-sync": ("GradusiOS/EmptyStateView.swift", 'Button("Enable iCloud Sync")'),
     },
     "sample-dashboard": {
         "sample-data-banner": ("GradusiOS/GradusiOSApp.swift", "struct SampleDataBanner"),
@@ -78,6 +82,18 @@ _SOURCE_CONTROL_MARKERS = {
             "GradusiOS/SettingsView.swift",
             ".disabled(isSampleEntryInProgress)",
         ),
+        "warning-alerts": (
+            "GradusiOS/SettingsView.swift",
+            'accessibilityIdentifier: "warning-alerts-toggle"',
+        ),
+        "warning-alerts-requesting": (
+            "GradusiOS/SettingsView.swift",
+            "Requesting warning-alert permission…",
+        ),
+        "open-ios-notification-settings": (
+            "GradusiOS/SettingsView.swift",
+            'Button("Open iOS Settings")',
+        ),
     },
     "ios-settings-sample": {
         "sample-data-reset-settings": (
@@ -87,6 +103,16 @@ _SOURCE_CONTROL_MARKERS = {
         "sample-data-exit-settings": (
             "GradusiOS/SettingsView.swift",
             'accessibilityIdentifier("sample-data-exit-settings")',
+        ),
+    },
+    "mac-menu": {
+        "continue-required-icloud-mac": (
+            "GradusMac/MenuContentView.swift",
+            'Button("Continue")',
+        ),
+        "mac-settings": (
+            "GradusMac/MenuContentView.swift",
+            'Button("Settings…")',
         ),
     },
 }
@@ -216,16 +242,25 @@ def default_manifest() -> dict[str, Any]:
     return {
         "onboarding": [
             {
-                "id": "live-mode-opt-in",
-                "title": "Explicit live-mode opt-in",
+                "id": "required-icloud-lifecycle",
+                "title": "Required iCloud availability",
                 "controls": [
                     control(
-                        "enable-sync", "Enable iCloud Sync to start live mode", state="permission"
+                        "checking-icloud",
+                        "Checking iCloud availability",
+                        state="disabled",
                     ),
                     control(
-                        "request-notifications",
-                        "Allow notifications after sync is enabled",
-                        state="permission",
+                        "continue-required-icloud",
+                        "Continue with required iCloud",
+                        state="recovery",
+                        recovery=True,
+                    ),
+                    control(
+                        "retry-icloud",
+                        "Try iCloud availability again",
+                        state="recovery",
+                        recovery=True,
                     ),
                 ],
             }
@@ -244,8 +279,6 @@ def default_manifest() -> dict[str, Any]:
                 "title": "Empty state",
                 "controls": [
                     control("explore-sample", "Explore Sample"),
-                    control("open-settings", "Open Settings", state="recovery", recovery=True),
-                    control("enable-sync", "Enable iCloud Sync", state="permission"),
                 ],
             },
             {
@@ -274,11 +307,18 @@ def default_manifest() -> dict[str, Any]:
                     control("card-size-slider", "Card size", state="disabled"),
                     control("show-exhausted", "Show exhausted"),
                     control("warning-threshold", "Warning threshold"),
-                    control("notifications", "Notifications", state="permission"),
+                    control("warning-alerts", "Warning alerts", state="permission"),
                     control(
-                        "open-ios-settings", "Open iOS Settings", state="recovery", recovery=True
+                        "warning-alerts-requesting",
+                        "Waiting for your iOS notification choice",
+                        state="disabled",
                     ),
-                    control("sync", "Enable iCloud Sync", state="permission"),
+                    control(
+                        "open-ios-notification-settings",
+                        "Open iOS Settings for denied warning alerts",
+                        state="recovery",
+                        recovery=True,
+                    ),
                     control("explore-sample-settings", "Explore Sample"),
                     control(
                         "sample-entry-in-progress",
@@ -306,7 +346,12 @@ def default_manifest() -> dict[str, Any]:
                 "id": "mac-menu",
                 "title": "Gradus menu",
                 "controls": [
-                    control("mac-sync", "Enable iCloud Sync", state="permission"),
+                    control(
+                        "continue-required-icloud-mac",
+                        "Continue with required iCloud",
+                        state="recovery",
+                        recovery=True,
+                    ),
                     control("mac-settings", "Settings"),
                     control("quit", "Quit Gradus"),
                 ],
@@ -323,9 +368,9 @@ def default_manifest() -> dict[str, Any]:
         "roles": [
             {"id": "all", "name": "All users", "permissions": ["view", "change-local-preferences"]},
             {
-                "id": "icloud-signed-out",
-                "name": "iCloud signed out",
-                "permissions": ["view", "open-system-settings"],
+                "id": "icloud-unavailable",
+                "name": "iCloud unavailable or restricted",
+                "permissions": ["view", "retry-icloud"],
             },
             {
                 "id": "notifications-denied",
@@ -335,22 +380,29 @@ def default_manifest() -> dict[str, Any]:
         ],
         "states": [
             {"id": "enabled", "label": "Enabled"},
-            {"id": "empty", "label": "No synced data"},
+            {"id": "icloud-discovery", "label": "Checking iCloud availability"},
+            {"id": "awaiting-confirmation", "label": "Required iCloud awaiting confirmation"},
+            {"id": "temporary-retry", "label": "Temporary iCloud availability retry"},
+            {"id": "no-account", "label": "No iCloud account signed in"},
+            {"id": "restricted", "label": "iCloud account access restricted"},
+            {"id": "empty", "label": "Waiting for the first synced data"},
             {"id": "offline", "label": "Offline cached data"},
             {"id": "disabled", "label": "Disabled"},
             {"id": "permission", "label": "Permission required"},
             {"id": "recovery", "label": "Recovery"},
+            {"id": "sample", "label": "Local-only sample data"},
+            {"id": "notification-denied", "label": "Warning alerts denied by iOS"},
         ],
         "systemOwnedSheets": [
             {
                 "id": "notification-permission",
                 "owner": "iOS",
-                "trigger": "first explicit live-mode opt-in after sync is enabled",
+                "trigger": "Enabling Warning alerts when iOS notification permission is not yet decided",
             },
             {
-                "id": "icloud-settings",
+                "id": "notification-settings",
                 "owner": "iOS",
-                "trigger": "Open Settings from empty/restricted state",
+                "trigger": "Open iOS Settings only after warning alerts are denied by iOS",
             },
             {"id": "mac-settings-window", "owner": "macOS", "trigger": "Settings from menu"},
         ],

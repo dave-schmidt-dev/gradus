@@ -4,7 +4,7 @@ The 2026-08-10 reliability/accessibility/parity reconciliation is recorded in
 the dated Gradus plan under the local `.plans/gradus/` workspace; its live
 queue mapping and explicit future exclusions remain in `TASKS.md`.
 
-The current release is internal TestFlight **1.6.7 (16)**. Its candidate path is
+The active internal TestFlight release line is **1.6.7**. Its candidate path is
 limited to preparation, upload, processing/compliance, and assignment to an
 existing attended internal group. App Store submission is planned but not yet
 authorized; the publication roadmap and evidence gates are in

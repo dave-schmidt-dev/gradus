@@ -57,7 +57,7 @@ public struct CKSubscriptionManager: Sendable {
         let info = CKSubscription.NotificationInfo()
         info.shouldSendContentAvailable = true
         subscription.notificationInfo = info
-        try await database.saveSubscription(subscription)
+        try await saveWithOneRetry(subscription)
     }
 
     public func subscribeToWarnings() async throws {
@@ -66,12 +66,24 @@ public struct CKSubscriptionManager: Sendable {
             recordType: CloudKitConstants.recordType,
             predicate: predicate,
             subscriptionID: GradusSubscriptionID.warning,
-            options: [.firesOnRecordCreation, .firesOnRecordUpdate])
+            options: [.firesOnRecordCreation, .firesOnRecordUpdate]
+        )
         subscription.zoneID = zoneID
         let info = CKSubscription.NotificationInfo()
         info.shouldSendContentAvailable = true
         subscription.notificationInfo = info
-        try await database.saveSubscription(subscription)
+        try await saveWithOneRetry(subscription)
+    }
+
+    /// CloudKit registration can fail transiently while account availability
+    /// is settling. Keep the retry bounded; callers surface the remaining
+    /// error and retry on the next foreground/account transition.
+    private func saveWithOneRetry(_ subscription: CKSubscription) async throws {
+        do {
+            try await database.saveSubscription(subscription)
+        } catch {
+            try await database.saveSubscription(subscription)
+        }
     }
 
     /// P5/T5.1: the disable-path counterpart to `subscribeToWarnings()`,

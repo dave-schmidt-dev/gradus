@@ -2,15 +2,75 @@ import CloudKit
 import Foundation
 import GradusKit
 
+public enum RequiredICloudMode: String, Equatable, Sendable {
+    case awaitingConfirmation
+    case confirmed
+
+    var allowsLiveWork: Bool {
+        self == .confirmed
+    }
+}
+
+/// The account status shown by the dashboard. Temporary uncertainty is kept
+/// separate from a confirmed missing or restricted account so recovery copy
+/// never sends a user to the wrong settings surface.
+public enum ICloudAvailabilityState: Equatable, Sendable {
+    case checkingICloud
+    case available
+    case noAccount
+    case restricted
+    case tryAgain
+}
+
+enum RequiredICloudMigration {
+    static let modeKey = "requiredICloudMode"
+    static let versionKey = "requiredICloudModeVersion"
+    static let currentVersion = 1
+
+    static func migrate(
+        defaults: UserDefaults,
+        legacyKey: String,
+        writeMode: (UserDefaults, RequiredICloudMode) -> Void = { defaults, mode in
+            defaults.set(mode.rawValue, forKey: modeKey)
+            defaults.set(currentVersion, forKey: versionKey)
+        }
+    ) -> RequiredICloudMode {
+        let mode: RequiredICloudMode = if let stored = defaults.object(forKey: modeKey) as? String,
+                                          let storedMode = RequiredICloudMode(rawValue: stored)
+        {
+            // The new authority wins if both generations are present. Re-write
+            // its version before removing the legacy value so a partial write
+            // remains safely re-runnable.
+            storedMode
+        } else if defaults.object(forKey: legacyKey) == nil {
+            .confirmed
+        } else {
+            defaults.bool(forKey: legacyKey) ? .confirmed : .awaitingConfirmation
+        }
+        writeMode(defaults, mode)
+        guard let committed = defaults.object(forKey: modeKey) as? String,
+              RequiredICloudMode(rawValue: committed) == mode,
+              defaults.integer(forKey: versionKey) == currentVersion
+        else { return mode }
+        defaults.removeObject(forKey: legacyKey)
+        return mode
+    }
+}
+
 /// The three distinct empty states the dashboard must never collapse
 /// (CV-5) -- each has its own copy, its own fix action, and its own
 /// snapshot baseline (T3.3/T3.5).
 public enum DashboardEmptyState: Equatable {
+    case checkingICloud
+    case tryAgain
     /// Not signed in to iCloud at the OS level. The in-app toggle can't fix
     /// this; only a deep link to Settings can.
     case notSignedIn
     /// Signed in, but the in-app "Enable iCloud Sync" toggle is off.
     case syncDisabled
+    /// Signed in, but CloudKit access is restricted for this account.
+    case restricted
+    case awaitingConfirmation
     /// Signed in, toggle on, zero records yet -- waiting for the Mac's
     /// first publish. iOS has no independent data source (§5.4): this
     /// state can only resolve once the Mac writes something.
@@ -27,9 +87,16 @@ public final class DashboardViewModel: ObservableObject {
     @Published public private(set) var lastSyncedAt: Date?
     @Published public private(set) var connectedSource: SyncSource?
     @Published public private(set) var connectedSourcePublishedAt: Date?
+    @Published public private(set) var requiredICloudMode: RequiredICloudMode = .confirmed
+    @Published public private(set) var iCloudAvailability: ICloudAvailabilityState = .checkingICloud
+    @Published public private(set) var liveLifecycleNeedsRetry = false
     @Published public var syncEnabled: Bool {
-        didSet { userDefaults.set(syncEnabled, forKey: Self.syncEnabledKey) }
+        didSet {
+            guard syncEnabled != oldValue else { return }
+            commitRequiredICloudMode(syncEnabled ? .confirmed : .awaitingConfirmation)
+        }
     }
+
     @Published public private(set) var accountStatus: CKAccountStatus = .couldNotDetermine
     @Published public private(set) var isSyncing = false
 
@@ -87,12 +154,14 @@ public final class DashboardViewModel: ObservableObject {
             applyPresentationPreferences()
         }
     }
+
     @Published public var showExhausted: Bool {
         didSet {
             userDefaults.set(showExhausted, forKey: Self.showExhaustedKey)
             applyPresentationPreferences()
         }
     }
+
     /// `0` is Auto; positive values are explicit size stops from Small to
     /// Large. This remains device-local: iPad positions depend on its current
     /// geometry, while a one-column phone is always Automatic.
@@ -113,6 +182,9 @@ public final class DashboardViewModel: ObservableObject {
     @Published public private(set) var availableCardColumns: Int = 1
 
     static let syncEnabledKey = "iCloudSyncEnabled"
+    static let requiredICloudModeKey = RequiredICloudMigration.modeKey
+    static let requiredICloudModeVersionKey = RequiredICloudMigration.versionKey
+    static let requiredICloudModeVersion = RequiredICloudMigration.currentVersion
     static let notificationsEnabledKey = "warningNotificationsEnabled"
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
     static let providerSortOptionKey = "providerSortOption"
@@ -134,6 +206,7 @@ public final class DashboardViewModel: ObservableObject {
     private let liveLifecycleGate: LiveLifecycleGate?
     private let userDefaults: UserDefaults
     private var allProviders: [ProviderStatus] = []
+    private var isReconcilingLiveLifecycle = false
     /// Build 12 stored a direct column count. Keep that value until the first
     /// geometry pass gives us the device's current maximum, then translate it
     /// to the new Small-to-Large stop so an upgrade does not change layout.
@@ -164,7 +237,8 @@ public final class DashboardViewModel: ObservableObject {
             zoneChangesFetcher: zoneChangesFetcher, subscriptionManager: subscriptionManager,
             warningNotificationScheduler: warningNotificationScheduler,
             notificationAuthorizationSource: notificationAuthorizationSource,
-            liveLifecycleGate: nil, userDefaults: userDefaults)
+            liveLifecycleGate: nil, userDefaults: userDefaults
+        )
     }
 
     init(
@@ -187,37 +261,36 @@ public final class DashboardViewModel: ObservableObject {
         self.notificationAuthorizationSource = notificationAuthorizationSource
         self.liveLifecycleGate = liveLifecycleGate
         self.userDefaults = userDefaults
-        // Default OFF: usage data leaves the device only on explicit opt-in.
-        let syncEnabledValue = userDefaults.bool(forKey: Self.syncEnabledKey)
-        self.syncEnabled = syncEnabledValue
-        // Default ON when sync is on, matching today's implicit behavior
-        // (pre-Phase-5, notifications were bundled 1:1 with sync -- there
-        // was no separate opt-out). Reads the local `syncEnabledValue`, not
-        // `self.syncEnabled` -- a class initializer can't use `self` for
-        // any purpose (including reading an already-assigned property)
-        // until every stored property has an initial value.
+        let migratedMode = RequiredICloudMigration.migrate(
+            defaults: userDefaults, legacyKey: Self.syncEnabledKey
+        )
+        requiredICloudMode = migratedMode
+        syncEnabled = migratedMode.allowsLiveWork
+        // Warning alerts are optional and fresh installs start off. Existing
+        // explicit choices are preserved by the key-presence branch above.
         if userDefaults.object(forKey: Self.notificationsEnabledKey) != nil {
-            self.notificationsEnabled = userDefaults.bool(forKey: Self.notificationsEnabledKey)
+            notificationsEnabled = userDefaults.bool(forKey: Self.notificationsEnabledKey)
         } else {
-            self.notificationsEnabled = syncEnabledValue
+            notificationsEnabled = false
         }
         if userDefaults.object(forKey: Self.localWarningThresholdPercentKey) != nil {
-            self.localWarningThresholdPercent = userDefaults.double(forKey: Self.localWarningThresholdPercentKey)
+            localWarningThresholdPercent = userDefaults.double(forKey: Self.localWarningThresholdPercentKey)
         } else {
-            self.localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
+            localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
         }
-        self.providerSortOption = ProviderSortOption(rawValue: userDefaults.string(forKey: Self.providerSortOptionKey) ?? "") ?? .mostUrgent
+        providerSortOption = ProviderSortOption(rawValue: userDefaults.string(forKey: Self.providerSortOptionKey) ?? "") ?? .mostUrgent
         let storedCardPreference = max(0, userDefaults.integer(forKey: Self.cardColumnPreferenceKey))
         let deferredLegacyPreference = max(
-            0, userDefaults.integer(forKey: Self.pendingLegacyCardColumnPreferenceKey))
+            0, userDefaults.integer(forKey: Self.pendingLegacyCardColumnPreferenceKey)
+        )
         if userDefaults.integer(forKey: Self.cardColumnPreferenceFormatKey) >= Self.cardColumnPreferenceFormatVersion {
-            self.cardColumnPreference = storedCardPreference
-            self.pendingLegacyCardColumnPreference = deferredLegacyPreference > 0
+            cardColumnPreference = storedCardPreference
+            pendingLegacyCardColumnPreference = deferredLegacyPreference > 0
                 ? deferredLegacyPreference
                 : nil
         } else if storedCardPreference > 0 {
-            self.cardColumnPreference = 0
-            self.pendingLegacyCardColumnPreference = storedCardPreference
+            cardColumnPreference = 0
+            pendingLegacyCardColumnPreference = storedCardPreference
             // The old direct-column value is now held in a dedicated pending
             // key. Mark the format so a relaunch does not reinterpret it as a
             // current Small-to-Large stop.
@@ -225,24 +298,64 @@ public final class DashboardViewModel: ObservableObject {
             userDefaults.set(Self.cardColumnPreferenceFormatVersion, forKey: Self.cardColumnPreferenceFormatKey)
             userDefaults.set(storedCardPreference, forKey: Self.pendingLegacyCardColumnPreferenceKey)
         } else {
-            self.cardColumnPreference = 0
-            self.pendingLegacyCardColumnPreference = nil
+            cardColumnPreference = 0
+            pendingLegacyCardColumnPreference = nil
             userDefaults.set(Self.cardColumnPreferenceFormatVersion, forKey: Self.cardColumnPreferenceFormatKey)
             userDefaults.removeObject(forKey: Self.pendingLegacyCardColumnPreferenceKey)
         }
         if userDefaults.object(forKey: Self.showExhaustedKey) != nil {
-            self.showExhausted = userDefaults.bool(forKey: Self.showExhaustedKey)
+            showExhausted = userDefaults.bool(forKey: Self.showExhaustedKey)
         } else {
-            self.showExhausted = true
+            showExhausted = true
         }
-        self.allProviders = cache.loadCachedStatuses()
-        self.providers = Self.presentedProviders(
+        allProviders = cache.loadCachedStatuses()
+        providers = Self.presentedProviders(
             allProviders,
-            localThreshold: self.localWarningThresholdPercent,
-            sortOption: self.providerSortOption,
-            showExhausted: self.showExhausted)
-        self.lastSyncedAt = cache.lastSyncedAt()
+            localThreshold: localWarningThresholdPercent,
+            sortOption: providerSortOption,
+            showExhausted: showExhausted
+        )
+        lastSyncedAt = cache.lastSyncedAt()
         updateConnectedSource()
+    }
+
+    private func commitRequiredICloudMode(_ mode: RequiredICloudMode) {
+        requiredICloudMode = mode
+        userDefaults.set(mode.rawValue, forKey: Self.requiredICloudModeKey)
+        userDefaults.set(Self.requiredICloudModeVersion, forKey: Self.requiredICloudModeVersionKey)
+        guard userDefaults.object(forKey: Self.requiredICloudModeKey) as? String == mode.rawValue,
+              userDefaults.integer(forKey: Self.requiredICloudModeVersionKey)
+              == Self.requiredICloudModeVersion
+        else { return }
+        userDefaults.removeObject(forKey: Self.syncEnabledKey)
+    }
+
+    /// Confirms the required iCloud setup from the concrete Continue action.
+    public func confirmRequiredICloud() {
+        syncEnabled = true
+    }
+
+    /// Starts the bounded account-discovery window used by the dashboard.
+    public func beginAccountAvailabilityCheck() {
+        guard requiredICloudMode.allowsLiveWork else { return }
+        iCloudAvailability = .checkingICloud
+        liveLifecycleNeedsRetry = false
+    }
+
+    /// Records a non-sensitive lifecycle failure. The cached dashboard stays
+    /// visible and the next foreground/account-available event can retry.
+    public func noteLiveLifecycleFailure() {
+        liveLifecycleNeedsRetry = true
+        if accountStatus != .available {
+            iCloudAvailability = .tryAgain
+        }
+    }
+
+    /// Called by the account monitor after its one bounded bootstrap retry.
+    public func accountAvailabilityCheckFailed() {
+        guard requiredICloudMode.allowsLiveWork else { return }
+        iCloudAvailability = .tryAgain
+        liveLifecycleNeedsRetry = true
     }
 
     /// Updates the Settings slider's device-relative range. A legacy explicit
@@ -274,7 +387,8 @@ public final class DashboardViewModel: ObservableObject {
             return
         }
         let deferredPreference = max(
-            0, userDefaults.integer(forKey: Self.deferredCardSizePreferenceKey))
+            0, userDefaults.integer(forKey: Self.deferredCardSizePreferenceKey)
+        )
         guard cardColumnPreference == 0, deferredPreference > 0 else { return }
         userDefaults.removeObject(forKey: Self.deferredCardSizePreferenceKey)
         cardColumnPreference = min(max(deferredPreference, 1), maximum)
@@ -290,7 +404,7 @@ public final class DashboardViewModel: ObservableObject {
     /// explicit stop is the smallest-card presentation (the maximum feasible
     /// column count); later stops remove columns toward Large. A one-column
     /// device has no explicit stops and stays on Automatic.
-    nonisolated static func resolvedCardColumnCount(preference: Int, maximum: Int, sizeStops: Int) -> Int {
+    nonisolated static func resolvedCardColumnCount(preference: Int, maximum: Int, sizeStops _: Int) -> Int {
         let maximum = max(1, maximum)
         guard preference != 0 else { return maximum }
         let position = min(max(preference, 1), maximum)
@@ -318,7 +432,8 @@ public final class DashboardViewModel: ObservableObject {
         let stops = cardSizeStopCount(for: maximumColumns)
         let density = resolvedCardDensity(preference: preference, sizeStops: stops) ?? .large
         let columns = resolvedCardColumnCount(
-            preference: preference, maximum: maximumColumns, sizeStops: stops)
+            preference: preference, maximum: maximumColumns, sizeStops: stops
+        )
         let size = switch density {
         case .compact: "Small"
         case .standard: "Medium"
@@ -382,22 +497,30 @@ public final class DashboardViewModel: ObservableObject {
     /// `.notDetermined` is the honest starting point and stays put.
     public func refreshNotificationAuthorization() async {
         guard let notificationAuthorizationSource else { return }
-        let refresh = {
-            self.systemNotificationAuthorization = await notificationAuthorizationSource.currentAuthorization()
-        }
-        if let liveLifecycleGate {
-            await liveLifecycleGate.withOperation { _ in await refresh() }
-        } else {
-            await refresh()
-        }
+        // This is a local UserNotifications read, not live iCloud work. UI
+        // fixtures intentionally suspend CloudKit through the lifecycle gate
+        // but still need an accurate permission state to render their alert
+        // recovery controls deterministically.
+        systemNotificationAuthorization = await notificationAuthorizationSource.currentAuthorization()
     }
 
     /// `nil` means "render the populated dashboard" -- there is data (fresh
     /// or offline-stale) to show.
     public var emptyState: DashboardEmptyState? {
         guard providers.isEmpty else { return nil }
-        if accountStatus != .available { return .notSignedIn }
-        if !syncEnabled { return .syncDisabled }
+        if requiredICloudMode == .awaitingConfirmation {
+            return .awaitingConfirmation
+        }
+        switch iCloudAvailability {
+        case .checkingICloud: return .checkingICloud
+        case .tryAgain: return .tryAgain
+        case .noAccount: return .notSignedIn
+        case .restricted: return .restricted
+        case .available: break
+        }
+        if !syncEnabled {
+            return .syncDisabled
+        }
         return .waitingForFirstPublish
     }
 
@@ -406,11 +529,14 @@ public final class DashboardViewModel: ObservableObject {
     /// three assignment sites (`init`, `sync()`, `reconcile()`) -- the
     /// `.zoneNotFound`/`.zoneDeleted` reset path assigns `[]` directly, which
     /// is trivially "ranked" (empty), so this invariant holds unconditionally.
-    public var heroProvider: ProviderStatus? { providers.first }
+    public var heroProvider: ProviderStatus? {
+        providers.first
+    }
 
     /// All providers other than the hero, still in ranked order.
-    public var restProviders: [ProviderStatus] { Array(providers.dropFirst()) }
-
+    public var restProviders: [ProviderStatus] {
+        Array(providers.dropFirst())
+    }
 
     public func refreshAccountStatus() async {
         guard let accountSource else { return }
@@ -430,10 +556,24 @@ public final class DashboardViewModel: ObservableObject {
     /// change observed mid-session, including a `.CKAccountChanged` reset,
     /// and kicks a sync when the account newly becomes available.
     public func updateAccountStatus(_ status: CKAccountStatus) {
-        let wasAvailable = accountStatus == .available
         accountStatus = status
-        guard !wasAvailable, status == .available, syncEnabled else { return }
-        Task { await self.sync() }
+        switch status {
+        case .available:
+            iCloudAvailability = .available
+            liveLifecycleNeedsRetry = false
+        case .noAccount:
+            iCloudAvailability = .noAccount
+        case .restricted:
+            iCloudAvailability = .restricted
+        case .couldNotDetermine, .temporarilyUnavailable:
+            if !liveLifecycleNeedsRetry {
+                iCloudAvailability = .checkingICloud
+            }
+        @unknown default:
+            if !liveLifecycleNeedsRetry {
+                iCloudAvailability = .checkingICloud
+            }
+        }
     }
 
     /// Entry point for a push-driven delta sync (T4.1): fetches only what
@@ -447,7 +587,8 @@ public final class DashboardViewModel: ObservableObject {
             await liveLifecycleGate.withOperation { operationEpoch in
                 await self.performIncrementalSync(
                     using: zoneChangesFetcher, token: token, allowRetryOnExpiredToken: true,
-                    lifecycleEpoch: operationEpoch)
+                    lifecycleEpoch: operationEpoch
+                )
             }
         } else {
             await performIncrementalSync(using: zoneChangesFetcher, token: token, allowRetryOnExpiredToken: true)
@@ -460,14 +601,18 @@ public final class DashboardViewModel: ObservableObject {
         allowRetryOnExpiredToken: Bool,
         lifecycleEpoch: LiveLifecycleGate.Epoch? = nil
     ) async {
-        if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) { return }
+        if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) {
+            return
+        }
         let result = await fetcher.fetchZoneChanges(sinceToken: token)
         // `LiveLifecycleGate` is re-entrant around the CloudKit await. Sample
         // entry invalidates the epoch while that request is suspended, so a
         // late result must not reconcile providers or persist cache state.
-        if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) { return }
+        if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) {
+            return
+        }
         switch result {
-        case .success(let changed, let deletedProviderNames, let newToken):
+        case let .success(changed, deletedProviderNames, newToken):
             reconcile(changed: changed, deletedProviderNames: deletedProviderNames)
             try? cache.saveChangeToken(newToken)
             let syncedAt = Date()
@@ -482,7 +627,8 @@ public final class DashboardViewModel: ObservableObject {
             guard allowRetryOnExpiredToken else { return }
             await performIncrementalSync(
                 using: fetcher, token: nil, allowRetryOnExpiredToken: false,
-                lifecycleEpoch: lifecycleEpoch)
+                lifecycleEpoch: lifecycleEpoch
+            )
         case .zoneNotFound, .zoneDeleted:
             // PM-3: GradusZone is Mac-owned and recreated idempotently on
             // its next publish (T2a.2) -- iOS can't recreate it, so this
@@ -505,13 +651,16 @@ public final class DashboardViewModel: ObservableObject {
     private func reconcile(changed: [ProviderStatus], deletedProviderNames: [String]) {
         var byName = Dictionary(uniqueKeysWithValues: allProviders.map { ($0.providerName, $0) })
         for status in changed {
-            if status.isWarning && !(byName[status.providerName]?.isWarning ?? false), notificationsEnabled {
+            if status.isWarning, !(byName[status.providerName]?.isWarning ?? false), notificationsEnabled {
                 warningNotificationScheduler?.scheduleWarningNotification(
-                    for: status, thresholdPercent: localWarningThresholdPercent)
+                    for: status, thresholdPercent: localWarningThresholdPercent
+                )
             }
             byName[status.providerName] = status
         }
-        for name in deletedProviderNames { byName.removeValue(forKey: name) }
+        for name in deletedProviderNames {
+            byName.removeValue(forKey: name)
+        }
         allProviders = Array(byName.values)
         applyPresentationPreferences()
     }
@@ -520,9 +669,10 @@ public final class DashboardViewModel: ObservableObject {
         guard notificationsEnabled else { return }
         var previousByName = Dictionary(uniqueKeysWithValues: previous.map { ($0.providerName, $0) })
         for status in current {
-            if status.isWarning && !(previousByName[status.providerName]?.isWarning ?? false) {
+            if status.isWarning, !(previousByName[status.providerName]?.isWarning ?? false) {
                 warningNotificationScheduler?.scheduleWarningNotification(
-                    for: status, thresholdPercent: localWarningThresholdPercent)
+                    for: status, thresholdPercent: localWarningThresholdPercent
+                )
             }
             previousByName[status.providerName] = status
         }
@@ -533,19 +683,19 @@ public final class DashboardViewModel: ObservableObject {
     /// off or the account isn't ready -- CV-6's "distinct state, not silent
     /// failure" applies to the empty-state copy, not to spamming a fetch
     /// that would just fail.
-    public func sync() async {
-        guard syncEnabled, accountStatus == .available, let fetcher else { return }
+    public func sync() async -> Bool {
+        guard syncEnabled, accountStatus == .available, let fetcher else { return false }
         if let liveLifecycleGate {
-            await liveLifecycleGate.withOperation { _ in await self.performSync(using: fetcher) }
+            return await liveLifecycleGate.withOperation { _ in await self.performSync(using: fetcher) } ?? false
         } else {
-            await performSync(using: fetcher)
+            return await performSync(using: fetcher)
         }
     }
 
-    private func performSync(using fetcher: CloudFetcher) async {
+    private func performSync(using fetcher: CloudFetcher) async -> Bool {
         isSyncing = true
         defer { isSyncing = false }
-        guard let fetched = try? await fetcher.fetchAll() else { return }
+        guard let fetched = try? await fetcher.fetchAll() else { return false }
         // Compare the complete cached set, not the filtered presentation set,
         // so hiding exhausted providers cannot turn an unchanged warning into
         // a fresh notification on the next full sync.
@@ -555,6 +705,28 @@ public final class DashboardViewModel: ObservableObject {
         let syncedAt = Date()
         lastSyncedAt = syncedAt
         try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
+        return true
+    }
+
+    /// The single idempotent live-data reconciliation path. Account changes,
+    /// bootstrap, and foreground recovery all call this method so fixed
+    /// subscription IDs and the cached data converge together.
+    public func reconcileLiveLifecycle() async {
+        guard requiredICloudMode.allowsLiveWork, syncEnabled, accountStatus == .available else { return }
+        guard !isReconcilingLiveLifecycle else { return }
+        isReconcilingLiveLifecycle = true
+        defer { isReconcilingLiveLifecycle = false }
+
+        var failed = await !sync()
+        if let subscriptionManager {
+            do { try await subscriptionManager.subscribeToZoneChanges() }
+            catch { failed = true }
+            if notificationsEnabled {
+                do { try await subscriptionManager.subscribeToWarnings() }
+                catch { failed = true }
+            }
+        }
+        liveLifecycleNeedsRetry = failed
     }
 
     private func applyPresentationPreferences() {
@@ -562,7 +734,8 @@ public final class DashboardViewModel: ObservableObject {
             allProviders,
             localThreshold: localWarningThresholdPercent,
             sortOption: providerSortOption,
-            showExhausted: showExhausted)
+            showExhausted: showExhausted
+        )
         updateConnectedSource()
     }
 

@@ -1,8 +1,7 @@
 import Foundation
+@testable import GradusiOS
 import GradusKit
 import Testing
-
-@testable import GradusiOS
 
 // T4.3 gate: the push-driven delta-sync reconciliation (T4.1) and the
 // PM-3-required recovery paths (changeTokenExpired -> drop token + full
@@ -28,7 +27,7 @@ private actor DelayedZoneChangesFetcher: ZoneChangesFetcher {
     private var continuation: CheckedContinuation<ZoneChangesOutcome, Never>?
     private(set) var requestStarted = false
 
-    func fetchZoneChanges(sinceToken token: Data?) async -> ZoneChangesOutcome {
+    func fetchZoneChanges(sinceToken _: Data?) async -> ZoneChangesOutcome {
         requestStarted = true
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
@@ -36,7 +35,9 @@ private actor DelayedZoneChangesFetcher: ZoneChangesFetcher {
     }
 
     func waitUntilRequestStarts() async {
-        while !requestStarted { await Task.yield() }
+        while !requestStarted {
+            await Task.yield()
+        }
     }
 
     func release(_ outcome: ZoneChangesOutcome) {
@@ -80,7 +81,7 @@ private actor DelayedCloudFetcher: CloudFetcher {
 private final class RecordingWarningNotificationScheduler: WarningNotificationScheduling {
     private(set) var scheduledProviders: [String] = []
 
-    func scheduleWarningNotification(for provider: ProviderStatus, thresholdPercent: Double) {
+    func scheduleWarningNotification(for provider: ProviderStatus, thresholdPercent _: Double) {
         scheduledProviders.append(provider.providerName)
     }
 }
@@ -93,7 +94,8 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
             ProviderWindow(id: "five_hour", percentLeft: 20, resetISO: nil, windowHours: 5, paceDelta: nil),
             ProviderWindow(id: "weekly", percentLeft: 80, resetISO: nil, windowHours: 168, paceDelta: nil),
         ], data: [:], observedAt: nil, snapshotUpdatedAt: "2026-08-11T12:00:00Z",
-        publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true)
+        publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true
+    )
 
     let content = WarningNotificationContent.make(for: provider, thresholdPercent: 25)
 
@@ -108,7 +110,8 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
         windows: [
             ProviderWindow(id: "five_hour", percentLeft: 62, resetISO: nil, windowHours: 5, paceDelta: -0.20),
         ], data: [:], observedAt: nil, snapshotUpdatedAt: "2026-08-11T12:00:00Z",
-        publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true)
+        publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true
+    )
 
     let content = WarningNotificationContent.make(for: provider, thresholdPercent: 25)
 
@@ -121,7 +124,7 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
     let cache = tempCache()
     let scheduler = RecordingWarningNotificationScheduler()
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("opencode-go")], deletedProviderNames: [], newToken: nil)
+        .success(changed: [makeStatus("opencode-go")], deletedProviderNames: [], newToken: nil),
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
 
@@ -143,16 +146,20 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
     let defaults = isolatedDefaults()
     defaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
     let viewModel = DashboardViewModel(
-        cache: cache, zoneChangesFetcher: fetcher, liveLifecycleGate: gate, userDefaults: defaults)
+        cache: cache, zoneChangesFetcher: fetcher, liveLifecycleGate: gate, userDefaults: defaults
+    )
     viewModel.updateAccountStatus(.available)
 
     let syncTask = Task { await viewModel.handleRemoteNotification() }
     await fetcher.waitUntilRequestStarts()
 
     let suspendTask = Task { await gate.suspend() }
-    while !gate.isSuspended { await Task.yield() }
+    while !gate.isSuspended {
+        await Task.yield()
+    }
     await fetcher.release(.success(
-        changed: [makeStatus("late")], deletedProviderNames: [], newToken: Data([2])))
+        changed: [makeStatus("late")], deletedProviderNames: [], newToken: Data([2])
+    ))
 
     await suspendTask.value
     await syncTask.value
@@ -164,7 +171,8 @@ private func makeStatus(_ name: String, isWarning: Bool = false) -> ProviderStat
     ProviderStatus(
         providerName: name, providerDisplayName: name, ok: true, errorMessage: nil, windows: [], data: [:],
         observedAt: nil, snapshotUpdatedAt: "2026-08-02T20:00:00-04:00", publishedAt: Date(timeIntervalSince1970: 1_785_000_000),
-        isWarning: isWarning)
+        isWarning: isWarning
+    )
 }
 
 /// A fresh suite per call -- `syncEnabled` persists to `UserDefaults`
@@ -189,7 +197,8 @@ private func makeViewModel(
     }
     let viewModel = DashboardViewModel(
         cache: cache, zoneChangesFetcher: fetcher, warningNotificationScheduler: warningNotificationScheduler,
-        userDefaults: userDefaults)
+        userDefaults: userDefaults
+    )
     viewModel.syncEnabled = true
     viewModel.updateAccountStatus(.available)
     return viewModel
@@ -236,7 +245,9 @@ struct LiveLifecycleTransitionTests {
             await gate.suspend()
             await recorder.markCompleted()
         }
-        while !gate.isSuspended { await Task.yield() }
+        while !gate.isSuspended {
+            await Task.yield()
+        }
 
         let second = Task { @MainActor in
             await gate.suspend()
@@ -279,9 +290,13 @@ struct LiveLifecycleTransitionTests {
         }
 
         // The first seam call proves the transition really has work to drain.
-        while await recorder.calls.isEmpty { await Task.yield() }
+        while await recorder.calls.isEmpty {
+            await Task.yield()
+        }
         let enterSample = Task { @MainActor in await gate.suspend() }
-        while !gate.isSuspended { await Task.yield() }
+        while !gate.isSuspended {
+            await Task.yield()
+        }
 
         // Entry invalidates the epoch immediately, but waits for the in-flight
         // account call before returning and exposing the sample UI.
@@ -301,7 +316,9 @@ struct LiveLifecycleTransitionTests {
 private func tempCache() -> FileLocalCacheStore {
     FileLocalCacheStore(
         directory: FileManager.default.temporaryDirectory.appendingPathComponent(
-            "gradus-sync-tests-\(UUID().uuidString)", isDirectory: true))
+            "gradus-sync-tests-\(UUID().uuidString)", isDirectory: true
+        )
+    )
 }
 
 @MainActor
@@ -311,7 +328,8 @@ private func tempCache() -> FileLocalCacheStore {
         providerName: "copilot", providerDisplayName: "Copilot", ok: false,
         errorMessage: "provider probe failed", windows: [], data: [:], observedAt: nil,
         snapshotUpdatedAt: "2026-08-11T12:00:00Z",
-        publishedAt: Date(timeIntervalSince1970: 1_786_000_000))
+        publishedAt: Date(timeIntervalSince1970: 1_786_000_000)
+    )
     try? cache.saveCachedStatuses([cachedError], syncedAt: Date())
 
     let fetcher = DelayedCloudFetcher(result: [makeStatus("copilot")])
@@ -342,7 +360,7 @@ private func tempCache() -> FileLocalCacheStore {
     #expect(CloudKitRuntimeConfiguration.shouldUseCloudKit(isSimulator: false, hasCloudKitEntitlement: true) == true)
 
     #if targetEnvironment(simulator)
-    #expect(CloudKitRuntimeConfiguration.currentValue == false)
+        #expect(CloudKitRuntimeConfiguration.currentValue == false)
     #endif
 }
 
@@ -351,7 +369,7 @@ private func tempCache() -> FileLocalCacheStore {
     let cache = tempCache()
     try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("cursor")], deletedProviderNames: [], newToken: Data([1, 2, 3]))
+        .success(changed: [makeStatus("cursor")], deletedProviderNames: [], newToken: Data([1, 2, 3])),
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
     await viewModel.handleRemoteNotification()
@@ -366,7 +384,7 @@ private func tempCache() -> FileLocalCacheStore {
     let cache = tempCache()
     try? cache.saveCachedStatuses([makeStatus("codex"), makeStatus("cursor")], syncedAt: Date())
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [], deletedProviderNames: ["cursor"], newToken: nil)
+        .success(changed: [], deletedProviderNames: ["cursor"], newToken: nil),
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
     await viewModel.handleRemoteNotification()
@@ -445,7 +463,7 @@ private func tempCache() -> FileLocalCacheStore {
     let cache = tempCache()
     let scheduler = RecordingWarningNotificationScheduler()
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil)
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
 
@@ -499,10 +517,11 @@ private func tempCache() -> FileLocalCacheStore {
     try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
     let scheduler = RecordingWarningNotificationScheduler()
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil)
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
     ])
     let viewModel = makeViewModel(
-        cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler, userDefaults: defaults)
+        cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler, userDefaults: defaults
+    )
 
     await viewModel.handleRemoteNotification()
 
@@ -513,9 +532,11 @@ private func tempCache() -> FileLocalCacheStore {
 @Test func handleRemoteNotificationNoOpsWhenSyncDisabled() async {
     let cache = tempCache()
     let fetcher = MockZoneChangesFetcher(outcomes: [.success(changed: [makeStatus("codex")], deletedProviderNames: [], newToken: nil)])
-    let viewModel = DashboardViewModel(cache: cache, zoneChangesFetcher: fetcher, userDefaults: isolatedDefaults())
+    let defaults = isolatedDefaults()
+    defaults.set(false, forKey: DashboardViewModel.syncEnabledKey)
+    let viewModel = DashboardViewModel(cache: cache, zoneChangesFetcher: fetcher, userDefaults: defaults)
     viewModel.updateAccountStatus(.available)
-    // syncEnabled defaults OFF.
+    // Legacy false requires confirmation and must not start live work.
     await viewModel.handleRemoteNotification()
 
     #expect(viewModel.providers.isEmpty)
@@ -523,7 +544,7 @@ private func tempCache() -> FileLocalCacheStore {
 }
 
 @MainActor
-@Test func updateAccountStatusTriggersSyncOnlyOnAvailableTransition() async {
+@Test func updateAccountStatusTriggersSyncOnlyOnAvailableTransition() {
     let cache = tempCache()
     let fetcher = MockZoneChangesFetcher(outcomes: [])
     let viewModel = DashboardViewModel(cache: cache, zoneChangesFetcher: fetcher, userDefaults: isolatedDefaults())
@@ -534,7 +555,48 @@ private func tempCache() -> FileLocalCacheStore {
 
     viewModel.updateAccountStatus(.available)
     #expect(viewModel.accountStatus == .available)
-    // updateAccountStatus's sync() call runs full-fetch via `fetcher:
-    // CloudFetcher?` (nil here), which no-ops -- this test only asserts the
-    // status transition itself is recorded correctly, not the fetch.
+    // The app-level reconciliation callback owns the full fetch; this test
+    // only asserts the status transition itself is recorded correctly.
+}
+
+@MainActor
+@Test func temporaryAccountStatesUseCheckingThenTryAgainAndConfirmedRecoveryCopy() {
+    let viewModel = DashboardViewModel(cache: tempCache(), userDefaults: isolatedDefaults())
+
+    viewModel.updateAccountStatus(.couldNotDetermine)
+    #expect(viewModel.emptyState == .checkingICloud)
+
+    viewModel.accountAvailabilityCheckFailed()
+    #expect(viewModel.emptyState == .tryAgain)
+
+    viewModel.updateAccountStatus(.noAccount)
+    #expect(viewModel.emptyState == .notSignedIn)
+
+    viewModel.updateAccountStatus(.restricted)
+    #expect(viewModel.emptyState == .restricted)
+}
+
+@MainActor
+@Test func retryableSyncFailureRetainsCachedDataAndSurfacesRetry() async {
+    let cache = tempCache()
+    let cached = makeStatus("cached")
+    try? cache.saveCachedStatuses([cached], syncedAt: Date())
+    let defaults = isolatedDefaults()
+    defaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
+    let viewModel = DashboardViewModel(
+        cache: cache, fetcher: FailingCloudFetcher(), userDefaults: defaults
+    )
+    viewModel.updateAccountStatus(.available)
+
+    await viewModel.reconcileLiveLifecycle()
+
+    #expect(viewModel.providers.map(\.providerName) == ["cached"])
+    #expect(viewModel.liveLifecycleNeedsRetry)
+}
+
+private struct FailingCloudFetcher: CloudFetcher {
+    func fetchAll() async throws -> [ProviderStatus] {
+        struct RetryableError: Error {}
+        throw RetryableError()
+    }
 }

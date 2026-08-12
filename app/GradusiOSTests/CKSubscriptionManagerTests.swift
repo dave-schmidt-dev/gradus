@@ -1,9 +1,8 @@
 import CloudKit
 import Foundation
+@testable import GradusiOS
 import GradusKit
 import Testing
-
-@testable import GradusiOS
 
 // T4.3 gate: both subscriptions (CR-3) are constructed with the fields the
 // real CloudKit push path depends on -- verified against a mock database
@@ -21,11 +20,15 @@ private struct MockDeleteError: Error {}
 private final class MockSubscriptionDatabase: SubscriptionDatabase {
     private(set) var saved: [CKSubscription] = []
     var saveCallCount = 0
+    var saveErrors: [Error] = []
     private(set) var deletedSubscriptionIDs: [CKSubscription.ID] = []
     var deleteError: Error?
 
     func saveSubscription(_ subscription: CKSubscription) async throws {
         saveCallCount += 1
+        if !saveErrors.isEmpty {
+            throw saveErrors.removeFirst()
+        }
         saved.append(subscription)
     }
 
@@ -37,6 +40,8 @@ private final class MockSubscriptionDatabase: SubscriptionDatabase {
     }
 }
 
+private struct RetryableSubscriptionError: Error {}
+
 /// A fresh suite per call, matching `DashboardViewModelSyncTests.swift`'s
 /// `isolatedDefaults()` -- `.standard` is shared process-wide and these
 /// tests persist `notificationsEnabled`/`syncEnabled`.
@@ -47,7 +52,9 @@ private func isolatedDefaults() -> UserDefaults {
 private func tempCache() -> FileLocalCacheStore {
     FileLocalCacheStore(
         directory: FileManager.default.temporaryDirectory.appendingPathComponent(
-            "gradus-subscription-manager-tests-\(UUID().uuidString)", isDirectory: true))
+            "gradus-subscription-manager-tests-\(UUID().uuidString)", isDirectory: true
+        )
+    )
 }
 
 private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
@@ -91,6 +98,17 @@ private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, owner
     #expect(database.saveCallCount == 2)
 }
 
+@Test func retryableSubscriptionRegistrationRetriesOnceAndSucceeds() async throws {
+    let database = MockSubscriptionDatabase()
+    database.saveErrors = [RetryableSubscriptionError()]
+    let manager = CKSubscriptionManager(database: database, zoneID: zoneID)
+
+    try await manager.subscribeToZoneChanges()
+
+    #expect(database.saveCallCount == 2)
+    #expect(database.saved.count == 1)
+}
+
 @Test func unsubscribeFromWarningsRemovesTheSubscriptionByID() async throws {
     let database = MockSubscriptionDatabase()
     let manager = CKSubscriptionManager(database: database, zoneID: zoneID)
@@ -100,7 +118,7 @@ private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, owner
 }
 
 @MainActor
-@Test func failedUnsubscribeLeavesNotificationsEnabledTrue() async throws {
+@Test func failedUnsubscribeLeavesNotificationsEnabledTrue() async {
     let database = MockSubscriptionDatabase()
     database.deleteError = MockDeleteError()
     let manager = CKSubscriptionManager(database: database, zoneID: zoneID)
@@ -118,7 +136,7 @@ private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, owner
 }
 
 @MainActor
-@Test func successfulUnsubscribeFlipsNotificationsEnabledFalse() async throws {
+@Test func successfulUnsubscribeFlipsNotificationsEnabledFalse() async {
     let database = MockSubscriptionDatabase()
     let manager = CKSubscriptionManager(database: database, zoneID: zoneID)
 

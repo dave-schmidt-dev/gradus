@@ -21,8 +21,12 @@ struct SettingsView: View {
     let onExitSample: () -> Void
     let onResetSample: () -> Void
     let isSampleEntryInProgress: Bool
+    /// Only supplied by the UI-test launch fixture. Normal launches start
+    /// false and enter this state only after the user enables Warning alerts.
+    let initialWarningAlertPermissionRequestPending: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @State private var warningAlertPermissionRequestPending = false
 
     init(
         dashboardViewModel: DashboardViewModel,
@@ -30,7 +34,8 @@ struct SettingsView: View {
         onExploreSample: @escaping () -> Void = {},
         onExitSample: @escaping () -> Void = {},
         onResetSample: @escaping () -> Void = {},
-        isSampleEntryInProgress: Bool = false
+        isSampleEntryInProgress: Bool = false,
+        initialWarningAlertPermissionRequestPending: Bool = false
     ) {
         self.dashboardViewModel = dashboardViewModel
         self.isSampleMode = isSampleMode
@@ -38,6 +43,10 @@ struct SettingsView: View {
         self.onExitSample = onExitSample
         self.onResetSample = onResetSample
         self.isSampleEntryInProgress = isSampleEntryInProgress
+        self.initialWarningAlertPermissionRequestPending = initialWarningAlertPermissionRequestPending
+        _warningAlertPermissionRequestPending = State(
+            initialValue: initialWarningAlertPermissionRequestPending
+        )
     }
 
     /// Custom binding, not a direct `$dashboardViewModel.notificationsEnabled`
@@ -52,9 +61,22 @@ struct SettingsView: View {
         Binding(
             get: { dashboardViewModel.notificationsEnabled },
             set: { newValue in
+                guard newValue != dashboardViewModel.notificationsEnabled else { return }
+                if newValue,
+                   dashboardViewModel.systemNotificationAuthorization == .notDetermined
+                {
+                    warningAlertPermissionRequestPending = true
+                }
                 Task { await dashboardViewModel.setNotificationsEnabled(newValue) }
-            })
+            }
+        )
     }
+
+    static let warningAlertsDescription =
+        "Notifies you when a provider reaches your warning threshold. Optional; iCloud syncing is unaffected."
+
+    static let warningAlertsRequestingDescription =
+        "Waiting for your iOS notification choice. iCloud syncing continues either way."
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,9 +98,18 @@ struct SettingsView: View {
             }
             .listStyle(.plain)
         }
+        .onChange(of: dashboardViewModel.systemNotificationAuthorization) {
+            if dashboardViewModel.systemNotificationAuthorization != .notDetermined {
+                warningAlertPermissionRequestPending = false
+            }
+        }
+        .onChange(of: dashboardViewModel.notificationsEnabled) {
+            if !dashboardViewModel.notificationsEnabled {
+                warningAlertPermissionRequestPending = false
+            }
+        }
     }
 
-    @ViewBuilder
     private var sampleSection: some View {
         Section("Explore Sample") {
             Text("This is local-only sample data. It does not use iCloud, notifications, or provider connections.")
@@ -91,7 +122,6 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
     private var exploreSampleSection: some View {
         Section("Explore Sample") {
             Text("See a complete dashboard using local-only sample data. Your iCloud data stays unchanged.")
@@ -108,9 +138,9 @@ struct SettingsView: View {
                     Text(Self.exploreSampleButtonTitle(isInProgress: isSampleEntryInProgress))
                 }
             }
-                .accessibilityIdentifier("explore-sample-settings")
-                .accessibilityValue(isSampleEntryInProgress ? "In progress" : "")
-                .disabled(isSampleEntryInProgress)
+            .accessibilityIdentifier("explore-sample-settings")
+            .accessibilityValue(isSampleEntryInProgress ? "In progress" : "")
+            .disabled(isSampleEntryInProgress)
         }
     }
 
@@ -128,7 +158,6 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
     private var localDisplaySection: some View {
         Section("Local Display") {
             VStack(alignment: .leading, spacing: 8) {
@@ -176,15 +205,17 @@ struct SettingsView: View {
                             get: {
                                 Double(min(max(dashboardViewModel.cardColumnPreference, 1), cardSizeStopCount))
                             },
-                            set: { dashboardViewModel.cardColumnPreference = Int($0.rounded()) }),
-                        range: 1...Double(cardSizeStopCount),
+                            set: { dashboardViewModel.cardColumnPreference = Int($0.rounded()) }
+                        ),
+                        range: 1 ... Double(cardSizeStopCount),
                         valueLabel: { value in
                             if dashboardViewModel.cardColumnPreference == 0 {
                                 return "Auto"
                             }
                             return DashboardViewModel.cardSizeLabel(
                                 preference: Int(value.rounded()),
-                                maximumColumns: dashboardViewModel.availableCardColumns)
+                                maximumColumns: dashboardViewModel.availableCardColumns
+                            )
                         },
                         isEnabled: cardSizeSliderEnabled
                     )
@@ -199,14 +230,16 @@ struct SettingsView: View {
                 icon: Icon.listBullet,
                 label: "Show exhausted",
                 isOn: $dashboardViewModel.showExhausted,
-                accessibilityIdentifier: "show-exhausted-toggle")
+                accessibilityIdentifier: "show-exhausted-toggle"
+            )
         }
     }
 
     private var cardSizeLabel: String {
         DashboardViewModel.cardSizeLabel(
             preference: dashboardViewModel.cardColumnPreference,
-            maximumColumns: dashboardViewModel.availableCardColumns)
+            maximumColumns: dashboardViewModel.availableCardColumns
+        )
     }
 
     private var cardSizeStopCount: Int {
@@ -222,7 +255,8 @@ struct SettingsView: View {
                 } else if dashboardViewModel.cardColumnPreference == 0 {
                     dashboardViewModel.cardColumnPreference = 1
                 }
-            })
+            }
+        )
     }
 
     var cardSizeSliderEnabled: Bool {
@@ -230,19 +264,29 @@ struct SettingsView: View {
             && dashboardViewModel.cardColumnPreference != 0
     }
 
-    @ViewBuilder
     private var syncAndNotificationsSection: some View {
-        Section("Sync & Notifications") {
-            ListRow.toggle(
-                icon: Icon.syncing,
-                label: "iCloud Sync",
-                isOn: $dashboardViewModel.syncEnabled,
-                accessibilityIdentifier: "icloud-sync-toggle")
+        Section("Warning alerts") {
             ListRow.toggle(
                 icon: Icon.bell,
-                label: "Notifications",
+                label: warningAlertsToggleLabel,
                 isOn: notificationsBinding,
-                accessibilityIdentifier: "notifications-toggle")
+                accessibilityIdentifier: "warning-alerts-toggle"
+            )
+            .disabled(warningAlertPermissionRequestPending)
+            .accessibilityHint(warningAlertsAccessibilityHint)
+            Text(Self.warningAlertsDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if warningAlertPermissionRequestPending {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(Self.warningAlertsRequestingDescription)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .combine)
+            }
             if let error = dashboardViewModel.notificationsToggleError {
                 Text(error)
                     .font(.caption)
@@ -252,6 +296,22 @@ struct SettingsView: View {
                 systemAuthorizationWarning
             }
         }
+    }
+
+    private var warningAlertsToggleLabel: String {
+        warningAlertPermissionRequestPending ? "Requesting warning-alert permission…" : "Warning alerts"
+    }
+
+    private var warningAlertsAccessibilityHint: String {
+        if warningAlertPermissionRequestPending {
+            return "Waiting for your iOS notification choice. This does not affect iCloud syncing."
+        }
+        if dashboardViewModel.systemNotificationAuthorization == .denied,
+           dashboardViewModel.notificationsEnabled
+        {
+            return "iOS is blocking warning alerts. Open iOS Settings to allow them. This does not affect iCloud syncing."
+        }
+        return "Notifies you when a provider reaches your warning threshold. Optional and separate from iCloud syncing."
     }
 
     /// Shown only when our own toggle is on and iOS is dropping the result --
@@ -264,7 +324,6 @@ struct SettingsView: View {
     /// Says what still works, not just what does not. The warning subscription
     /// keeps waking the app to sync even with alerts suppressed, so "you will
     /// not see alerts" is the accurate claim and "notifications are off" is not.
-    @ViewBuilder
     private var systemAuthorizationWarning: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Icon.warning
@@ -273,7 +332,7 @@ struct SettingsView: View {
             // first baseline caught it hanging off the row's leading edge
             // instead, reading as an unrelated control.
             VStack(alignment: .leading, spacing: 6) {
-                Text("iOS is not allowing Gradus to show notifications, so you won't see warning alerts. Syncing is unaffected.")
+                Text("iOS is not allowing Gradus to show warning alerts. iCloud syncing is unaffected.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
@@ -290,7 +349,6 @@ struct SettingsView: View {
         .padding(.vertical, 4)
     }
 
-    @ViewBuilder
     private var warningThresholdSection: some View {
         Section("Warning Threshold") {
             VStack(alignment: .leading, spacing: 6) {
@@ -302,7 +360,7 @@ struct SettingsView: View {
                     Text("\(Int(dashboardViewModel.localWarningThresholdPercent))%")
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $dashboardViewModel.localWarningThresholdPercent, in: 0...100, step: 1)
+                Slider(value: $dashboardViewModel.localWarningThresholdPercent, in: 0 ... 100, step: 1)
                     .accessibilityIdentifier("warning-threshold-slider")
                 Text(
                     "Highlights providers below this % on this device only -- does not change which alerts get pushed."
@@ -314,7 +372,6 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
     private var aboutSection: some View {
         Section("About") {
             ListRow.value(icon: Icon.listBullet, label: "Providers", value: "\(dashboardViewModel.providers.count)")
@@ -342,14 +399,17 @@ private struct QuietDiscreteSlider: UIViewRepresentable {
     let valueLabel: (Double) -> String
     var isEnabled = true
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
 
     func makeUIView(context: Context) -> QuietDiscreteUISlider {
         let slider = QuietDiscreteUISlider(frame: .zero)
         slider.minimumValue = Float(range.lowerBound)
         slider.maximumValue = Float(range.upperBound)
         slider.addTarget(
-            context.coordinator, action: #selector(Coordinator.valueChanged(_:)), for: .valueChanged)
+            context.coordinator, action: #selector(Coordinator.valueChanged(_:)), for: .valueChanged
+        )
         slider.accessibilityLabel = "Card size"
         update(slider)
         return slider
@@ -376,7 +436,9 @@ private struct QuietDiscreteSlider: UIViewRepresentable {
     final class Coordinator: NSObject {
         var parent: QuietDiscreteSlider
 
-        init(_ parent: QuietDiscreteSlider) { self.parent = parent }
+        init(_ parent: QuietDiscreteSlider) {
+            self.parent = parent
+        }
 
         @objc func valueChanged(_ slider: UISlider) {
             let value = min(max(Double(slider.value).rounded(), parent.range.lowerBound), parent.range.upperBound)

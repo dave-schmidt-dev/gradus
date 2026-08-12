@@ -10,7 +10,7 @@ enum MenuVerticalBudget {
     static let minimumReferenceHeight: CGFloat = 520
     /// Use the display's actual usable height before introducing a provider
     /// scrollbar. The content is a status menu, not a fixed-height panel.
-    static let maximumReferenceHeight: CGFloat = 1_200
+    static let maximumReferenceHeight: CGFloat = 1200
     static let fallbackReferenceHeight: CGFloat = 680
     static let verticalSafetyMargin: CGFloat = 24
     /// Menu header, dividers, sync controls, action buttons, and outer padding.
@@ -79,7 +79,7 @@ enum MenuVerticalBudget {
         let exhaustedHeight = exhausted.isEmpty
             ? 0
             : density.exhaustionHeadingHeight + density.providerSpacing
-                + columnHeight(exhausted, density: density)
+            + columnHeight(exhausted, density: density)
         let sectionSpacing: CGFloat = active.isEmpty || exhausted.isEmpty ? 0 : density.providerSpacing
         return (activeHeight + sectionSpacing + exhaustedHeight) * scale
     }
@@ -107,10 +107,21 @@ enum MenuVerticalBudget {
 enum MenuDensityRung: Equatable {
     case standard
 
-    var rowSpacing: CGFloat { MenuContentView.providerRowSpacing }
-    var barHeight: CGFloat { MenuContentView.providerBarHeight }
-    var providerSpacing: CGFloat { MenuContentView.providerGroupSpacing }
-    var metadataFontKind: MenuMetadataFont { MenuContentView.providerMetadataFont }
+    var rowSpacing: CGFloat {
+        MenuContentView.providerRowSpacing
+    }
+
+    var barHeight: CGFloat {
+        MenuContentView.providerBarHeight
+    }
+
+    var providerSpacing: CGFloat {
+        MenuContentView.providerGroupSpacing
+    }
+
+    var metadataFontKind: MenuMetadataFont {
+        MenuContentView.providerMetadataFont
+    }
 
     var metadataFont: Font {
         switch metadataFontKind {
@@ -118,11 +129,25 @@ enum MenuDensityRung: Equatable {
         }
     }
 
-    var providerHeaderHeight: CGFloat { 20 }
-    var singleWindowHeight: CGFloat { 48 }
-    var windowHeight: CGFloat { 48 }
-    var metadataHeight: CGFloat { 20 }
-    var exhaustionHeadingHeight: CGFloat { 20 }
+    var providerHeaderHeight: CGFloat {
+        20
+    }
+
+    var singleWindowHeight: CGFloat {
+        48
+    }
+
+    var windowHeight: CGFloat {
+        48
+    }
+
+    var metadataHeight: CGFloat {
+        20
+    }
+
+    var exhaustionHeadingHeight: CGFloat {
+        20
+    }
 
     func dynamicTypeScale(_ size: DynamicTypeSize) -> CGFloat {
         switch size {
@@ -154,7 +179,9 @@ struct MenuDensityResolution: Equatable {
     let intrinsicHeight: CGFloat
     let referenceHeight: CGFloat
 
-    var scrolls: Bool { !didFit }
+    var scrolls: Bool {
+        !didFit
+    }
 }
 
 /// Applies the density decision before the provider content enters the menu.
@@ -266,10 +293,7 @@ struct MenuContentView: View {
 
             Divider()
 
-            Toggle("Enable iCloud Sync", isOn: $viewModel.syncEnabled)
-            if viewModel.syncEnabled {
-                cloudSyncStatus
-            }
+            cloudSyncStatus
             Toggle(
                 "Launch at Login",
                 isOn: Binding(
@@ -320,25 +344,38 @@ struct MenuContentView: View {
     /// despite having synced minutes earlier.
     @ViewBuilder
     private var cloudSyncStatus: some View {
-        switch viewModel.syncState {
-        case .publishing:
-            Text("Syncing with iCloud…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        case .failed:
-            VStack(alignment: .leading, spacing: 1) {
-                Text("iCloud sync failed. Will retry with the next update.")
-                    .foregroundStyle(SignalColor.forLevel(.red))
-                // A failure is only actionable next to how stale it left you.
-                if let label = Self.lastSyncLabel(viewModel.lastSyncedAt) {
-                    Text(label).foregroundStyle(.secondary)
+        if viewModel.requiredICloudMode == .awaitingConfirmation {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Required iCloud setup is awaiting confirmation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Continue") {
+                    viewModel.confirmRequiredICloud()
+                    PublishPipeline.shared.start()
                 }
+                .buttonStyle(.borderedProminent)
             }
-            .font(.caption)
-        case .idle, .synced:
-            Text(Self.lastSyncLabel(viewModel.lastSyncedAt) ?? "Not synced yet")
+        } else {
+            switch viewModel.syncState {
+            case .publishing:
+                Text("Syncing with iCloud…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .failed:
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("iCloud sync failed. Will retry with the next update.")
+                        .foregroundStyle(SignalColor.forLevel(.red))
+                    // A failure is only actionable next to how stale it left you.
+                    if let label = Self.lastSyncLabel(viewModel.lastSyncedAt) {
+                        Text(label).foregroundStyle(.secondary)
+                    }
+                }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+            case .idle, .synced:
+                Text(Self.lastSyncLabel(viewModel.lastSyncedAt) ?? "Not synced yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -389,13 +426,16 @@ struct MenuUITestFixtureView: View {
                             ProviderWindow(
                                 id: "five_hour", percentLeft: 72,
                                 resetISO: "2026-08-10T17:00:00-04:00", windowHours: 5,
-                                paceDelta: 0.12),
+                                paceDelta: 0.12
+                            ),
                             ProviderWindow(
                                 id: "weekly", percentLeft: 44,
                                 resetISO: "2026-08-12T09:00:00-04:00", windowHours: 168,
-                                paceDelta: -0.02),
+                                paceDelta: -0.02
+                            ),
                         ],
-                        data: [:], observedAt: "2026-08-10T12:00:00-04:00"),
+                        data: [:], observedAt: "2026-08-10T12:00:00-04:00"
+                    ),
                     ProviderEntry(
                         name: "Cursor",
                         ok: true,
@@ -404,9 +444,11 @@ struct MenuUITestFixtureView: View {
                             ProviderWindow(
                                 id: "monthly", percentLeft: 0,
                                 resetISO: "2026-08-31T23:59:00-04:00", windowHours: 720,
-                                paceDelta: -0.5),
+                                paceDelta: -0.5
+                            ),
                         ],
-                        data: [:], observedAt: "2026-08-10T12:00:00-04:00"),
+                        data: [:], observedAt: "2026-08-10T12:00:00-04:00"
+                    ),
                 ]
             )
         )
@@ -423,27 +465,27 @@ struct MenuUITestFixtureView: View {
     }
 }
 
-/// DEBUG-only window host for the Mac UI-test fixture. A status-item app has
-/// no normal root window for XCUITest to launch, so the test seam owns one
-/// explicit window while the production MenuBarExtra path remains unchanged.
+// DEBUG-only window host for the Mac UI-test fixture. A status-item app has
+// no normal root window for XCUITest to launch, so the test seam owns one
+// explicit window while the production MenuBarExtra path remains unchanged.
 #if DEBUG
-enum MenuUITestFixtureWindow {
-    private static var window: NSWindow?
+    enum MenuUITestFixtureWindow {
+        private static var window: NSWindow?
 
-    static func show() {
-        NSApplication.shared.setActivationPolicy(.regular)
-        let hostingController = NSHostingController(rootView: MenuUITestFixtureView())
-        let window = NSWindow(contentViewController: hostingController)
-        window.identifier = NSUserInterfaceItemIdentifier("gradus-ui-test-menu")
-        window.title = "Gradus UI Test Menu"
-        window.setContentSize(NSSize(width: MenuContentView.columnWidth + 24, height: 800))
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.center()
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
-        self.window = window
+        static func show() {
+            NSApplication.shared.setActivationPolicy(.regular)
+            let hostingController = NSHostingController(rootView: MenuUITestFixtureView())
+            let window = NSWindow(contentViewController: hostingController)
+            window.identifier = NSUserInterfaceItemIdentifier("gradus-ui-test-menu")
+            window.title = "Gradus UI Test Menu"
+            window.setContentSize(NSSize(width: MenuContentView.columnWidth + 24, height: 800))
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.center()
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            self.window = window
+        }
     }
-}
 #endif
 
 /// Title plus an at-a-glance count of providers needing attention, so the
@@ -506,13 +548,19 @@ enum ProviderTriage {
     /// any-window, so that provider raised a warning on the phone and none on
     /// the Mac.
     static func needsAttention(_ provider: ProviderEntry) -> Bool {
-        if ProviderRetryAccessibility.isCarriedFailure(provider) { return false }
-        if ProviderRetryAccessibility.isRetrying(provider) { return false }
-        if !provider.ok { return true }
+        if ProviderRetryAccessibility.isCarriedFailure(provider) {
+            return false
+        }
+        if ProviderRetryAccessibility.isRetrying(provider) {
+            return false
+        }
+        if !provider.ok {
+            return true
+        }
         return providerNeedsAttention(provider.windows)
     }
-
 }
+
 // Ordering deliberately does NOT live here any more. `ProviderTriage.sorted`
 // ranked by signal level, and because a depleted provider is red, it sorted
 // exhausted providers to the *top* -- while iOS's ranking put them last, on
@@ -521,11 +569,11 @@ enum ProviderTriage {
 // `rankedPartition` in `Shared/ProviderRanking.swift`; this type keeps only
 // the Mac-specific pace-ramp classification that feeds it.
 
-/// The provider rows, split out from `MenuContentView` so they can be
-/// snapshot-tested standalone. Multi-window providers use a provider heading
-/// and labeled bucket rows; singleton providers compose both names in one
-/// compact header. The menu stays a single ordered column so the visual order
-/// always matches the selected sort without reserving empty grid cells.
+// The provider rows, split out from `MenuContentView` so they can be
+// snapshot-tested standalone. Multi-window providers use a provider heading
+// and labeled bucket rows; singleton providers compose both names in one
+// compact header. The menu stays a single ordered column so the visual order
+// always matches the selected sort without reserving empty grid cells.
 
 struct ProviderListView: View {
     let providers: [ProviderEntry]
@@ -568,7 +616,6 @@ struct ProviderListView: View {
         }
     }
 
-    @ViewBuilder
     private func activeProviders(_ providers: [ProviderEntry]) -> some View {
         ForEach(providers, id: \.name) { provider in
             ProviderRow(provider: provider, now: now, density: density)
@@ -608,7 +655,6 @@ private struct ProviderRow: View {
     let now: Date
     let density: MenuDensityRung
 
-    @ViewBuilder
     var body: some View {
         Group {
             if provider.ok, provider.windows.count == 1 {
@@ -624,9 +670,9 @@ private struct ProviderRow: View {
         VStack(alignment: .leading, spacing: density.rowSpacing) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(MenuContentView.compactProviderLabel(providerName: provider.name))
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text(percentDisplay(window.percentLeft))
                     .font(.subheadline.weight(.semibold).monospacedDigit())
@@ -662,7 +708,7 @@ private struct ProviderRow: View {
                 }
             }
 
-            if !provider.ok && !ProviderRetryAccessibility.isCarriedFailure(provider) {
+            if !provider.ok, !ProviderRetryAccessibility.isCarriedFailure(provider) {
                 let label = ProviderRetryAccessibility.displayLabel(for: provider)
                     ?? "Provider probe failed"
                 Text(label)
@@ -688,7 +734,6 @@ private struct ProviderRow: View {
             }
         }
     }
-
 }
 
 private struct MenuWindowRow: View {
@@ -724,7 +769,6 @@ private struct MenuWindowRow: View {
         }
         .padding(.leading, MenuContentView.providerBarLeadingInset)
     }
-
 }
 
 struct MenuWindowMetadata: View {
@@ -751,7 +795,9 @@ struct MenuWindowMetadata: View {
     static func paceLabel(for window: ProviderWindow) -> String {
         guard let paceDelta = window.paceDelta, paceDelta.isFinite else { return "pace unavailable" }
         let points = abs(paceDelta * 100).rounded()
-        if points < 1 { return "on pace" }
+        if points < 1 {
+            return "on pace"
+        }
         return "\(Int(points))% \(paceDelta < 0 ? "behind" : "ahead")"
     }
 }
@@ -769,7 +815,7 @@ struct ProgressBar: View {
 
     /// The marker stays inside the bar. A marker taller than its bar made rows
     /// with a pace reference appear visually thicker than rows without one.
-    static func markerOverhang(barHeight: CGFloat) -> CGFloat {
+    static func markerOverhang(barHeight _: CGFloat) -> CGFloat {
         0
     }
 

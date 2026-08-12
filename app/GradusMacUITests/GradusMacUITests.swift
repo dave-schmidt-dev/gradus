@@ -1,7 +1,7 @@
 import XCTest
 
 final class GradusMacUITests: XCTestCase {
-    func testMenuFixtureShowsWindowsPlacesExhaustedLastAndOpensSettings() throws {
+    func testMenuFixtureShowsWindowsPlacesExhaustedLastAndOpensSettings() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-menu-fixture"]
         app.launchEnvironment["GRADUS_DISABLE_PIPELINE"] = "1"
@@ -26,7 +26,7 @@ final class GradusMacUITests: XCTestCase {
         XCTAssertTrue(app.windows["Gradus Settings"].waitForExistence(timeout: 5))
     }
 
-    func testMenuFixtureExposesAccessibleSyncAndLoginControls() throws {
+    func testMenuFixtureExposesRequiredICloudStatusAndLoginControl() {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-test-menu-fixture"]
         app.launchEnvironment["GRADUS_DISABLE_PIPELINE"] = "1"
@@ -36,11 +36,9 @@ final class GradusMacUITests: XCTestCase {
         let fixture = app.windows["Gradus UI Test Menu"]
         XCTAssertTrue(fixture.waitForExistence(timeout: 10))
 
-        let sync = fixture.checkBoxes["Enable iCloud Sync"]
         let login = fixture.checkBoxes["Launch at Login"]
-        XCTAssertTrue(sync.exists)
         XCTAssertTrue(login.exists)
-        XCTAssertTrue(sync.isHittable)
-        XCTAssertTrue(login.isHittable)
+        XCTAssertTrue(login.isEnabled)
+        XCTAssertFalse(fixture.checkBoxes["Enable iCloud Sync"].exists)
     }
 }

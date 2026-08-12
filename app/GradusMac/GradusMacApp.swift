@@ -13,6 +13,11 @@ struct GradusMacApp: App {
 
     init() {
         _isMenuBarInserted = State(initialValue: !Self.isTestHost() && !Self.uiTestMenuFixtureEnabled)
+        // Resolve the required iCloud authority before the publisher, account
+        // monitor, or SwiftUI menu can read live-mode state.
+        _ = RequiredICloudMigration.migrate(
+            defaults: .standard, legacyKey: PublisherViewModel.syncEnabledKey
+        )
         #if DEBUG
             if CommandLine.arguments.contains("--cloudkit-spike") {
                 Task { await CloudKitSpike.run() }
@@ -195,6 +200,7 @@ final class PublishPipeline {
     /// MainActor-isolated static property.
     func start(snapshotPath: URL? = nil) {
         guard !started else { return }
+        guard viewModel.requiredICloudMode.allowsLiveWork else { return }
         started = true
 
         let snapshotPath = snapshotPath ?? Self.defaultSnapshotPath

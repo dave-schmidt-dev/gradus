@@ -58,12 +58,13 @@ def test_current_walkthrough_is_dated_hashed_and_bound_to_ledger(tmp_path):
     assert "Onboarding" in text and "Reachable screens and controls" in text
     assert "Role and permission differences" in text and "System-owned sheets" in text
     assert "App Store submission and public release are excluded" in text
-    assert "Explicit live-mode opt-in" in text
-    assert "Allow notifications after sync is enabled" in text
+    assert "Required iCloud availability" in text
+    assert "Warning alerts" in text
+    assert "Enabling Warning alerts when iOS notification permission is not yet decided" in text
     assert "first launch" not in text.lower()
 
 
-def test_default_manifest_covers_visible_explore_sample_flow():
+def test_default_manifest_covers_required_icloud_alert_recovery_and_sample_states():
     manifest = validate_manifest(default_manifest())
     routes = {
         route["id"]: {control["id"] for control in route["controls"]}
@@ -78,6 +79,34 @@ def test_default_manifest_covers_visible_explore_sample_flow():
     assert {"sample-data-reset-settings", "sample-data-exit-settings"} <= routes[
         "ios-settings-sample"
     ]
+    assert {
+        "checking-icloud",
+        "continue-required-icloud",
+        "retry-icloud",
+    } <= {control["id"] for control in manifest["onboarding"][0]["controls"]}
+    assert {
+        "warning-alerts",
+        "warning-alerts-requesting",
+        "open-ios-notification-settings",
+    } <= routes["ios-settings"]
+    state_ids = {state["id"] for state in manifest["states"]}
+    assert {
+        "icloud-discovery",
+        "awaiting-confirmation",
+        "temporary-retry",
+        "no-account",
+        "restricted",
+        "disabled",
+        "recovery",
+        "sample",
+        "notification-denied",
+    } <= state_ids
+    sheets = {sheet["id"]: sheet["trigger"] for sheet in manifest["systemOwnedSheets"]}
+    assert "Warning alerts" in sheets["notification-permission"]
+    assert "only after warning alerts are denied" in sheets["notification-settings"]
+    rendered = default_manifest()
+    assert "Enable iCloud Sync" not in str(rendered)
+    assert "liveModeEnabled" not in str(rendered)
     assert any(
         control["state"] == "disabled"
         for route in manifest["screens"]

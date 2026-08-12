@@ -32,11 +32,10 @@ struct MacSettingsView: View {
     var body: some View {
         Form {
             Section("Sync") {
-                Toggle("Enable iCloud Sync", isOn: $viewModel.syncEnabled)
                 Text(
                     viewModel.syncEnabled
                         ? (MenuContentView.lastSyncLabel(viewModel.lastSyncedAt) ?? "Not synced yet")
-                        : "Usage data stays on this Mac."
+                        : "Required iCloud setup is awaiting confirmation."
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -66,7 +65,7 @@ struct MacSettingsView: View {
             Section("Warning Threshold") {
                 Slider(
                     value: warningThresholdBinding,
-                    in: 0...100
+                    in: 0 ... 100
                 ) {
                     Text("Warn at or below \(Int(viewModel.localWarningThresholdPercent))%")
                 }

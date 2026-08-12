@@ -25,18 +25,27 @@ struct DashboardView: View {
     @ObservedObject var viewModel: DashboardViewModel
     let now: Date
     let onExploreSample: () -> Void
+    let onRetryICloud: () -> Void
     let isSampleEntryInProgress: Bool
+    /// Test-only initial state for the explicit permission-requesting UI.
+    /// Production callers use the default and derive this state from a user
+    /// interaction with Warning alerts.
+    let initialWarningAlertPermissionRequestPending: Bool
 
     init(
         viewModel: DashboardViewModel,
         now: Date = Date(),
         onExploreSample: @escaping () -> Void = {},
-        isSampleEntryInProgress: Bool = false
+        onRetryICloud: @escaping () -> Void = {},
+        isSampleEntryInProgress: Bool = false,
+        initialWarningAlertPermissionRequestPending: Bool = false
     ) {
         self.viewModel = viewModel
         self.now = now
         self.onExploreSample = onExploreSample
+        self.onRetryICloud = onRetryICloud
         self.isSampleEntryInProgress = isSampleEntryInProgress
+        self.initialWarningAlertPermissionRequestPending = initialWarningAlertPermissionRequestPending
     }
 
     var body: some View {
@@ -45,7 +54,10 @@ struct DashboardView: View {
                 viewModel: viewModel,
                 now: now,
                 onExploreSample: onExploreSample,
-                isSampleEntryInProgress: isSampleEntryInProgress)
+                onRetryICloud: onRetryICloud,
+                isSampleEntryInProgress: isSampleEntryInProgress,
+                initialWarningAlertPermissionRequestPending: initialWarningAlertPermissionRequestPending
+            )
         }
     }
 }
@@ -71,7 +83,9 @@ enum DashboardLayout {
     /// The editorial comfort rule: reset is welcome on the wider presentation
     /// but deliberately omitted from the compact presentation even when the
     /// collapse floor says the column would technically fit.
-    var editorialShowsReset: Bool { self == .denseGrid }
+    var editorialShowsReset: Bool {
+        self == .denseGrid
+    }
 }
 
 /// The provider/window identity that both size classes promise to present.
@@ -113,9 +127,11 @@ struct DashboardContent: View {
     @State private var showingSettings = false
     let isSampleMode: Bool
     let onExploreSample: () -> Void
+    let onRetryICloud: () -> Void
     let onExitSample: () -> Void
     let onResetSample: () -> Void
     let isSampleEntryInProgress: Bool
+    let initialWarningAlertPermissionRequestPending: Bool
 
     // The grid must resolve its column count before the child WindowRows are
     // installed. Keep the same compile-time style mapping as WindowRow here;
@@ -138,19 +154,23 @@ struct DashboardContent: View {
         density: DashboardDensity? = nil,
         isSampleMode: Bool = false,
         onExploreSample: @escaping () -> Void = {},
+        onRetryICloud: @escaping () -> Void = {},
         onExitSample: @escaping () -> Void = {},
         onResetSample: @escaping () -> Void = {},
-        isSampleEntryInProgress: Bool = false
+        isSampleEntryInProgress: Bool = false,
+        initialWarningAlertPermissionRequestPending: Bool = false
     ) {
         self.viewModel = viewModel
         self.now = now
-        self.layoutOverride = layout
-        self.densityOverride = density
+        layoutOverride = layout
+        densityOverride = density
         self.isSampleMode = isSampleMode
         self.onExploreSample = onExploreSample
+        self.onRetryICloud = onRetryICloud
         self.onExitSample = onExitSample
         self.onResetSample = onResetSample
         self.isSampleEntryInProgress = isSampleEntryInProgress
+        self.initialWarningAlertPermissionRequestPending = initialWarningAlertPermissionRequestPending
     }
 
     var layout: DashboardLayout {
@@ -173,6 +193,7 @@ struct DashboardContent: View {
                     IconButton(Icon.settings) {
                         showingSettings = true
                     }
+                    .accessibilityIdentifier("settings-button")
                 }
             }
 
@@ -181,8 +202,9 @@ struct DashboardContent: View {
                     EmptyStateView(
                         state: emptyState,
                         onExploreSample: onExploreSample,
-                        onEnableSync: { viewModel.syncEnabled = true },
-                        isExploreSampleInProgress: isSampleEntryInProgress)
+                        onEnableSync: { performICloudRecovery(for: emptyState) },
+                        isExploreSampleInProgress: isSampleEntryInProgress
+                    )
                 } else {
                     denseGrid
                 }
@@ -200,7 +222,37 @@ struct DashboardContent: View {
                 onExploreSample: onExploreSample,
                 onExitSample: onExitSample,
                 onResetSample: onResetSample,
-                isSampleEntryInProgress: isSampleEntryInProgress)
+                isSampleEntryInProgress: isSampleEntryInProgress,
+                initialWarningAlertPermissionRequestPending: initialWarningAlertPermissionRequestPending
+            )
+        }
+    }
+
+    enum ICloudRecoveryAction: Equatable {
+        case confirmRequiredICloud
+        case retryLiveLifecycle
+        case none
+    }
+
+    static func iCloudRecoveryAction(for state: DashboardEmptyState) -> ICloudRecoveryAction {
+        switch state {
+        case .awaitingConfirmation, .syncDisabled:
+            .confirmRequiredICloud
+        case .tryAgain, .notSignedIn, .restricted:
+            .retryLiveLifecycle
+        case .checkingICloud, .waitingForFirstPublish:
+            .none
+        }
+    }
+
+    func performICloudRecovery(for state: DashboardEmptyState) {
+        switch Self.iCloudRecoveryAction(for: state) {
+        case .confirmRequiredICloud:
+            viewModel.confirmRequiredICloud()
+        case .retryLiveLifecycle:
+            onRetryICloud()
+        case .none:
+            break
         }
     }
 
@@ -224,7 +276,8 @@ struct DashboardContent: View {
         viewModel.providers.map {
             DashboardProviderWindowSet(
                 providerName: $0.providerName,
-                windowIDs: $0.windows.map(\.id))
+                windowIDs: $0.windows.map(\.id)
+            )
         }
     }
 
@@ -242,10 +295,13 @@ struct DashboardContent: View {
                 ?? DashboardViewModel.resolvedCardDensity(
                     preference: viewModel.cardColumnPreference,
                     sizeStops: DashboardViewModel.cardSizeStopCount(
-                        for: viewModel.availableCardColumns))
+                        for: viewModel.availableCardColumns
+                    )
+                )
                 ?? .compact
             return GridResolution(
-                metrics: rung.metrics, columns: 1, maximumColumns: 1, didFitDensity: true)
+                metrics: rung.metrics, columns: 1, maximumColumns: 1, didFitDensity: true
+            )
         case .denseGrid:
             // Explicit rungs are snapshot-only fixtures. They preserve the
             // pre-slider baselines while production follows the one-way
@@ -256,32 +312,38 @@ struct DashboardContent: View {
                     metrics: densityOverride.metrics,
                     columns: columns,
                     maximumColumns: columns,
-                    didFitDensity: true)
+                    didFitDensity: true
+                )
             }
 
             let compact = DashboardDensity.compact.metrics
             let stops = feasibleColumnStops(
                 containerWidth: contentWidth,
                 scaledFixedColumnWidth: scaledFixedColumnWidth(
-                    for: .compact, showsReset: false),
+                    for: .compact, showsReset: false
+                ),
                 cardPadding: compact.cardPadding,
                 cardGap: compact.cardGap,
-                minimumBarWidth: DensityMetrics.minimumBarWidth)
+                minimumBarWidth: DensityMetrics.minimumBarWidth
+            )
             let maximum = stops.last ?? 1
             let sizeStops = DashboardViewModel.cardSizeStopCount(for: maximum)
             let selectedColumns = DashboardViewModel.resolvedCardColumnCount(
                 preference: viewModel.cardColumnPreference,
                 maximum: maximum,
-                sizeStops: sizeStops)
+                sizeStops: sizeStops
+            )
             let preferred = DashboardViewModel.resolvedCardDensity(
                 preference: viewModel.cardColumnPreference,
-                sizeStops: sizeStops)
+                sizeStops: sizeStops
+            )
             let resolution = DashboardDensity.resolveRung(preferred: preferred) { rung in
                 let rungMetrics = rung.metrics
                 let width = cardWidth(
                     containerWidth: contentWidth,
                     columns: selectedColumns,
-                    cardGap: rungMetrics.cardGap)
+                    cardGap: rungMetrics.cardGap
+                )
                 return width - rungMetrics.cardPadding * 2
                     - scaledFixedColumnWidth(for: rung, showsReset: false)
                     >= DensityMetrics.minimumBarWidth
@@ -290,7 +352,8 @@ struct DashboardContent: View {
                 metrics: resolution.rung.metrics,
                 columns: selectedColumns,
                 maximumColumns: maximum,
-                didFitDensity: resolution.didFit)
+                didFitDensity: resolution.didFit
+            )
         }
     }
 
@@ -301,23 +364,24 @@ struct DashboardContent: View {
         contentWidth: CGFloat
     ) -> Int {
         let metrics = density.metrics
-        let fixedColumnWidth: CGFloat
-        if scaledFixedColumnWidth(for: density, showsReset: true)
+        let fixedColumnWidth: CGFloat = if scaledFixedColumnWidth(for: density, showsReset: true)
             > metrics.fixedColumnWidth(showsReset: true)
         {
-            fixedColumnWidth = scaledFixedColumnWidth(for: density, showsReset: false)
+            scaledFixedColumnWidth(for: density, showsReset: false)
         } else {
-            fixedColumnWidth = max(
+            max(
                 0,
                 metrics.gridMinimum - metrics.cardPadding * 2
-                    - DensityMetrics.minimumBarWidth)
+                    - DensityMetrics.minimumBarWidth
+            )
         }
         return maxColumns(
             containerWidth: contentWidth,
             scaledFixedColumnWidth: fixedColumnWidth,
             cardPadding: metrics.cardPadding,
             cardGap: metrics.cardGap,
-            minimumBarWidth: DensityMetrics.minimumBarWidth)
+            minimumBarWidth: DensityMetrics.minimumBarWidth
+        )
     }
 
     /// The row owns Dynamic Type scaling; the grid only consumes its exposed
@@ -329,14 +393,13 @@ struct DashboardContent: View {
         for density: DashboardDensity,
         showsReset: Bool
     ) -> CGFloat {
-        let columns: (label: CGFloat, percent: CGFloat, reset: CGFloat)
-        switch density {
+        let columns: (label: CGFloat, percent: CGFloat, reset: CGFloat) = switch density {
         case .compact:
-            columns = (compactLabelWidth, compactPercentWidth, compactResetWidth)
+            (compactLabelWidth, compactPercentWidth, compactResetWidth)
         case .standard:
-            columns = (standardLabelWidth, standardPercentWidth, standardResetWidth)
+            (standardLabelWidth, standardPercentWidth, standardResetWidth)
         case .large:
-            columns = (largeLabelWidth, largePercentWidth, largeResetWidth)
+            (largeLabelWidth, largePercentWidth, largeResetWidth)
         }
         let fixed = columns.label + columns.percent
             + (showsReset ? columns.reset : 0)
@@ -356,7 +419,8 @@ struct DashboardContent: View {
             inContentWidth: contentWidth,
             columns: columns,
             metrics: metrics,
-            scaledFixedColumnWidth: scaledFixedColumnWidth)
+            scaledFixedColumnWidth: scaledFixedColumnWidth
+        )
     }
 
     private func runtimeShowsReset(
@@ -368,11 +432,13 @@ struct DashboardContent: View {
         let resolvedWidth = cardWidth(
             containerWidth: contentWidth,
             columns: columns,
-            cardGap: metrics.cardGap)
+            cardGap: metrics.cardGap
+        )
         return layout.editorialShowsReset
             && metrics.fitsResetColumn(
                 inCardWidth: resolvedWidth,
-                scaledFixedColumnWidth: scaledFixedColumnWidth)
+                scaledFixedColumnWidth: scaledFixedColumnWidth
+            )
     }
 
     /// Every provider and every window at once, on both platforms.
@@ -396,7 +462,6 @@ struct DashboardContent: View {
     ///
     /// The `showExhausted` preference still applies upstream — it filters the
     /// source array, so hiding them removes this section entirely.
-    @ViewBuilder
     private var denseGrid: some View {
         GeometryReader { geometry in
             let contentWidth = geometry.size.width - dashboardHorizontalInset * 2
@@ -406,7 +471,9 @@ struct DashboardContent: View {
                 columns: resolution.columns,
                 metrics: resolution.metrics,
                 scaledFixedColumnWidth: scaledFixedColumnWidth(
-                    for: resolution.metrics.rung, showsReset: true))
+                    for: resolution.metrics.rung, showsReset: true
+                )
+            )
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ProviderRowBalancedLayout(
@@ -421,10 +488,10 @@ struct DashboardContent: View {
                                 showsReset: resolvedShowsReset,
                                 metrics: resolution.metrics
                             )
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    selectedProviderName = provider.providerName
-                                }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedProviderName = provider.providerName
+                            }
                         }
                     }
                     .frame(width: contentWidth, alignment: .leading)
@@ -464,10 +531,12 @@ struct DashboardContent: View {
             scaledFixedColumnWidth: exhaustedResetLabelWidth(for: metrics.rung),
             cardPadding: metrics.cardPadding,
             cardGap: metrics.exhaustedGap,
-            minimumBarWidth: 0)
+            minimumBarWidth: 0
+        )
         return Array(
             repeating: GridItem(.flexible(), spacing: metrics.exhaustedGap, alignment: .top),
-            count: columns)
+            count: columns
+        )
     }
 
     private func exhaustedSection(metrics: DensityMetrics, contentWidth: CGFloat) -> some View {
@@ -561,12 +630,14 @@ struct ProviderRowBalancedLayout: Layout {
     let horizontalSpacing: CGFloat
     let verticalSpacing: CGFloat
 
-    private var resolvedColumns: Int { max(1, columns) }
+    private var resolvedColumns: Int {
+        max(1, columns)
+    }
 
     func sizeThatFits(
         proposal: ProposedViewSize,
         subviews: Subviews,
-        cache: inout ()
+        cache _: inout ()
     ) -> CGSize {
         let width = proposal.width ?? 0
         let columnWidth = widthForColumn(containerWidth: width)
@@ -579,9 +650,9 @@ struct ProviderRowBalancedLayout: Layout {
 
     func placeSubviews(
         in bounds: CGRect,
-        proposal: ProposedViewSize,
+        proposal _: ProposedViewSize,
         subviews: Subviews,
-        cache: inout ()
+        cache _: inout ()
     ) {
         let columnWidth = widthForColumn(containerWidth: bounds.width)
         let heights = subviews.map {
@@ -592,12 +663,14 @@ struct ProviderRowBalancedLayout: Layout {
             columns: resolvedColumns,
             cardWidth: columnWidth,
             horizontalSpacing: horizontalSpacing,
-            verticalSpacing: verticalSpacing)
+            verticalSpacing: verticalSpacing
+        )
         for (subview, frame) in zip(subviews, frames) {
             subview.place(
                 at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
                 anchor: .topLeading,
-                proposal: ProposedViewSize(width: frame.width, height: frame.height))
+                proposal: ProposedViewSize(width: frame.width, height: frame.height)
+            )
         }
     }
 
@@ -611,7 +684,7 @@ struct ProviderRowBalancedLayout: Layout {
         // tallest-card rule.
         guard count > 1 else { return cardHeights }
         return stride(from: 0, to: cardHeights.count, by: count).map { start in
-            cardHeights[start..<min(start + count, cardHeights.count)].max() ?? 0
+            cardHeights[start ..< min(start + count, cardHeights.count)].max() ?? 0
         }
     }
 
@@ -630,13 +703,14 @@ struct ProviderRowBalancedLayout: Layout {
         for (row, rowHeight) in rows.enumerated() {
             let firstIndex = row * count
             let lastIndex = min(firstIndex + count, cardHeights.count)
-            for index in firstIndex..<lastIndex {
+            for index in firstIndex ..< lastIndex {
                 let column = index - firstIndex
                 result.append(CGRect(
                     x: CGFloat(column) * (cardWidth + horizontalSpacing),
                     y: rowOrigin,
                     width: cardWidth,
-                    height: rowHeight))
+                    height: rowHeight
+                ))
             }
             rowOrigin += rowHeight + verticalSpacing
         }
@@ -647,7 +721,8 @@ struct ProviderRowBalancedLayout: Layout {
         max(
             0,
             (containerWidth - CGFloat(resolvedColumns - 1) * horizontalSpacing)
-                / CGFloat(resolvedColumns))
+                / CGFloat(resolvedColumns)
+        )
     }
 
     private func rowHeights(subviews: Subviews, columnWidth: CGFloat) -> [CGFloat] {
@@ -655,6 +730,7 @@ struct ProviderRowBalancedLayout: Layout {
             cardHeights: subviews.map {
                 $0.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height
             },
-            columns: resolvedColumns)
+            columns: resolvedColumns
+        )
     }
 }

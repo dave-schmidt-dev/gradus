@@ -1,9 +1,8 @@
 import Foundation
+@testable import GradusiOS
 import GradusKit
 import Testing
 import UserNotifications
-
-@testable import GradusiOS
 
 // Covers the gap that shipped in 1.6.0: `AppDelegate` discarded both results of
 // `requestAuthorization(options:) { _, _ in }`, so a user who declined -- or
@@ -19,13 +18,17 @@ private func authorizationDefaults() -> UserDefaults {
 private func authorizationCache() -> FileLocalCacheStore {
     FileLocalCacheStore(
         directory: FileManager.default.temporaryDirectory.appendingPathComponent(
-            "gradus-notification-authorization-\(UUID().uuidString)", isDirectory: true))
+            "gradus-notification-authorization-\(UUID().uuidString)", isDirectory: true
+        )
+    )
 }
 
 private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let authorization: NotificationAuthorization
 
-    func currentAuthorization() async -> NotificationAuthorization { authorization }
+    func currentAuthorization() async -> NotificationAuthorization {
+        authorization
+    }
 }
 
 @Test func unauthorizationStatusMapsProvisionalAndEphemeralToAuthorized() {
@@ -43,10 +46,25 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let viewModel = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .denied),
-        userDefaults: authorizationDefaults())
+        userDefaults: authorizationDefaults()
+    )
 
     // Honest starting point: nothing has been read yet.
     #expect(viewModel.systemNotificationAuthorization == .notDetermined)
+
+    await viewModel.refreshNotificationAuthorization()
+
+    #expect(viewModel.systemNotificationAuthorization == .denied)
+}
+
+@MainActor
+@Test func refreshReadsAuthorizationWhileLiveLifecycleIsSuspended() async {
+    let viewModel = DashboardViewModel(
+        cache: authorizationCache(),
+        notificationAuthorizationSource: StubAuthorizationSource(authorization: .denied),
+        liveLifecycleGate: LiveLifecycleGate(initiallySuspended: true),
+        userDefaults: authorizationDefaults()
+    )
 
     await viewModel.refreshNotificationAuthorization()
 
@@ -72,7 +90,8 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let suppressed = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .denied),
-        userDefaults: authorizationDefaults())
+        userDefaults: authorizationDefaults()
+    )
     await suppressed.setNotificationsEnabled(true)
     await suppressed.refreshNotificationAuthorization()
     #expect(suppressed.notificationsSuppressedBySystem)
@@ -82,7 +101,8 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let optedOut = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .denied),
-        userDefaults: authorizationDefaults())
+        userDefaults: authorizationDefaults()
+    )
     await optedOut.setNotificationsEnabled(false)
     await optedOut.refreshNotificationAuthorization()
     #expect(!optedOut.notificationsSuppressedBySystem)
@@ -91,7 +111,8 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let working = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .authorized),
-        userDefaults: authorizationDefaults())
+        userDefaults: authorizationDefaults()
+    )
     await working.setNotificationsEnabled(true)
     await working.refreshNotificationAuthorization()
     #expect(!working.notificationsSuppressedBySystem)
@@ -106,7 +127,8 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let viewModel = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .denied),
-        userDefaults: authorizationDefaults())
+        userDefaults: authorizationDefaults()
+    )
     await viewModel.setNotificationsEnabled(true)
 
     await viewModel.refreshNotificationAuthorization()

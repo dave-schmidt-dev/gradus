@@ -1,8 +1,7 @@
 import CloudKit
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 private actor MockAccountStatusSource: AccountStatusSource {
     var nextStatus: Result<CKAccountStatus, Error> = .success(.available)
@@ -11,8 +10,8 @@ private actor MockAccountStatusSource: AccountStatusSource {
     func currentAccountStatus() async throws -> CKAccountStatus {
         callCount += 1
         switch nextStatus {
-        case .success(let status): return status
-        case .failure(let error): throw error
+        case let .success(status): return status
+        case let .failure(error): throw error
         }
     }
 
@@ -37,12 +36,29 @@ private actor DelayedAccountStatusSource: AccountStatusSource {
     }
 
     func waitUntilRequestStarts() async {
-        while !requestStarted { await Task.yield() }
+        while !requestStarted {
+            await Task.yield()
+        }
     }
 
     func release(_ status: CKAccountStatus) {
         continuation?.resume(returning: status)
         continuation = nil
+    }
+}
+
+private actor SequencedAccountStatusSource: AccountStatusSource {
+    private var results: [Result<CKAccountStatus, Error>]
+    private(set) var callCount = 0
+
+    init(_ results: [Result<CKAccountStatus, Error>]) {
+        self.results = results
+    }
+
+    func currentAccountStatus() async throws -> CKAccountStatus {
+        callCount += 1
+        let result = results.removeFirst()
+        return try result.get()
     }
 }
 
@@ -75,6 +91,24 @@ func everyNonAvailableStatusIsBlocked(_ status: CKAccountStatus) {
     #expect(await source.callCount == 1)
 }
 
+@Test func startRetriesOneTemporaryStatusBeforePublishingAvailable() async {
+    let source = SequencedAccountStatusSource([
+        .success(.temporarilyUnavailable),
+        .success(.available),
+    ])
+    let reported = ReportedStatuses()
+    let monitor = AccountStatusMonitor(source: source, notificationCenter: NotificationCenter()) { status in
+        Task { await reported.append(status) }
+    }
+
+    await monitor.start()
+
+    #expect(await source.callCount == 2)
+    #expect(await monitor.lastKnownStatus == .available)
+    #expect(await eventually { await reported.values == [.available] })
+    await monitor.stopObserving()
+}
+
 @Test func refreshOnTransientErrorLeavesLastKnownStatusUnchangedAndDoesNotReport() async {
     let source = MockAccountStatusSource()
     await source.setNextStatus(.available)
@@ -96,8 +130,8 @@ func everyNonAvailableStatusIsBlocked(_ status: CKAccountStatus) {
     // fail spuriously, which is the tradeoff worth taking in a release gate.
     try? await Task.sleep(nanoseconds: 50_000_000)
 
-    #expect(await monitor.lastKnownStatus == .available)  // unchanged, not silently "blocked" or reset
-    #expect(await reported.values == [.available])  // no spurious onChange for the failed refresh
+    #expect(await monitor.lastKnownStatus == .available) // unchanged, not silently "blocked" or reset
+    #expect(await reported.values == [.available]) // no spurious onChange for the failed refresh
 }
 
 @Test func refreshCompletedAfterStopDoesNotPublishOrMutateStatus() async {
@@ -157,7 +191,7 @@ func everyNonAvailableStatusIsBlocked(_ status: CKAccountStatus) {
 
     await monitor.start()
     await source.setNextStatus(.available)
-    center.post(name: .CKAccountChanged, object: nil)  // no sleep: the point of the test
+    center.post(name: .CKAccountChanged, object: nil) // no sleep: the point of the test
 
     #expect(await eventually { await monitor.lastKnownStatus == .available })
     #expect(await source.callCount == 2)
@@ -180,7 +214,9 @@ private func eventually(
 ) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     repeat {
-        if await condition() { return true }
+        if await condition() {
+            return true
+        }
         try? await Task.sleep(nanoseconds: 1_000_000)
     } while ContinuousClock.now < deadline
     return await condition()

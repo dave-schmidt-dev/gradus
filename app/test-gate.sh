@@ -40,9 +40,9 @@ COUNTING_LEG_REPORTERS=(
   "xctest"
 )
 # The iPad leg includes the 12 canonical image tests below as well as the
-# three GradusiOSUITests workflows. Its floor must exceed the image-only
+# nine GradusiOSUITests workflows. Its floor must exceed the image-only
 # result, or a zero-test UI target could be hidden by the snapshot count.
-COUNTING_LEG_MINIMUMS=(2 2 2 2 15 6 5 5 5 5 4 2 3)
+COUNTING_LEG_MINIMUMS=(2 2 2 2 21 6 5 5 5 5 4 2 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -349,6 +349,12 @@ echo "    iPad UDID: $ipad_udid"
 prior_dialog_type="$(defaults read com.apple.CrashReporter DialogType 2>/dev/null || true)"
 defaults write com.apple.CrashReporter DialogType none
 
+# iOS snapshot tests load resources from DerivedData. Keep that directory fresh
+# for each gate run so a stale copied bundle cannot make changed baselines
+# appear to pass. The three iOS legs share this run-scoped directory for build
+# reuse; the Mac legs retain their proven default DerivedData behavior.
+derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"
+
 # Preserve a developer's already-running simulator and its account/share state.
 # A gate-created disposable simulator can still be stopped after the run to
 # avoid leaving a new background workload behind.
@@ -371,6 +377,7 @@ trap '
   else
     defaults write com.apple.CrashReporter DialogType "$prior_dialog_type"
   fi
+  rm -rf "$derived_data_dir"
 ' EXIT
 
 echo "==> Booting simulators"
@@ -398,6 +405,7 @@ done
 echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
   -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$sim_udid" \
   -skip-testing:GradusiOSUITests \
@@ -416,6 +424,7 @@ assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
 echo "==> xcodebuild test — GradusiOS UI tests ($IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOS-iPad" xcodebuild test \
   -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$ipad_udid" \
   -only-testing:GradusiOSUITests \
@@ -433,6 +442,7 @@ assert_counting_leg "GradusMacUI" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test 
 echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOSUI" xcodebuild test \
   -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$sim_udid" \
   -only-testing:GradusiOSUITests \

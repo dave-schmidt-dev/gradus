@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// from reaching the live view model; sample mode has no live lifecycle.
     var liveActivitySuppressed = CommandLine.arguments.contains(SampleDataMode.launchArgument)
     var onRemoteNotification: (() async -> Void)?
+    var onRemoteRegistrationFailure: (() -> Void)?
 
     /// Fires once the first-launch permission prompt has been answered,
     /// whichever way it went.
@@ -28,6 +29,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// read instead of a cached copy of one moment's answer.
     var onAuthorizationResolved: (() -> Void)?
 
+    /// The app's alert choice is deliberately separate from APNs registration.
+    /// `off` is the default for a fresh install; a permission request is only
+    /// started after the Warning alerts control is enabled.
+    private(set) var warningAlertAuthorization: NotificationAuthorization = .off
+
     private let clearBadge: (UIApplication) -> Void
     private let liveModeEnabled: () -> Bool
     private let registerForRemoteNotifications: @MainActor (UIApplication) -> Void
@@ -36,23 +42,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     /// been answered. Injected so the launch path can be exercised in a unit
     /// test without a real prompt (which no test can answer) and without a
     /// real APNs registration attempt.
-    private let requestNotificationAuthorization: (UIApplication, @escaping () -> Void) -> Void
-    private var notificationAuthorizationStarted = false
-    private var authorizationRequestResolved = false
+    private let requestNotificationAuthorization: (UIApplication, @escaping (Bool) -> Void) -> Void
+    private var liveLifecycleStarted = false
+    private var warningAlertIntentGeneration: UInt64 = 0
+    private var warningAlertsEnabled = false
     private var remoteRegistrationStarted = false
-    private var authorizationResolutionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var remoteRegistrationFailed = false
 
-    private static let systemNotificationAuthorizationRequest: (UIApplication, @escaping () -> Void) -> Void = {
-        application, resolved in
+    private static let systemNotificationAuthorizationRequest: (UIApplication, @escaping (Bool) -> Void) -> Void = {
+        _, resolved in
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
             DispatchQueue.main.async {
-                resolved()
+                UNUserNotificationCenter.current().getNotificationSettings { settings in
+                    DispatchQueue.main.async { resolved(settings.authorizationStatus != .denied) }
+                }
             }
         }
     }
 
     override init() {
-        self.clearBadge = { application in
+        // AppDelegate is constructed before the SwiftUI App initializer. Run
+        // the synchronous migration here too so launch cannot interpret the
+        // legacy Boolean before the required-iCloud authority is committed.
+        _ = RequiredICloudMigration.migrate(
+            defaults: .standard, legacyKey: DashboardViewModel.syncEnabledKey
+        )
+        clearBadge = { application in
             // `setBadgeCount` is the modern notification-center API, while
             // `applicationIconBadgeNumber` clears a stale badge left by an
             // earlier app version immediately. Both are needed because a
@@ -61,19 +76,21 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             application.applicationIconBadgeNumber = 0
             UNUserNotificationCenter.current().setBadgeCount(0) { _ in }
         }
-        self.requestNotificationAuthorization = Self.systemNotificationAuthorizationRequest
-        self.registerForRemoteNotifications = { application in
+        requestNotificationAuthorization = Self.systemNotificationAuthorizationRequest
+        registerForRemoteNotifications = { application in
             application.registerForRemoteNotifications()
         }
-        self.liveModeEnabled = {
-            UserDefaults.standard.bool(forKey: DashboardViewModel.syncEnabledKey)
+        liveModeEnabled = {
+            RequiredICloudMigration.migrate(
+                defaults: .standard, legacyKey: DashboardViewModel.syncEnabledKey
+            ).allowsLiveWork
         }
         super.init()
     }
 
     init(
         clearBadge: @escaping () -> Void,
-        requestNotificationAuthorization: @escaping (UIApplication, @escaping () -> Void) -> Void = { _, _ in },
+        requestNotificationAuthorization: @escaping (UIApplication, @escaping (Bool) -> Void) -> Void = { _, _ in },
         liveModeEnabled: @escaping () -> Bool = { true },
         registerForRemoteNotifications: @escaping @MainActor (UIApplication) -> Void = { application in
             application.registerForRemoteNotifications()
@@ -87,11 +104,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(
-        _ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+        _ application: UIApplication, didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        // A fresh install starts with sync disabled. Defer all notification
-        // prompting/registration until the user explicitly enables live mode;
-        // an existing opt-in keeps the prior launch behavior.
+        // A fresh install starts live, but alert presentation is an explicit
+        // Warning alerts choice and must not delay remote registration.
         guard liveModeEnabled() else { return true }
         beginLiveLifecycle(application)
         return true
@@ -105,55 +121,79 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func beginLiveLifecycle(_ application: UIApplication) {
-        guard !liveActivitySuppressed, !notificationAuthorizationStarted else { return }
-        notificationAuthorizationStarted = true
+        guard !liveActivitySuppressed, !liveLifecycleStarted else { return }
+        liveLifecycleStarted = true
         clearBadge(application)
-        // The app-side warning notification is visible only after this local
-        // authorization succeeds. Both CloudKit subscriptions are silent
-        // content-available pushes and never display alerts themselves.
-        requestNotificationAuthorization(application) { [weak self] in
-            // Read the closure at call time rather than capturing it: the
-            // prompt resolves long after launch, and the SwiftUI `App`'s
-            // init is what assigns this.
+        registerIfLive(application: application)
+    }
+
+    /// Kept as a compatibility seam for the sample transition. Alert consent
+    /// is no longer part of live lifecycle quiescence, so this never waits.
+    func awaitAuthorizationResolution() async {}
+
+    /// Applies the current user-visible Warning alerts choice. Every request
+    /// carries a generation, so a late system completion cannot restore an
+    /// older choice after the user has tapped the control again.
+    func setWarningAlertsEnabled(
+        _ enabled: Bool,
+        knownAuthorization: NotificationAuthorization? = nil,
+        application: UIApplication? = nil
+    ) {
+        let application = application ?? UIApplication.shared
+        warningAlertIntentGeneration &+= 1
+        let generation = warningAlertIntentGeneration
+        warningAlertsEnabled = enabled
+        guard enabled else {
+            warningAlertAuthorization = .off
+            return
+        }
+        if let knownAuthorization {
+            warningAlertAuthorization = knownAuthorization
+        }
+
+        switch warningAlertAuthorization {
+        case .authorized, .denied, .requesting:
+            return
+        case .off, .notDetermined:
+            warningAlertAuthorization = .requesting
+        }
+
+        requestNotificationAuthorization(application) { [weak self] granted in
             Task { @MainActor [weak self] in
-                self?.resolveAuthorizationRequest(application)
+                guard let self,
+                      warningAlertIntentGeneration == generation,
+                      warningAlertsEnabled
+                else { return }
+                warningAlertAuthorization = granted ? .authorized : .denied
+                onAuthorizationResolved?()
             }
         }
     }
 
-    /// Waits for the authorization request started by `beginLiveLifecycle()`.
-    /// Keeping this pending until the callback returns makes notification
-    /// authorization and APNs registration part of the same quiescence
-    /// boundary as CloudKit work during sample entry.
-    func awaitAuthorizationResolution() async {
-        guard notificationAuthorizationStarted, !authorizationRequestResolved else {
-            if authorizationRequestResolved { registerIfLive(application: .shared) }
+    /// Keeps the delegate's recovery state synchronized with the authoritative
+    /// `notificationSettings()` read performed by the view model.
+    func updateWarningAlertAuthorization(_ authorization: NotificationAuthorization) {
+        guard warningAlertsEnabled else {
+            warningAlertAuthorization = .off
             return
         }
-        await withCheckedContinuation { continuation in
-            authorizationResolutionWaiters.append(continuation)
-        }
-    }
-
-    private func resolveAuthorizationRequest(_ application: UIApplication) {
-        guard !authorizationRequestResolved else { return }
-        authorizationRequestResolved = true
-        registerIfLive(application: application)
-        let waiters = authorizationResolutionWaiters
-        authorizationResolutionWaiters.removeAll()
-        waiters.forEach { $0.resume() }
+        guard warningAlertAuthorization != .requesting else { return }
+        warningAlertAuthorization = authorization
     }
 
     private func registerIfLive(application: UIApplication) {
         guard !liveActivitySuppressed, !remoteRegistrationStarted else { return }
         remoteRegistrationStarted = true
+        remoteRegistrationFailed = false
         registerForRemoteNotifications(application)
-        onAuthorizationResolved?()
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
         guard !liveActivitySuppressed else { return }
         clearBadge(application)
+        if remoteRegistrationFailed {
+            registerIfLive(application: application)
+        }
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
@@ -161,7 +201,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         clearBadge(application)
     }
 
-    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async
+    func application(_: UIApplication, didReceiveRemoteNotification _: [AnyHashable: Any]) async
         -> UIBackgroundFetchResult
     {
         await handleRemoteNotificationOnMainActor()
@@ -173,8 +213,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         return .newData
     }
 
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        // No device token this session -- push-driven sync/alerts won't
-        // fire, but the opt-in toggle's on-demand `sync()` still works.
+    func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError _: Error) {
+        // Keep the error non-sensitive. Foreground entry retries once per
+        // lifecycle opportunity; on-demand sync remains available meanwhile.
+        remoteRegistrationStarted = false
+        remoteRegistrationFailed = true
+        onRemoteRegistrationFailure?()
     }
 }

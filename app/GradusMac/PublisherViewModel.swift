@@ -1,6 +1,47 @@
 import Foundation
 import GradusKit
 
+public enum RequiredICloudMode: String, Equatable, Sendable {
+    case awaitingConfirmation
+    case confirmed
+
+    var allowsLiveWork: Bool {
+        self == .confirmed
+    }
+}
+
+enum RequiredICloudMigration {
+    static let modeKey = "requiredICloudMode"
+    static let versionKey = "requiredICloudModeVersion"
+    static let currentVersion = 1
+
+    static func migrate(
+        defaults: UserDefaults,
+        legacyKey: String,
+        writeMode: (UserDefaults, RequiredICloudMode) -> Void = { defaults, mode in
+            defaults.set(mode.rawValue, forKey: modeKey)
+            defaults.set(currentVersion, forKey: versionKey)
+        }
+    ) -> RequiredICloudMode {
+        let mode: RequiredICloudMode = if let stored = defaults.object(forKey: modeKey) as? String,
+                                          let storedMode = RequiredICloudMode(rawValue: stored)
+        {
+            storedMode
+        } else if defaults.object(forKey: legacyKey) == nil {
+            .confirmed
+        } else {
+            defaults.bool(forKey: legacyKey) ? .confirmed : .awaitingConfirmation
+        }
+        writeMode(defaults, mode)
+        guard let committed = defaults.object(forKey: modeKey) as? String,
+              RequiredICloudMode(rawValue: committed) == mode,
+              defaults.integer(forKey: versionKey) == currentVersion
+        else { return mode }
+        defaults.removeObject(forKey: legacyKey)
+        return mode
+    }
+}
+
 public enum CloudSyncState: Equatable, Sendable {
     case idle
     case publishing
@@ -18,13 +59,15 @@ public final class PublisherViewModel: ObservableObject {
     @Published public private(set) var updatedAt: String?
     @Published public var syncEnabled: Bool {
         didSet {
-            defaults.set(syncEnabled, forKey: Self.syncEnabledKey)
+            guard syncEnabled != oldValue else { return }
+            commitRequiredICloudMode(syncEnabled ? .confirmed : .awaitingConfirmation)
             if !syncEnabled {
                 syncOperationID &+= 1
                 syncState = .idle
             }
         }
     }
+
     @Published public var launchAtLoginEnabled: Bool
     @Published public private(set) var syncState: CloudSyncState = .idle
     /// When the last publish actually succeeded. Persisted, because the state
@@ -32,6 +75,7 @@ public final class PublisherViewModel: ObservableObject {
     /// been running for a week would otherwise claim it had never synced until
     /// the next snapshot changed, which is exactly when a user checks.
     @Published public private(set) var lastSyncedAt: Date?
+    @Published public private(set) var requiredICloudMode: RequiredICloudMode
 
     /// Device-local display preferences, mirroring `DashboardViewModel`'s on
     /// iOS down to the `UserDefaults` key names. They are deliberately *not*
@@ -44,12 +88,14 @@ public final class PublisherViewModel: ObservableObject {
             advancePresentationRevision()
         }
     }
+
     @Published public var localWarningThresholdPercent: Double {
         didSet {
             defaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
             advancePresentationRevision()
         }
     }
+
     /// Matches `DashboardViewModel.showExhausted`, including its default of
     /// visible: a provider you can't use is still a provider you asked about,
     /// so hiding it is opt-in.
@@ -59,6 +105,7 @@ public final class PublisherViewModel: ObservableObject {
             advancePresentationRevision()
         }
     }
+
     /// Forces the menu's provider subtree to be rebuilt after a device-local
     /// display choice changes. `MenuBarExtra` keeps its window-hosted content
     /// alive while Settings is open; merely updating a child initializer did
@@ -67,6 +114,9 @@ public final class PublisherViewModel: ObservableObject {
     private var syncOperationID: UInt64 = 0
 
     static let syncEnabledKey = "iCloudSyncEnabled"
+    static let requiredICloudModeKey = RequiredICloudMigration.modeKey
+    static let requiredICloudModeVersionKey = RequiredICloudMigration.versionKey
+    static let requiredICloudModeVersion = RequiredICloudMigration.currentVersion
     static let lastSyncedAtKey = "iCloudLastSyncedAt"
     static let providerSortOptionKey = "providerSortOption"
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
@@ -91,32 +141,51 @@ public final class PublisherViewModel: ObservableObject {
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // Default OFF: usage data leaves the device only on explicit opt-in.
-        self.syncEnabled = defaults.bool(forKey: Self.syncEnabledKey)
-        self.launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
+        let migratedMode = RequiredICloudMigration.migrate(
+            defaults: defaults, legacyKey: Self.syncEnabledKey
+        )
+        requiredICloudMode = migratedMode
+        syncEnabled = migratedMode.allowsLiveWork
+        launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
         // `object(forKey:)` rather than `double(forKey:)` -- the latter returns
         // 0 for a missing key, which would render as 1970 instead of "never".
-        self.lastSyncedAt = (defaults.object(forKey: Self.lastSyncedAtKey) as? Double)
+        lastSyncedAt = (defaults.object(forKey: Self.lastSyncedAtKey) as? Double)
             .map { Date(timeIntervalSince1970: $0) }
-        self.providerSortOption = ProviderSortOption(
+        providerSortOption = ProviderSortOption(
             rawValue: defaults.string(forKey: Self.providerSortOptionKey) ?? ""
         ) ?? .mostUrgent
         // Same `object(forKey:)` guard as the timestamp above, for the same
         // reason: `double(forKey:)` returns 0 for a missing key, which would
         // silently mean "warn me about nothing" instead of the 20% default.
         if defaults.object(forKey: Self.localWarningThresholdPercentKey) != nil {
-            self.localWarningThresholdPercent =
+            localWarningThresholdPercent =
                 defaults.double(forKey: Self.localWarningThresholdPercentKey)
         } else {
-            self.localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
+            localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
         }
         // And again: `bool(forKey:)` returns false for a missing key, which
         // would make a fresh install default to *hiding* exhausted providers.
         if defaults.object(forKey: Self.showExhaustedKey) != nil {
-            self.showExhausted = defaults.bool(forKey: Self.showExhaustedKey)
+            showExhausted = defaults.bool(forKey: Self.showExhaustedKey)
         } else {
-            self.showExhausted = true
+            showExhausted = true
         }
+    }
+
+    /// Confirms the required iCloud setup from the concrete Continue action.
+    public func confirmRequiredICloud() {
+        syncEnabled = true
+    }
+
+    private func commitRequiredICloudMode(_ mode: RequiredICloudMode) {
+        requiredICloudMode = mode
+        defaults.set(mode.rawValue, forKey: Self.requiredICloudModeKey)
+        defaults.set(Self.requiredICloudModeVersion, forKey: Self.requiredICloudModeVersionKey)
+        guard defaults.object(forKey: Self.requiredICloudModeKey) as? String == mode.rawValue,
+              defaults.integer(forKey: Self.requiredICloudModeVersionKey)
+              == Self.requiredICloudModeVersion
+        else { return }
+        defaults.removeObject(forKey: Self.syncEnabledKey)
     }
 
     public func apply(_ payload: SnapshotPayload) {
@@ -130,7 +199,7 @@ public final class PublisherViewModel: ObservableObject {
 
     @discardableResult
     public func cloudSyncDidStart() -> UInt64? {
-        guard syncEnabled else { return nil }
+        guard requiredICloudMode.allowsLiveWork else { return nil }
         syncOperationID &+= 1
         syncState = .publishing
         return syncOperationID
@@ -161,7 +230,8 @@ public final class PublisherViewModel: ObservableObject {
             // to the old value is the only signal a user ever got; the reason
             // was discarded here.
             GradusLog.app.warning(
-                "could not set launch-at-login to \(enabled): \(error.localizedDescription)")
+                "could not set launch-at-login to \(enabled): \(error.localizedDescription)"
+            )
             launchAtLoginEnabled = LaunchAtLoginManager.isEnabled
         }
     }

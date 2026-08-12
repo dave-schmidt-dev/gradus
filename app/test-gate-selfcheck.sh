@@ -119,6 +119,24 @@ validate_ios_destination_contract() {
 validate_ios_destination_contract "$GATE_SCRIPT" ||
   fail "iPhone/iPad destination or UI-selector contract is incomplete"
 
+# Every iOS test leg must use one fresh, run-scoped DerivedData directory.
+# Without it, snapshot resources copied into a previous run can survive a
+# source change and make the release gate exercise stale test bundles. Mac
+# legs intentionally retain their default DerivedData behavior.
+validate_derived_data_contract() {
+  local gate_path="$1" leg block
+  grep -Fq 'derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"' "$gate_path" ||
+    return 1
+  grep -Fq 'rm -rf "$derived_data_dir"' "$gate_path" || return 1
+  for leg in GradusiOS-iPhone GradusiOS-iPad GradusiOSUI; do
+    block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$gate_path")"
+    [[ "$block" == *'-derivedDataPath "$derived_data_dir"'* ]] || return 1
+  done
+}
+
+validate_derived_data_contract "$GATE_SCRIPT" ||
+  fail "Xcode test legs are not isolated in fresh run-scoped DerivedData"
+
 # Prove the contract rejects a destination copy/paste regression, not just
 # that the current source happens to contain the expected strings.
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-gate-contract.XXXXXX")"
@@ -126,6 +144,15 @@ sed 's/platform=iOS Simulator,id=\$ipad_udid/platform=iOS Simulator,id=\$sim_udi
   "$GATE_SCRIPT" > "$mutated_gate"
 if validate_ios_destination_contract "$mutated_gate"; then
   fail "destination contract accepted an iPad leg pointed at the iPhone simulator"
+fi
+rm -f "$mutated_gate"
+
+# Prove the DerivedData check rejects a partial wiring regression rather than
+# only recognizing the current source.
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-derived-data-contract.XXXXXX")"
+sed '/-derivedDataPath "\$derived_data_dir"/d' "$GATE_SCRIPT" > "$mutated_gate"
+if validate_derived_data_contract "$mutated_gate"; then
+  fail "DerivedData contract accepted an Xcode test leg without isolation"
 fi
 rm -f "$mutated_gate"
 
@@ -144,16 +171,25 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
 # otherwise the image count can hide a zero-test UI target.
 snapshot_count="${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"
 ios_ui_test_count="$(rg --no-heading '^\s*func test' "$SCRIPT_DIR/GradusiOSUITests" -g '*.swift' | wc -l | tr -d ' ')"
+[[ "$ios_ui_test_count" -eq 9 ]] ||
+  fail "expected 9 GradusiOSUITests workflows, found $ios_ui_test_count"
 ipad_leg_index=-1
+iphone_ui_leg_index=-1
 for ((index = 0; index < leg_count; index++)); do
   if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOS-iPad" ]]; then
     ipad_leg_index="$index"
-    break
+  fi
+  if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOSUI" ]]; then
+    iphone_ui_leg_index="$index"
   fi
 done
 if [[ "$ipad_leg_index" -lt 0 ||
       "${COUNTING_LEG_MINIMUMS[ipad_leg_index]}" -lt $((snapshot_count + ios_ui_test_count)) ]]; then
   fail "iPad aggregate floor does not protect its UI target from snapshot masking"
+fi
+if [[ "$iphone_ui_leg_index" -lt 0 ||
+      "${COUNTING_LEG_MINIMUMS[iphone_ui_leg_index]}" -lt "$ios_ui_test_count" ]]; then
+  fail "dedicated iPhone UI floor does not protect its UI target"
 fi
 
 for ((index = 0; index < leg_count; index++)); do
