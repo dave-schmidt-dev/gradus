@@ -443,6 +443,11 @@ bws-secret-exec app-store-connect-upload --        # archives, codesigns, upload
 # replacement is prepared.
 bws-secret-exec app-store-connect-upload -- ./archive-upload-ios.sh \
   --rollover-assigned --supersession-reason "release-blocking correction"
+# Generate and persist the candidate IPA, evidence, and walkthrough without
+# contacting App Store Connect. The release owner reviews the walkthrough, then
+# reruns the same command without --prepare-only to resume the exact candidate.
+bws-secret-exec app-store-connect-upload -- ./archive-upload-ios.sh \
+  --prepare-only --rollover-assigned --supersession-reason "release-blocking correction"
 bws-secret-exec app-store-connect-testflight-setup -- <candidate-id> <build> \
   --group-id <confirmed-internal-group-id> --group-name "<confirmed-group-name>" \
   --ledger .release-state/candidate.json \

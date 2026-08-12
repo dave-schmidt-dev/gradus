@@ -159,6 +159,30 @@ assert_upload_argument_rejected "whitespace reason" "requires --supersession-rea
   --rollover-assigned --supersession-reason "   "
 assert_upload_argument_rejected "unknown argument" "unknown argument" --unexpected-flag
 
+assert_upload_option_parsed() {
+  local label="$1"
+  shift
+  set +e
+  local output
+  output="$(
+    APP_STORE_CONNECT_API_KEY=fixture-key \
+    APP_STORE_CONNECT_KEY_ID=fixture-key-id \
+    APP_STORE_CONNECT_ISSUER_ID=fixture-issuer \
+    GRADUS_PRODUCER_EVIDENCE_PATH="$TEST_ROOT/missing-evidence.json" \
+      "$UPLOAD_SCRIPT" "$@" 2>&1
+  )"
+  local status=$?
+  set -e
+  [[ "$status" -ne 64 && "$output" != *"unknown argument"* ]] || {
+    echo "FAIL: $label was rejected during option parsing" >&2
+    echo "$output" >&2
+    exit 1
+  }
+}
+assert_upload_option_parsed "prepare-only" --prepare-only
+assert_upload_option_parsed "prepare-only with assigned rollover" \
+  --prepare-only --rollover-assigned --supersession-reason correction
+
 rollover_root="$TEST_ROOT/rollover"
 rollover_ledger="$rollover_root/candidate.json"
 rollover_workspace="$rollover_root/candidates/old"
@@ -356,6 +380,126 @@ validate_producer_evidence_boundary "$TEST_ROOT/matching.json" "$EXPECTED_MAC_BU
   exit 1
 }
 
+# Exercise main's prepared-candidate resume path without invoking archive
+# tooling or App Store Connect. The checkout is intentionally dirty while
+# this hermetic test runs, so the fixture's source revision is checked by a
+# narrow test seam instead of weakening the production validation function.
+behavior_root="$TEST_ROOT/prepare-only-behavior"
+behavior_workspace="$behavior_root/candidate"
+behavior_ledger="$behavior_root/candidate.json"
+behavior_ipa="$behavior_workspace/GradusiOS.ipa"
+behavior_candidate_evidence="$behavior_workspace/candidate-evidence.json"
+behavior_walkthrough="$behavior_workspace/walkthrough.md"
+behavior_producer_evidence="$behavior_root/publish-evidence.json"
+behavior_receipt="$behavior_workspace/ios-artifact.json"
+behavior_candidate_id="fixture-prepared-candidate"
+behavior_source_revision="fixture-resume-revision"
+behavior_build=42
+behavior_marketing_version="$(read_marketing_version "$SCRIPT_DIR/project.yml" GradusiOS)"
+mkdir -p "$behavior_workspace"
+printf 'hermetic prepared candidate ipa\n' >"$behavior_ipa"
+printf '# Fixture candidate walkthrough\n' >"$behavior_walkthrough"
+behavior_artifact_digest="$(sha256_file "$behavior_ipa")"
+behavior_walkthrough_digest="$(sha256_file "$behavior_walkthrough")"
+behavior_published_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+write_evidence_fixture "$behavior_producer_evidence" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" \
+  "$behavior_published_at" "$behavior_source_revision" "$EXPECTED_PROJECT_SHA256"
+behavior_producer_digest="$(sha256_file "$behavior_producer_evidence")"
+behavior_source_digest="$(printf '%s' fixture-source | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+prepare_candidate_ledger "$behavior_ledger" "$behavior_candidate_id" "$behavior_source_digest" "$EXPECTED_PROJECT_SHA256" \
+  "$behavior_artifact_digest" "$behavior_build" "$behavior_marketing_version" "$behavior_source_revision" \
+  "$EXPECTED_MAC_BUILD" "$behavior_producer_digest" "$behavior_published_at" "$behavior_workspace" "$behavior_ipa"
+persist_candidate_evidence "$behavior_ledger" "$behavior_candidate_evidence" "$behavior_candidate_id" \
+  "$behavior_source_digest" "$EXPECTED_PROJECT_SHA256" "$behavior_artifact_digest" "$behavior_build" \
+  "$behavior_marketing_version" "$behavior_source_revision" "$EXPECTED_MAC_BUILD" "$behavior_producer_digest" \
+  "$behavior_walkthrough" "$behavior_walkthrough_digest" "$behavior_published_at" "$behavior_workspace" "$behavior_ipa"
+
+behavior_bin="$behavior_root/bin"
+behavior_transition_log="$behavior_root/transitions.log"
+behavior_key_log="$behavior_root/mktemp.log"
+behavior_xcrun_log="$behavior_root/xcrun.log"
+mkdir -p "$behavior_bin"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\\n" "$*" >> "$GRADUS_TEST_KEY_LOG"' \
+  'exec /usr/bin/mktemp "$@"' >"$behavior_bin/mktemp"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\\n" "$*" >> "$GRADUS_TEST_XCRUN_LOG"' \
+  'exit 0' >"$behavior_bin/xcrun"
+chmod 700 "$behavior_bin/mktemp" "$behavior_bin/xcrun"
+
+# The seam records production's transition requests while preventing even a
+# mocked transition from mutating the fixture before the assertions run.
+validate_resumed_source_revision() {
+  [[ "$1" == "$(cd "$SCRIPT_DIR/.." && pwd)" && "$2" == "$behavior_source_revision" ]] || {
+    echo "FAIL: prepared-candidate source fixture was not selected" >&2
+    return 1
+  }
+}
+transition_candidate_state() {
+  printf '%s\n' "$2" >>"$behavior_transition_log"
+}
+
+export APP_STORE_CONNECT_API_KEY=fixture-api-key
+export APP_STORE_CONNECT_KEY_ID=fixture-key-id
+export APP_STORE_CONNECT_ISSUER_ID=fixture-issuer
+export GRADUS_PRODUCER_EVIDENCE_PATH="$behavior_producer_evidence"
+export GRADUS_CANDIDATE_LEDGER_PATH="$behavior_ledger"
+export GRADUS_CANDIDATE_RECEIPT_PATH="$behavior_receipt"
+export GRADUS_TEST_KEY_LOG="$behavior_key_log"
+export GRADUS_TEST_XCRUN_LOG="$behavior_xcrun_log"
+behavior_path="$PATH"
+export PATH="$behavior_bin:$behavior_path"
+unset API_PRIVATE_KEYS_DIR
+
+set +e
+prepare_only_output="$(main --prepare-only 2>&1)"
+prepare_only_status=$?
+set -e
+[[ "$prepare_only_status" -eq 0 && "$prepare_only_output" == *"upload deferred"* ]] || {
+  echo "FAIL: --prepare-only did not return successfully from a prepared candidate" >&2
+  echo "$prepare_only_output" >&2
+  exit 1
+}
+[[ ! -s "$behavior_transition_log" && ! -s "$behavior_key_log" && ! -s "$behavior_xcrun_log" ]] || {
+  echo "FAIL: --prepare-only reached upload transition, key creation, or xcrun" >&2
+  exit 1
+}
+PYTHONPATH="$SCRIPT_DIR" /usr/bin/python3 - "$behavior_ledger" <<'PY'
+import sys
+from release_candidate.ledger import CandidateLedger, CandidateState
+
+record = CandidateLedger(sys.argv[1]).load()
+assert record is not None and record.state == CandidateState.PREPARED
+PY
+
+set +e
+resume_output="$(main 2>&1)"
+resume_status=$?
+set -e
+[[ "$resume_status" -eq 0 && "$resume_output" == *"Uploading to App Store Connect"* ]] || {
+  echo "FAIL: normal prepared-candidate resume did not reach mocked upload" >&2
+  echo "$resume_output" >&2
+  exit 1
+}
+grep -Fxq uploading "$behavior_transition_log" || {
+  echo "FAIL: normal resume did not request the uploading transition" >&2
+  exit 1
+}
+grep -Fq -- '--upload-package' "$behavior_xcrun_log" || {
+  echo "FAIL: normal resume did not reach the mocked xcrun altool attempt" >&2
+  exit 1
+}
+grep -Fq -- '-d' "$behavior_key_log" || {
+  echo "FAIL: normal resume did not create the temporary API-key directory" >&2
+  exit 1
+}
+export PATH="$behavior_path"
+unset APP_STORE_CONNECT_API_KEY APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID
+unset API_PRIVATE_KEYS_DIR GRADUS_PRODUCER_EVIDENCE_PATH GRADUS_CANDIDATE_LEDGER_PATH
+unset GRADUS_CANDIDATE_RECEIPT_PATH GRADUS_TEST_KEY_LOG GRADUS_TEST_XCRUN_LOG
+
 write_evidence_fixture "$TEST_ROOT/missing-fields.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp"
 assert_boundary_refused missing-fields "$TEST_ROOT/missing-fields.json"
 write_evidence_fixture "$TEST_ROOT/mismatched-source.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp" \
@@ -538,9 +682,18 @@ grep -Fq 'Revalidating fresh producer evidence before resumed upload' "$UPLOAD_S
 prepare_line="$(grep -n 'Persisting machine-written candidate ledger before walkthrough generation' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 walkthrough_line="$(grep -n -- '-m release_candidate.walkthrough' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 uploading_line="$(grep -n 'transition_candidate_state "\$candidate_ledger_path" uploading' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+prepare_only_line="$(grep -n 'if (( prepare_only )); then' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+key_dir_line="$(grep -n 'KEY_DIR="\$(mktemp -d)"' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+altool_line="$(grep -n 'xcrun altool --upload-package' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 [[ -n "$prepare_line" && -n "$walkthrough_line" && -n "$uploading_line" \
+  && -n "$prepare_only_line" && -n "$key_dir_line" && -n "$altool_line" \
   && "$prepare_line" -lt "$walkthrough_line" && "$walkthrough_line" -lt "$uploading_line" ]] || {
   echo "FAIL: candidate ledger, walkthrough, and uploading transitions are out of order" >&2
+  exit 1
+}
+[[ "$walkthrough_line" -lt "$prepare_only_line" && "$prepare_only_line" -lt "$uploading_line" \
+  && "$prepare_only_line" -lt "$key_dir_line" && "$prepare_only_line" -lt "$altool_line" ]] || {
+  echo "FAIL: prepare-only exit is not before upload transition or key/altool setup" >&2
   exit 1
 }
 

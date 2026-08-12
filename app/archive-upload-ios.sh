@@ -634,9 +634,10 @@ bump_ios_build_number() {
 }
 
 main() {
-  local rollover_assigned=0 supersession_reason=""
+  local prepare_only=0 rollover_assigned=0 supersession_reason=""
   while (($# > 0)); do
     case "$1" in
+      --prepare-only) prepare_only=1 ;;
       --rollover-assigned) rollover_assigned=1 ;;
       --supersession-reason)
         (($# >= 2)) || {
@@ -649,6 +650,7 @@ main() {
       -h | --help)
         sed -n '2,28p' "${BASH_SOURCE[0]}"
         echo "Options:"
+        echo "  --prepare-only                              prepare and persist a resumable candidate without uploading"
         echo "  --rollover-assigned                         archive the assigned candidate before replacement"
         echo "  --supersession-reason <reason>              record why the assigned candidate is superseded"
         return 0
@@ -914,6 +916,10 @@ os.chmod(temporary, 0o600)
 os.replace(temporary, path)
 PY
   failure_hook receipt-persistence
+  if (( prepare_only )); then
+    echo "==> Prepared candidate $candidate_id build $NEXT_BUILD; upload deferred"
+    return 0
+  fi
   transition_candidate_state "$candidate_ledger_path" uploading
 
 # altool's --api-key auth looks for AuthKey_<key-id>.p8 in a fixed set of
