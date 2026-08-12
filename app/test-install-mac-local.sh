@@ -21,6 +21,52 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_SCRIPT="$SCRIPT_DIR/install-mac-local.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gradus-install-tests.XXXXXX")"
 FAKE_BIN="$TEST_ROOT/bin"
+SOURCE_PLIST="$SCRIPT_DIR/GradusMac/Info.plist"
+PROJECT_CONFIG="$SCRIPT_DIR/project.yml"
+
+assert_plist_value() {
+  local key="$1" expected="$2" actual
+  actual="$(/usr/bin/plutil -extract "$key" raw -o - "$SOURCE_PLIST")"
+  [[ "$actual" == "$expected" ]] || {
+    echo "FAIL: GradusMac/Info.plist $key is '$actual', expected '$expected'" >&2
+    exit 1
+  }
+}
+
+# This checks the physical plist XcodeGen writes, independently of the fake
+# PlistBuddy used below for installer behavior.
+assert_plist_value CFBundleShortVersionString '$(MARKETING_VERSION)'
+assert_plist_value CFBundleVersion '$(CURRENT_PROJECT_VERSION)'
+assert_plist_value GRADUS_SOURCE_REVISION '$(GRADUS_SOURCE_REVISION)'
+assert_plist_value GRADUS_PROJECT_SHA256 '$(GRADUS_PROJECT_SHA256)'
+assert_plist_value LSUIElement true
+
+# Keep the generated plist as a source file, not an ignored build artifact.
+# The parent checkpoint stages the newly added file; before that checkpoint
+# this also gives a useful failure if a future ignore rule hides it.
+if git -C "$SCRIPT_DIR/.." check-ignore -q "$SOURCE_PLIST"; then
+  echo "FAIL: GradusMac/Info.plist is ignored instead of being a tracked source" >&2
+  exit 1
+fi
+
+# The generated Xcode project is intentionally ignored and is not required for
+# this hermetic test. Assert the source-of-truth XcodeGen target instead.
+MAC_TARGET_CONFIG="$(awk '
+  /^  GradusMac:/ { in_target=1 }
+  in_target && /^  [[:alnum:]_]+:/ && $0 !~ /^  GradusMac:/ { exit }
+  in_target { print }
+' "$PROJECT_CONFIG")"
+assert_mac_target_config() {
+  local expected="$1"
+  grep -Fq "$expected" <<<"$MAC_TARGET_CONFIG" || {
+    echo "FAIL: GradusMac XcodeGen target is missing '$expected'" >&2
+    exit 1
+  }
+}
+assert_mac_target_config '    info:'
+assert_mac_target_config '      path: GradusMac/Info.plist'
+assert_mac_target_config '        GRADUS_PROJECT_SHA256: $(GRADUS_PROJECT_SHA256)'
+assert_mac_target_config '        GRADUS_SOURCE_REVISION: $(GRADUS_SOURCE_REVISION)'
 
 cleanup() {
   rm -rf "$TEST_ROOT" 2>/dev/null || true
@@ -91,13 +137,12 @@ printf '%s\n' "$*" >>"${FAKE_RUNTIME:?}/xcodegen-calls"
 exit 0
 FAKE
 
-# Records the subcommand and, on export, materializes the bundle the real
-# exportArchive would have produced.
+# Records the subcommand and materializes archive/export bundle fixtures.
 cat >"$FAKE_BIN/xcodebuild" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >>"${FAKE_RUNTIME:?}/xcodebuild-calls"
-if [[ "$*" == *"-exportArchive"* ]]; then
+if [[ "${1:-}" == "-exportArchive" ]]; then
   export_path=""
   while (($# > 0)); do
     if [[ "$1" == "-exportPath" ]]; then
@@ -107,6 +152,15 @@ if [[ "$*" == *"-exportArchive"* ]]; then
   done
   mkdir -p "$export_path/GradusMac.app/Contents/MacOS"
   : >"$export_path/GradusMac.app/Contents/Info.plist"
+fi
+if [[ "${1:-}" == "archive" ]]; then
+  archive_path=""
+  while (($# > 0)); do
+    if [[ "$1" == "-archivePath" ]]; then archive_path="$2"; fi
+    shift
+  done
+  mkdir -p "$archive_path/Products/Applications/GradusMac.app/Contents"
+  : >"$archive_path/Products/Applications/GradusMac.app/Contents/Info.plist"
 fi
 exit 0
 FAKE
@@ -119,13 +173,29 @@ key="$2"
 if [[ "$plist" == *"/export/"* ]]; then
   short="${FAKE_INCOMING_SHORT:-9.9.9}"
   build="${FAKE_INCOMING_BUILD:-99}"
+  source_revision="${FAKE_INCOMING_SOURCE_REVISION:-fixture-revision}"
+  project_sha256="${FAKE_INCOMING_PROJECT_SHA256:-${FAKE_PROJECT_SHA256:?}}"
+elif [[ "$plist" == *".xcarchive/"* ]]; then
+  short="${FAKE_ARCHIVE_SHORT:-9.9.9}"
+  build="${FAKE_ARCHIVE_BUILD:-99}"
+  source_revision="${FAKE_ARCHIVE_SOURCE_REVISION:-fixture-revision}"
+  project_sha256="${FAKE_ARCHIVE_PROJECT_SHA256:-${FAKE_PROJECT_SHA256:?}}"
+elif [[ "$plist" == *"/incoming/"* ]]; then
+  short="${FAKE_INCOMING_SHORT:-9.9.9}"
+  build="${FAKE_INCOMING_BUILD:-99}"
+  source_revision="${FAKE_INCOMING_SOURCE_REVISION:-fixture-revision}"
+  project_sha256="${FAKE_INCOMING_PROJECT_SHA256:-${FAKE_PROJECT_SHA256:?}}"
 else
   short="${FAKE_INSTALLED_SHORT:-1.0.0}"
   build="${FAKE_INSTALLED_BUILD:-1}"
+  source_revision="${FAKE_INSTALLED_SOURCE_REVISION:-fixture-revision}"
+  project_sha256="${FAKE_INSTALLED_PROJECT_SHA256:-${FAKE_PROJECT_SHA256:?}}"
 fi
 case "$key" in
   *CFBundleShortVersionString*) printf '%s\n' "$short" ;;
   *CFBundleVersion*) printf '%s\n' "$build" ;;
+  *GRADUS_SOURCE_REVISION*) printf '%s\n' "$source_revision" ;;
+  *GRADUS_PROJECT_SHA256*) printf '%s\n' "$project_sha256" ;;
   *) exit 1 ;;
 esac
 FAKE
@@ -162,9 +232,13 @@ setup_case() {
   chmod 700 "$CASE_INSTALL_SCRIPT"
   export INSTALL_DIR BUILD_DIR FAKE_RUNTIME
   export GRADUS_SOURCE_REVISION=fixture-revision
+  FAKE_PROJECT_SHA256="$(/usr/bin/shasum -a 256 "$CASE_ROOT/project.yml" | /usr/bin/awk '{print $1}')"
+  export FAKE_PROJECT_SHA256
   export PLIST_BUDDY="$FAKE_BIN/plistbuddy"
   export QUIT_TIMEOUT_SECONDS=1
   unset FAKE_CODESIGN_FAIL_SUBSTR FAKE_XATTR_FAIL_SUBSTR FAKE_APP_RUNNING_FLAG
+  unset FAKE_ARCHIVE_SOURCE_REVISION FAKE_ARCHIVE_PROJECT_SHA256
+  unset FAKE_INCOMING_SOURCE_REVISION FAKE_INCOMING_PROJECT_SHA256
   unset FAKE_OPEN_EXIT FAKE_PKILL_EXIT
 }
 
@@ -275,6 +349,30 @@ marker_is "$INSTALL_DIR/GradusMac.app" "keep-me" ||
   fail "the installed app was touched despite an unverifiable export"
 [[ ! -e "$FAKE_RUNTIME/pkill-calls" ]] || fail "quit the running app before knowing the build was good"
 no_staging_artifacts
+end
+
+begin "a provenance-mismatched export never reaches the destination"
+setup_case export-provenance-fails
+make_bundle "$BUILD_DIR/export/GradusMac.app"
+make_bundle "$INSTALL_DIR/GradusMac.app" "keep-me"
+export FAKE_INCOMING_SOURCE_REVISION="wrong-revision"
+if run_install --skip-build; then
+  fail "install succeeded despite mismatched exported provenance"
+fi
+marker_is "$INSTALL_DIR/GradusMac.app" "keep-me" || fail "provenance mismatch touched installed app"
+grep -q "source revision" "$FAKE_RUNTIME/stderr" || fail "provenance mismatch was not reported"
+no_staging_artifacts
+end
+
+begin "a provenance-mismatched archive stops before export"
+setup_case archive-provenance-fails
+export FAKE_ARCHIVE_PROJECT_SHA256="wrong-digest"
+if run_install; then
+  fail "build succeeded despite mismatched archived provenance"
+fi
+if grep -Fq -- "-exportArchive" "$FAKE_RUNTIME/xcodebuild-calls"; then
+  fail "export ran after archived provenance mismatch"
+fi
 end
 
 begin "refuses to swap a bundle that is still running"

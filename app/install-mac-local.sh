@@ -50,6 +50,7 @@ BUILD_DIR="${BUILD_DIR:-build}"
 ARCHIVE_PATH="$BUILD_DIR/GradusMac.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
 APP_PATH="$EXPORT_PATH/$APP_NAME.app"
+ARCHIVE_APP_PATH="$ARCHIVE_PATH/Products/Applications/$APP_NAME.app"
 ALLOWED_UNTRACKED_SOURCE_REPORT="verifications/2026-08-09-internal-testflight-candidate-migration-verification.md"
 assert_source_checkout_clean() {
   local root="$1" status_output status_line dirty=0
@@ -159,6 +160,34 @@ strip_and_verify() {
   return 0
 }
 
+verify_provenance() {
+  local target="$1"
+  local label="$2"
+  local plist="$target/Contents/Info.plist"
+  local source_revision project_sha256
+
+  if [[ ! -f "$plist" ]]; then
+    echo "FAIL: $label bundle has no Info.plist for provenance verification." >&2
+    return 1
+  fi
+  if ! source_revision="$($PLIST_BUDDY -c 'Print :GRADUS_SOURCE_REVISION' "$plist" 2>/dev/null)"; then
+    echo "FAIL: $label bundle is missing GRADUS_SOURCE_REVISION." >&2
+    return 1
+  fi
+  if ! project_sha256="$($PLIST_BUDDY -c 'Print :GRADUS_PROJECT_SHA256' "$plist" 2>/dev/null)"; then
+    echo "FAIL: $label bundle is missing GRADUS_PROJECT_SHA256." >&2
+    return 1
+  fi
+  if [[ "$source_revision" != "$SOURCE_REVISION" ]]; then
+    echo "FAIL: $label bundle source revision does not match the clean checkout." >&2
+    return 1
+  fi
+  if [[ "$project_sha256" != "$PROJECT_SHA256" ]]; then
+    echo "FAIL: $label bundle project digest does not match project.yml." >&2
+    return 1
+  fi
+}
+
 if ((skip_build == 0)); then
   echo "==> Regenerating Xcode project from project.yml"
   xcodegen generate
@@ -175,6 +204,12 @@ if ((skip_build == 0)); then
     -destination "generic/platform=macOS" \
     GRADUS_SOURCE_REVISION="$SOURCE_REVISION" \
     GRADUS_PROJECT_SHA256="$PROJECT_SHA256"
+
+  if [[ ! -d "$ARCHIVE_APP_PATH" ]]; then
+    echo "FAIL: archive did not contain $APP_NAME.app." >&2
+    exit 66
+  fi
+  verify_provenance "$ARCHIVE_APP_PATH" "archived" || exit 65
 
   echo "==> Exporting for Developer ID distribution"
   # Export the same Developer ID-signed artifact that is installed locally.
@@ -199,6 +234,7 @@ echo "==> Verifying the exported bundle"
 if ! strip_and_verify "$APP_PATH" "exported"; then
   exit 65
 fi
+verify_provenance "$APP_PATH" "exported" || exit 65
 
 incoming_version="$(bundle_version "$APP_PATH")"
 if [[ -d "$INSTALLED_APP" ]]; then
@@ -250,6 +286,7 @@ echo "==> Verifying the staged copy in place"
 if ! strip_and_verify "$STAGED_APP" "staged"; then
   exit 65
 fi
+verify_provenance "$STAGED_APP" "staged" || exit 65
 
 echo "==> Swapping $INSTALLED_APP"
 rm -rf "$PREVIOUS_APP"

@@ -61,10 +61,8 @@ targets:
         # builds carry a semantic marketing version like iOS; the build number
         # distinguishes successive local installs of that patch release.
         CURRENT_PROJECT_VERSION: "17"
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_LSUIElement: YES
-        INFOPLIST_KEY_GRADUS_SOURCE_REVISION: "$(GRADUS_SOURCE_REVISION)"
-        INFOPLIST_KEY_GRADUS_PROJECT_SHA256: "$(GRADUS_PROJECT_SHA256)"
+        # The explicit plist below is generated from this properties block;
+        # XcodeGen overwrites the physical file on every `generate`.
         # Without this the target compiles no app icon at all -- and does so
         # silently, with no build warning: the shipped bundle had an empty
         # Contents/Resources and no CFBundleIconName, so macOS fell back to the
@@ -92,6 +90,21 @@ targets:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Developer ID Application"
           PROVISIONING_PROFILE_SPECIFIER: "Gradus Mac Developer ID (API-created)"
+    info:
+      path: GradusMac/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: $(DEVELOPMENT_LANGUAGE)
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        GRADUS_PROJECT_SHA256: $(GRADUS_PROJECT_SHA256)
+        GRADUS_SOURCE_REVISION: $(GRADUS_SOURCE_REVISION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSUIElement: true
 
   GradusiOS:
     type: application
