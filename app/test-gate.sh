@@ -280,7 +280,11 @@ echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
 assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
-SIM_DEVICE_NAME="iPhone 16"
+# Plain "iPhone 16" collides with whatever other iPhone 16 simulators exist
+# on this machine (Xcode's own default, other projects' gate devices); a
+# dedicated name is the only way `simctl list | grep` can resolve to exactly
+# one UDID instead of silently picking whichever one `simctl` lists first.
+SIM_DEVICE_NAME="Gradus Gate iPhone 16 2026-08-11"
 SIM_OS_VERSION="26.5"
 SIM_RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
@@ -334,7 +338,14 @@ xcodegen generate
 
 echo "==> Ensuring the pinned simulator exists: $SIM_DEVICE_NAME / iOS $SIM_OS_VERSION"
 simulator_created=0
-sim_udid="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep "$SIM_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)"
+sim_matches="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep "$SIM_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' || true)"
+sim_match_count="$(printf '%s\n' "$sim_matches" | sed '/^$/d' | wc -l | tr -d ' ')"
+if [[ "$sim_match_count" -gt 1 ]]; then
+  echo "FAIL: $sim_match_count simulators are named \"$SIM_DEVICE_NAME\" on iOS $SIM_OS_VERSION" >&2
+  echo "      -- the gate needs exactly one match to pin reliably; delete the duplicate." >&2
+  exit 1
+fi
+sim_udid="$sim_matches"
 if [[ -z "$sim_udid" ]]; then
   echo "    Creating $SIM_DEVICE_NAME (iOS $SIM_OS_VERSION) simulator..."
   sim_udid="$(xcrun simctl create "$SIM_DEVICE_NAME" "$SIM_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
@@ -347,7 +358,14 @@ echo "==> Ensuring the pinned iPad exists: $IPAD_DEVICE_NAME / iOS $SIM_OS_VERSI
 # the match to the UDID column so a same-prefix variant (e.g. the "(16GB)"
 # device type) can't be picked up by accident.
 ipad_simulator_created=0
-ipad_udid="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep -F "$IPAD_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)"
+ipad_matches="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep -F "$IPAD_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' || true)"
+ipad_match_count="$(printf '%s\n' "$ipad_matches" | sed '/^$/d' | wc -l | tr -d ' ')"
+if [[ "$ipad_match_count" -gt 1 ]]; then
+  echo "FAIL: $ipad_match_count simulators are named \"$IPAD_DEVICE_NAME\" on iOS $SIM_OS_VERSION" >&2
+  echo "      -- the gate needs exactly one match to pin reliably; delete the duplicate." >&2
+  exit 1
+fi
+ipad_udid="$ipad_matches"
 if [[ -z "$ipad_udid" ]]; then
   echo "    Creating $IPAD_DEVICE_NAME (iOS $SIM_OS_VERSION) simulator..."
   ipad_udid="$(xcrun simctl create "$IPAD_DEVICE_NAME" "$IPAD_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
