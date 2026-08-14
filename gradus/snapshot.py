@@ -1023,6 +1023,28 @@ def _project_codex_spark_data(snapshot: ProviderSnapshot) -> dict:
     }
 
 
+# Config table for schema-v2 synthetic entries that mirror a primary probe's
+# SAME snapshot under a different display name and window mapping. Keyed by
+# the primary provider's raw snapshot name; each value is
+# (synthetic entry name, window-spec map for _build_windows, data-projection
+# function). A third synthetic entry is one new row here, not a new ~70-line
+# builder function plus three new inline branches (deferred follow-up D2).
+_SYNTHETIC_ENTRY_SPECS: dict[
+    str, tuple[str, dict[str, tuple], Callable[[ProviderSnapshot], dict]]
+] = {
+    "Antigravity": (
+        "Antigravity (Claude)",
+        {"Antigravity": THIRD_PARTY_WINDOW_SPECS},
+        _project_antigravity_claude_data,
+    ),
+    "Codex": (
+        "Codex (Spark)",
+        {"Codex": CODEX_SPARK_WINDOW_SPECS},
+        _project_codex_spark_data,
+    ),
+}
+
+
 def CANONICAL_PROVIDERS() -> tuple[str, ...]:
     return _canonical_providers()
 
@@ -1220,17 +1242,24 @@ def _build_snapshot_payload(
 
     providers: list[dict] = []
 
-    def _antigravity_claude_entry(snap: ProviderSnapshot | None) -> dict:
-        """Synthesize the schema-v2 "Antigravity (Claude)" entry (Task A.1).
+    def _synthetic_entry(
+        snap: ProviderSnapshot | None,
+        entry_name: str,
+        window_specs: dict[str, tuple],
+        project_fn: Callable[[ProviderSnapshot], dict],
+    ) -> dict:
+        """Synthesize a schema-v2 entry that mirrors a primary probe's SAME
+        snapshot object under a different display name and window mapping —
+        no second lookup, no second fetch, no Keychain re-read.
 
-        Mirrors the primary Antigravity entry's shape from the SAME probe —
-        no second lookup, no second fetch, no Keychain re-read. Its windows
-        are built from the third-party (Claude) bucket's fields under the
-        standard ``five_hour``/``weekly`` window IDs.
+        Auth-grace (CR-6) only ever applies to a snapshot literally named
+        "Antigravity" (``is_antigravity_auth_failure`` checks ``snap.name``),
+        so it naturally no-ops for every other mirrored probe rather than
+        needing a per-entry opt-out.
         """
         if snap is None:
             return {
-                "name": "Antigravity (Claude)",
+                "name": entry_name,
                 "ok": False,
                 "error": "provider not enabled",
                 "windows": [],
@@ -1239,38 +1268,33 @@ def _build_snapshot_payload(
             }
         if snap.ok:
             return {
-                "name": "Antigravity (Claude)",
+                "name": entry_name,
                 "ok": True,
                 "error": None,
-                "windows": _build_windows(
-                    snap, updated_at, {"Antigravity": THIRD_PARTY_WINDOW_SPECS}
-                ),
-                "data": _project_antigravity_claude_data(snap),
+                "windows": _build_windows(snap, updated_at, window_specs),
+                "data": project_fn(snap),
                 "observed_at": updated_at_iso,
             }
         # ok is False: default to a fresh failure entry, but carry a recent
         # healthy prior entry's values for transient errors (CR-6 anti-flap)
-        # without losing the current failure — mirrors the primary Antigravity
-        # entry's retention logic below. Now that
-        # V2_WINDOW_SPECS["Antigravity (Claude)"] is registered (Task A.2),
-        # specs_by_provider.get(...) resolves to THIRD_PARTY_WINDOW_SPECS
-        # instead of an empty tuple, so retained entries validate correctly.
+        # without losing the current failure — mirrors the primary entry's
+        # retention logic below.
         entry: dict = {
-            "name": "Antigravity (Claude)",
+            "name": entry_name,
             "ok": False,
             "error": snap.error[:200] if snap.error else snap.error,
             "windows": [],
-            "data": _project_antigravity_claude_data(snap),
+            "data": project_fn(snap),
             "observed_at": None,
         }
         auth_grace = is_antigravity_auth_failure(snap) and prior_auth_failures == 0
         if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap) or auth_grace:
-            prior_entry = prior_by_name.get("Antigravity (Claude)")
+            prior_entry = prior_by_name.get(entry_name)
             retained_entry = _sanitize_prior_entry(
-                "Antigravity (Claude)",
+                entry_name,
                 prior_entry,
                 allowed_window_ids=frozenset(
-                    spec.window_id for spec in specs_by_provider.get("Antigravity (Claude)", ())
+                    spec.window_id for spec in specs_by_provider.get(entry_name, ())
                 ),
                 fallback_observed_at=fallback_observed_at,
                 allow_carried_failure=not auth_grace,
@@ -1290,64 +1314,6 @@ def _build_snapshot_payload(
             entry["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
         return entry
 
-    def _codex_spark_entry(snap: ProviderSnapshot | None) -> dict:
-        """Synthesize the schema-v2 "Codex (Spark)" entry (Task 3.2).
-
-        Mirrors the primary Codex entry's shape from the SAME probe — no
-        second lookup, no second fetch. Its window is built from the Spark
-        weekly bucket's fields under the standard "weekly" window id.
-        Unlike ``_antigravity_claude_entry``, there is no auth-grace branch
-        here: ``is_antigravity_auth_failure`` only ever matches a snapshot
-        named "Antigravity", so it would be permanently False for a Codex
-        probe and is omitted rather than carried over as dead code.
-        """
-        if snap is None:
-            return {
-                "name": "Codex (Spark)",
-                "ok": False,
-                "error": "provider not enabled",
-                "windows": [],
-                "data": {},
-                "observed_at": None,
-            }
-        if snap.ok:
-            return {
-                "name": "Codex (Spark)",
-                "ok": True,
-                "error": None,
-                "windows": _build_windows(snap, updated_at, {"Codex": CODEX_SPARK_WINDOW_SPECS}),
-                "data": _project_codex_spark_data(snap),
-                "observed_at": updated_at_iso,
-            }
-        # ok is False: default to a fresh failure entry, but carry a recent
-        # healthy prior entry's values for transient errors (CR-6 anti-flap)
-        # without losing the current failure — mirrors the primary Codex
-        # entry's retention logic below.
-        entry: dict = {
-            "name": "Codex (Spark)",
-            "ok": False,
-            "error": snap.error[:200] if snap.error else snap.error,
-            "windows": [],
-            "data": _project_codex_spark_data(snap),
-            "observed_at": None,
-        }
-        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
-            prior_entry = prior_by_name.get("Codex (Spark)")
-            retained_entry = _sanitize_prior_entry(
-                "Codex (Spark)",
-                prior_entry,
-                allowed_window_ids=frozenset(
-                    spec.window_id for spec in specs_by_provider.get("Codex (Spark)", ())
-                ),
-                fallback_observed_at=fallback_observed_at,
-                allow_carried_failure=True,
-            )
-            if retained_entry is not None and _is_fresh_retained_entry(
-                retained_entry, updated_at_aware
-            ):
-                entry = _failure_with_retained_values(retained_entry, entry["error"])
-        return entry
-
     for name in CANONICAL_PROVIDERS():
         snap = by_name.get(name)
         if snap is None:
@@ -1361,10 +1327,8 @@ def _build_snapshot_payload(
                     "observed_at": None,
                 }
             )
-            if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
-                providers.append(_antigravity_claude_entry(snap))
-            if schema_version == SCHEMA_VERSION_V2 and name == "Codex":
-                providers.append(_codex_spark_entry(snap))
+            if schema_version == SCHEMA_VERSION_V2 and name in _SYNTHETIC_ENTRY_SPECS:
+                providers.append(_synthetic_entry(snap, *_SYNTHETIC_ENTRY_SPECS[name]))
             continue
         if snap.ok:
             providers.append(
@@ -1377,10 +1341,8 @@ def _build_snapshot_payload(
                     "observed_at": updated_at_iso,
                 }
             )
-            if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
-                providers.append(_antigravity_claude_entry(snap))
-            if schema_version == SCHEMA_VERSION_V2 and name == "Codex":
-                providers.append(_codex_spark_entry(snap))
+            if schema_version == SCHEMA_VERSION_V2 and name in _SYNTHETIC_ENTRY_SPECS:
+                providers.append(_synthetic_entry(snap, *_SYNTHETIC_ENTRY_SPECS[name]))
             continue
         # ok is False: default to a fresh failure entry, but carry a recent
         # healthy prior entry's values for transient errors (CR-6 anti-flap)
@@ -1421,10 +1383,8 @@ def _build_snapshot_payload(
         if auth_grace and entry["error"] != ANTIGRAVITY_AUTH_RETRY_MESSAGE:
             entry["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
         providers.append(entry)
-        if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
-            providers.append(_antigravity_claude_entry(snap))
-        if schema_version == SCHEMA_VERSION_V2 and name == "Codex":
-            providers.append(_codex_spark_entry(snap))
+        if schema_version == SCHEMA_VERSION_V2 and name in _SYNTHETIC_ENTRY_SPECS:
+            providers.append(_synthetic_entry(snap, *_SYNTHETIC_ENTRY_SPECS[name]))
 
     return {
         "schema_version": schema_version,
