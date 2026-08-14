@@ -78,19 +78,6 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
 - A terminal that supports ANSI color
 
-### VM profile-free test configuration
-
-`app/Gradus.xcodeproj` provides the named `VMProfileFreeTest` configuration for
-agent-driven macOS/iOS simulator builds. It sets exactly
-`CODE_SIGN_ENTITLEMENTS = ""`, `CODE_SIGN_IDENTITY = "-"`, and
-`CODE_SIGN_STYLE = Manual`; it declares no `DEVELOPMENT_TEAM`,
-`PROVISIONING_PROFILE_SPECIFIER`, or provisioning profile. Use it with
-`xcodebuild build-for-testing ... -configuration VMProfileFreeTest`.
-
-This configuration is intentionally capability-limited: CloudKit containers,
-iCloud entitlements, and APNs/push registration are unavailable. Tests that
-exercise CloudKit or push require a separately signed profile-bearing build.
-
 ## Run
 
 ```bash
@@ -551,6 +538,57 @@ uv run pytest
 uv run ruff check gradus/ tests/
 uv run ruff format --check gradus/ tests/
 ```
+
+### VM profile-free test configuration
+
+The switchyard macOS VM lane runs this project's Xcode tests inside a guest that
+has no Apple Development identity, no team membership, and no provisioning
+profile. `scripts/vm-test-build.sh` is the entry point that builds under those
+constraints and then verifies the result rather than assuming it:
+
+```bash
+scripts/vm-test-build.sh GradusMac               # macOS, ad-hoc signed
+scripts/vm-test-build.sh GradusCredentialBridge  # macOS, ad-hoc signed
+scripts/vm-test-build.sh GradusiOS               # iOS simulator, no overrides needed
+```
+
+The macOS schemes build with `CODE_SIGN_IDENTITY=-` and an empty
+`DEVELOPMENT_TEAM`, `PROVISIONING_PROFILE_SPECIFIER`, and
+`CODE_SIGN_ENTITLEMENTS`. Ad-hoc is not a convenience: `CODE_SIGNING_ALLOWED=NO`
+produces an unsigned Mach-O that AMFI SIGKILLs at `exec` on Apple silicon, and
+xcodebuild reports that as `Test crashed with signal kill before establishing
+connection` — a signing failure wearing a test failure's clothes.
+
+`CODE_SIGN_INJECT_BASE_ENTITLEMENTS` is deliberately *not* overridden. GradusMac's
+Debug config already sets it to `NO` so local Mac tests do not depend on a stale
+profile; pinning it in the script would make the guest build something the host
+never tests. `GradusiOS` needs no overrides at all, because Xcode already signs
+simulator products ad-hoc and strips their entitlements. The script still asserts
+that every produced bundle is ad-hoc with no `TeamIdentifier`, which is what
+catches a target regaining a `DEVELOPMENT_TEAM` later.
+
+There is deliberately **no `VMProfileFreeTest` build configuration**. An earlier
+attempt added one by hand to `app/Gradus.xcodeproj/project.pbxproj` — a file that
+is gitignored and regenerated from `project.yml` — so the next `xcodegen generate`
+erased it, and this README kept describing it for two days. A script that passes
+settings on the command line survives regeneration, and a third configuration
+would propagate through every target and SPM dependency to buy nothing this
+project needs.
+
+**Capabilities unavailable under this configuration.** Tests that need any of
+these cannot run in the VM and must run on the host against a real profile:
+
+| Capability | Entitlement | Effect in the VM |
+|---|---|---|
+| CloudKit | `com.apple.developer.icloud-services`, `com.apple.developer.icloud-container-identifiers` | No `iCloud.com.zerodelta.gradus` container access; CloudKit calls fail rather than sync |
+| Push notifications | `com.apple.developer.aps-environment` | No APNs registration; remote-notification paths are unreachable |
+| Full Disk Access (`GradusCredentialBridge`) | TCC grant, keyed to the signature | An ad-hoc bridge is a different signing identity than the host's approved copy, so it holds no FDA grant and cannot read provider credential files |
+
+For `GradusMac` the first two are already absent from Debug builds on the host,
+so the VM loses no coverage the host had; the entitlements files
+(`GradusMac.entitlements`, `GradusMacProduction.entitlements`,
+`GradusiOS.entitlements`) are unchanged and Release keeps its full signing
+contract, because the overrides are command-line only.
 
 ### Agent validation approvals
 
