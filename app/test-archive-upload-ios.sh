@@ -818,6 +818,121 @@ grep -Fq 'persist_ram_volume_attestation' "$UPLOAD_SCRIPT" || {
   exit 1
 }
 
+# hdiutil detach can transiently report "Resource busy" against a RAM volume
+# right after its last reader lets go (observed live on the gradus-ios-19
+# upload, immediately after a successful altool transfer). detach_ram_key_volume
+# must retry with backoff rather than fail on the first busy response, and
+# must still fail closed once retries are exhausted.
+detach_retry_root="$TEST_ROOT/detach-retry"
+detach_retry_bin="$detach_retry_root/bin"
+mkdir -p "$detach_retry_bin"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'count=0' \
+  '[[ -f "$GRADUS_TEST_HDIUTIL_COUNT_FILE" ]] && count="$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")"' \
+  'count=$(( count + 1 ))' \
+  'printf "%s" "$count" > "$GRADUS_TEST_HDIUTIL_COUNT_FILE"' \
+  'printf "%s\n" "$*" >> "$GRADUS_TEST_HDIUTIL_LOG"' \
+  'if (( count < GRADUS_TEST_HDIUTIL_FAIL_UNTIL )); then' \
+  '  echo "hdiutil: couldn'"'"'t eject \"$2\" - Resource busy" >&2' \
+  '  exit 16' \
+  'fi' \
+  'exit 0' >"$detach_retry_bin/hdiutil"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\n" "$*" >> "$GRADUS_TEST_SLEEP_LOG"' >"$detach_retry_bin/sleep"
+chmod 700 "$detach_retry_bin/hdiutil" "$detach_retry_bin/sleep"
+
+detach_retry_path="$PATH"
+export PATH="$detach_retry_bin:$detach_retry_path"
+unset GRADUS_RAM_VOLUME_MOUNT_PATH GRADUS_TEST_KEY_LOG
+
+RAM_VOLUME_DEVICE=/dev/disk99
+RAM_VOLUME_MOUNTPOINT=/tmp/fixture-ram-volume-mountpoint
+RAM_VOLUME_DETACHED=0
+export GRADUS_TEST_HDIUTIL_COUNT_FILE="$detach_retry_root/succeed-on-3rd.count"
+export GRADUS_TEST_HDIUTIL_LOG="$detach_retry_root/succeed-on-3rd.log"
+export GRADUS_TEST_SLEEP_LOG="$detach_retry_root/succeed-on-3rd.sleep.log"
+export GRADUS_TEST_HDIUTIL_FAIL_UNTIL=3
+detach_ram_key_volume || {
+  echo "FAIL: detach_ram_key_volume did not recover from transient busy failures" >&2
+  exit 1
+}
+[[ "$RAM_VOLUME_DETACHED" -eq 1 ]] || {
+  echo "FAIL: detach_ram_key_volume did not mark the volume detached after recovery" >&2
+  exit 1
+}
+[[ "$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")" -eq 3 ]] || {
+  echo "FAIL: detach_ram_key_volume did not retry hdiutil detach the expected number of times" >&2
+  exit 1
+}
+grep -Fq 'detach /dev/disk99' "$GRADUS_TEST_HDIUTIL_LOG" || {
+  echo "FAIL: detach_ram_key_volume did not invoke hdiutil detach with the volume device" >&2
+  exit 1
+}
+
+# shellcheck disable=SC2034 # read by detach_ram_key_volume via "$RAM_VOLUME_DEVICE"; see note above
+RAM_VOLUME_DEVICE=/dev/disk99
+RAM_VOLUME_MOUNTPOINT=/tmp/fixture-ram-volume-mountpoint
+RAM_VOLUME_DETACHED=0
+export GRADUS_TEST_HDIUTIL_COUNT_FILE="$detach_retry_root/never-succeeds.count"
+export GRADUS_TEST_HDIUTIL_LOG="$detach_retry_root/never-succeeds.log"
+export GRADUS_TEST_SLEEP_LOG="$detach_retry_root/never-succeeds.sleep.log"
+export GRADUS_TEST_HDIUTIL_FAIL_UNTIL=99
+set +e
+detach_retry_output="$(detach_ram_key_volume 2>&1)"
+detach_retry_status=$?
+set -e
+[[ "$detach_retry_status" -ne 0 && "$detach_retry_output" == *"did not succeed after 4 attempts"* ]] || {
+  echo "FAIL: detach_ram_key_volume did not fail closed once retries were exhausted" >&2
+  echo "$detach_retry_output" >&2
+  exit 1
+}
+[[ "$RAM_VOLUME_DETACHED" -eq 0 ]] || {
+  echo "FAIL: detach_ram_key_volume marked an unresolved failure as detached" >&2
+  exit 1
+}
+[[ "$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")" -eq 4 ]] || {
+  echo "FAIL: detach_ram_key_volume did not exhaust exactly 4 attempts before failing" >&2
+  exit 1
+}
+
+export PATH="$detach_retry_path"
+unset RAM_VOLUME_DEVICE RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DETACHED RAM_VOLUME_DETACH_DIGEST
+unset GRADUS_TEST_HDIUTIL_COUNT_FILE GRADUS_TEST_HDIUTIL_LOG GRADUS_TEST_HDIUTIL_FAIL_UNTIL GRADUS_TEST_SLEEP_LOG
+
+# A successful upload followed by a since-recovered cleanup hiccup must not
+# report the transient failure's exit code as the script's own outcome.
+# ShellCheck's cross-file dataflow does not trace these globals into
+# cleanup_ram_key_volume's tail (archive-upload-ios.sh); each is genuinely
+# read there via "${VAR:-default}".
+cleanup_recovery_root="$TEST_ROOT/cleanup-recovery"
+mkdir -p "$cleanup_recovery_root"
+# shellcheck disable=SC2034
+GRADUS_UPLOAD_ATTEMPTED=1
+# shellcheck disable=SC2034
+GRADUS_UPLOAD_SUCCEEDED=1
+# shellcheck disable=SC2034
+GRADUS_UPLOAD_FAILURE_STATUS=""
+# shellcheck disable=SC2034
+RAM_VOLUME_MOUNTPOINT=""
+RAM_VOLUME_DETACHED=1
+# shellcheck disable=SC2034
+GRADUS_RAM_VOLUME_ATTESTATION_PATH=""
+# shellcheck disable=SC2034
+GRADUS_UPLOAD_RECONCILIATION_PATH=""
+set +e
+(exit 16)
+cleanup_ram_key_volume >/dev/null
+cleanup_recovery_exit=$?
+set -e
+[[ "$cleanup_recovery_exit" -eq 0 ]] || {
+  echo "FAIL: cleanup_ram_key_volume reported a failure once cleanup was already clean" >&2
+  exit 1
+}
+unset GRADUS_UPLOAD_ATTEMPTED GRADUS_UPLOAD_SUCCEEDED GRADUS_UPLOAD_FAILURE_STATUS
+unset RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DETACHED GRADUS_RAM_VOLUME_ATTESTATION_PATH GRADUS_UPLOAD_RECONCILIATION_PATH
+
 # A post-prepare interruption must leave one resumable tuple; a retry may not
 # allocate a new build or rebind the IPA digest.
 retry_root="$TEST_ROOT/retry-candidate"

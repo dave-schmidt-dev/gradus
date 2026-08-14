@@ -466,7 +466,22 @@ detach_ram_key_volume() {
   if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
     detach_record="device=$RAM_VOLUME_DEVICE;mountpoint=$RAM_VOLUME_MOUNTPOINT;detached=true"
   else
-    hdiutil detach "$RAM_VOLUME_DEVICE" >/dev/null
+    # hdiutil detach can transiently fail "Resource busy" against a RAM
+    # volume moments after its last reader lets go (observed live on the
+    # gradus-ios-19 upload, immediately after a successful altool transfer,
+    # with nothing in lsof/ps holding the mount). Retry with backoff before
+    # treating it as a real failure.
+    local attempt delay=1
+    for attempt in 1 2 3 4; do
+      hdiutil detach "$RAM_VOLUME_DEVICE" >/dev/null && break
+      if (( attempt == 4 )); then
+        echo "FAIL: hdiutil detach $RAM_VOLUME_DEVICE did not succeed after $attempt attempts" >&2
+        return 1
+      fi
+      echo "    hdiutil detach $RAM_VOLUME_DEVICE busy, retrying in ${delay}s (attempt $attempt/4)..." >&2
+      sleep "$delay"
+      delay=$(( delay * 2 ))
+    done
     detach_record="device=$RAM_VOLUME_DEVICE;mountpoint=$RAM_VOLUME_MOUNTPOINT;detached=true"
   fi
   RAM_VOLUME_DETACH_DIGEST="$(printf '%s' "$detach_record" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
@@ -504,7 +519,18 @@ cleanup_ram_key_volume() {
     rmdir "$RAM_VOLUME_MOUNTPOINT" 2>/dev/null || true
   fi
   if (( cleanup_status != 0 )); then
+    if [[ "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 1 ]]; then
+      echo "==> Upload to App Store Connect already succeeded; only local RAM-volume cleanup failed above." >&2
+      echo "    The candidate is uploaded and safe; this exit code reflects cleanup, not the transfer." >&2
+    fi
     return "$cleanup_status"
+  fi
+  # A successful upload followed by an aborted intermediate step (e.g. the
+  # first, now-retried detach attempt) leaves $exit_status holding that
+  # step's stale failure code even once cleanup above has fully recovered.
+  # Once cleanup is clean, the outcome is whatever the upload itself was.
+  if [[ "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 1 ]]; then
+    return 0
   fi
   return "$exit_status"
 }
