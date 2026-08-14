@@ -28,7 +28,7 @@ COUNTING_LEG_REPORTERS=(
   "swift-testing"
   "pytest"
   "xctest"
-  "xctest"
+  "aggregate-xctest-swift"
   "aggregate-xctest-swift"
   "pytest"
   "pytest"
@@ -42,7 +42,17 @@ COUNTING_LEG_REPORTERS=(
 # The iPad leg includes the 12 canonical image tests below as well as the
 # nine GradusiOSUITests workflows. Its floor must exceed the image-only
 # result, or a zero-test UI target could be hidden by the snapshot count.
-COUNTING_LEG_MINIMUMS=(2 2 2 2 21 6 5 5 5 5 4 2 9)
+#
+# GradusiOS-iPhone's floor (index 3) is pinned to its exact current reported
+# count (162, as of the Codex (Spark) bucket work) rather than a loose lower
+# bound, so a test silently dropping out of selection fails the gate instead
+# of hiding under slack. Raise it deliberately when adding tests there. The
+# leg mixes Swift Testing and XCTest in one target, so its reporter is
+# `aggregate-xctest-swift` (sum of both frameworks' max-seen counts, 142 + 20
+# here), not `xctest` (max across patterns) -- the latter would let the
+# smaller XCTest count silently ride under the larger Swift Testing one
+# without ever binding to the reported/floor-checked total.
+COUNTING_LEG_MINIMUMS=(2 2 2 162 21 6 5 5 5 5 4 2 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -146,7 +156,7 @@ assert_counting_leg() {
     reported_count="$(awk '
       function number(value) {
         gsub(/[^0-9]/, "", value)
-        return value
+        return value + 0
       }
       {
         if (match($0, /Test run with [0-9]+ tests?/)) {
@@ -166,7 +176,10 @@ assert_counting_leg() {
     reported_count="$(awk '
     function record(value) {
       gsub(/[^0-9]/, "", value)
-      if (value != "" && value > maximum) maximum = value
+      if (value != "") {
+        value = value + 0
+        if (value > maximum) maximum = value
+      }
       found = 1
     }
     {
@@ -287,9 +300,10 @@ SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 IPAD_DEVICE_NAME="iPad Pro 11-inch (M5)"
 IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
 
-# The deterministic local Mac UI fixture uses the same unsigned Debug
-# configuration as every other test target. Archive/export scripts retain
-# their independent signing and entitlement checks for release artifacts.
+# The deterministic local Mac UI fixture uses Debug app behavior, but its
+# XCTest runner is explicitly development-signed so macOS can launch the
+# bundle. Archive/export scripts retain their independent signing and
+# entitlement checks for release artifacts.
 
 echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
 # One `awk` that reads to EOF, rather than `| head -1 | awk ...`. `head` exits
@@ -349,10 +363,12 @@ echo "    iPad UDID: $ipad_udid"
 prior_dialog_type="$(defaults read com.apple.CrashReporter DialogType 2>/dev/null || true)"
 defaults write com.apple.CrashReporter DialogType none
 
-# iOS snapshot tests load resources from DerivedData. Keep that directory fresh
-# for each gate run so a stale copied bundle cannot make changed baselines
-# appear to pass. The three iOS legs share this run-scoped directory for build
-# reuse; the Mac legs retain their proven default DerivedData behavior.
+# All Xcode test legs use one fresh, run-scoped DerivedData directory. This
+# prevents a stale Mac XCTest runner (especially one produced by an older
+# unsigned invocation) from being rediscovered by testmanagerd on the next
+# run. The iOS legs also need isolation so snapshot resources cannot survive a
+# source change. Sharing the directory within this gate keeps package/build
+# reuse while making the entire test run disposable.
 derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"
 
 # Preserve a developer's already-running simulator and its account/share state.
@@ -390,6 +406,7 @@ echo "==> xcodebuild test — GradusMac (platform=macOS)"
 # archive, export, and notarization scripts retain their normal signing paths.
 assert_counting_leg "GradusMac" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
   -destination 'platform=macOS,arch=arm64' \
   -skip-testing:GradusMacUITests \
@@ -434,10 +451,15 @@ assert_counting_leg "GradusiOS-iPad" xcodebuild test \
 echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
 assert_counting_leg "GradusMacUI" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:GradusMacUITests \
-  CODE_SIGNING_ALLOWED=NO
+  CODE_SIGN_IDENTITY="Apple Development" \
+  DEVELOPMENT_TEAM=4CJ49V6QHW \
+  CODE_SIGN_ENTITLEMENTS="" \
+  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
+  PROVISIONING_PROFILE_SPECIFIER=""
 
 echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOSUI" xcodebuild test \

@@ -22,6 +22,7 @@ from gradus.history import (
     recent_auth_failure_count,
 )
 from gradus.providers import ProviderSnapshot
+from gradus.snapshot import build_snapshot_v2_payload
 
 UTC = timezone.utc
 
@@ -201,6 +202,41 @@ class HistoryRecordTests(unittest.TestCase):
         credential_payload = _payload(updated_at)
         credential_payload["providers"][0]["error"] = "authorization: Bearer secret"
         self.assertIsNone(build_history_record(credential_payload, []))
+
+    def test_codex_spark_entry_synthesized_from_generated_v2_payload(self) -> None:
+        """A generated 9-entry v2 payload's "Codex (Spark)" observation is
+        synthetic and sourced from the "Codex" probe, which does not exist
+        as a probe under its own name (Task 3.2).
+        """
+        updated_at = datetime(2026, 1, 8, 12, tzinfo=UTC)
+        codex_snapshot = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="api",
+            data={
+                "five_hour_percent_left": 55.0,
+                "weekly_percent_left": 10.0,
+                "spark_weekly_percent_left": 90.0,
+                "spark_weekly_reset": "in 2d",
+            },
+        )
+        payload = build_snapshot_v2_payload([codex_snapshot], updated_at)
+        self.assertEqual(len(payload["providers"]), 9)
+        self.assertIn("Codex (Spark)", [entry["name"] for entry in payload["providers"]])
+
+        record = build_history_record(payload, [codex_snapshot])
+        assert record is not None
+
+        self.assertEqual(record["provenance"]["Codex (Spark)"], {"provenance_available": False})
+        spark_observation = record["observations"]["Codex (Spark)"]
+        self.assertTrue(spark_observation["capacity"]["synthetic"])
+        self.assertEqual(spark_observation["probe"], {"attempted": True, "reason": "success"})
+        # The primary Codex entry's own observation is unaffected: it is not
+        # synthetic, and its probe metadata is unchanged by the new pairing.
+        self.assertFalse(record["observations"]["Codex"]["capacity"]["synthetic"])
+        self.assertEqual(
+            record["observations"]["Codex"]["probe"], {"attempted": True, "reason": "success"}
+        )
 
 
 class HistoryStoreTests(unittest.TestCase):

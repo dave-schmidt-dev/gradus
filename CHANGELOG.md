@@ -13,6 +13,11 @@ history from the overnight release train. New releases use
 
 ### Added
 
+- A new "Codex (Spark)" card tracks a separate weekly quota bucket on your
+  Codex account, alongside the existing Codex card. It shows its own
+  remaining percentage, reset time, and pace, independent of Codex's own
+  weekly window — no separate sign-in is needed.
+
 - A device-relative card-size slider on iPad widths that can form multiple
   columns, under Settings → Local Display. Automatic is explicit; while it is
   selected, the manual slider is disabled. Small is at the left and uses more
@@ -42,6 +47,11 @@ history from the overnight release train. New releases use
 
 - Usage percentages no longer truncate at large text sizes. A full provider cannot
   read as nearly exhausted because its percent column ran out of room.
+
+- The terminal dashboard's Codex `5h` row briefly showed as `n/a` instead of
+  disappearing when OpenAI's API doesn't report that window (which it hasn't
+  since 2026-07). It's hidden again until OpenAI restores the window, matching
+  how the new Codex (Spark) `sp1w` row already behaves.
 
 ### TestFlight focus
 

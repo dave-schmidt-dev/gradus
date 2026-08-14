@@ -12,8 +12,8 @@ from gradus.snapshot import V2_WINDOW_SPECS
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_COUNTS = {
-    ROOT / "app/GradusiOSTests/DashboardSnapshotTests.swift": 6,
-    ROOT / "app/GradusiOSTests/DensityLayoutSnapshotTests.swift": 14,
+    ROOT / "app/GradusiOSTests/DashboardSnapshotTests.swift": 8,
+    ROOT / "app/GradusiOSTests/DensityLayoutSnapshotTests.swift": 15,
     ROOT / "app/GradusiOSTests/SettingsViewSnapshotTests.swift": 1,
 }
 BASELINE_DIRS = (

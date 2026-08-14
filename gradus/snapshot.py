@@ -692,6 +692,47 @@ THIRD_PARTY_WINDOW_SPECS: tuple[WindowSpec, ...] = (
 V2_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
 WARNING_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
 
+# Task 3.1: Spark is a weekly-only pool (the API's Spark ``secondary_window``
+# is always null — there is no 5-hour Spark window, unlike the cg5/cg1w or
+# third_party_* pairs above), so a single-window tuple is unioned onto
+# Codex's native five_hour/weekly windows purely for interactive alert
+# purposes. The window id ``sp1w`` is deliberately NOT ``weekly``: warning
+# lookup (:func:`warning_window_ids`) resolves by the raw snapshot name
+# ("Codex"), and _provider_is_empty keys off window id, so reusing the
+# native "weekly" id here would make Spark depletion indistinguishable from
+# native Codex weekly depletion.
+CODEX_SPARK_ALERT_SPECS: tuple[WindowSpec, ...] = (
+    WindowSpec(
+        "sp1w",
+        "session",
+        "spark_weekly_percent_left",
+        reset_key="spark_weekly_reset",
+        window_hours=168.0,
+    ),
+)
+WARNING_WINDOW_SPECS["Codex"] = (*WINDOW_SPECS["Codex"], *CODEX_SPARK_ALERT_SPECS)
+
+# CODEX_SPARK_WINDOW_SPECS is a SEPARATE tuple from CODEX_SPARK_ALERT_SPECS
+# above, even though both read the same spark_weekly_percent_left/
+# spark_weekly_reset keys. This one uses the STANDARD "weekly" window id
+# (mirroring THIRD_PARTY_WINDOW_SPECS's convention) because it backs the
+# synthetic "Codex (Spark)" entry's OWN windows list, published to
+# iOS/router like any other provider's weekly window. Collapsing this onto
+# CODEX_SPARK_ALERT_SPECS's "sp1w" id would publish a nonstandard id;
+# collapsing CODEX_SPARK_ALERT_SPECS onto this "weekly" id would collide
+# with native Codex's own "weekly" window id in the union above.
+CODEX_SPARK_WINDOW_SPECS: tuple[WindowSpec, ...] = (
+    WindowSpec(
+        "weekly",
+        "session",
+        "spark_weekly_percent_left",
+        reset_key="spark_weekly_reset",
+        window_hours=168.0,
+    ),
+)
+V2_WINDOW_SPECS["Codex (Spark)"] = CODEX_SPARK_WINDOW_SPECS
+WARNING_WINDOW_SPECS["Codex (Spark)"] = CODEX_SPARK_WINDOW_SPECS
+
 
 def _build_windows(
     snapshot: ProviderSnapshot,
@@ -954,6 +995,34 @@ def _project_antigravity_claude_data(snapshot: ProviderSnapshot) -> dict:
     }
 
 
+def _project_codex_spark_data(snapshot: ProviderSnapshot) -> dict:
+    """Project the Spark weekly bucket into the synthetic entry's data,
+    under the same key name project_data() uses for a primary entry's
+    weekly headroom (Task 3.2).
+
+    A DEDICATED projection, not a reuse of SAFE_DATA_KEYS/project_data():
+    ``snapshot.data`` holds BOTH the native Codex bucket and the Spark
+    bucket under the SAME ProviderSnapshot, so adding raw spark_* key
+    names to SAFE_DATA_KEYS would leak them into the PRIMARY "Codex"
+    entry's data too (project_data(snapshot) is called on that exact same
+    object for that entry). Mapping to the standard weekly_percent_left/
+    weekly_reset names instead keeps the two entries' data namespaces
+    independent, and — since those names are already in SAFE_DATA_KEYS —
+    keeps _sanitize_prior_entry's ``set(data).issubset(SAFE_DATA_KEYS)``
+    check passing for CR-6 retention.
+    """
+    data = snapshot.data if isinstance(snapshot.data, Mapping) else {}
+    field_map = {
+        "spark_weekly_percent_left": "weekly_percent_left",
+        "spark_weekly_reset": "weekly_reset",
+    }
+    return {
+        out_key: value
+        for raw_key, out_key in field_map.items()
+        if raw_key in data and (value := _json_safe_value(data[raw_key])) is not _UNSAFE_JSON
+    }
+
+
 def CANONICAL_PROVIDERS() -> tuple[str, ...]:
     return _canonical_providers()
 
@@ -1124,8 +1193,9 @@ def _build_snapshot_payload(
         A dict with ``schema_version``, ``updated_at`` (offset-aware ISO), and
         ``providers`` (a list of exactly seven entries — Codex, Claude,
         Antigravity, Copilot, Cursor, OpenCode Go, and Vibe; schema v2 adds
-        an eighth, "Antigravity (Claude)", synthesized from the same
-        Antigravity probe).
+        two more synthetic entries from those same probes: "Codex (Spark)"
+        right after "Codex", and "Antigravity (Claude)" right after
+        "Antigravity").
     """
     updated_at_iso = local_iso(updated_at)
     updated_at_aware = updated_at if updated_at.tzinfo else updated_at.astimezone()
@@ -1220,6 +1290,64 @@ def _build_snapshot_payload(
             entry["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
         return entry
 
+    def _codex_spark_entry(snap: ProviderSnapshot | None) -> dict:
+        """Synthesize the schema-v2 "Codex (Spark)" entry (Task 3.2).
+
+        Mirrors the primary Codex entry's shape from the SAME probe — no
+        second lookup, no second fetch. Its window is built from the Spark
+        weekly bucket's fields under the standard "weekly" window id.
+        Unlike ``_antigravity_claude_entry``, there is no auth-grace branch
+        here: ``is_antigravity_auth_failure`` only ever matches a snapshot
+        named "Antigravity", so it would be permanently False for a Codex
+        probe and is omitted rather than carried over as dead code.
+        """
+        if snap is None:
+            return {
+                "name": "Codex (Spark)",
+                "ok": False,
+                "error": "provider not enabled",
+                "windows": [],
+                "data": {},
+                "observed_at": None,
+            }
+        if snap.ok:
+            return {
+                "name": "Codex (Spark)",
+                "ok": True,
+                "error": None,
+                "windows": _build_windows(snap, updated_at, {"Codex": CODEX_SPARK_WINDOW_SPECS}),
+                "data": _project_codex_spark_data(snap),
+                "observed_at": updated_at_iso,
+            }
+        # ok is False: default to a fresh failure entry, but carry a recent
+        # healthy prior entry's values for transient errors (CR-6 anti-flap)
+        # without losing the current failure — mirrors the primary Codex
+        # entry's retention logic below.
+        entry: dict = {
+            "name": "Codex (Spark)",
+            "ok": False,
+            "error": snap.error[:200] if snap.error else snap.error,
+            "windows": [],
+            "data": _project_codex_spark_data(snap),
+            "observed_at": None,
+        }
+        if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap):
+            prior_entry = prior_by_name.get("Codex (Spark)")
+            retained_entry = _sanitize_prior_entry(
+                "Codex (Spark)",
+                prior_entry,
+                allowed_window_ids=frozenset(
+                    spec.window_id for spec in specs_by_provider.get("Codex (Spark)", ())
+                ),
+                fallback_observed_at=fallback_observed_at,
+                allow_carried_failure=True,
+            )
+            if retained_entry is not None and _is_fresh_retained_entry(
+                retained_entry, updated_at_aware
+            ):
+                entry = _failure_with_retained_values(retained_entry, entry["error"])
+        return entry
+
     for name in CANONICAL_PROVIDERS():
         snap = by_name.get(name)
         if snap is None:
@@ -1235,6 +1363,8 @@ def _build_snapshot_payload(
             )
             if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
                 providers.append(_antigravity_claude_entry(snap))
+            if schema_version == SCHEMA_VERSION_V2 and name == "Codex":
+                providers.append(_codex_spark_entry(snap))
             continue
         if snap.ok:
             providers.append(
@@ -1249,6 +1379,8 @@ def _build_snapshot_payload(
             )
             if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
                 providers.append(_antigravity_claude_entry(snap))
+            if schema_version == SCHEMA_VERSION_V2 and name == "Codex":
+                providers.append(_codex_spark_entry(snap))
             continue
         # ok is False: default to a fresh failure entry, but carry a recent
         # healthy prior entry's values for transient errors (CR-6 anti-flap)
@@ -1291,6 +1423,8 @@ def _build_snapshot_payload(
         providers.append(entry)
         if schema_version == SCHEMA_VERSION_V2 and name == "Antigravity":
             providers.append(_antigravity_claude_entry(snap))
+        if schema_version == SCHEMA_VERSION_V2 and name == "Codex":
+            providers.append(_codex_spark_entry(snap))
 
     return {
         "schema_version": schema_version,

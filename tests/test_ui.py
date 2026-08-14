@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import pathlib
+import re
 import unittest
 from datetime import datetime
 from io import StringIO
@@ -869,9 +870,9 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("to fix", output)
         self.assertNotIn("▓", output)
 
-    def test_codex_panel_shows_absent_five_hour_row_as_na(self) -> None:
-        # After OpenAI removed the 5h window the provider reports it as None; the
-        # card now renders "5h  n/a".
+    def test_codex_panel_hides_absent_five_hour_row(self) -> None:
+        # When the provider reports no 5h data (percent is None), the row is
+        # omitted entirely rather than rendered as "n/a".
         data = {
             "five_hour_percent_left": None,
             "five_hour_reset": None,
@@ -883,10 +884,167 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("Codex", output)
         self.assertIn("1w", output)
         self.assertIn("91%", output)
-        self.assertTrue(
-            any("5h" in line and "n/a" in line for line in output.splitlines()),
-            "Expected '5h' and 'n/a' on the same line",
+        self.assertFalse(
+            any(re.search(r"\b5h\b", line) for line in output.splitlines()),
+            "Expected no '5h' row when five_hour_percent_left is None",
         )
+        self.assertNotIn("n/a", output)
+
+    def test_codex_panel_shows_five_hour_row_when_present(self) -> None:
+        # Restoration path: when the provider DOES report 5h data, the row
+        # renders normally.
+        data = {
+            "five_hour_percent_left": 80.0,
+            "five_hour_reset": "Resets 9 PM",
+            "weekly_percent_left": 91,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("Codex", output)
+        self.assertTrue(
+            any(re.search(r"\b5h\b", line) for line in output.splitlines()),
+            "Expected a '5h' row when five_hour_percent_left is present",
+        )
+        self.assertIn("80%", output)
+
+    def test_codex_panel_shows_spark_weekly_row_when_present(self) -> None:
+        data = {
+            "five_hour_percent_left": 80.0,
+            "five_hour_reset": "Resets 9 PM",
+            "weekly_percent_left": 91,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+            "spark_weekly_percent_left": 42.0,
+            "spark_weekly_reset": "Resets Mar 17 at 9 PM",
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertTrue(
+            any("sp1w" in line for line in output.splitlines()),
+            "Expected an 'sp1w' row when spark_weekly_percent_left is present",
+        )
+        self.assertIn("42%", output)
+
+    def test_codex_panel_hides_spark_weekly_row_when_absent(self) -> None:
+        data = {
+            "five_hour_percent_left": 80.0,
+            "five_hour_reset": "Resets 9 PM",
+            "weekly_percent_left": 91,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+            "spark_weekly_percent_left": None,
+            "spark_weekly_reset": None,
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertFalse(
+            any("sp1w" in line for line in output.splitlines()),
+            "Expected no 'sp1w' row when spark_weekly_percent_left is None",
+        )
+
+    def test_codex_provider_is_empty_native_blocked_spark_has_capacity_stays_normal(
+        self,
+    ) -> None:
+        # Cross-pool case: native weekly=0% blocks the native pool, but the
+        # Spark pool (sp1w) still has capacity, so Codex is NOT fully empty --
+        # the normal panel must render with an sp1w row, not the depleted
+        # view. Regression for the bug this task fixes: before the Codex
+        # branch existed, the generic fallthrough treated ANY single depleted
+        # window (including sp1w, unioned into warning windows by task 3.1)
+        # as "provider empty".
+        data = {
+            "five_hour_percent_left": 80.0,
+            "five_hour_reset": "Resets 9 PM",
+            "weekly_percent_left": 0,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+            "spark_weekly_percent_left": 60.0,
+            "spark_weekly_reset": "Resets Mar 17 at 9 PM",
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        self.assertFalse(_provider_is_empty(snap, self.now))
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertTrue(
+            any("sp1w" in line for line in output.splitlines()),
+            "Expected an 'sp1w' row in the normal panel",
+        )
+        self.assertIn("60%", output)
+        self.assertNotIn("until", output)
+
+    def test_codex_provider_is_empty_spark_alone_blocked_stays_normal(self) -> None:
+        # Symmetric case: Spark is exhausted but native (5h/1w) both still
+        # have capacity -- native is independently usable, so the provider
+        # must not flip to the depleted view over Spark alone.
+        data = {
+            "five_hour_percent_left": 80.0,
+            "five_hour_reset": "Resets 9 PM",
+            "weekly_percent_left": 91,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+            "spark_weekly_percent_left": 0.0,
+            "spark_weekly_reset": "Resets Mar 17 at 9 PM",
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        self.assertFalse(_provider_is_empty(snap, self.now))
+
+    def test_codex_provider_is_empty_cross_pool_blocked_via_different_windows(self) -> None:
+        # Native pool is blocked via five_hour=0% (weekly still has capacity),
+        # and Spark is independently blocked via spark_weekly=0% -- both
+        # pools blocked, via different windows, means Codex has no usable
+        # capacity right now.
+        data = {
+            "five_hour_percent_left": 0.0,
+            "five_hour_reset": "Resets 9 PM",
+            "weekly_percent_left": 50,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+            "spark_weekly_percent_left": 0.0,
+            "spark_weekly_reset": "Resets Mar 17 at 9 PM",
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        self.assertTrue(_provider_is_empty(snap, self.now))
+
+    def test_codex_provider_is_empty_spark_absent_native_fully_depleted(self) -> None:
+        # Regression for the presence hazard: spark_weekly_percent_left is
+        # None for accounts without Spark access. A naive
+        # `native_blocked and spark_blocked` rule would make spark_blocked
+        # permanently False for these accounts, permanently suppressing the
+        # depleted view even when native quota is fully exhausted. The
+        # presence-safe rule (all *present* windows depleted) must still fire.
+        data = {
+            "five_hour_percent_left": 0.0,
+            "five_hour_reset": "Resets 9 PM",
+            "weekly_percent_left": 0.0,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+            "spark_weekly_percent_left": None,
+            "spark_weekly_reset": None,
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        self.assertTrue(_provider_is_empty(snap, self.now))
+
+    def test_codex_provider_is_empty_spark_absent_single_native_window_depleted(self) -> None:
+        # Locks in pre-Spark, currently-live Codex semantics: five_hour and
+        # weekly are tranches of ONE quota (not independent pools like
+        # Antigravity's native/third-party), so either hitting 0% empties the
+        # provider regardless of the other window's remaining capacity --
+        # established behavior `test_empty_view_codex_five_hour_zero` and
+        # `test_empty_view_codex_weekly_zero` already exercise via the
+        # rendered panel. A literal copy of Antigravity's two-rule structure
+        # (presence-safe "all present depleted" + bare
+        # `native_blocked and spark_blocked`) breaks this: for the near-100%
+        # of accounts with spark_weekly_percent_left still None, neither rule
+        # fires when only ONE native window is at 0% and the other still has
+        # capacity. `_provider_is_empty` must treat an absent Spark value as
+        # "blocked" (not an escape hatch) so the AND collapses to plain
+        # `native_blocked` for these accounts. This test asserts the
+        # predicate directly with `spark_weekly_percent_left: None` written
+        # out, so a future simplification of that presence handling fails
+        # here even if nobody re-runs the panel-level tests by hand.
+        data = {
+            "five_hour_percent_left": 0.0,
+            "five_hour_reset": "Resets 1:16 PM",
+            "weekly_percent_left": 88,
+            "weekly_reset": "Resets Mar 17 at 9 PM",
+            "spark_weekly_percent_left": None,
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        self.assertTrue(_provider_is_empty(snap, self.now))
 
     def test_claude_panel_contains_labels(self) -> None:
         snap = ProviderSnapshot(name="Claude", ok=True, source="cli", data=self.claude_data)
@@ -1179,8 +1337,8 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertNotIn("88%", output)
 
     def test_empty_view_codex_weekly_zero_without_five_hour(self) -> None:
-        # Weekly depleted and the 5h window removed: the depleted view shows
-        # the 1w row and the 5h row as n/a.
+        # Weekly depleted and the 5h window absent: the depleted view shows
+        # the 1w row only — the 5h row is omitted entirely, not "n/a".
         snap = ProviderSnapshot(
             name="Codex",
             ok=True,
@@ -1195,10 +1353,11 @@ class ProviderPanelTests(unittest.TestCase):
         output = _capture(build_provider_panel(snap, self.now), width=70)
         self.assertIn("until", output)
         self.assertIn("1w", output)
-        self.assertTrue(
-            any("5h" in line and "n/a" in line for line in output.splitlines()),
-            "Expected '5h' and 'n/a' on the same line in depleted view",
+        self.assertFalse(
+            any(re.search(r"\b5h\b", line) for line in output.splitlines()),
+            "Expected no '5h' row in depleted view when five_hour_percent_left is None",
         )
+        self.assertNotIn("n/a", output)
 
     def test_empty_view_antigravity_requires_both_zero(self) -> None:
         # 5h=0 but weekly has usage → normal view
@@ -1680,38 +1839,37 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(len(first_panel_line), 92)
 
     def test_packed_cards_place_next_provider_below_shorter_stack(self) -> None:
-        copilot = ProviderSnapshot(
-            name="Copilot",
+        short_codex = ProviderSnapshot(
+            name="Codex",
             ok=True,
             source="cli",
-            data={"premium_percent_left": 80, "premium_reset": "Resets Mar 17"},
+            data={"weekly_percent_left": 91, "weekly_reset": "Resets Mar 17 at 9 PM"},
         )
-        cursor = ProviderSnapshot(
-            name="Cursor",
-            ok=True,
-            source="api",
-            data={"auto_percent_used": 10, "api_percent_used": 20, "billing_cycle_end": "Mar 17"},
-        )
-        vibe = ProviderSnapshot(
-            name="Vibe",
+        antigravity = ProviderSnapshot(
+            name="Antigravity",
             ok=True,
             source="cli",
-            data={"usage_percent": 9, "reset_at": "Resets Mar 17"},
+            data={
+                "five_hour_percent_left": 75,
+                "five_hour_reset": "Resets 1:16 PM",
+                "weekly_percent_left": 60,
+                "weekly_reset": "Resets Mar 17 at 9 PM",
+            },
         )
 
         output = _capture(
-            build_dashboard([copilot, cursor, vibe], self.now, 30),
+            build_dashboard([short_codex, self.claude_snap, antigravity], self.now, 30),
             width=92,
         )
         lines = output.splitlines()
-        copilot_title = next(index for index, line in enumerate(lines) if "Copilot" in line)
-        vibe_title = next(index for index, line in enumerate(lines) if "Vibe" in line)
+        codex_title = next(index for index, line in enumerate(lines) if "Codex" in line)
+        antigravity_title = next(index for index, line in enumerate(lines) if "Antigravity" in line)
 
-        # Copilot is one row shorter than Cursor, so Vibe starts directly
-        # below Copilot while Cursor is still finishing in the opposite stack.
-        self.assertEqual(vibe_title, copilot_title + 3)
-        self.assertTrue(lines[vibe_title - 1].startswith("╰"))
-        self.assertTrue(lines[vibe_title].startswith("╭"))
+        # Codex is one row shorter than Claude, so Antigravity starts directly
+        # below Codex while Claude is still finishing in the opposite stack.
+        self.assertEqual(antigravity_title, codex_title + 3)
+        self.assertTrue(lines[antigravity_title - 1].startswith("╰"))
+        self.assertTrue(lines[antigravity_title].startswith("╭"))
 
     def test_five_provider_packing_keeps_every_card_and_no_vertical_gutter(self) -> None:
         antigravity = ProviderSnapshot(
@@ -2910,6 +3068,56 @@ class ExtractDepletedResetStrTests(unittest.TestCase):
         self.assertTrue(_provider_is_empty(snap, self.now))
         self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 14 at 11:00 AM")
 
+    def test_extract_reset_str_codex_cross_pool_picks_soonest_blocking_pool(self) -> None:
+        # Native pool has BOTH windows depleted (5h resets 8pm, weekly resets
+        # 6am same day) -- the native pool doesn't clear until the LATER of
+        # the two (8pm). Spark is its own single-window pool, resetting the
+        # next morning (9am Mar 15, later still). Codex is usable again the
+        # moment either pool clears, so the soonest across pools (8pm Mar 14)
+        # is correct -- not a flat max/min over all three raw windows, which
+        # would pick 6am (flat min) or 9am Mar 15 (flat max) instead.
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 08:00 PM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 14 at 06:00 AM",
+                "spark_weekly_percent_left": 0.0,
+                "spark_weekly_reset": "Resets Mar 15 at 09:00 AM",
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 14 at 08:00 PM")
+
+    def test_extract_reset_str_codex_spark_absent_falls_back_to_flat_latest_native_window(
+        self,
+    ) -> None:
+        # Spark absent (None) entirely -- the realistic case for accounts
+        # without Spark access -- so `_provider_is_empty`'s two-pool AND
+        # can't fire; it falls back to Codex's legacy rule where native 5h/1w
+        # are tranches of one quota and *either* window at 0% blocks the
+        # provider (OR). That OR only clears once BOTH currently-depleted
+        # windows have reset, so this is the latest (max) of native's two
+        # resets (Mar 19), not the soonest (min).
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 11:00 AM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 19 at 09:00 AM",
+                "spark_weekly_percent_left": None,
+                "spark_weekly_reset": None,
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 19 at 09:00 AM")
+
 
 class MicroDepletedPanelTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -3010,6 +3218,67 @@ class MicroDepletedPanelTests(unittest.TestCase):
         panel = build_micro_depleted_panel(snap, self.now)
         output = _capture(panel)
         self.assertIn("0% until n/a", output)
+
+    def test_codex_micro_depleted_panel_cross_pool_shows_soonest_blocking_reset(self) -> None:
+        # Regression test through the actual live-rendered path: exhausted
+        # Codex always reaches the micro-card (never build_provider_panel),
+        # so this must exercise build_micro_depleted_panel directly. Both
+        # native windows are depleted (pool clears at the LATER of the two,
+        # 8pm) and Spark is independently depleted (its own reset, 9am the
+        # next day, later still) -- the card must show the soonest blocking
+        # pool's reset (8pm), not one reset merged/first-found across all
+        # three windows indiscriminately (a flat max would show 9am the next
+        # day; a flat min would show weekly's 6am).
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 08:00 PM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 14 at 06:00 AM",
+                "spark_weekly_percent_left": 0.0,
+                "spark_weekly_reset": "Resets Mar 15 at 09:00 AM",
+            },
+        )
+        panel = build_micro_depleted_panel(snap, self.now, width=25)
+        output = _capture(panel, width=25)
+        self.assertIn("0% until 20:00", output)
+        self.assertNotIn("06:00", output)
+        self.assertNotIn("Mar 15", output)
+
+    def test_codex_micro_depleted_panel_spark_absent_still_renders_depleted_view(self) -> None:
+        # Regression for the presence hazard described in `_pool_is_present`:
+        # spark_weekly_percent_left is None for accounts without Spark access
+        # (the realistic case today). A naive `native_blocked and
+        # spark_blocked` rule in `_provider_is_empty` would make
+        # spark_blocked permanently False for these accounts, so a Codex
+        # account with native quota fully exhausted would NEVER show the
+        # depleted view again. This exercises the live render path
+        # (build_dashboard's DynamicMicroDepletedSingle/Pair both call
+        # build_micro_depleted_panel) and asserts the card still renders the
+        # depleted view, showing native's own latest reset (the provider
+        # stays blocked until BOTH depleted native windows clear).
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 0.0,
+                "five_hour_reset": "Resets Mar 14 at 11:00 AM",
+                "weekly_percent_left": 0.0,
+                "weekly_reset": "Resets Mar 19 at 09:00 AM",
+                "spark_weekly_percent_left": None,
+                "spark_weekly_reset": None,
+            },
+        )
+        self.assertTrue(_provider_is_empty(snap, self.now))
+        panel = build_micro_depleted_panel(snap, self.now, width=25)
+        output = _capture(panel, width=25)
+        self.assertIn("Mar 19", output)
+        self.assertIn("09:00", output)
+        self.assertNotIn("11:00", output)
 
 
 class DynamicMicroDepletedPairTests(unittest.TestCase):

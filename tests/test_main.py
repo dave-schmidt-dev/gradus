@@ -1047,9 +1047,10 @@ class WriteSnapshotTests(unittest.TestCase):
         for payload in res.payloads:
             updated = datetime.fromisoformat(payload["updated_at"])
             self.assertIsNotNone(updated.tzinfo)
-            # v1 keeps the seven canonical entries; v2 adds the synthetic
-            # "Antigravity (Claude)" entry synthesized from the same probe.
-            expected_count = 8 if payload["schema_version"] == 2 else 7
+            # v1 keeps the seven canonical entries; v2 adds two synthetic
+            # entries synthesized from their primary probes: "Antigravity
+            # (Claude)" and "Codex (Spark)".
+            expected_count = 9 if payload["schema_version"] == 2 else 7
             self.assertEqual(len(payload["providers"]), expected_count)
             for provider in payload["providers"]:
                 for key in ("name", "ok", "error", "windows", "data"):

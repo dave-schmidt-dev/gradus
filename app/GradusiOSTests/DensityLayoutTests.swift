@@ -1,10 +1,9 @@
+@testable import GradusiOS
 import GradusKit
 import SnapshotTesting
 import SwiftUI
 import Testing
 import UIKit
-
-@testable import GradusiOS
 
 // iPad Option B (David, 2026-08-05: "I like ipad b with bars for each
 // bucket"): behavior coverage for the dense layout's routing, card content,
@@ -54,7 +53,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     #expect(DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseGrid).layout == .denseGrid)
     #expect(
         DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn).layout
-            == .denseSingleColumn)
+            == .denseSingleColumn
+    )
     // No override and no environment (the default `horizontalSizeClass` is
     // nil off-screen) must not silently pick the multi-column grid.
     #expect(DashboardContent(viewModel: viewModel, now: fixedNow).layout == .denseSingleColumn)
@@ -68,7 +68,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
 @Test func bothLayoutsShowEveryWindowAndDifferOnlyInDensityDetail() {
     let threeWindows = provider(
         "opencode",
-        windows: [window("five_hour", 100), window("weekly", 61), window("monthly", 7)])
+        windows: [window("five_hour", 100), window("weekly", 61), window("monthly", 7)]
+    )
     let viewModel = makeDensityViewModel(providers: [threeWindows])
     let presentations: [(layout: DashboardLayout, width: CGFloat, expectedReset: Bool)] = [
         (.denseSingleColumn, 361, false),
@@ -80,7 +81,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
             viewModel: viewModel,
             now: fixedNow,
             layout: presentation.layout,
-            density: .compact)
+            density: .compact
+        )
         let columns = presentation.layout == .denseSingleColumn
             ? 1
             : maxColumns(
@@ -88,11 +90,13 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
                 scaledFixedColumnWidth: 0,
                 cardPadding: 0,
                 cardGap: DashboardDensity.compact.metrics.cardGap,
-                minimumBarWidth: DashboardDensity.compact.metrics.gridMinimum)
+                minimumBarWidth: DashboardDensity.compact.metrics.gridMinimum
+            )
         let showsReset = dashboard.runtimeShowsReset(
             inContentWidth: presentation.width,
             columns: columns,
-            scaledFixedColumnWidth: DashboardDensity.compact.metrics.fixedColumnWidth(showsReset: true))
+            scaledFixedColumnWidth: DashboardDensity.compact.metrics.fixedColumnWidth(showsReset: true)
+        )
         #expect(showsReset == presentation.expectedReset)
 
         let card = ProviderDensityCard(provider: threeWindows, now: fixedNow, showsReset: showsReset)
@@ -105,7 +109,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     let line = SyncStatusLine(
         source: SyncSource(computerName: "dm5mbp", userName: "dave"),
         publishedAt: published,
-        now: fixedNow)
+        now: fixedNow
+    )
     #expect(line.renderedText == "synced 2m ago · dm5mbp")
 }
 
@@ -116,7 +121,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     // No source: age only.
     #expect(
         SyncStatusLine(source: nil, publishedAt: fixedNow.addingTimeInterval(-7200), now: fixedNow)
-            .renderedText == "synced 2h ago")
+            .renderedText == "synced 2h ago"
+    )
     // Neither: render nothing at all rather than a placeholder.
     #expect(SyncStatusLine(source: nil, publishedAt: nil, now: fixedNow).renderedText == nil)
 }
@@ -130,15 +136,18 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
                 window("five_hour", 82, pace: 0.02),
                 window("weekly", 47, pace: -0.08),
                 window("monthly", 31, pace: -0.04),
-            ]),
-        now: fixedNow)
+            ]
+        ),
+        now: fixedNow
+    )
     #expect(card.visibleWindows.map(\.id) == ["five_hour", "weekly", "monthly"])
 
     // INV-3 violations are dropped, not drawn as an `unknown`-colored row --
     // at this density a muted row reads as a spent pool, not as missing data.
     let withInvalid = ProviderDensityCard(
         provider: provider("cursor", windows: [window("api", 150), window("auto", 40)]),
-        now: fixedNow)
+        now: fixedNow
+    )
     #expect(withInvalid.visibleWindows.map(\.id) == ["auto"])
 }
 
@@ -154,7 +163,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
         columns: 2,
         cardWidth: 100,
         horizontalSpacing: spacing,
-        verticalSpacing: spacing)
+        verticalSpacing: spacing
+    )
 
     #expect(frames.count == heights.count)
     #expect(frames[0].minY == 0)
@@ -165,7 +175,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     #expect(frames[2].height == frames[3].height)
     #expect(
         frames[2].minY >= frames[1].maxY,
-        "a later source row must never appear above an earlier provider")
+        "a later source row must never appear above an earlier provider"
+    )
 }
 
 @Test func singleColumnPlacementRemainsContentDriven() {
@@ -173,7 +184,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
 
     #expect(
         ProviderRowBalancedLayout.rowHeights(cardHeights: heights, columns: 1) == heights,
-        "iPhone cards must retain their measured content heights")
+        "iPhone cards must retain their measured content heights"
+    )
     #expect(
         ProviderRowBalancedLayout.frames(
             cardHeights: heights,
@@ -181,7 +193,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
             cardWidth: 361,
             horizontalSpacing: 14,
             verticalSpacing: 14
-        ).map(\.height) == heights)
+        ).map(\.height) == heights
+    )
 }
 
 @Test func providerCardBorderIsFixedStructuralNavy() {
@@ -192,8 +205,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
 @MainActor
 @Test func fullFixturePinsPortraitLandscapeMeasurementsAndLargeText() {
     let providers = fullProviderSet()
-    #expect(providers.count == 8)
-    #expect(providers.reduce(0) { $0 + $1.windows.count } == 14)
+    #expect(providers.count == 9)
+    #expect(providers.reduce(0) { $0 + $1.windows.count } == 15)
 
     let standard = DashboardDensity.standard.metrics
     let solverMetrics = DashboardDensity.compact.metrics
@@ -204,23 +217,29 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
         scaledFixedColumnWidth: solverMetrics.fixedColumnWidth(showsReset: false),
         cardPadding: solverMetrics.cardPadding,
         cardGap: solverMetrics.cardGap,
-        minimumBarWidth: DensityMetrics.minimumBarWidth)
+        minimumBarWidth: DensityMetrics.minimumBarWidth
+    )
     let landscapeMaximum = maxColumns(
         containerWidth: landscapeWidth,
         scaledFixedColumnWidth: solverMetrics.fixedColumnWidth(showsReset: false),
         cardPadding: solverMetrics.cardPadding,
         cardGap: solverMetrics.cardGap,
-        minimumBarWidth: DensityMetrics.minimumBarWidth)
+        minimumBarWidth: DensityMetrics.minimumBarWidth
+    )
     let portraitColumns = DashboardViewModel.resolvedCardColumnCount(
-        preference: pinnedCardColumnPreference, maximum: portraitMaximum)
+        preference: pinnedCardColumnPreference, maximum: portraitMaximum
+    )
     let landscapeColumns = DashboardViewModel.resolvedCardColumnCount(
-        preference: pinnedCardColumnPreference, maximum: landscapeMaximum)
+        preference: pinnedCardColumnPreference, maximum: landscapeMaximum
+    )
     #expect(portraitColumns == portraitMaximum)
     #expect(landscapeColumns == landscapeMaximum)
     let portraitCardWidth = cardWidth(
-        containerWidth: portraitWidth, columns: portraitColumns, cardGap: standard.cardGap)
+        containerWidth: portraitWidth, columns: portraitColumns, cardGap: standard.cardGap
+    )
     let landscapeCardWidth = cardWidth(
-        containerWidth: landscapeWidth, columns: landscapeColumns, cardGap: standard.cardGap)
+        containerWidth: landscapeWidth, columns: landscapeColumns, cardGap: standard.cardGap
+    )
 
     struct MeasuredDevice {
         let name: String
@@ -229,9 +248,11 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     }
     for device in [
         MeasuredDevice(
-            name: "iPad Pro 11-inch (M5) portrait", cardWidth: portraitCardWidth, columns: portraitColumns),
+            name: "iPad Pro 11-inch (M5) portrait", cardWidth: portraitCardWidth, columns: portraitColumns
+        ),
         MeasuredDevice(
-            name: "iPad Pro 11-inch (M5) landscape", cardWidth: landscapeCardWidth, columns: landscapeColumns),
+            name: "iPad Pro 11-inch (M5) landscape", cardWidth: landscapeCardWidth, columns: landscapeColumns
+        ),
     ] {
         let heights = providers.map { provider in
             UIHostingController(
@@ -243,7 +264,7 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
                 )
                 .environment(\.dynamicTypeSize, .xxxLarge)
                 .frame(width: device.cardWidth, alignment: .leading)
-            ).sizeThatFits(in: CGSize(width: device.cardWidth, height: 4_000)).height
+            ).sizeThatFits(in: CGSize(width: device.cardWidth, height: 4000)).height
         }
         #expect(heights.allSatisfy { $0 > 0 }, "\(device.name) produced an empty provider card")
         let frames = ProviderRowBalancedLayout.frames(
@@ -251,12 +272,13 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
             columns: device.columns,
             cardWidth: device.cardWidth,
             horizontalSpacing: standard.cardGap,
-            verticalSpacing: standard.cardGap)
+            verticalSpacing: standard.cardGap
+        )
         #expect(frames.count == providers.count)
         #expect(frames[0].minY == 0)
         for rowStart in stride(from: 0, to: frames.count, by: device.columns) {
             let rowEnd = min(rowStart + device.columns, frames.count)
-            let rowFrames = Array(frames[rowStart..<rowEnd])
+            let rowFrames = Array(frames[rowStart ..< rowEnd])
             let rowY = rowFrames[0].minY
             #expect(rowFrames.dropFirst().allSatisfy { $0.minY == rowY })
             #expect(rowFrames.dropFirst().allSatisfy { $0.height == rowFrames[0].height })
@@ -277,18 +299,20 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
         viewModel: makeDensityViewModel(providers: providers),
         now: fixedNow,
         layout: .denseSingleColumn,
-        density: .standard)
+        density: .standard
+    )
     let iPad = DashboardContent(
         viewModel: makeDensityViewModel(providers: providers),
         now: fixedNow,
         layout: .denseGrid,
-        density: .standard)
+        density: .standard
+    )
 
     let expectedProviderNames = Set(providers.map(\.providerName))
     #expect(Set(iPhone.semanticProviderWindowSet.map(\.providerName)) == expectedProviderNames)
     #expect(Set(iPad.semanticProviderWindowSet.map(\.providerName)) == expectedProviderNames)
-    #expect(iPhone.semanticProviderWindowSet.count == 8)
-    #expect(iPhone.semanticProviderWindowSet.reduce(0) { $0 + $1.windowIDs.count } == 14)
+    #expect(iPhone.semanticProviderWindowSet.count == 9)
+    #expect(iPhone.semanticProviderWindowSet.reduce(0) { $0 + $1.windowIDs.count } == 15)
     #expect(iPhone.semanticProviderWindowSet == iPad.semanticProviderWindowSet)
 
     // Production's one-column frame model is compared with the explicit
@@ -301,7 +325,8 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
         columns: 1,
         cardWidth: 361,
         horizontalSpacing: 14,
-        verticalSpacing: 14)
+        verticalSpacing: 14
+    )
     var expectedY: CGFloat = 0
     let expectedFrames = measuredHeights.map { height in
         let frame = CGRect(x: 0, y: expectedY, width: 361, height: height)
@@ -395,7 +420,8 @@ private func scaledProductionMetric(
     dynamicTypeSize: DynamicTypeSize
 ) -> CGFloat {
     let traits = UITraitCollection(
-        preferredContentSizeCategory: uiContentSizeCategory(for: dynamicTypeSize))
+        preferredContentSizeCategory: uiContentSizeCategory(for: dynamicTypeSize)
+    )
     return UIFontMetrics(forTextStyle: style.uiTextStyle)
         .scaledValue(for: value, compatibleWith: traits)
 }
@@ -416,14 +442,13 @@ private func scaledProductionColumnWidths(
     dynamicTypeSize: DynamicTypeSize
 ) -> ScaledFixedColumnWidths {
     let metrics = density.metrics
-    let styles: (label: ProductionScaledMetricStyle, percent: ProductionScaledMetricStyle, reset: ProductionScaledMetricStyle)
-    switch density {
+    let styles: (label: ProductionScaledMetricStyle, percent: ProductionScaledMetricStyle, reset: ProductionScaledMetricStyle) = switch density {
     case .compact:
-        styles = (.caption, .caption, .caption2)
+        (.caption, .caption, .caption2)
     case .standard:
-        styles = (.footnote, .footnote, .caption)
+        (.footnote, .footnote, .caption)
     case .large:
-        styles = (.subheadline, .subheadline, .footnote)
+        (.subheadline, .subheadline, .footnote)
     }
     return ScaledFixedColumnWidths(
         label: scaledProductionMetric(metrics.labelWidth, relativeTo: styles.label, dynamicTypeSize: dynamicTypeSize),
@@ -486,7 +511,8 @@ private let compactHistoricalTightCase = (
 
     for (columns, gap, rendered, source) in measured {
         let predicted = cardWidth(
-            containerWidth: iPadPortraitContent, columns: columns, cardGap: gap)
+            containerWidth: iPadPortraitContent, columns: columns, cardGap: gap
+        )
         #expect(
             abs(predicted - rendered) < 0.5,
             """
@@ -494,7 +520,8 @@ private let compactHistoricalTightCase = (
             columns \(columns) with gap \(gap) predicts \(predicted)pt, but the \
             baseline shows \(rendered)pt (\(source)). Re-measure before changing \
             the expected value — the baseline is the authority here, not the formula.
-            """)
+            """
+        )
     }
 }
 
@@ -514,10 +541,11 @@ private let compactHistoricalTightCase = (
     for device in deviceContentWidths {
         for dynamicTypeSize in densityPropertyDynamicTypeSizes {
             for providerCount in densityPropertyProviderCounts {
-                let providers = (0..<providerCount).map { index in
+                let providers = (0 ..< providerCount).map { index in
                     provider(
                         "provider-\(index)",
-                        windows: [window("weekly", 50)])
+                        windows: [window("weekly", 50)]
+                    )
                 }
                 let viewModel = makeDensityViewModel(providers: providers)
 
@@ -528,9 +556,11 @@ private let compactHistoricalTightCase = (
                        usesTwoLineRow(at: dynamicTypeSize)
                     {
                         let traits = UITraitCollection(
-                            preferredContentSizeCategory: uiContentSizeCategory(for: dynamicTypeSize))
+                            preferredContentSizeCategory: uiContentSizeCategory(for: dynamicTypeSize)
+                        )
                         let textLineHeight = UIFont.preferredFont(
-                            forTextStyle: rowTextStyle(for: density), compatibleWith: traits).lineHeight
+                            forTextStyle: rowTextStyle(for: density), compatibleWith: traits
+                        ).lineHeight
                         let rowWidth = max(1, device.width - metrics.cardPadding * 2)
                         let renderedHeight = UIHostingController(
                             rootView: WindowRow(
@@ -540,7 +570,7 @@ private let compactHistoricalTightCase = (
                                 metrics: metrics
                             )
                             .environment(\.dynamicTypeSize, dynamicTypeSize)
-                        ).sizeThatFits(in: CGSize(width: rowWidth, height: 2_000)).height
+                        ).sizeThatFits(in: CGSize(width: rowWidth, height: 2000)).height
                         let minimumTwoLineHeight = textLineHeight
                             + metrics.rowGap + metrics.barHeight
                         #expect(
@@ -550,19 +580,21 @@ private let compactHistoricalTightCase = (
                     }
 
                     let scaledColumns = scaledProductionColumnWidths(
-                        density: density, dynamicTypeSize: dynamicTypeSize)
-                    let fixedDemand: CGFloat
-                    if scaledColumns.total(showsReset: true, columnGap: metrics.columnGap)
+                        density: density, dynamicTypeSize: dynamicTypeSize
+                    )
+                    let fixedDemand: CGFloat = if scaledColumns.total(showsReset: true, columnGap: metrics.columnGap)
                         > metrics.fixedColumnWidth(showsReset: true)
                     {
-                        fixedDemand = scaledColumns.total(
-                            showsReset: false, columnGap: metrics.columnGap)
+                        scaledColumns.total(
+                            showsReset: false, columnGap: metrics.columnGap
+                        )
                     } else {
-                        fixedDemand = max(
+                        max(
                             0,
                             historicalDefaultCardMinimum(for: density)
                                 - metrics.cardPadding * 2
-                                - DensityMetrics.minimumBarWidth)
+                                - DensityMetrics.minimumBarWidth
+                        )
                     }
                     let columns = device.isGrid
                         ? maxColumns(
@@ -570,27 +602,33 @@ private let compactHistoricalTightCase = (
                             scaledFixedColumnWidth: fixedDemand,
                             cardPadding: metrics.cardPadding,
                             cardGap: metrics.cardGap,
-                            minimumBarWidth: DensityMetrics.minimumBarWidth)
+                            minimumBarWidth: DensityMetrics.minimumBarWidth
+                        )
                         : 1
                     let resolvedWidth = cardWidth(
                         containerWidth: device.width,
                         columns: columns,
-                        cardGap: metrics.cardGap)
+                        cardGap: metrics.cardGap
+                    )
                     let scaledResetDemand = scaledColumns.total(
-                        showsReset: true, columnGap: metrics.columnGap)
+                        showsReset: true, columnGap: metrics.columnGap
+                    )
                     let dashboard = DashboardContent(
                         viewModel: viewModel,
                         now: fixedNow,
                         layout: device.isGrid ? .denseGrid : .denseSingleColumn,
-                        density: density)
+                        density: density
+                    )
                     let showsReset = dashboard.runtimeShowsReset(
                         inContentWidth: device.width,
                         columns: columns,
-                        scaledFixedColumnWidth: scaledResetDemand)
+                        scaledFixedColumnWidth: scaledResetDemand
+                    )
                     let expectedShowsReset = device.isGrid
                         && metrics.fitsResetColumn(
                             inCardWidth: resolvedWidth,
-                            scaledFixedColumnWidth: scaledResetDemand)
+                            scaledFixedColumnWidth: scaledResetDemand
+                        )
                     #expect(
                         showsReset == expectedShowsReset,
                         """
@@ -604,13 +642,13 @@ private let compactHistoricalTightCase = (
                     // this Phase 1 arithmetic aligned with that contract: the
                     // bar gets the full card content width on its own line,
                     // while smaller text sizes pay the fixed-column demand.
-                    let barWidth: CGFloat
-                    if usesTwoLineRow(at: dynamicTypeSize) {
-                        barWidth = resolvedWidth - metrics.cardPadding * 2
+                    let barWidth: CGFloat = if usesTwoLineRow(at: dynamicTypeSize) {
+                        resolvedWidth - metrics.cardPadding * 2
                     } else {
-                        barWidth = resolvedWidth - metrics.cardPadding * 2
+                        resolvedWidth - metrics.cardPadding * 2
                             - (showsReset ? scaledResetDemand : scaledColumns.total(
-                                showsReset: false, columnGap: metrics.columnGap))
+                                showsReset: false, columnGap: metrics.columnGap
+                            ))
                     }
 
                     #expect(
@@ -628,25 +666,30 @@ private let compactHistoricalTightCase = (
 
     let historical = scaledProductionColumnWidths(
         density: compactHistoricalTightCase.density,
-        dynamicTypeSize: compactHistoricalTightCase.dynamicTypeSize)
+        dynamicTypeSize: compactHistoricalTightCase.dynamicTypeSize
+    )
     let historicalColumns = maxColumns(
         containerWidth: compactHistoricalTightCase.contentWidth,
         scaledFixedColumnWidth: historicalDefaultCardMinimum(
-            for: compactHistoricalTightCase.density)
+            for: compactHistoricalTightCase.density
+        )
             - compactHistoricalTightCase.density.metrics.cardPadding * 2
             - DensityMetrics.minimumBarWidth,
         cardPadding: compactHistoricalTightCase.density.metrics.cardPadding,
         cardGap: compactHistoricalTightCase.density.metrics.cardGap,
-        minimumBarWidth: DensityMetrics.minimumBarWidth)
+        minimumBarWidth: DensityMetrics.minimumBarWidth
+    )
     let historicalCardWidth = cardWidth(
         containerWidth: compactHistoricalTightCase.contentWidth,
         columns: historicalColumns,
-        cardGap: compactHistoricalTightCase.density.metrics.cardGap)
+        cardGap: compactHistoricalTightCase.density.metrics.cardGap
+    )
     let historicalBarWidth = historicalCardWidth
         - compactHistoricalTightCase.density.metrics.cardPadding * 2
         - historical.total(
             showsReset: true,
-            columnGap: compactHistoricalTightCase.density.metrics.columnGap)
+            columnGap: compactHistoricalTightCase.density.metrics.columnGap
+        )
     #expect(historicalColumns == 4)
     #expect(historicalBarWidth == compactHistoricalTightCase.expectedBarWidth)
 }
@@ -664,7 +707,9 @@ private let compactHistoricalTightCase = (
             scaledFixedColumnWidth: 246,
             cardPadding: 12,
             cardGap: 12,
-            minimumBarWidth: 48) == 1)
+            minimumBarWidth: 48
+        ) == 1
+    )
 
     for item in cases {
         let columns = maxColumns(
@@ -672,11 +717,13 @@ private let compactHistoricalTightCase = (
             scaledFixedColumnWidth: item.fixed,
             cardPadding: item.padding,
             cardGap: item.gap,
-            minimumBarWidth: item.minimum)
+            minimumBarWidth: item.minimum
+        )
         #expect(columns >= 1)
         if columns > 1 {
             let resolved = cardWidth(
-                containerWidth: item.container, columns: columns, cardGap: item.gap)
+                containerWidth: item.container, columns: columns, cardGap: item.gap
+            )
             let barWidth = resolved - item.fixed - item.padding * 2
             #expect(barWidth >= item.minimum)
         }
@@ -688,30 +735,36 @@ private func feasibleStops(
     dynamicTypeSize: DynamicTypeSize
 ) -> [Int] {
     let scaledColumns = scaledProductionColumnWidths(
-        density: .compact, dynamicTypeSize: dynamicTypeSize)
+        density: .compact, dynamicTypeSize: dynamicTypeSize
+    )
     return feasibleColumnStops(
         containerWidth: device.width,
         scaledFixedColumnWidth: scaledColumns.total(
-            showsReset: false, columnGap: DashboardDensity.compact.metrics.columnGap),
+            showsReset: false, columnGap: DashboardDensity.compact.metrics.columnGap
+        ),
         cardPadding: DashboardDensity.compact.metrics.cardPadding,
         cardGap: DashboardDensity.compact.metrics.cardGap,
-        minimumBarWidth: DensityMetrics.minimumBarWidth)
+        minimumBarWidth: DensityMetrics.minimumBarWidth
+    )
 }
 
 @Test func feasibleSliderStopsCoverEveryDeviceWidthInLargerCardOrder() {
     for device in deviceContentWidths {
         let stops = feasibleStops(for: device, dynamicTypeSize: .large)
         let scaledColumns = scaledProductionColumnWidths(
-            density: .compact, dynamicTypeSize: .large)
+            density: .compact, dynamicTypeSize: .large
+        )
         let expectedMaximum = maxColumns(
             containerWidth: device.width,
             scaledFixedColumnWidth: scaledColumns.total(
-                showsReset: false, columnGap: DashboardDensity.compact.metrics.columnGap),
+                showsReset: false, columnGap: DashboardDensity.compact.metrics.columnGap
+            ),
             cardPadding: DashboardDensity.compact.metrics.cardPadding,
             cardGap: DashboardDensity.compact.metrics.cardGap,
-            minimumBarWidth: DensityMetrics.minimumBarWidth)
+            minimumBarWidth: DensityMetrics.minimumBarWidth
+        )
 
-        #expect(stops == Array(1...expectedMaximum), Comment(rawValue: device.name))
+        #expect(stops == Array(1 ... expectedMaximum), Comment(rawValue: device.name))
         #expect(stops.allSatisfy { $0 >= 1 }, Comment(rawValue: device.name))
     }
 
@@ -722,7 +775,9 @@ private func feasibleStops(
             scaledFixedColumnWidth: 120,
             cardPadding: 12,
             cardGap: 12,
-            minimumBarWidth: 48) == [1])
+            minimumBarWidth: 48
+        ) == [1]
+    )
 }
 
 @Test func extraExtraExtraLargeOffersFewerSliderStopsOnTheSameDevice() {
@@ -739,43 +794,53 @@ private func feasibleStops(
     for device in deviceContentWidths {
         for dynamicTypeSize in densityPropertyDynamicTypeSizes {
             let scaledColumns = scaledProductionColumnWidths(
-                density: .compact, dynamicTypeSize: dynamicTypeSize)
+                density: .compact, dynamicTypeSize: dynamicTypeSize
+            )
             let fixedWidth = scaledColumns.total(
-                showsReset: false, columnGap: metrics.columnGap)
+                showsReset: false, columnGap: metrics.columnGap
+            )
             for columns in feasibleStops(for: device, dynamicTypeSize: dynamicTypeSize) {
                 let barWidth = cardWidth(
                     containerWidth: device.width,
                     columns: columns,
-                    cardGap: metrics.cardGap)
+                    cardGap: metrics.cardGap
+                )
                     - metrics.cardPadding * 2
                     - fixedWidth
                 #expect(
                     barWidth >= DensityMetrics.minimumBarWidth,
-                    "\(device.name) at \(dynamicTypeSize), \(columns) columns")
+                    "\(device.name) at \(dynamicTypeSize), \(columns) columns"
+                )
             }
         }
     }
 }
 
 @MainActor
-@Test func autoUsesTheLargestFeasibleStopOnPhoneAndPad() {
-    let phone = deviceContentWidths.first { !$0.isGrid }!
-    let pad = deviceContentWidths.first { $0.isGrid }!
+@Test func autoUsesTheLargestFeasibleStopOnPhoneAndPad() throws {
+    let phone = try #require(deviceContentWidths.first { !$0.isGrid })
+    let pad = try #require(deviceContentWidths.first { $0.isGrid })
     let phoneStops = feasibleStops(for: phone, dynamicTypeSize: .large)
     let padStops = feasibleStops(for: pad, dynamicTypeSize: .large)
 
     #expect(phoneStops == [1], "iPhone has one feasible column count")
-    #expect(DashboardViewModel.cardSizeStopCount(for: phoneStops.last!) == 1)
+    #expect(try DashboardViewModel.cardSizeStopCount(for: #require(phoneStops.last)) == 1)
     #expect(padStops.count > phoneStops.count, "iPad exposes its wider feasible range")
     #expect(
-        DashboardViewModel.resolvedCardColumnCount(
-            preference: 0, maximum: phoneStops.last!) == phoneStops.last!)
+        try DashboardViewModel.resolvedCardColumnCount(
+            preference: 0, maximum: #require(phoneStops.last)
+        ) == phoneStops.last!
+    )
     #expect(
-        DashboardViewModel.resolvedCardColumnCount(
-            preference: 0, maximum: padStops.last!) == padStops.last!)
+        try DashboardViewModel.resolvedCardColumnCount(
+            preference: 0, maximum: #require(padStops.last)
+        ) == padStops.last!
+    )
     #expect(
-        DashboardViewModel.resolvedCardColumnCount(
-            preference: 1, maximum: padStops.last!) == padStops.last!)
+        try DashboardViewModel.resolvedCardColumnCount(
+            preference: 1, maximum: #require(padStops.last)
+        ) == padStops.last!
+    )
 }
 
 /// Selecting `.compact` must reproduce 1.6.0 exactly, so that adding the
@@ -844,10 +909,12 @@ private func feasibleStops(
     let recessed = WindowRowLabelForegroundToken.recessed.effectiveForeground
     let recessedNormalRatio = min(
         recessed.light.contrastRatio(with: ProviderDensityCardSurfaceToken.light),
-        recessed.dark.contrastRatio(with: ProviderDensityCardSurfaceToken.dark))
+        recessed.dark.contrastRatio(with: ProviderDensityCardSurfaceToken.dark)
+    )
     #expect(
         recessedNormalRatio < 4.5,
-        "the old secondary token unexpectedly clears normal-label AA; keep the mutation fixture honest")
+        "the old secondary token unexpectedly clears normal-label AA; keep the mutation fixture honest"
+    )
 }
 
 /// Standard and XXXL are the two readability checkpoints for the named
@@ -869,11 +936,12 @@ private func feasibleStops(
     for dynamicTypeSize in [DynamicTypeSize.large, .xxxLarge] {
         for (id, label) in expected {
             let row = WindowRow(
-                window: window(id, 47), now: fixedNow, showsReset: false, metrics: .standard)
-                .environment(\.dynamicTypeSize, dynamicTypeSize)
+                window: window(id, 47), now: fixedNow, showsReset: false, metrics: .standard
+            )
+            .environment(\.dynamicTypeSize, dynamicTypeSize)
             let renderedWidth = UIHostingController(
                 rootView: row.fixedSize(horizontal: true, vertical: false)
-            ).sizeThatFits(in: CGSize(width: 2_000, height: 200)).width
+            ).sizeThatFits(in: CGSize(width: 2000, height: 200)).width
 
             #expect(ProviderWindowLabel.label(for: id) == label)
             #expect(rowContentContainsLabel(id: id, label: label))
@@ -924,13 +992,14 @@ private func rowContentContainsLabel(id: String, label: String) -> Bool {
 @MainActor
 @Test func windowRowScalesFixedColumnsAtExtraExtraExtraLarge() {
     let row = WindowRow(
-        window: window("weekly", 47), now: fixedNow, showsReset: true, metrics: .compact)
+        window: window("weekly", 47), now: fixedNow, showsReset: true, metrics: .compact
+    )
     let defaultSize = UIHostingController(rootView: row.fixedSize(horizontal: true, vertical: false))
-        .sizeThatFits(in: CGSize(width: 2_000, height: 200))
+        .sizeThatFits(in: CGSize(width: 2000, height: 200))
     let xxxLargeSize = UIHostingController(
         rootView: row.environment(\.dynamicTypeSize, .xxxLarge)
             .fixedSize(horizontal: true, vertical: false)
-    ).sizeThatFits(in: CGSize(width: 2_000, height: 200))
+    ).sizeThatFits(in: CGSize(width: 2000, height: 200))
     // Apple's literal `.xxxLarge` category scales this row by about 1.48x;
     // the plan's documented ~1.9x checkpoint is reached at the next
     // accessibility rung. The row itself reflows at AX1+, so compare the
@@ -938,21 +1007,24 @@ private func rowContentContainsLabel(id: String, label: String) -> Bool {
     // structures' intrinsic widths.
     #expect(xxxLargeSize.width > defaultSize.width)
     let defaultColumns = scaledProductionColumnWidths(
-        density: .compact, dynamicTypeSize: .large)
+        density: .compact, dynamicTypeSize: .large
+    )
     let xxxLargeColumns = scaledProductionColumnWidths(
-        density: .compact, dynamicTypeSize: .xxxLarge)
+        density: .compact, dynamicTypeSize: .xxxLarge
+    )
     let accessibility2Columns = scaledProductionColumnWidths(
-        density: .compact, dynamicTypeSize: .accessibility2)
+        density: .compact, dynamicTypeSize: .accessibility2
+    )
     for (defaultValue, xxxLargeValue) in zip(
         [defaultColumns.label, defaultColumns.percent, defaultColumns.reset],
-        [xxxLargeColumns.label, xxxLargeColumns.percent, xxxLargeColumns.reset])
-    {
+        [xxxLargeColumns.label, xxxLargeColumns.percent, xxxLargeColumns.reset]
+    ) {
         #expect(xxxLargeValue > defaultValue)
     }
     for (xxxLargeValue, accessibility2Value) in zip(
         [xxxLargeColumns.label, xxxLargeColumns.percent, xxxLargeColumns.reset],
-        [accessibility2Columns.label, accessibility2Columns.percent, accessibility2Columns.reset])
-    {
+        [accessibility2Columns.label, accessibility2Columns.percent, accessibility2Columns.reset]
+    ) {
         #expect(accessibility2Value > xxxLargeValue)
     }
     let ratio = accessibility2Columns.total(showsReset: true, columnGap: DensityMetrics.compact.columnGap)
@@ -963,13 +1035,15 @@ private func rowContentContainsLabel(id: String, label: String) -> Bool {
 @MainActor
 @Test func windowRowUsesScaledContentHeightAsTheRowFloorAtExtraExtraExtraLarge() {
     let row = WindowRow(
-        window: window("weekly", 47), now: fixedNow, showsReset: true, metrics: .compact)
+        window: window("weekly", 47), now: fixedNow, showsReset: true, metrics: .compact
+    )
     let rendered = UIHostingController(
         rootView: row.environment(\.dynamicTypeSize, .xxxLarge)
-    ).sizeThatFits(in: CGSize(width: 2_000, height: 200))
+    ).sizeThatFits(in: CGSize(width: 2000, height: 200))
     let trait = UITraitCollection(preferredContentSizeCategory: .extraExtraExtraLarge)
     let scaledContentHeight = UIFont.preferredFont(
-        forTextStyle: .caption1, compatibleWith: trait).lineHeight
+        forTextStyle: .caption1, compatibleWith: trait
+    ).lineHeight
 
     #expect(rendered.height >= scaledContentHeight)
     #expect(rendered.height >= DensityMetrics.compact.rowHeight)
@@ -1004,22 +1078,27 @@ private let phoneContentWidths: [(name: String, content: CGFloat)] = [
         for dynamicTypeSize in densityPropertyDynamicTypeSizes {
             let resetDemand = typesetWidth(
                 "resets Aug 12, 7:46 PM",
-                exhaustedFont(resetStyle, dynamicTypeSize: dynamicTypeSize))
+                exhaustedFont(resetStyle, dynamicTypeSize: dynamicTypeSize)
+            )
             for phone in phoneContentWidths {
                 let packed = maxColumns(
                     containerWidth: phone.content,
                     scaledFixedColumnWidth: resetDemand,
                     cardPadding: metrics.cardPadding,
                     cardGap: metrics.exhaustedGap,
-                    minimumBarWidth: 0)
+                    minimumBarWidth: 0
+                )
                 let resolvedWidth = cardWidth(
                     containerWidth: phone.content,
                     columns: packed,
-                    cardGap: metrics.exhaustedGap)
+                    cardGap: metrics.exhaustedGap
+                )
                 let textWidth = resolvedWidth - metrics.cardPadding * 2
                 let widestResetToken = widestUnbreakableTokenWidth(
                     in: "resets Aug 12, 7:46 PM", font: exhaustedFont(
-                        resetStyle, dynamicTypeSize: dynamicTypeSize))
+                        resetStyle, dynamicTypeSize: dynamicTypeSize
+                    )
+                )
                 #expect(
                     textWidth >= widestResetToken,
                     """
@@ -1058,7 +1137,9 @@ private func exhaustedFont(
     UIFont.preferredFont(
         forTextStyle: style,
         compatibleWith: UITraitCollection(
-            preferredContentSizeCategory: uiContentSizeCategory(for: dynamicTypeSize)))
+            preferredContentSizeCategory: uiContentSizeCategory(for: dynamicTypeSize)
+        )
+    )
 }
 
 private func typesetWidth(_ string: String, _ font: UIFont) -> CGFloat {
@@ -1102,7 +1183,7 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
         // both labels may wrap at accessibility sizes.
         let surfaces: [(name: String, content: CGFloat, isGrid: Bool)] =
             phoneContentWidths.map { ($0.name, $0.content, false) }
-            + deviceContentWidths.filter(\.isGrid).map { ($0.name, $0.width, true) }
+                + deviceContentWidths.filter(\.isGrid).map { ($0.name, $0.width, true) }
 
         for dynamicTypeSize in densityPropertyDynamicTypeSizes {
             let titleFont = exhaustedFont(titleStyle, dynamicTypeSize: dynamicTypeSize)
@@ -1110,7 +1191,8 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
             let resetDemand = typesetWidth(longestReset, resetFont)
             let needed = max(
                 widestUnbreakableTokenWidth(in: longestTitle, font: titleFont),
-                widestUnbreakableTokenWidth(in: longestReset, font: resetFont))
+                widestUnbreakableTokenWidth(in: longestReset, font: resetFont)
+            )
 
             for device in surfaces {
                 let columns = maxColumns(
@@ -1118,9 +1200,11 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
                     scaledFixedColumnWidth: resetDemand,
                     cardPadding: m.cardPadding,
                     cardGap: m.exhaustedGap,
-                    minimumBarWidth: 0)
+                    minimumBarWidth: 0
+                )
                 let cellWidth = cardWidth(
-                    containerWidth: device.content, columns: columns, cardGap: m.exhaustedGap)
+                    containerWidth: device.content, columns: columns, cardGap: m.exhaustedGap
+                )
                 let textWidth = cellWidth - m.cardPadding * 2
                 #expect(
                     textWidth >= needed,
@@ -1163,10 +1247,12 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
 @Test func everyDensityShowsEveryWindow() {
     let threeWindows = provider(
         "opencode",
-        windows: [window("five_hour", 100), window("weekly", 61), window("monthly", 7)])
+        windows: [window("five_hour", 100), window("weekly", 61), window("monthly", 7)]
+    )
     for density in DashboardDensity.allCases {
         let card = ProviderDensityCard(
-            provider: threeWindows, now: fixedNow, metrics: density.metrics)
+            provider: threeWindows, now: fixedNow, metrics: density.metrics
+        )
         #expect(card.visibleWindows.count == 3, "\(density.rawValue) hid a window")
     }
 }
@@ -1176,16 +1262,17 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
 /// are the slider's Small-to-Large stops, which the dashboard clamps against
 /// the actual device geometry and Dynamic Type size.
 @MainActor
-@Test func densityPersistsPerDeviceAndDefaultsToCompact() {
+@Test func densityPersistsPerDeviceAndDefaultsToCompact() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-pref-\(UUID().uuidString)", isDirectory: true)
     let suite = "gradus-density-pref-\(UUID().uuidString)"
-    let defaults = UserDefaults(suiteName: suite)!
+    let defaults = try #require(UserDefaults(suiteName: suite))
 
     // Unset defaults to Auto. The selected count is resolved only from the
     // live container and Dynamic Type environment, not provider data.
     let viewModel = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
     #expect(viewModel.cardColumnPreference == 0)
 
     viewModel.cardColumnPreference = 3
@@ -1193,29 +1280,32 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
 
     // Survives a relaunch against the same defaults.
     let relaunched = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
     #expect(relaunched.cardColumnPreference == 3)
 
     // A stale invalid value falls back to Auto rather than producing an
     // impossible slider position.
     defaults.set(-1, forKey: DashboardViewModel.cardColumnPreferenceKey)
     let unknown = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
     #expect(unknown.cardColumnPreference == 0)
 }
 
 @MainActor
-@Test func legacyColumnPreferenceMigratesAfterGeometryIsKnown() {
+@Test func legacyColumnPreferenceMigratesAfterGeometryIsKnown() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-migration-\(UUID().uuidString)", isDirectory: true)
-    let defaults = UserDefaults(suiteName: "gradus-density-migration-\(UUID().uuidString)")!
+    let defaults = try #require(UserDefaults(suiteName: "gradus-density-migration-\(UUID().uuidString)"))
 
     // Build 12 stored a direct column count. Before geometry is available the
     // new model stays on Auto rather than briefly treating that number as a
     // size stop; the first dashboard geometry pass translates it exactly.
     defaults.set(3, forKey: DashboardViewModel.cardColumnPreferenceKey)
     let viewModel = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
     #expect(viewModel.cardColumnPreference == 0)
 
     viewModel.setAvailableCardColumns(5)
@@ -1223,25 +1313,28 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
     #expect(defaults.integer(forKey: DashboardViewModel.cardColumnPreferenceKey) == 3)
 
     let relaunched = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
     #expect(relaunched.cardColumnPreference == 3)
 }
 
 @MainActor
-@Test func legacyColumnPreferenceDoesNotRemigrateAfterOneColumnGeometry() {
+@Test func legacyColumnPreferenceDoesNotRemigrateAfterOneColumnGeometry() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-migration-one-column-\(UUID().uuidString)", isDirectory: true)
-    let defaults = UserDefaults(suiteName: "gradus-density-migration-one-column-\(UUID().uuidString)")!
+    let defaults = try #require(UserDefaults(suiteName: "gradus-density-migration-one-column-\(UUID().uuidString)"))
     defaults.set(3, forKey: DashboardViewModel.cardColumnPreferenceKey)
 
     let viewModel = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
     viewModel.setAvailableCardColumns(1)
     #expect(viewModel.cardColumnPreference == 0)
     #expect(defaults.integer(forKey: DashboardViewModel.cardColumnPreferenceKey) == 0)
 
     let relaunched = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
     relaunched.setAvailableCardColumns(4)
     #expect(relaunched.cardColumnPreference == 2, "three legacy columns should map to two stops from Small")
 }
@@ -1255,31 +1348,41 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
     #expect(DashboardViewModel.resolvedCardDensity(preference: 0, sizeStops: 1) == nil)
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
-            preference: 0, maximum: 1, sizeStops: 1) == 1)
+            preference: 0, maximum: 1, sizeStops: 1
+        ) == 1
+    )
 
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
-            preference: 1, maximum: 4, sizeStops: 4) == 4)
+            preference: 1, maximum: 4, sizeStops: 4
+        ) == 4
+    )
     #expect(
         DashboardViewModel.resolvedCardColumnCount(
-            preference: 4, maximum: 4, sizeStops: 4) == 1)
+            preference: 4, maximum: 4, sizeStops: 4
+        ) == 1
+    )
     #expect(
-        DashboardViewModel.cardSizeLabel(preference: 0, maximumColumns: 1) == "Auto")
+        DashboardViewModel.cardSizeLabel(preference: 0, maximumColumns: 1) == "Auto"
+    )
     #expect(
         DashboardViewModel.cardSizeLabel(preference: 1, maximumColumns: 4)
-            .hasPrefix("Small · 4 columns"))
+            .hasPrefix("Small · 4 columns")
+    )
     #expect(
         DashboardViewModel.cardSizeLabel(preference: 3, maximumColumns: 1)
-            == "Auto")
+            == "Auto"
+    )
 }
 
 @MainActor
-@Test func oneColumnGeometryForcesAutomaticCardSize() {
+@Test func oneColumnGeometryForcesAutomaticCardSize() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-one-column-size-\(UUID().uuidString)", isDirectory: true)
-    let defaults = UserDefaults(suiteName: "gradus-one-column-size-\(UUID().uuidString)")!
+    let defaults = try #require(UserDefaults(suiteName: "gradus-one-column-size-\(UUID().uuidString)"))
     let viewModel = DashboardViewModel(
-        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults)
+        cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
+    )
 
     viewModel.setAvailableCardColumns(4)
     viewModel.cardColumnPreference = 4
@@ -1294,13 +1397,14 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
 }
 
 @MainActor
-@Test func automaticCardSizeDisablesManualSlider() {
+@Test func automaticCardSizeDisablesManualSlider() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-card-size-binding-\(UUID().uuidString)", isDirectory: true)
     let suite = "gradus-card-size-binding-\(UUID().uuidString)"
-    let viewModel = DashboardViewModel(
+    let viewModel = try DashboardViewModel(
         cache: FileLocalCacheStore(directory: directory),
-        userDefaults: UserDefaults(suiteName: suite)!)
+        userDefaults: #require(UserDefaults(suiteName: suite))
+    )
     viewModel.setAvailableCardColumns(4)
     let settings = SettingsView(dashboardViewModel: viewModel)
 
@@ -1360,14 +1464,16 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
     #expect(viewModel.cardColumnPreference == 0)
 
     let explicit = DashboardContent(
-        viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: .compact)
+        viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: .compact
+    )
     let byPreference = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseGrid)
     #expect(explicit.metrics == byPreference.metrics)
 
     // The override must actually override, or the two fixtures above would
     // agree for the wrong reason.
     let overridden = DashboardContent(
-        viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: .large)
+        viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: .large
+    )
     #expect(overridden.metrics != byPreference.metrics)
 
     let standard = DashboardDensity.resolveRung { $0 == .standard }
@@ -1389,21 +1495,26 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
             scaledFixedColumnWidth: 0,
             cardPadding: 0,
             cardGap: metrics.cardGap,
-            minimumBarWidth: metrics.gridMinimum)
+            minimumBarWidth: metrics.gridMinimum
+        )
         #expect(
             !DashboardContent(
                 viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn, density: density
             ).runtimeShowsReset(
                 inContentWidth: 361,
                 columns: 1,
-                scaledFixedColumnWidth: metrics.fixedColumnWidth(showsReset: true)))
+                scaledFixedColumnWidth: metrics.fixedColumnWidth(showsReset: true)
+            )
+        )
         #expect(
             DashboardContent(
                 viewModel: viewModel, now: fixedNow, layout: .denseGrid, density: density
             ).runtimeShowsReset(
                 inContentWidth: 802,
                 columns: gridColumns,
-                scaledFixedColumnWidth: metrics.fixedColumnWidth(showsReset: true)))
+                scaledFixedColumnWidth: metrics.fixedColumnWidth(showsReset: true)
+            )
+        )
     }
 }
 

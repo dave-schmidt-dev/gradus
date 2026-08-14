@@ -37,6 +37,7 @@ from gradus.providers import (
     _write_debug_dump,
     fetch_provider_snapshot,
 )
+from gradus.providers._codex_helpers import _extract_spark_window
 from gradus.snapshot import _is_transient_probe_error
 
 
@@ -1208,6 +1209,153 @@ class CodexWindowClassificationTests(unittest.TestCase):
         self.assertEqual(result, 95.0)
 
 
+class CodexSparkWindowExtractionTests(unittest.TestCase):
+    """GPT-5.3-Codex-Spark ships as a top-level additional_rate_limits entry."""
+
+    SPARK_WINDOW = {
+        "allowed": True,
+        "limit_reached": False,
+        "primary_window": {"used_percent": 10, "reset_at": 1787274482},
+        "secondary_window": None,
+    }
+
+    def _payload(self, *, metered_feature="codex_bengalfox", limit_name="GPT-5.3-Codex-Spark"):
+        return {
+            "rate_limit": {},
+            "additional_rate_limits": [
+                {
+                    "limit_name": limit_name,
+                    "metered_feature": metered_feature,
+                    "rate_limit": self.SPARK_WINDOW,
+                }
+            ],
+        }
+
+    def test_extracts_primary_window_from_matching_entry(self) -> None:
+        result = _extract_spark_window(self._payload())
+        self.assertIs(result, self.SPARK_WINDOW["primary_window"])
+
+    def test_absent_array_returns_none(self) -> None:
+        self.assertIsNone(_extract_spark_window({"rate_limit": {}}))
+
+    def test_non_list_array_returns_none(self) -> None:
+        self.assertIsNone(_extract_spark_window({"additional_rate_limits": {"not": "a list"}}))
+
+    def test_non_dict_element_is_skipped_not_fatal(self) -> None:
+        payload = {
+            "additional_rate_limits": [
+                "not a dict",
+                None,
+                42,
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "metered_feature": "codex_bengalfox",
+                    "rate_limit": self.SPARK_WINDOW,
+                },
+            ]
+        }
+        result = _extract_spark_window(payload)
+        self.assertIs(result, self.SPARK_WINDOW["primary_window"])
+
+    def test_all_non_dict_elements_returns_none(self) -> None:
+        self.assertIsNone(_extract_spark_window({"additional_rate_limits": ["x", None, 1]}))
+
+    def test_missing_inner_rate_limit_returns_none(self) -> None:
+        payload = {
+            "additional_rate_limits": [
+                {"limit_name": "GPT-5.3-Codex-Spark", "metered_feature": "codex_bengalfox"}
+            ]
+        }
+        self.assertIsNone(_extract_spark_window(payload))
+
+    def test_non_dict_inner_rate_limit_returns_none(self) -> None:
+        payload = {
+            "additional_rate_limits": [
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "metered_feature": "codex_bengalfox",
+                    "rate_limit": "not a dict",
+                }
+            ]
+        }
+        self.assertIsNone(_extract_spark_window(payload))
+
+    def test_missing_primary_window_returns_none(self) -> None:
+        payload = {
+            "additional_rate_limits": [
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "metered_feature": "codex_bengalfox",
+                    "rate_limit": {"allowed": True},
+                }
+            ]
+        }
+        self.assertIsNone(_extract_spark_window(payload))
+
+    def test_non_dict_primary_window_returns_none(self) -> None:
+        payload = {
+            "additional_rate_limits": [
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "metered_feature": "codex_bengalfox",
+                    "rate_limit": {"primary_window": "not a dict"},
+                }
+            ]
+        }
+        self.assertIsNone(_extract_spark_window(payload))
+
+    def test_missing_or_non_numeric_used_percent_yields_no_percent_but_no_raise(self) -> None:
+        # _extract_spark_window itself only locates the window; a malformed
+        # used_percent inside it is _codex_percent_left's job to reject.
+        for bad_used_percent in (None, "not a number", [1, 2]):
+            window = dict(self.SPARK_WINDOW)
+            window["primary_window"] = {"used_percent": bad_used_percent, "reset_at": 1}
+            payload = {
+                "additional_rate_limits": [
+                    {
+                        "limit_name": "GPT-5.3-Codex-Spark",
+                        "metered_feature": "codex_bengalfox",
+                        "rate_limit": window,
+                    }
+                ]
+            }
+            result = _extract_spark_window(payload)
+            self.assertIsNotNone(result)
+            self.assertIsNone(_codex_percent_left(result))
+
+    def test_metered_feature_match_wins_over_limit_name_when_they_disagree(self) -> None:
+        # One entry matches by metered_feature but has an unrelated limit_name;
+        # another matches by limit_name but has an unrelated metered_feature.
+        # The metered_feature match must win.
+        by_feature_window = {"used_percent": 11, "reset_at": 111}
+        by_name_window = {"used_percent": 22, "reset_at": 222}
+        payload = {
+            "additional_rate_limits": [
+                {
+                    "limit_name": "Some Other Bucket",
+                    "metered_feature": "codex_bengalfox",
+                    "rate_limit": {"primary_window": by_feature_window},
+                },
+                {
+                    "limit_name": "GPT-5.3-Codex-Spark",
+                    "metered_feature": "some_other_feature",
+                    "rate_limit": {"primary_window": by_name_window},
+                },
+            ]
+        }
+        result = _extract_spark_window(payload)
+        self.assertIs(result, by_feature_window)
+
+    def test_limit_name_fallback_when_no_metered_feature_match(self) -> None:
+        payload = self._payload(metered_feature="some_other_feature")
+        result = _extract_spark_window(payload)
+        self.assertIs(result, self.SPARK_WINDOW["primary_window"])
+
+    def test_no_match_by_either_key_returns_none(self) -> None:
+        payload = self._payload(metered_feature="unrelated", limit_name="Unrelated Bucket")
+        self.assertIsNone(_extract_spark_window(payload))
+
+
 class CodexHttpProviderTests(unittest.TestCase):
     # Real API uses rate_limit.{primary,secondary}_window.used_percent (epoch reset_at)
     NORMAL_RESPONSE = {
@@ -1259,6 +1407,76 @@ class CodexHttpProviderTests(unittest.TestCase):
             status = provider.fetch()
         self.assertIsInstance(status.five_hour_percent_left, float)
         self.assertIsInstance(status.weekly_percent_left, float)
+
+    def test_spark_window_populates_status_fields(self) -> None:
+        provider = self._make_provider()
+        response = dict(self.NORMAL_RESPONSE)
+        response["additional_rate_limits"] = [
+            {
+                "limit_name": "GPT-5.3-Codex-Spark",
+                "metered_feature": "codex_bengalfox",
+                "rate_limit": {
+                    "allowed": True,
+                    "limit_reached": False,
+                    "primary_window": {
+                        "limit_window_seconds": 604800,
+                        "reset_after_seconds": 604800,
+                        "reset_at": 1787274482,
+                        "used_percent": 15,
+                    },
+                    "secondary_window": None,
+                },
+            }
+        ]
+        with patch("gradus.providers._base._http_json", return_value=response):
+            status = provider.fetch()
+        self.assertEqual(status.spark_weekly_percent_left, 85.0)
+        self.assertIsNotNone(status.spark_weekly_reset)
+
+    def test_spark_window_absent_leaves_fields_none(self) -> None:
+        provider = self._make_provider()
+        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
+            status = provider.fetch()
+        self.assertIsNone(status.spark_weekly_percent_left)
+        self.assertIsNone(status.spark_weekly_reset)
+
+    def test_spark_reset_at_as_dict_does_not_raise_and_yields_none_reset(self) -> None:
+        # A malformed reset_at (dict instead of str/int/float) must not reach
+        # _format_reset_time, which only catches ValueError/OSError/OverflowError
+        # and would crash the whole Codex probe on an unguarded TypeError.
+        provider = self._make_provider()
+        response = dict(self.NORMAL_RESPONSE)
+        response["additional_rate_limits"] = [
+            {
+                "limit_name": "GPT-5.3-Codex-Spark",
+                "metered_feature": "codex_bengalfox",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 15,
+                        "reset_at": {"nested": "malformed"},
+                    },
+                },
+            }
+        ]
+        with patch("gradus.providers._base._http_json", return_value=response):
+            status = provider.fetch()  # must not raise TypeError
+        self.assertIsNone(status.spark_weekly_reset)
+        self.assertEqual(status.spark_weekly_percent_left, 85.0)
+
+    def test_spark_percent_set_with_absent_reset_at(self) -> None:
+        provider = self._make_provider()
+        response = dict(self.NORMAL_RESPONSE)
+        response["additional_rate_limits"] = [
+            {
+                "limit_name": "GPT-5.3-Codex-Spark",
+                "metered_feature": "codex_bengalfox",
+                "rate_limit": {"primary_window": {"used_percent": 30}},
+            }
+        ]
+        with patch("gradus.providers._base._http_json", return_value=response):
+            status = provider.fetch()
+        self.assertEqual(status.spark_weekly_percent_left, 70.0)
+        self.assertIsNone(status.spark_weekly_reset)
 
     def test_five_hour_removal_maps_weekly_only(self) -> None:
         # Live shape after OpenAI dropped the 5h window: primary_window is the

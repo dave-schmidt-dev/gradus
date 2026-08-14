@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 private func loadGoldenFixtureData() throws -> Data {
     let url = Bundle.module.url(forResource: "golden-v2-snapshot", withExtension: "json")!
@@ -9,16 +8,17 @@ private func loadGoldenFixtureData() throws -> Data {
 }
 
 @Test func decodesGoldenFixtureWithAllProviders() throws {
-    let payload = try JSONDecoder().decode(SnapshotPayload.self, from: try loadGoldenFixtureData())
+    let payload = try JSONDecoder().decode(SnapshotPayload.self, from: loadGoldenFixtureData())
     #expect(payload.schemaVersion == 2)
-    // 7 canonical providers + the synthetic "Antigravity (Claude)" v2-only entry.
-    #expect(payload.providers.count == 8)
+    // Includes synthetic v2-only entries: "Codex (Spark)" and "Antigravity (Claude)".
+    #expect(payload.providers.count == 9)
     let names = Set(payload.providers.map(\.name))
     #expect(
         names == [
-            "Codex", "Claude", "Antigravity", "Antigravity (Claude)", "Copilot", "Cursor",
+            "Codex", "Codex (Spark)", "Claude", "Antigravity", "Antigravity (Claude)", "Copilot", "Cursor",
             "OpenCode Go", "Vibe",
-        ])
+        ]
+    )
 }
 
 @Test func decodesUnknownTopLevelAndPerProviderFieldsWithoutError() throws {
@@ -63,7 +63,7 @@ private func loadGoldenFixtureData() throws -> Data {
 }
 
 @Test func inv3BoundsHoldAcrossGoldenFixtureWindows() throws {
-    let payload = try JSONDecoder().decode(SnapshotPayload.self, from: try loadGoldenFixtureData())
+    let payload = try JSONDecoder().decode(SnapshotPayload.self, from: loadGoldenFixtureData())
     for provider in payload.providers {
         for window in provider.windows {
             #expect(window.percentLeft.isFinite)
@@ -73,12 +73,12 @@ private func loadGoldenFixtureData() throws -> Data {
 }
 
 @Test func carriesObservedAtSeparatelyFromOkFlag() throws {
-    let payload = try JSONDecoder().decode(SnapshotPayload.self, from: try loadGoldenFixtureData())
-    let copilot = payload.providers.first { $0.name == "Copilot" }!
+    let payload = try JSONDecoder().decode(SnapshotPayload.self, from: loadGoldenFixtureData())
+    let copilot = try #require(payload.providers.first { $0.name == "Copilot" })
     #expect(copilot.ok == false)
     #expect(copilot.observedAt == nil)
 
-    let codex = payload.providers.first { $0.name == "Codex" }!
+    let codex = try #require(payload.providers.first { $0.name == "Codex" })
     #expect(codex.ok == true)
     #expect(codex.observedAt != nil)
 }

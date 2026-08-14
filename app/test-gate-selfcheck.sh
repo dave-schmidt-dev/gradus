@@ -119,17 +119,18 @@ validate_ios_destination_contract() {
 validate_ios_destination_contract "$GATE_SCRIPT" ||
   fail "iPhone/iPad destination or UI-selector contract is incomplete"
 
-# Every iOS test leg must use one fresh, run-scoped DerivedData directory.
-# Without it, snapshot resources copied into a previous run can survive a
-# source change and make the release gate exercise stale test bundles. Mac
-# legs intentionally retain their default DerivedData behavior.
+# Every Xcode test leg must use one fresh, run-scoped DerivedData directory.
+# Without it, snapshot resources or a stale Mac XCTest runner can survive a
+# source/signing change and make the release gate exercise the wrong bundle.
 validate_derived_data_contract() {
   local gate_path="$1" leg block
   grep -Fq 'derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"' "$gate_path" ||
     return 1
   grep -Fq 'rm -rf "$derived_data_dir"' "$gate_path" || return 1
-  for leg in GradusiOS-iPhone GradusiOS-iPad GradusiOSUI; do
+  for leg in GradusMac GradusiOS-iPhone GradusiOS-iPad GradusMacUI GradusiOSUI; do
     block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$gate_path")"
+    [[ "$leg" == "GradusMacUI" ]] &&
+      block="$(sed -n "/assert_counting_leg \"$leg\"/,/PROVISIONING_PROFILE_SPECIFIER=/p" "$gate_path")"
     [[ "$block" == *'-derivedDataPath "$derived_data_dir"'* ]] || return 1
   done
 }
@@ -216,6 +217,16 @@ grep -Fq -- "-only-testing:GradusMacUITests" "$GATE_SCRIPT" ||
 grep -Fq -- "-only-testing:GradusiOSUITests" "$GATE_SCRIPT" ||
   fail "iOS UI target-level selector is missing from the canonical gate"
 
+mac_ui_block="$(sed -n '/assert_counting_leg "GradusMacUI"/,/PROVISIONING_PROFILE_SPECIFIER=/p' "$GATE_SCRIPT")"
+[[ "$mac_ui_block" == *'CODE_SIGN_IDENTITY="Apple Development"'* ]] ||
+  fail "Mac UI runner must use an explicit development signing identity"
+[[ "$mac_ui_block" == *'DEVELOPMENT_TEAM=4CJ49V6QHW'* ]] ||
+  fail "Mac UI runner must pin the development team"
+[[ "$mac_ui_block" == *'CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO'* ]] ||
+  fail "Mac UI runner must disable base entitlement injection"
+[[ "$mac_ui_block" != *'CODE_SIGNING_ALLOWED=NO'* ]] ||
+  fail "Mac UI runner must not use the unsigned test path"
+
 iphone_unit_block="$(sed -n '/assert_counting_leg "GradusiOS-iPhone"/,/CODE_SIGNING_ALLOWED=NO/p' "$GATE_SCRIPT")"
 [[ "$iphone_unit_block" == *"-skip-testing:GradusiOSUITests"* ]] ||
   fail "iPhone unit leg must leave UI tests to their dedicated gate"
@@ -269,6 +280,25 @@ for ((index = 0; index < leg_count - 1; index++)); do
     emit_report "${COUNTING_LEG_REPORTERS[index]}" "${COUNTING_LEG_MINIMUMS[index]}"
 done
 expect_failure "deleted counting leg" assert_counting_legs_complete
+
+# Regression lock: `record()`'s per-pattern comparison must be numeric, not
+# lexicographic (fixed 2026-08-13 -- see HISTORY.md). A smaller-magnitude
+# match recorded first must not block a later larger-magnitude match from
+# winning. The real GradusiOS-iPhone incident this locks in had "Executed 20
+# tests" precede "Test run with 142 tests" in the same leg's captured output;
+# a lexicographic `>` keeps "20" because '1' < '2'. No declared leg's mock
+# emits out-of-order magnitudes today, so this exercises the awk logic
+# directly against a synthetic transcript shaped like that incident.
+emit_out_of_order_magnitudes() {
+  printf 'Executed 20 tests\n** TEST SUCCEEDED **\nTest run with 142 tests in 3 suites.\n'
+}
+[[ "${COUNTING_LEG_NAMES[2]}" == "GradusMac" ]] ||
+  fail "numeric-max regression lock assumes GradusMac is index 2; array order changed"
+saved_gradusmac_floor="${COUNTING_LEG_MINIMUMS[2]}"
+COUNTING_LEG_MINIMUMS[2]=100
+assert_counting_leg "GradusMac" emit_out_of_order_magnitudes ||
+  fail "record() picked the string-comparison-losing count (20) instead of the numeric max (142)"
+COUNTING_LEG_MINIMUMS[2]="$saved_gradusmac_floor"
 
 if [[ "$failure_count" -ne 0 ]]; then
   echo "FAIL: $failure_count test-gate self-check failure(s)" >&2

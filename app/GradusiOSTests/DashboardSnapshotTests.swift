@@ -356,6 +356,66 @@ final class DashboardSnapshotTests: XCTestCase {
         }
     }
 
+    /// Task 4.2 (Spark bucket plan): "Codex (Spark)" is a fully independent
+    /// provider entry, not a display variant of "Codex" -- it must rank on
+    /// its own `percentLeft` rather than inherit Codex's, and must not trip
+    /// the Antigravity-only retry guard. Providers are constructed in
+    /// Spark-first order so a correct result can only come from ranking, not
+    /// from preserving input order or falling back to name adjacency.
+    @MainActor
+    func testCodexSparkRanksByItsOwnPercentAndDoesNotTriggerAntigravityGuard() {
+        let codex = ProviderStatus(
+            providerName: "codex",
+            providerDisplayName: "Codex",
+            ok: true,
+            errorMessage: nil,
+            windows: [
+                ProviderWindow(id: "weekly", percentLeft: 10, resetISO: nil, windowHours: 168, paceDelta: nil),
+            ],
+            data: [:],
+            observedAt: ISO8601DateFormatter().string(from: fixedNow),
+            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+            publishedAt: fixedNow
+        )
+        let codexSpark = ProviderStatus(
+            providerName: "codex-spark",
+            providerDisplayName: "Codex (Spark)",
+            ok: true,
+            errorMessage: nil,
+            windows: [
+                ProviderWindow(id: "weekly", percentLeft: 90, resetISO: nil, windowHours: 168, paceDelta: nil),
+            ],
+            data: [:],
+            observedAt: ISO8601DateFormatter().string(from: fixedNow),
+            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+            publishedAt: fixedNow
+        )
+
+        let viewModel = makeViewModel(providers: [codexSpark, codex])
+        viewModel.providerSortOption = .mostUrgent
+
+        // Codex (10%, attention-needed) must rank ahead of Spark (90%, not
+        // attention-needed) -- if Spark had silently inherited Codex's 10%,
+        // both would land in the same tier and this would be free to fail.
+        XCTAssertEqual(viewModel.providers.map(\.providerName), ["codex", "codex-spark"])
+
+        // The order assertion alone is not discriminating: providerName sorts
+        // "codex" < "codex-spark" too, so a name tie-break would produce the
+        // same order even if percent ranking were broken. Assert the tier
+        // split directly -- with paceDelta nil, signalLevel is percent-driven,
+        // so this only passes if each provider ranked on its own percentLeft.
+        guard let rankedCodex = viewModel.providers.first(where: { $0.providerName == "codex" }),
+              let rankedSpark = viewModel.providers.first(where: { $0.providerName == "codex-spark" })
+        else {
+            XCTFail("expected both codex and codex-spark in ranked providers")
+            return
+        }
+        XCTAssertTrue(rankedCodex.isWarning)
+        XCTAssertFalse(rankedSpark.isWarning)
+
+        XCTAssertNil(IOSProviderRetryAccessibility.label(for: codexSpark))
+    }
+
     /// The view-level half of that gate, and the half that was missing.
     ///
     /// The assertion above checks the order `DashboardViewModel` produces, which

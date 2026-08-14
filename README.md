@@ -47,7 +47,8 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors Vibe usage via the Mistral billing API
 - Monitors OpenCode Go usage via the opencode.ai SolidStart console (5h/1w/monthly quota)
 - Refreshes every 120 seconds by default
-- Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position. The Codex 5-hour limit row is permanently visible and will display as `n/a` when omitted by the upstream API, ensuring immediate visibility upon restoration.
+- Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position. The Codex 5-hour limit row is hidden entirely when the upstream API omits it (as OpenAI has done since 2026-07) and reappears automatically once the API reports it again.
+- Shows Codex (Spark) — a separate weekly-quota bucket on the same OpenAI account, disambiguated from the primary Codex weekly window (`sp1w` in the TUI) — with its own remaining percentage, reset time, and pace indicator
 - Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus conditional Claude+GPT (`cg5`, `cg1w`) group activation when at least one valid C+G remaining percentage is below 100%. Rows render independently: each valid C+G row below 100% appears; exact-100%, missing, or malformed sibling rows are omitted.
 - Shows Copilot monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
@@ -67,7 +68,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 ## Requirements
 
 - Python 3.10+
-- Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow.
+- Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow. Codex (Spark) reads from the same authenticated Codex usage response — no separate login or credential is needed.
 - Claude: `~/.claude/` credentials present (created by `claude login`)
 - Antigravity (`agy`): signed in via `agy` (stores its OAuth token in the macOS Keychain). The monitor reads it read-only; the first read may prompt for Keychain access — choose "Always Allow" so background refreshes stay silent. The token expires ~hourly and only `agy` refreshes it, so when the token lapses the monitor **nudges `agy` to refresh its own token** by running `agy models` (a non-interactive, quota-free authenticated command) and re-reads the Keychain — the card self-heals without manual action. If that nudge can't recover (e.g. `agy` isn't installed on `PATH`, or `agy`'s own refresh token is dead), the card falls back to an auth error; run `agy` to re-authenticate. The nudge runs only in the interactive TUI, never on the read-only `--write-snapshot`/headless path (INV-2).
 - Copilot: `gh` CLI authenticated (`gh auth login` or OAuth token present)
@@ -162,8 +163,9 @@ Codex and Claude cards show:
 
 - `5h`: remaining usage for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining usage for the current 1-week window, weekly reset time, pace indicator
+- `sp1w`: remaining usage for Codex (Spark)'s separate weekly window (a distinct quota bucket on the same OpenAI account), reset time, pace indicator
 
-For Codex the `5h` row is permanently visible; if OpenAI's API ceases to report a sub-day window, it gracefully renders as `n/a` rather than omitting the row entirely. This ensures immediate visibility if and when the window is restored.
+Codex's `5h` row is omitted entirely when the API doesn't report that window (as OpenAI has done since 2026-07) and reappears automatically once it does; the same hide-when-absent rule applies to `sp1w`. Codex's `1w` row is always shown.
 
 Antigravity card shows (Gemini model group — the pool `agy` consumes):
 

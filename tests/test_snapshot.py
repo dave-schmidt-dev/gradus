@@ -167,6 +167,48 @@ class TestAllowlist(unittest.TestCase):
             {"weekly_percent_left": 15.0, "five_hour_reset": "in 1h", "weekly_reset": "in 2d"},
         )
 
+    def test_project_codex_spark_data_reads_only_spark_fields(self) -> None:
+        """The synthetic Spark entry's projection reads only spark_* fields.
+
+        ``snapshot.data`` holds both the native Codex bucket and the Spark
+        bucket under the same ProviderSnapshot, and both use a
+        weekly_percent_left/weekly_reset headroom concept. The dedicated
+        projection must map the spark_* source fields onto the standard key
+        names WITHOUT ever picking up the plain native Codex values that
+        share those names.
+        """
+        codex = _ps(
+            "Codex",
+            True,
+            data={
+                "five_hour_percent_left": 55,
+                "weekly_percent_left": 10,
+                "weekly_reset": "in 5d",
+                "spark_weekly_percent_left": 90,
+                "spark_weekly_reset": "in 2d",
+            },
+        )
+        projected = snap._project_codex_spark_data(codex)
+        self.assertEqual(
+            projected,
+            {"weekly_percent_left": 90, "weekly_reset": "in 2d"},
+        )
+        self.assertTrue(set(projected).issubset(snap.SAFE_DATA_KEYS))
+
+    def test_project_codex_spark_data_drops_nonfinite_values(self) -> None:
+        """Bad Spark source metadata cannot poison the synthetic entry."""
+        codex = _ps(
+            "Codex",
+            True,
+            data={
+                "spark_weekly_percent_left": math.nan,
+                "spark_weekly_reset": "in 2d",
+            },
+        )
+        projected = snap._project_codex_spark_data(codex)
+        self.assertNotIn("weekly_percent_left", projected)
+        self.assertEqual(projected, {"weekly_reset": "in 2d"})
+
     def test_payload_error_carries_no_raw_payload(self) -> None:
         sentinel = "SENTINEL-a1b2c3-raw-body"
 
@@ -346,6 +388,68 @@ class TestWarningPredicate(unittest.TestCase):
             self.assertEqual(
                 entry["data"], {"five_hour_percent_left": 80, "weekly_percent_left": 70}
             )
+
+    def test_codex_spark_alert_window_warns_independently_of_native_weekly(self) -> None:
+        """Task 3.1: Spark's weekly pool is alert-only, keyed by a distinct "sp1w" id.
+
+        A warning-level Spark percentage must not be masked by a healthy
+        native Codex weekly percentage - the two ids are evaluated
+        independently by :func:`window_warns`.
+        """
+        codex = _ps(
+            "Codex",
+            True,
+            data={
+                "five_hour_percent_left": 90,
+                "weekly_percent_left": 80,
+                "spark_weekly_percent_left": 15.0,
+            },
+        )
+
+        warning_windows = {
+            window["id"]: window for window in snap.normalized_warning_windows(codex, NOW)
+        }
+        self.assertEqual(set(warning_windows), {"five_hour", "weekly", "sp1w"})
+        self.assertEqual(warning_windows["weekly"]["percent_left"], 80)
+        self.assertEqual(warning_windows["sp1w"]["percent_left"], 15.0)
+        self.assertNotEqual(
+            warning_windows["weekly"]["percent_left"], warning_windows["sp1w"]["percent_left"]
+        )
+        self.assertEqual(warning_windows["sp1w"]["window_hours"], 168.0)
+
+        self.assertEqual(snap.warning_window_ids(codex, NOW), ("sp1w",))
+        self.assertEqual(snap.warning_membership([codex], NOW), {"Codex": ("sp1w",)})
+
+        # Router v1/v2 windows stay alert-free: Spark never enters the
+        # persisted "Codex" contract (it lands only under the synthetic
+        # "Codex (Spark)" entry, wired in Task 3.2).
+        expected_router_ids = ["five_hour", "weekly"]
+        self.assertEqual(
+            [window["id"] for window in snap.build_windows(codex, NOW)], expected_router_ids
+        )
+        self.assertEqual(
+            [window["id"] for window in snap.build_v2_windows(codex, NOW)], expected_router_ids
+        )
+
+    def test_codex_spark_window_specs_use_standard_weekly_id(self) -> None:
+        """CODEX_SPARK_WINDOW_SPECS backs the synthetic "Codex (Spark)" entry.
+
+        It must use the STANDARD "weekly" id (not "sp1w"/"spark_weekly") so it
+        publishes under the same window-id convention every other v1/v2
+        provider uses - distinct from CODEX_SPARK_ALERT_SPECS's "sp1w" id,
+        which exists only to avoid colliding with native Codex's "weekly" id
+        in the interactive alert union.
+        """
+        (spec,) = snap.CODEX_SPARK_WINDOW_SPECS
+        self.assertEqual(spec.window_id, "weekly")
+        self.assertEqual(spec.percent_key, "spark_weekly_percent_left")
+        self.assertEqual(spec.reset_key, "spark_weekly_reset")
+        self.assertIs(snap.V2_WINDOW_SPECS["Codex (Spark)"], snap.CODEX_SPARK_WINDOW_SPECS)
+        self.assertIs(snap.WARNING_WINDOW_SPECS["Codex (Spark)"], snap.CODEX_SPARK_WINDOW_SPECS)
+
+        (alert_spec,) = snap.CODEX_SPARK_ALERT_SPECS
+        self.assertEqual(alert_spec.window_id, "sp1w")
+        self.assertNotEqual(alert_spec.window_id, spec.window_id)
 
 
 class TestReconcile(unittest.TestCase):
@@ -825,6 +929,99 @@ class TestPayloadSchema(unittest.TestCase):
                         entry = next(item for item in payload["providers"] if item["name"] == name)
                         self.assertFalse(entry["ok"])
                         self.assertEqual(entry["error"], "network error")
+
+    def test_v2_codex_spark_entry_from_same_probe(self) -> None:
+        """Schema v2 surfaces the Spark weekly bucket as its own entry (3.2).
+
+        One Codex probe carries both the native five_hour/weekly buckets and
+        the Spark weekly bucket; v2 must publish them as two independent
+        entries without a second probe. The synthetic entry's window is
+        built from the spark_* fields under the standard "weekly" id.
+        """
+        codex = _ps(
+            "Codex",
+            True,
+            data={
+                "five_hour_percent_left": 55,
+                "weekly_percent_left": 10,
+                "five_hour_reset": "in 3h",
+                "weekly_reset": "in 5d",
+                "spark_weekly_percent_left": 90,
+                "spark_weekly_reset": "in 2d",
+            },
+        )
+        v2 = snap.build_snapshot_v2_payload([codex], NOW)
+        by_name = {entry["name"]: entry for entry in v2["providers"]}
+
+        native = by_name["Codex"]
+        self.assertTrue(native["ok"])
+        self.assertEqual(
+            next(w["percent_left"] for w in native["windows"] if w["id"] == "weekly"), 10.0
+        )
+        # The primary entry's published data must never leak spark_* keys.
+        self.assertFalse(any(key.startswith("spark_") for key in native["data"]))
+
+        spark = by_name["Codex (Spark)"]
+        self.assertTrue(spark["ok"])
+        self.assertIsNone(spark["error"])
+        self.assertEqual(spark["data"], {"weekly_percent_left": 90, "weekly_reset": "in 2d"})
+        windows = {window["id"]: window for window in spark["windows"]}
+        self.assertEqual(set(windows), {"weekly"})
+        # This is the exact case that fails if _build_windows were keyed by
+        # "Codex (Spark)" (empty spec list) or by the full V2_WINDOW_SPECS
+        # map (native "weekly" id would resolve to the native 10, not 90).
+        self.assertEqual(windows["weekly"]["percent_left"], 90.0)
+        self.assertEqual(windows["weekly"]["window_hours"], 168.0)
+        self.assertIsNotNone(windows["weekly"]["reset_iso"])
+
+    def test_v1_codex_has_no_synthetic_spark_entry(self) -> None:
+        """The synthetic Spark entry is schema-v2 only; v1 keeps 7 entries."""
+        codex = _ps(
+            "Codex",
+            True,
+            data={"weekly_percent_left": 10, "spark_weekly_percent_left": 90},
+        )
+        v1 = snap.build_snapshot_payload([codex], NOW)
+        names = [entry["name"] for entry in v1["providers"]]
+        self.assertEqual(tuple(names), snap.CANONICAL_PROVIDERS())
+        self.assertEqual(len(v1["providers"]), 7)
+        self.assertNotIn("Codex (Spark)", names)
+
+    def test_v2_codex_spark_disabled_when_not_enabled(self) -> None:
+        """An absent Codex probe yields a symmetric disabled entry."""
+        v2 = snap.build_snapshot_v2_payload([], NOW)
+        by_name = {entry["name"]: entry for entry in v2["providers"]}
+        primary = by_name["Codex"]
+        spark = by_name["Codex (Spark)"]
+        for key in ("ok", "error", "windows", "data"):
+            self.assertEqual(spark[key], primary[key])
+        self.assertFalse(spark["ok"])
+        self.assertEqual(spark["error"], "provider not enabled")
+        self.assertEqual(spark["windows"], [])
+        self.assertEqual(spark["data"], {})
+
+    def test_v2_payload_has_nine_entries_in_canonical_order(self) -> None:
+        """v2 publishes 9 entries: 7 primaries plus 2 synthetics, each
+        synthetic immediately following the primary it was synthesized from.
+        """
+        snapshots = [_ps(name, True, data={}) for name in snap.CANONICAL_PROVIDERS()]
+        v2 = snap.build_snapshot_v2_payload(snapshots, NOW)
+        names = [entry["name"] for entry in v2["providers"]]
+        self.assertEqual(len(names), 9)
+        self.assertEqual(
+            names,
+            [
+                "Codex",
+                "Codex (Spark)",
+                "Claude",
+                "Antigravity",
+                "Antigravity (Claude)",
+                "Copilot",
+                "Cursor",
+                "OpenCode Go",
+                "Vibe",
+            ],
+        )
 
 
 class TestTransientMerge(unittest.TestCase):
@@ -1311,6 +1508,56 @@ class TestTransientMerge(unittest.TestCase):
         self.assertEqual(claude["windows"], [])
         self.assertEqual(claude["data"], {})
 
+    def test_transient_codex_and_spark_both_retain_recent_prior(self) -> None:
+        """A transient Codex probe failure carries forward BOTH the primary
+        "Codex" entry and the synthetic "Codex (Spark)" entry it seeds
+        (Task 3.2), mirroring the Antigravity/Antigravity (Claude) pair.
+        """
+        codex = _ps(
+            "Codex",
+            True,
+            data={
+                "five_hour_percent_left": 88,
+                "weekly_percent_left": 10,
+                "five_hour_reset": "in 4h",
+                "weekly_reset": "in 6d",
+                "spark_weekly_percent_left": 90,
+                "spark_weekly_reset": "in 2d",
+            },
+        )
+        prior = snap.build_snapshot_v2_payload([codex], NOW - timedelta(seconds=100))
+        failing = _ps("Codex", False, error="rate limited")
+        payload = snap.build_snapshot_v2_payload([failing], NOW, prior=prior)
+
+        primary = next(entry for entry in payload["providers"] if entry["name"] == "Codex")
+        prior_primary = next(entry for entry in prior["providers"] if entry["name"] == "Codex")
+        self.assertFalse(primary["ok"])
+        self.assertEqual(primary["error"], "rate limited")
+        self.assertTrue(primary["windows"])
+        self.assertEqual(primary["observed_at"], prior_primary["observed_at"])
+
+        spark = next(entry for entry in payload["providers"] if entry["name"] == "Codex (Spark)")
+        prior_spark = next(
+            entry for entry in prior["providers"] if entry["name"] == "Codex (Spark)"
+        )
+        self.assertFalse(spark["ok"])
+        self.assertEqual(spark["error"], "rate limited")
+        windows = {window["id"]: window for window in spark["windows"]}
+        self.assertEqual(set(windows), {"weekly"})
+        self.assertEqual(windows["weekly"]["percent_left"], 90.0)
+        self.assertEqual(spark["observed_at"], prior_spark["observed_at"])
+        self.assertIsNot(spark, prior_spark)
+
+    def test_transient_codex_spark_no_prior_is_fresh(self) -> None:
+        """A transient Spark failure with no prior stays a fresh failure."""
+        failing = _ps("Codex", False, error="rate limited")
+        payload = snap.build_snapshot_v2_payload([failing], NOW, prior=None)
+        spark = next(entry for entry in payload["providers"] if entry["name"] == "Codex (Spark)")
+        self.assertFalse(spark["ok"])
+        self.assertEqual(spark["error"], "rate limited")
+        self.assertEqual(spark["windows"], [])
+        self.assertEqual(spark["data"], {})
+
 
 class TestPathContract(unittest.TestCase):
     def test_snapshot_path_is_state_dir(self) -> None:
@@ -1325,16 +1572,39 @@ class TestPathContract(unittest.TestCase):
 
 class TestConsistencyGuard(unittest.TestCase):
     def test_window_specs_match_render_specs(self) -> None:
-        """CR-5: WINDOW_SPECS agree with ui render/row definitions."""
+        """CR-5: WINDOW_SPECS agree with ui render/row definitions.
+
+        Codex is a deliberate partial exception (Task 3.1): its TUI panel
+        carries a trailing ``spark_weekly`` row for the alert-only Spark
+        pool, which is NOT part of the router v1 contract -
+        ``WINDOW_SPECS["Codex"]`` stays five_hour/weekly only. Spark is
+        instead unioned onto ``WARNING_WINDOW_SPECS["Codex"]`` under the
+        distinct "sp1w" id (``CODEX_SPARK_ALERT_SPECS``), so the leading
+        windows are compared here and the trailing spark row is checked
+        separately below.
+        """
         for name in ("Codex", "Claude", "Antigravity"):
             render_windows = ui.PROVIDER_RENDER_SPECS[name].windows
             spec_windows = snap.WINDOW_SPECS[name]
-            self.assertEqual(len(render_windows), len(spec_windows))
+            if name == "Codex":
+                self.assertEqual(len(render_windows), len(spec_windows) + 1)
+                render_windows = render_windows[: len(spec_windows)]
+            else:
+                self.assertEqual(len(render_windows), len(spec_windows))
             for render_win, spec_win in zip(render_windows, spec_windows):
                 self.assertEqual(spec_win.window_id, render_win.window_id)
                 self.assertEqual(spec_win.percent_key, render_win.percent_key)
                 self.assertEqual(spec_win.reset_key, render_win.reset_key)
                 self.assertEqual(spec_win.window_hours, render_win.window_hours)
+
+        spark_row = ui.PROVIDER_RENDER_SPECS["Codex"].windows[-1]
+        self.assertEqual(spark_row.window_id, "spark_weekly")
+        self.assertEqual(spark_row.percent_key, "spark_weekly_percent_left")
+        self.assertEqual(spark_row.reset_key, "spark_weekly_reset")
+        (spark_alert_spec,) = snap.CODEX_SPARK_ALERT_SPECS
+        self.assertEqual(spark_alert_spec.percent_key, spark_row.percent_key)
+        self.assertEqual(spark_alert_spec.reset_key, spark_row.reset_key)
+        self.assertEqual(spark_alert_spec.window_hours, spark_row.window_hours)
 
         # Cursor / Vibe are absent from PROVIDER_RENDER_SPECS. Cursor's
         # router contract remains independent from the TUI's two-pool rows.
