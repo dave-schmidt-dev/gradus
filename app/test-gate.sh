@@ -301,7 +301,9 @@ SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 # the snapshots do. The iPad leg selects the UI tests and the 12 canonical
 # image snapshot functions; rerunning the whole iOS suite on a second simulator
 # would roughly double the gate's slowest phase.
-IPAD_DEVICE_NAME="iPad Pro 11-inch (M5)"
+# Plain "iPad Pro 11-inch (M5)" collides the same way the iPhone name did
+# above -- a dedicated fixture (already created 2026-08-11) is required.
+IPAD_DEVICE_NAME="Gradus Gate iPad Pro 11 2026-08-11"
 IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
 
 # The deterministic local Mac UI fixture uses Debug app behavior, but its
