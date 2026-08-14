@@ -480,10 +480,13 @@ struct MenuUITestFixtureView: View {
             window.title = "Gradus UI Test Menu"
             window.setContentSize(NSSize(width: MenuContentView.columnWidth + 24, height: 800))
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setAccessibilityRole(.window)
+            window.setAccessibilityElement(true)
             window.center()
             NSApplication.shared.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             self.window = window
+            fputs("GRADUS_SHOW_END policy=\(NSApplication.shared.activationPolicy().rawValue) windows=\(NSApplication.shared.windows.count) visible=\(window.isVisible)\n", stderr)
         }
     }
 #endif

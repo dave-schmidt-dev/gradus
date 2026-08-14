@@ -53,7 +53,7 @@ targets:
         # publisher stuck at 0.1.0 while the consumer reads 1.6.0 makes the
         # pair impossible to talk about. CURRENT_PROJECT_VERSION stays
         # independent: it is a per-platform upload counter, not a version.
-        MARKETING_VERSION: "1.6.7"
+        MARKETING_VERSION: "1.7.0"
         # 1.6.7 (17) makes Name A-Z and Reset soonest true full-active-list
         # sorts and prevents a pipeline-disabled test host from creating a
         # persistent empty status menu that can displace the installed app.
@@ -81,7 +81,24 @@ targets:
         # for the T2.5 (CV-7/PM-11) schema-promotion verification probe.
         CODE_SIGN_ENTITLEMENTS: GradusMac/GradusMac.entitlements
       configs:
+        Debug:
+          # XCUITest needs a regular app process so Accessibility can enumerate
+          # the DEBUG-only fixture window. Release remains a menu-bar agent.
+          INFOPLIST_KEY_LSUIElement: NO
+          INFOPLIST_FILE: GradusMac/Info-Debug.plist
+          # Local Mac UI/unit tests must not depend on a stale Mac provisioning
+          # profile. Keep the debug host development-signed with no CloudKit
+          # entitlements; Release retains the production signing contract.
+          CODE_SIGN_IDENTITY: "Apple Development"
+          CODE_SIGN_ENTITLEMENTS: ""
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+          PROVISIONING_PROFILE_SPECIFIER: ""
+          # Keep the local UI-test host on an ordinary Apple Development
+          # signature; Release retains its Developer ID archive settings.
+          CODE_SIGN_STYLE: Manual
         Release:
+          INFOPLIST_KEY_LSUIElement: YES
+          INFOPLIST_FILE: GradusMac/Info-Release.plist
           CODE_SIGN_ENTITLEMENTS: GradusMac/GradusMacProduction.entitlements
           # The local installer archives this configuration before exporting a
           # Developer-ID bundle. Automatic signing can select an Apple
@@ -104,7 +121,6 @@ targets:
         GRADUS_PROJECT_SHA256: $(GRADUS_PROJECT_SHA256)
         GRADUS_SOURCE_REVISION: $(GRADUS_SOURCE_REVISION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
-        LSUIElement: true
 
   GradusiOS:
     type: application
@@ -140,7 +156,7 @@ targets:
         # archive-upload-ios.sh allocates the build number from App Store
         # Connect, so the value checked in here is history, not the next
         # upload's identifier.
-        MARKETING_VERSION: "1.6.7"
+        MARKETING_VERSION: "1.7.0"
         CURRENT_PROJECT_VERSION: "12"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -235,6 +251,15 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 4CJ49V6QHW
+      configs:
+        Debug:
+          # Match the host's local development-signing contract so Xcode never
+          # falls back to an unsigned or stale-profile XCTest runner.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Development"
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+          PROVISIONING_PROFILE_SPECIFIER: ""
+          CODE_SIGN_ENTITLEMENTS: ""
 
   # T3.5 gate: real `XCUIApplication` behavioral test only (renders the
   # dashboard from a seeded on-disk cache via `launchEnvironment`). Snapshot

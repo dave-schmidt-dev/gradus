@@ -1,0 +1,64 @@
+{
+  "schemaVersion": "1.0.0",
+  "workflow": {
+    "coreVersion": "1.0.0",
+    "profile": "appleTestFlightV2",
+    "profileVersion": "2.0.0"
+  },
+  "obligations": [
+    {"operationClass": "identityAllocation", "task": "Allocate the registered Gradus ASC identity before source freeze.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "identity-allocation", "--product", "gradus-ios"], "evidencePath": ".release-state/evidence/allocate-identity.json", "stopCondition": "Stop on an allocation conflict or unresolved orphan.", "dependencies": [], "phaseGate": "identity-allocation-proof"},
+    {"operationClass": "sourceSnapshot", "task": "Freeze the Gradus source snapshot and candidate tuple.", "command": ["framework", "source-snapshot"], "evidencePath": ".release-state/evidence/{candidateId}/candidate.json", "stopCondition": "Stop on source drift.", "dependencies": ["identityAllocation"], "phaseGate": "candidate-freeze"},
+    {"operationClass": "readiness", "task": "Validate the declared Gradus release readiness manifest.", "command": ["python3", "-m", "release_candidate", "validate-readiness", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/readiness.json", "stopCondition": "Stop on missing or stale readiness evidence.", "dependencies": ["sourceSnapshot"], "phaseGate": "readiness"},
+    {"operationClass": "localGate", "task": "Run the Gradus authoritative local gate.", "command": ["bash", "app/test-gate.sh"], "evidencePath": ".release-state/evidence/{candidateId}/local-gate.json", "stopCondition": "Stop on any gate failure.", "dependencies": ["readiness"], "phaseGate": "local-gate"},
+    {"operationClass": "productionReleaseBuild", "task": "Prepare the signed Gradus production candidate.", "command": ["bash", "app/archive-upload-ios.sh", "--prepare-only"], "evidencePath": ".release-state/evidence/{candidateId}/production-build.json", "stopCondition": "Stop when signing or artifact proof is absent.", "dependencies": ["localGate"], "phaseGate": "production-build"},
+    {"operationClass": "archive", "task": "Archive the frozen Gradus candidate.", "command": ["bash", "app/archive-upload-ios.sh", "--prepare-only"], "evidencePath": ".release-state/evidence/{candidateId}/archive.json", "stopCondition": "Stop on archive failure.", "dependencies": ["productionReleaseBuild"], "phaseGate": "archive"},
+    {"operationClass": "sign", "task": "Verify production signing for the frozen candidate.", "command": ["bash", "app/archive-upload-ios.sh", "--prepare-only"], "evidencePath": ".release-state/evidence/{candidateId}/signing.json", "stopCondition": "Stop on entitlement or signing mismatch.", "dependencies": ["archive"], "phaseGate": "signing"},
+    {"operationClass": "artifactVerify", "task": "Verify the exact candidate artifact.", "command": ["bash", "app/archive-upload-ios.sh", "--prepare-only"], "evidencePath": ".release-state/evidence/{candidateId}/artifact.json", "stopCondition": "Stop on a digest mismatch.", "dependencies": ["sign"], "phaseGate": "artifact-verification"},
+    {"operationClass": "upload", "task": "Upload only the reviewed frozen candidate.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "upload", "--product", "gradus-ios", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/upload.json", "stopCondition": "Stop unless walkthrough and upload handoff match.", "dependencies": ["artifactVerify"], "phaseGate": "upload-authorization"},
+    {"operationClass": "processing", "task": "Poll exact-build processing with bounded heartbeats.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "processing", "--product", "gradus-ios", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/processing.json", "stopCondition": "Return a resumable result at deadline.", "dependencies": ["upload"], "phaseGate": "processing"},
+    {"operationClass": "compliance", "task": "Reconcile export compliance without repeating upload.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "compliance", "--product", "gradus-ios", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/compliance.json", "stopCondition": "Return blocked on missing compliance.", "dependencies": ["processing"], "phaseGate": "compliance"},
+    {"operationClass": "testerGroup", "task": "Reconcile the registered internal tester group.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "tester-group", "--product", "gradus-ios", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/tester-group.json", "stopCondition": "Stop on ambiguous group identity.", "dependencies": ["compliance"], "phaseGate": "tester-group"},
+    {"operationClass": "assignment", "task": "Assign the exact uploaded build to the confirmed group.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "assignment", "--product", "gradus-ios", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/assignment.json", "stopCondition": "Lookup before any repeated mutation.", "dependencies": ["testerGroup"], "phaseGate": "assignment"},
+    {"operationClass": "deviceHealth", "task": "Record device health for the assigned candidate.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "device-health", "--product", "gradus-ios", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/device-health.json", "stopCondition": "Stop when device evidence is missing or stale.", "dependencies": ["assignment"], "phaseGate": "device-health"},
+    {"operationClass": "notification", "task": "Reconcile internal notification delivery.", "command": ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", "--operation", "notification", "--product", "gradus-ios", "--candidate", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/notification.json", "stopCondition": "Lookup before retrying delivery.", "dependencies": ["deviceHealth"], "phaseGate": "notification"},
+    {"operationClass": "receipt", "task": "Write one immutable candidate receipt.", "command": ["framework", "receipt", "{candidateId}"], "evidencePath": ".release-state/evidence/{candidateId}/receipt.json", "stopCondition": "Stop on receipt identity mismatch.", "dependencies": ["notification"], "phaseGate": "receipt"}
+  ],
+  "manualBoundaries": ["Owner reviews the candidate-current walkthrough before upload.", "Each new candidate requires fresh broker, Xcode signing, and App Store Connect evidence; the recorded Gradus bridge canary authorizes this adapter."],
+  "knownOfflineLimitations": ["real-tool-canary-required"],
+  "policyDivergence": [],
+  "canaryBinding": {
+    "product_key": "gradus-ios",
+    "repository_revision": "819ab785a19e831dc313af3b7b6c06782082ded6",
+    "adapter_sha256": "69546392389bb894722de38fe867487116b9e47a831ddb61361595e6fc1efbc2",
+    "candidate_id": "gradus-ios-18-a4acb3118b78faff",
+    "marketing_version": "1.6.7",
+    "build_number": 18,
+    "consumer_descriptor_sha256": "602f0ff123c0fd261661d3aa610f4c714ccd5e04a23f34b7dac792acef330808"
+  },
+  "realToolCanary": {
+    "formatVersion": "1.0.0",
+    "productKey": "gradus-ios",
+    "repositoryRevision": "819ab785a19e831dc313af3b7b6c06782082ded6",
+    "adapterSha256": "69546392389bb894722de38fe867487116b9e47a831ddb61361595e6fc1efbc2",
+    "candidateId": "gradus-ios-18-a4acb3118b78faff",
+    "marketingVersion": "1.6.7",
+    "buildNumber": 18,
+    "consumerDescriptorSha256": "602f0ff123c0fd261661d3aa610f4c714ccd5e04a23f34b7dac792acef330808",
+    "observedAt": "2026-08-13T15:53:53Z",
+    "broker": {
+      "formatVersion": "1.0.0",
+      "result": "passed",
+      "evidenceSha256": "91888beae48db7b974dab407aea0b21f7201c9357ee0ba05fd54cf451a9ae27f"
+    },
+    "xcodeSigning": {
+      "formatVersion": "1.0.0",
+      "result": "passed",
+      "evidenceSha256": "8b6625e03aa87910eb532adcd2f35477f7067d964f33f711e5969803285f6f3a"
+    },
+    "appStoreConnect": {
+      "formatVersion": "1.0.0",
+      "result": "passed",
+      "evidenceSha256": "d8417a84f20b95946c13061dd17436453f174d778948bdbdebebfff2d95e9b68"
+    }
+  }
+}

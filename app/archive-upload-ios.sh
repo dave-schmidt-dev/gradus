@@ -21,6 +21,8 @@
 #   bws-secret-exec app-store-connect-upload --
 # Human-attended invocation uses the same fixed consumer:
 #   bws-secret-exec app-store-connect-upload -- app/archive-upload-ios.sh
+# Upload-only resumes an existing prepared candidate and never creates one:
+#   app/archive-upload-ios.sh --upload-only
 # Assigned candidates are never replaced implicitly. An attended rollover must
 # be explicit and include a non-empty reason:
 #   app/archive-upload-ios.sh --rollover-assigned --supersession-reason "<reason>"
@@ -190,6 +192,314 @@ create_candidate_workspace() {
     --exclude='DerivedData' --exclude='__pycache__' \
     "$project_root/" "$workspace/project/"
   printf '%s\n' "$workspace/project"
+}
+
+persist_identity_allocation() {
+  local path="$1" candidate_id="$2" build="$3" marketing_version="$4"
+  /usr/bin/python3 - "$SCRIPT_DIR" "$path" "$candidate_id" "$build" "$marketing_version" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from release_candidate.allocation import persist  # noqa: E402
+
+persist(sys.argv[2], candidate_id=sys.argv[3], build=int(sys.argv[4]), marketing_version=sys.argv[5])
+PY
+}
+
+consume_identity_allocation_proof() {
+  local proof_path="$1" allocation_path="$2" marketing_version="$3" candidate_id="$4"
+  /usr/bin/python3 - "$SCRIPT_DIR" "$proof_path" "$allocation_path" "$marketing_version" "$candidate_id" <<'PY'
+import json
+import re
+import sys
+from datetime import datetime
+
+from pathlib import Path
+
+script_dir, proof_path, allocation_path, expected_version, candidate_id = sys.argv[1:]
+required = {
+    "proofVersion", "operationClass", "result", "marketingVersion", "buildNumber",
+    "responseSha256", "productKey", "remoteHighestMarketingVersion",
+    "remoteHighestBuildNumber", "observedAt",
+}
+hex64 = re.compile(r"^[0-9a-f]{64}$")
+semver = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+
+def fail(message):
+    print(f"FAIL: identity allocation proof {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    with Path(proof_path).open(encoding="utf-8") as stream:
+        proof = json.load(stream)
+except (OSError, json.JSONDecodeError):
+    fail("is missing or malformed")
+if not isinstance(proof, dict) or set(proof) != required:
+    fail("is missing or malformed")
+if (
+    proof["proofVersion"] != "1.0.0"
+    or proof["operationClass"] != "identityAllocation"
+    or proof["result"] != "passed"
+    or proof["productKey"] != "gradus-ios"
+    or not isinstance(proof["marketingVersion"], str)
+    or not semver.fullmatch(proof["marketingVersion"])
+    or proof["marketingVersion"] != expected_version
+    or isinstance(proof["buildNumber"], bool)
+    or not isinstance(proof["buildNumber"], int)
+    or proof["buildNumber"] < 1
+    or not isinstance(proof["responseSha256"], str)
+    or not hex64.fullmatch(proof["responseSha256"])
+    or proof["remoteHighestMarketingVersion"] is not None
+    and (
+        not isinstance(proof["remoteHighestMarketingVersion"], str)
+        or not semver.fullmatch(proof["remoteHighestMarketingVersion"])
+    )
+    or isinstance(proof["remoteHighestBuildNumber"], bool)
+    or not isinstance(proof["remoteHighestBuildNumber"], int)
+    or proof["remoteHighestBuildNumber"] < 0
+    or proof["buildNumber"] != proof["remoteHighestBuildNumber"] + 1
+    or not isinstance(proof["observedAt"], str)
+    or not proof["observedAt"].endswith("Z")
+):
+    fail("is mismatched or malformed")
+try:
+    observed_at = datetime.fromisoformat(proof["observedAt"][:-1] + "+00:00")
+except ValueError:
+    fail("is malformed")
+if observed_at.tzinfo is None:
+    fail("is malformed")
+
+sys.path.insert(0, script_dir)
+from release_candidate.allocation import CandidateError, load, persist  # noqa: E402
+
+try:
+    existing = load(allocation_path)
+except CandidateError as exc:
+    fail(str(exc))
+
+if not candidate_id:
+    candidate_id = existing.candidate_id if existing is not None else f"gradus-ios-{proof['buildNumber']}"
+if not re.fullmatch(r"[A-Za-z0-9._-]+", candidate_id):
+    fail("is mismatched or malformed")
+
+try:
+    if existing is None:
+        record = persist(
+            allocation_path,
+            candidate_id=candidate_id,
+            build=proof["buildNumber"],
+            marketing_version=proof["marketingVersion"],
+            allocated_at=proof["observedAt"],
+        )
+    else:
+        if candidate_id and existing.candidate_id != candidate_id:
+            fail("does not match durable allocation")
+        if (
+            existing.build != proof["buildNumber"]
+            or existing.marketing_version != proof["marketingVersion"]
+        ):
+            fail("does not match durable allocation")
+        record = existing
+except CandidateError as exc:
+    fail(str(exc))
+print(f"candidateId\t{record.candidate_id}")
+print(f"build\t{record.build}")
+print(f"marketingVersion\t{record.marketing_version}")
+PY
+}
+
+read_identity_allocation() {
+  local path="$1"
+  /usr/bin/python3 - "$SCRIPT_DIR" "$path" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from release_candidate.allocation import load  # noqa: E402
+
+record = load(sys.argv[2])
+if record is not None:
+    print(f"candidateId\t{record.candidate_id}")
+    print(f"build\t{record.build}")
+    print(f"marketingVersion\t{record.marketing_version}")
+PY
+}
+
+persist_ram_volume_attestation() {
+  local path="$1" candidate_id="$2" mount_digest="$3" detach_digest="$4" volume_id="$5" filesystem="$6"
+  /usr/bin/python3 - "$SCRIPT_DIR" "$path" "$candidate_id" "$mount_digest" "$detach_digest" "$volume_id" "$filesystem" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from release_candidate.ram_volume import validate  # noqa: E402
+
+path = Path(sys.argv[2])
+payload = {
+    "proofVersion": "release.proof.ram-volume.v1",
+    "operationClass": "ram-volume",
+    "candidateId": sys.argv[3],
+    "mountEvidenceSha256": sys.argv[4],
+    "detachEvidenceSha256": sys.argv[5],
+    "volumeId": sys.argv[6],
+    "filesystem": sys.argv[7],
+    "diskBacked": False,
+    "detached": True,
+    "result": "passed",
+}
+validate(payload)
+path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+except Exception:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
+persist_upload_reconciliation() {
+  local path="$1" candidate_id="$2" artifact_digest="$3" transport_status="$4"
+  /usr/bin/python3 - "$path" "$candidate_id" "$artifact_digest" "$transport_status" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = {
+    "schemaVersion": "1.0.0",
+    "operationClass": "upload",
+    "candidateId": sys.argv[2],
+    "artifactSha256": sys.argv[3],
+    "result": "reconciliation-required",
+    "reason": "upload-result-ambiguous",
+    "transportExitCode": int(sys.argv[4]),
+}
+path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+except Exception:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
+create_ram_key_volume() {
+  local mountpoint device mount_record mount_type
+  if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
+    # Hermetic tests provide a declared RAM-volume fixture. The fixture is
+    # explicit and never becomes a production disk-backed fallback.
+    if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" ]]; then
+      mountpoint="$GRADUS_RAM_VOLUME_MOUNT_PATH"
+    else
+      mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-ram-volume.XXXXXX")"
+    fi
+    mkdir -p "$mountpoint"
+    device="${GRADUS_RAM_VOLUME_DEVICE:-fixture-ram-volume}"
+    mount_type="${GRADUS_RAM_VOLUME_FILESYSTEM:-hfs}"
+    [[ "${GRADUS_RAM_VOLUME_DISK_BACKED:-false}" != "true" ]] || {
+      echo "FAIL: disk-backed key volume fixture was rejected" >&2
+      return 1
+    }
+  else
+    mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/gradus-ios-key-volume.XXXXXX")"
+    device="$(hdiutil attach -nomount ram://4096 | /usr/bin/awk 'NF {value=$NF} END {print value}')"
+    [[ "$device" == /dev/disk* ]] || {
+      echo "FAIL: hdiutil did not return a RAM-backed device" >&2
+      return 1
+    }
+    newfs_hfs "$device" >/dev/null
+    mount -t hfs -o noowners "$device" "$mountpoint"
+    mount_type="$(mount | /usr/bin/awk -v path="$mountpoint" '$0 ~ " on " path " " {print $3; exit}')"
+    [[ "$mount_type" == "hfs" || "$mount_type" == "apfs" ]] || {
+      echo "FAIL: key volume mount type was not verified" >&2
+      return 1
+    }
+    # The RAM device is the proof that this regular-file volume is volatile;
+    # a normal mktemp directory is never accepted as the key directory.
+    [[ "$device" == /dev/disk* ]] || return 1
+  fi
+  [[ -d "$mountpoint" ]] || {
+    echo "FAIL: RAM-backed key volume mountpoint is unavailable" >&2
+    return 1
+  }
+  mount_record="device=$device;mountpoint=$mountpoint;filesystem=$mount_type;disk_backed=false"
+  RAM_VOLUME_MOUNTPOINT="$mountpoint"
+  RAM_VOLUME_DEVICE="$device"
+  RAM_VOLUME_FILESYSTEM="$mount_type"
+  RAM_VOLUME_MOUNT_DIGEST="$(printf '%s' "$mount_record" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+  RAM_VOLUME_DETACHED=0
+  export RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DEVICE RAM_VOLUME_FILESYSTEM RAM_VOLUME_MOUNT_DIGEST RAM_VOLUME_DETACHED
+}
+
+detach_ram_key_volume() {
+  [[ "${RAM_VOLUME_DETACHED:-0}" -eq 1 ]] && return 0
+  local detach_record
+  if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
+    detach_record="device=$RAM_VOLUME_DEVICE;mountpoint=$RAM_VOLUME_MOUNTPOINT;detached=true"
+  else
+    hdiutil detach "$RAM_VOLUME_DEVICE" >/dev/null
+    detach_record="device=$RAM_VOLUME_DEVICE;mountpoint=$RAM_VOLUME_MOUNTPOINT;detached=true"
+  fi
+  RAM_VOLUME_DETACH_DIGEST="$(printf '%s' "$detach_record" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
+  RAM_VOLUME_DETACHED=1
+  export RAM_VOLUME_DETACH_DIGEST RAM_VOLUME_DETACHED
+}
+
+cleanup_ram_key_volume() {
+  local exit_status="${GRADUS_UPLOAD_FAILURE_STATUS:-$?}"
+  local cleanup_status=0
+  if [[ -n "${RAM_VOLUME_MOUNTPOINT:-}" && "${RAM_VOLUME_DETACHED:-0}" -eq 0 ]]; then
+    if ! detach_ram_key_volume; then
+      echo "FAIL: RAM-backed key volume could not be detached" >&2
+      cleanup_status=70
+    fi
+  fi
+  if [[ -n "${GRADUS_RAM_VOLUME_ATTESTATION_PATH:-}" && "${RAM_VOLUME_DETACHED:-0}" -eq 1 \
+    && ! -e "$GRADUS_RAM_VOLUME_ATTESTATION_PATH" ]]; then
+    if ! persist_ram_volume_attestation "$GRADUS_RAM_VOLUME_ATTESTATION_PATH" \
+      "$GRADUS_RAM_VOLUME_CANDIDATE_ID" "$RAM_VOLUME_MOUNT_DIGEST" \
+      "$RAM_VOLUME_DETACH_DIGEST" "$RAM_VOLUME_DEVICE" "$RAM_VOLUME_FILESYSTEM"; then
+      echo "FAIL: RAM-volume attestation could not be persisted" >&2
+      cleanup_status=70
+    fi
+  fi
+  if [[ "${GRADUS_UPLOAD_ATTEMPTED:-0}" -eq 1 && "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 0 \
+    && -n "${GRADUS_UPLOAD_RECONCILIATION_PATH:-}" ]]; then
+    if ! persist_upload_reconciliation "$GRADUS_UPLOAD_RECONCILIATION_PATH" \
+      "$GRADUS_RAM_VOLUME_CANDIDATE_ID" "$GRADUS_RAM_VOLUME_ARTIFACT_SHA256" "$exit_status"; then
+      echo "FAIL: upload reconciliation evidence could not be persisted" >&2
+      cleanup_status=70
+    fi
+  fi
+  if [[ -n "${RAM_VOLUME_MOUNTPOINT:-}" && -d "$RAM_VOLUME_MOUNTPOINT" && -z "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" ]]; then
+    rmdir "$RAM_VOLUME_MOUNTPOINT" 2>/dev/null || true
+  fi
+  if (( cleanup_status != 0 )); then
+    return "$cleanup_status"
+  fi
+  return "$exit_status"
 }
 
 failure_hook() {
@@ -634,10 +944,23 @@ bump_ios_build_number() {
 }
 
 main() {
-  local prepare_only=0 rollover_assigned=0 supersession_reason=""
+  local prepare_only=0 upload_only=0 rollover_assigned=0 supersession_reason="" requested_candidate_id=""
   while (($# > 0)); do
     case "$1" in
       --prepare-only) prepare_only=1 ;;
+      --upload-only) upload_only=1 ;;
+      --candidate)
+        (($# >= 2)) || {
+          echo "FAIL: --candidate requires a non-empty candidate ID" >&2
+          return 64
+        }
+        requested_candidate_id="$2"
+        [[ "$requested_candidate_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
+          echo "FAIL: --candidate contains unsupported characters" >&2
+          return 64
+        }
+        shift
+        ;;
       --rollover-assigned) rollover_assigned=1 ;;
       --supersession-reason)
         (($# >= 2)) || {
@@ -651,6 +974,8 @@ main() {
         sed -n '2,28p' "${BASH_SOURCE[0]}"
         echo "Options:"
         echo "  --prepare-only                              prepare and persist a resumable candidate without uploading"
+        echo "  --upload-only                                upload only the existing prepared candidate"
+        echo "  --candidate <id>                             require this exact prepared candidate"
         echo "  --rollover-assigned                         archive the assigned candidate before replacement"
         echo "  --supersession-reason <reason>              record why the assigned candidate is superseded"
         return 0
@@ -671,30 +996,39 @@ main() {
     return 64
   fi
   cd "$SCRIPT_DIR"
-  local project_root evidence_path expected_mac_build expected_cloudkit_environment
+  local project_root evidence_path expected_mac_build expected_cloudkit_environment expected_project_digest
   local baseline_source_digest baseline_project_digest current_project_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path
   local candidate_workspace candidate_ledger_path candidate_evidence_path walkthrough_path candidate_id source_revision producer_published_at
   local producer_evidence_digest artifact_digest marketing_version walkthrough_digest candidate_ipa_path durable_ipa_path prepared_metadata resume_candidate=0
+  local allocation_record_path identity_proof_path allocation_metadata candidate_id_hint
   project_root="$(cd .. && pwd)"
   evidence_path="$(resolve_producer_evidence_path)" || return 1
   candidate_ledger_path="${GRADUS_CANDIDATE_LEDGER_PATH:-$project_root/.release-state/candidate.json}"
   candidate_evidence_path="${GRADUS_CANDIDATE_EVIDENCE_PATH:-}"
   walkthrough_path="${GRADUS_WALKTHROUGH_PATH:-}"
   candidate_receipt_path="${GRADUS_CANDIDATE_RECEIPT_PATH:-}"
+  allocation_record_path="${GRADUS_IDENTITY_ALLOCATION_PATH:-$project_root/.release-state/allocated-ios.json}"
+  identity_proof_path="${GRADUS_IDENTITY_ALLOCATION_PROOF_PATH:-$project_root/.release-state/evidence/allocate-identity.json}"
   expected_mac_build="$(read_mac_build_number project.yml)"
   expected_cloudkit_environment="$(read_cloudkit_environment "$SCRIPT_DIR/GradusMac/GradusMacProduction.entitlements")"
   echo "==> Reading producer evidence from $evidence_path"
-  : "${APP_STORE_CONNECT_API_KEY:?required}"
-  : "${APP_STORE_CONNECT_KEY_ID:?required}"
-  : "${APP_STORE_CONNECT_ISSUER_ID:?required}"
+  if (( ! prepare_only )); then
+    : "${APP_STORE_CONNECT_API_KEY:?required}"
+    : "${APP_STORE_CONNECT_KEY_ID:?required}"
+    : "${APP_STORE_CONNECT_ISSUER_ID:?required}"
+  fi
   validate_common_marketing_version "$SCRIPT_DIR/project.yml"
   assert_candidate_not_in_flight "$candidate_ledger_path" "$rollover_assigned"
   prepared_metadata="$(read_prepared_candidate "$candidate_ledger_path")"
+  if (( upload_only )) && [[ -z "$prepared_metadata" ]]; then
+    echo "FAIL: --upload-only requires an existing prepared candidate" >&2
+    return 3
+  fi
   if [[ -n "$prepared_metadata" ]]; then
     resume_candidate=1
     while IFS=$'\t' read -r metadata_key metadata_value; do
       case "$metadata_key" in
-        candidateId) candidate_id="$metadata_value" ;;
+        candidateId) candidate_id="$metadata_value"; candidate_id_hint="$metadata_value" ;;
         sourceSha256) baseline_source_digest="$metadata_value" ;;
         projectSha256) baseline_project_digest="$metadata_value" ;;
         artifactSha256) artifact_digest="$metadata_value" ;;
@@ -711,6 +1045,10 @@ main() {
         candidateEvidencePath) candidate_evidence_path="$metadata_value" ;;
       esac
     done <<< "$prepared_metadata"
+    if [[ -n "$requested_candidate_id" && "$requested_candidate_id" != "$candidate_id" ]]; then
+      echo "FAIL: requested candidate does not match the prepared candidate" >&2
+      return 1
+    fi
     [[ -n "${candidate_ipa_path:-}" && -n "${candidate_id:-}" && -n "${artifact_digest:-}" ]] || {
       echo "FAIL: prepared candidate metadata is incomplete" >&2
       return 1
@@ -720,14 +1058,15 @@ main() {
     echo "==> Resuming prepared candidate $candidate_id build $NEXT_BUILD"
   fi
   if [[ "$resume_candidate" -eq 0 ]]; then
-  baseline_source_digest="$(snapshot_source_digest "$project_root")"
-  baseline_project_digest="$(snapshot_project_digest "$SCRIPT_DIR/project.yml")"
+  # Resolve and validate the producer tuple before allocation. The source
+  # freeze itself occurs below, after the ASC identity is durable.
   source_revision="$(snapshot_source_revision "$project_root")" || {
     echo "FAIL: could not resolve the checked-out source revision" >&2
     return 1
   }
+  expected_project_digest="$(snapshot_project_digest "$SCRIPT_DIR/project.yml")"
   echo "==> Validating producer evidence before candidate allocation"
-  validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "$source_revision" "$baseline_project_digest"
+  validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "$source_revision" "$expected_project_digest"
   candidate_root="$(create_candidate_workspace "$project_root")"
   candidate_workspace="$(dirname "$candidate_root")"
   candidate_script_dir="$candidate_root/app"
@@ -754,14 +1093,47 @@ main() {
   ARCHIVE_PATH="$candidate_script_dir/build/GradusiOS.xcarchive"
   PACKAGE_DIR="$candidate_script_dir/build/package-ios"
 
-  echo "==> Determining next build number from App Store Connect"
-  NEXT_BUILD="$(cd "$candidate_script_dir" && "$uv_bin" run --with pyjwt --with cryptography next-ios-build-number.py)"
+  marketing_version="$(read_marketing_version "$candidate_script_dir/project.yml" GradusiOS)"
+  if (( prepare_only )); then
+    echo "==> Consuming typed identity allocation proof from $identity_proof_path"
+    allocation_metadata="$(consume_identity_allocation_proof "$identity_proof_path" "$allocation_record_path" \
+      "$marketing_version" "${GRADUS_CANDIDATE_ID:-}")" || return 1
+  else
+    allocation_metadata="$(read_identity_allocation "$allocation_record_path")"
+    if [[ -z "$allocation_metadata" ]]; then
+      echo "==> Determining next build number from App Store Connect"
+      NEXT_BUILD="$(cd "$candidate_script_dir" && "$uv_bin" run --with pyjwt --with cryptography next-ios-build-number.py)"
+      candidate_id_hint="${GRADUS_CANDIDATE_ID:-gradus-ios-${NEXT_BUILD}}"
+      persist_identity_allocation "$allocation_record_path" "$candidate_id_hint" "$NEXT_BUILD" "$marketing_version"
+      allocation_metadata="$(read_identity_allocation "$allocation_record_path")"
+    else
+      echo "==> Resuming allocated iOS identity without a second allocation"
+    fi
+  fi
+  while IFS=$'\t' read -r metadata_key metadata_value; do
+    case "$metadata_key" in
+      candidateId) candidate_id_hint="$metadata_value" ;;
+      build) NEXT_BUILD="$metadata_value" ;;
+      marketingVersion) marketing_version="$metadata_value" ;;
+    esac
+  done <<< "$allocation_metadata"
+  [[ -n "${NEXT_BUILD:-}" && -n "${candidate_id_hint:-}" ]] || {
+    echo "FAIL: identity allocation record is incomplete" >&2
+    return 1
+  }
   echo "    Next CURRENT_PROJECT_VERSION: $NEXT_BUILD"
+  # Only the isolated candidate copy is edited; the checked-out project is
+  # never rewritten after the identity is allocated.
   bump_ios_build_number "$NEXT_BUILD" "$candidate_script_dir/project.yml"
   failure_hook after-allocation
 
   echo "==> Regenerating Xcode project from project.yml"
   (cd "$candidate_script_dir" && xcodegen generate)
+
+  echo "==> Freezing source and candidate project after identity allocation"
+  baseline_source_digest="$(snapshot_source_digest "$project_root")"
+  baseline_project_digest="$expected_project_digest"
+  export GRADUS_SOURCE_FROZEN=1
 
   rm -rf "$ARCHIVE_PATH" "$PACKAGE_DIR"
 
@@ -842,7 +1214,7 @@ main() {
   validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "$source_revision" "$baseline_project_digest"
 
   artifact_digest="$(sha256_file "$IPA_PATH")"
-  candidate_id="${GRADUS_CANDIDATE_ID:-gradus-ios-${NEXT_BUILD}-${artifact_digest:0:16}}"
+  candidate_id="${candidate_id_hint:-${GRADUS_CANDIDATE_ID:-gradus-ios-${NEXT_BUILD}-${artifact_digest:0:16}}}"
   [[ "$candidate_id" =~ ^[A-Za-z0-9._-]+$ ]] || {
     echo "FAIL: candidate ID contains unsupported path characters" >&2
     return 1
@@ -923,27 +1295,39 @@ PY
   transition_candidate_state "$candidate_ledger_path" uploading
 
 # altool's --api-key auth looks for AuthKey_<key-id>.p8 in a fixed set of
-# directories (or $API_PRIVATE_KEYS_DIR); write it to a private temp file
-# for this process only and shred it on exit (success or failure) so the
-# plaintext key never lingers on disk or appears in any log.
-  KEY_DIR="$(mktemp -d)"
-  trap 'rm -rf "$KEY_DIR"' EXIT
+# directories (or $API_PRIVATE_KEYS_DIR). Keep that regular file only on a
+# verified RAM-backed volume; a disk-backed temporary directory is forbidden.
+  create_ram_key_volume
+  trap 'cleanup_ram_key_volume' EXIT
+  export GRADUS_RAM_VOLUME_ATTESTATION_PATH="${candidate_workspace}/ram-volume-attestation.json"
+  export GRADUS_UPLOAD_RECONCILIATION_PATH="${candidate_workspace}/upload-reconciliation.json"
+  export GRADUS_RAM_VOLUME_CANDIDATE_ID="$candidate_id"
+  export GRADUS_RAM_VOLUME_ARTIFACT_SHA256="$artifact_digest"
+  export GRADUS_UPLOAD_ATTEMPTED=0 GRADUS_UPLOAD_SUCCEEDED=0
   umask 077
-  printf '%s' "$APP_STORE_CONNECT_API_KEY" > "${KEY_DIR}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
-  export API_PRIVATE_KEYS_DIR="$KEY_DIR"
+  printf '%s' "$APP_STORE_CONNECT_API_KEY" > "${RAM_VOLUME_MOUNTPOINT}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+  chmod 600 "${RAM_VOLUME_MOUNTPOINT}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+  export API_PRIVATE_KEYS_DIR="$RAM_VOLUME_MOUNTPOINT"
 
   echo "==> Uploading to App Store Connect"
+  export GRADUS_UPLOAD_ATTEMPTED=1
   if xcrun altool --upload-package "$IPA_PATH" \
       -t ios \
       --api-key "$APP_STORE_CONNECT_KEY_ID" \
       --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"; then
-    transition_candidate_state "$candidate_ledger_path" uploaded_unassigned
+    export GRADUS_UPLOAD_SUCCEEDED=1
   else
     # The transport may have accepted the package before returning a failure.
     # Preserve the candidate and require reconciliation instead of re-uploading.
-    transition_candidate_state "$candidate_ledger_path" uploaded_unassigned || true
-    return 1
+    local upload_status=$?
+    export GRADUS_UPLOAD_FAILURE_STATUS="$upload_status"
+    cleanup_ram_key_volume
+    trap - EXIT
+    return "$upload_status"
   fi
+  detach_ram_key_volume
+  persist_ram_volume_attestation "$GRADUS_RAM_VOLUME_ATTESTATION_PATH" \
+    "$candidate_id" "$RAM_VOLUME_MOUNT_DIGEST" "$RAM_VOLUME_DETACH_DIGEST" "$RAM_VOLUME_DEVICE" "$RAM_VOLUME_FILESYSTEM"
   failure_hook assignment
 
   echo "==> Done. Candidate $candidate_id build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."

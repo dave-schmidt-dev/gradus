@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]] || {
+  echo "release-testflight: checkout root could not be verified" >&2
+  exit 4
+}
+
+CENTRAL_ROOT="$ROOT/../apple_developer"
+ADAPTER="$ROOT/.release/release-adapter.json"
+PYTHON_BIN="/usr/bin/python3"
+if [[ -x "${HOME:-}/.agent/bin/bws-secret-exec" ]]; then
+  PATH="$HOME/.agent/bin:$PATH"
+  export PATH
+fi
+[[ -f "$CENTRAL_ROOT/release_tools/__main__.py" && -f "$ADAPTER" ]] || {
+  echo "release-testflight: central release_tools or adapter is unavailable" >&2
+  exit 4
+}
+
+case "${1:-}" in
+  --prepare-only)
+    [[ $# -eq 1 ]] || { echo "release-testflight: --prepare-only takes no extra arguments" >&2; exit 64; }
+    exec env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
+      --adapter "$ADAPTER" --repository "$ROOT"
+    ;;
+  --upload)
+    [[ $# -eq 1 ]] || { echo "release-testflight: --upload takes no extra arguments" >&2; exit 64; }
+    candidate="$($PYTHON_BIN -c 'import json,sys; print(json.loads(open(sys.argv[1], encoding="utf-8").read())["candidateId"])' \
+      "$ROOT/.release-state/gradus-ios/active-candidate.json" 2>/dev/null)" || {
+      echo "release-testflight: no prepared central candidate" >&2
+      exit 3
+    }
+    exec env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
+      --adapter "$ADAPTER" --repository "$ROOT" --upload --candidate "$candidate"
+    ;;
+  *)
+    echo "usage: app/release-testflight --prepare-only|--upload" >&2
+    exit 64
+    ;;
+esac

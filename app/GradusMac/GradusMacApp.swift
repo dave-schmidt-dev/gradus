@@ -123,6 +123,11 @@ struct GradusMacApp: App {
     /// to order an AppKit window reliably; the delegate callback runs after the
     /// application has an active run loop while production remains menu-bar-only.
     private final class MenuUITestApplicationDelegate: NSObject, NSApplicationDelegate {
+        func applicationWillFinishLaunching(_: Notification) {
+            guard GradusMacApp.uiTestMenuFixtureEnabled else { return }
+            NSApplication.shared.setActivationPolicy(.regular)
+        }
+
         func applicationDidFinishLaunching(_: Notification) {
             guard GradusMacApp.uiTestMenuFixtureEnabled else { return }
             MenuUITestFixtureWindow.show()

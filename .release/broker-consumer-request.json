@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1.0.0",
+  "consumer": "gradus-app-store-connect-bridge",
+  "purpose": "Registered Gradus iOS TestFlight identity, upload, lookup, tester-group, device-health, and notification reconciliation operations.",
+  "allowedOperations": ["identity-allocation", "upload", "processing", "compliance", "tester-group", "assignment", "notification", "device-health"],
+  "credentialTransport": "ram-backed broker injection",
+  "writeAuthority": "project-owned adapter only"
+}

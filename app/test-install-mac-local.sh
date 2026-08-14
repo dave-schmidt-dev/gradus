@@ -22,24 +22,27 @@ INSTALL_SCRIPT="$SCRIPT_DIR/install-mac-local.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gradus-install-tests.XXXXXX")"
 FAKE_BIN="$TEST_ROOT/bin"
 SOURCE_PLIST="$SCRIPT_DIR/GradusMac/Info.plist"
+DEBUG_PLIST="$SCRIPT_DIR/GradusMac/Info-Debug.plist"
+RELEASE_PLIST="$SCRIPT_DIR/GradusMac/Info-Release.plist"
 PROJECT_CONFIG="$SCRIPT_DIR/project.yml"
 
 assert_plist_value() {
-  local key="$1" expected="$2" actual
-  actual="$(/usr/bin/plutil -extract "$key" raw -o - "$SOURCE_PLIST")"
+  local plist="$1" key="$2" expected="$3" actual
+  actual="$(/usr/bin/plutil -extract "$key" raw -o - "$plist")"
   [[ "$actual" == "$expected" ]] || {
-    echo "FAIL: GradusMac/Info.plist $key is '$actual', expected '$expected'" >&2
+    echo "FAIL: $plist $key is '$actual', expected '$expected'" >&2
     exit 1
   }
 }
 
 # This checks the physical plist XcodeGen writes, independently of the fake
 # PlistBuddy used below for installer behavior.
-assert_plist_value CFBundleShortVersionString '$(MARKETING_VERSION)'
-assert_plist_value CFBundleVersion '$(CURRENT_PROJECT_VERSION)'
-assert_plist_value GRADUS_SOURCE_REVISION '$(GRADUS_SOURCE_REVISION)'
-assert_plist_value GRADUS_PROJECT_SHA256 '$(GRADUS_PROJECT_SHA256)'
-assert_plist_value LSUIElement true
+assert_plist_value "$SOURCE_PLIST" CFBundleShortVersionString '$(MARKETING_VERSION)'
+assert_plist_value "$SOURCE_PLIST" CFBundleVersion '$(CURRENT_PROJECT_VERSION)'
+assert_plist_value "$SOURCE_PLIST" GRADUS_SOURCE_REVISION '$(GRADUS_SOURCE_REVISION)'
+assert_plist_value "$SOURCE_PLIST" GRADUS_PROJECT_SHA256 '$(GRADUS_PROJECT_SHA256)'
+assert_plist_value "$DEBUG_PLIST" LSUIElement false
+assert_plist_value "$RELEASE_PLIST" LSUIElement true
 
 # Keep the generated plist as a source file, not an ignored build artifact.
 # The parent checkpoint stages the newly added file; before that checkpoint
@@ -67,6 +70,10 @@ assert_mac_target_config '    info:'
 assert_mac_target_config '      path: GradusMac/Info.plist'
 assert_mac_target_config '        GRADUS_PROJECT_SHA256: $(GRADUS_PROJECT_SHA256)'
 assert_mac_target_config '        GRADUS_SOURCE_REVISION: $(GRADUS_SOURCE_REVISION)'
+assert_mac_target_config '          INFOPLIST_KEY_LSUIElement: NO'
+assert_mac_target_config '          INFOPLIST_FILE: GradusMac/Info-Debug.plist'
+assert_mac_target_config '          INFOPLIST_KEY_LSUIElement: YES'
+assert_mac_target_config '          INFOPLIST_FILE: GradusMac/Info-Release.plist'
 
 cleanup() {
   rm -rf "$TEST_ROOT" 2>/dev/null || true

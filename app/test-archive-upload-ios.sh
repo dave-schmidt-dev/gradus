@@ -158,6 +158,7 @@ assert_upload_argument_rejected "reason without rollover" "requires --rollover-a
 assert_upload_argument_rejected "whitespace reason" "requires --supersession-reason" \
   --rollover-assigned --supersession-reason "   "
 assert_upload_argument_rejected "unknown argument" "unknown argument" --unexpected-flag
+assert_upload_argument_rejected "unsafe candidate" "contains unsupported characters" --candidate 'candidate;touch'
 
 assert_upload_option_parsed() {
   local label="$1"
@@ -182,6 +183,7 @@ assert_upload_option_parsed() {
 assert_upload_option_parsed "prepare-only" --prepare-only
 assert_upload_option_parsed "prepare-only with assigned rollover" \
   --prepare-only --rollover-assigned --supersession-reason correction
+assert_upload_option_parsed "upload-only" --upload-only
 
 rollover_root="$TEST_ROOT/rollover"
 rollover_ledger="$rollover_root/candidate.json"
@@ -380,6 +382,37 @@ validate_producer_evidence_boundary "$TEST_ROOT/matching.json" "$EXPECTED_MAC_BU
   exit 1
 }
 
+# The legacy wrapper consumes the central allocator's typed proof without any
+# ASC credentials and persists the exact public identity for later retries.
+allocation_root="$TEST_ROOT/identity-proof"
+allocation_proof="$allocation_root/.release-state/evidence/allocate-identity.json"
+allocation_record="$allocation_root/.release-state/allocated-ios.json"
+mkdir -p "$(dirname "$allocation_proof")"
+cat >"$allocation_proof" <<'JSON'
+{"buildNumber":43,"marketingVersion":"1.6.7","observedAt":"2026-08-13T12:00:00Z","operationClass":"identityAllocation","productKey":"gradus-ios","proofVersion":"1.0.0","remoteHighestBuildNumber":42,"remoteHighestMarketingVersion":"1.6.7","responseSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","result":"passed"}
+JSON
+unset APP_STORE_CONNECT_API_KEY APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID
+allocation_metadata="$(consume_identity_allocation_proof "$allocation_proof" "$allocation_record" 1.6.7 '')"
+[[ "$allocation_metadata" == *$'build\t43'* && "$allocation_metadata" == *$'candidateId\tgradus-ios-43'* ]] || {
+  echo "FAIL: typed identity proof was not consumed into the durable allocation" >&2
+  exit 1
+}
+allocation_digest_before="$(sha256_file "$allocation_record")"
+allocation_metadata_retry="$(consume_identity_allocation_proof "$allocation_proof" "$allocation_record" 1.6.7 '')"
+[[ "$allocation_metadata_retry" == "$allocation_metadata" && "$(sha256_file "$allocation_record")" == "$allocation_digest_before" ]] || {
+  echo "FAIL: consuming the same identity proof allocated a second identity" >&2
+  exit 1
+}
+printf '%s\n' '{"operationClass":"identityAllocation"}' >"$allocation_root/malformed.json"
+set +e
+malformed_allocation_output="$(consume_identity_allocation_proof "$allocation_root/malformed.json" "$allocation_root/malformed-record.json" 1.6.7 '' 2>&1)"
+malformed_allocation_status=$?
+set -e
+[[ "$malformed_allocation_status" -ne 0 && "$malformed_allocation_output" == *"missing or malformed"* ]] || {
+  echo "FAIL: malformed identity proof was accepted" >&2
+  exit 1
+}
+
 # Exercise main's prepared-candidate resume path without invoking archive
 # tooling or App Store Connect. The checkout is intentionally dirty while
 # this hermetic test runs, so the fixture's source revision is checked by a
@@ -441,9 +474,6 @@ transition_candidate_state() {
   printf '%s\n' "$2" >>"$behavior_transition_log"
 }
 
-export APP_STORE_CONNECT_API_KEY=fixture-api-key
-export APP_STORE_CONNECT_KEY_ID=fixture-key-id
-export APP_STORE_CONNECT_ISSUER_ID=fixture-issuer
 export GRADUS_PRODUCER_EVIDENCE_PATH="$behavior_producer_evidence"
 export GRADUS_CANDIDATE_LEDGER_PATH="$behavior_ledger"
 export GRADUS_CANDIDATE_RECEIPT_PATH="$behavior_receipt"
@@ -474,6 +504,80 @@ record = CandidateLedger(sys.argv[1]).load()
 assert record is not None and record.state == CandidateState.PREPARED
 PY
 
+# A failed transport must detach the key volume and leave both the RAM proof
+# and an explicit reconciliation-required record before returning the transport
+# status. Build a second prepared fixture so the successful resume below stays
+# independent of this failure path.
+failure_root="$TEST_ROOT/upload-failure-behavior"
+failure_workspace="$failure_root/candidate"
+failure_ledger="$failure_root/candidate.json"
+failure_ipa="$failure_workspace/GradusiOS.ipa"
+failure_candidate_evidence="$failure_workspace/candidate-evidence.json"
+failure_walkthrough="$failure_workspace/walkthrough.md"
+failure_receipt="$failure_workspace/ios-artifact.json"
+failure_candidate_id="fixture-upload-failure"
+mkdir -p "$failure_workspace"
+printf 'hermetic failed-upload candidate ipa\n' >"$failure_ipa"
+failure_artifact_digest="$(sha256_file "$failure_ipa")"
+printf '# Fixture failed-upload walkthrough\n' >"$failure_walkthrough"
+failure_walkthrough_digest="$(sha256_file "$failure_walkthrough")"
+prepare_candidate_ledger "$failure_ledger" "$failure_candidate_id" "$behavior_source_digest" "$EXPECTED_PROJECT_SHA256" \
+  "$failure_artifact_digest" "$behavior_build" "$behavior_marketing_version" "$behavior_source_revision" \
+  "$EXPECTED_MAC_BUILD" "$behavior_producer_digest" "$behavior_published_at" "$failure_workspace" "$failure_ipa"
+persist_candidate_evidence "$failure_ledger" "$failure_candidate_evidence" "$failure_candidate_id" \
+  "$behavior_source_digest" "$EXPECTED_PROJECT_SHA256" "$failure_artifact_digest" "$behavior_build" \
+  "$behavior_marketing_version" "$behavior_source_revision" "$EXPECTED_MAC_BUILD" "$behavior_producer_digest" \
+  "$failure_walkthrough" "$failure_walkthrough_digest" "$behavior_published_at" "$failure_workspace" "$failure_ipa"
+failure_bin="$failure_root/bin"
+failure_key_log="$failure_root/mktemp.log"
+failure_xcrun_log="$failure_root/xcrun.log"
+mkdir -p "$failure_bin"
+cp "$behavior_bin/mktemp" "$failure_bin/mktemp"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\\n" "$*" >> "$GRADUS_TEST_XCRUN_LOG"' \
+  'exit 42' >"$failure_bin/xcrun"
+chmod 700 "$failure_bin/mktemp" "$failure_bin/xcrun"
+export GRADUS_CANDIDATE_LEDGER_PATH="$failure_ledger"
+export GRADUS_CANDIDATE_RECEIPT_PATH="$failure_receipt"
+export GRADUS_TEST_KEY_LOG="$failure_key_log"
+export GRADUS_TEST_XCRUN_LOG="$failure_xcrun_log"
+export PATH="$failure_bin:$behavior_path"
+export APP_STORE_CONNECT_API_KEY=fixture-api-key
+export APP_STORE_CONNECT_KEY_ID=fixture-key-id
+export APP_STORE_CONNECT_ISSUER_ID=fixture-issuer
+unset GRADUS_UPLOAD_FAILURE_STATUS
+set +e
+failed_upload_output="$(main --upload-only 2>&1)"
+failed_upload_status=$?
+set -e
+[[ "$failed_upload_status" -eq 42 && "$failed_upload_output" == *"Uploading to App Store Connect"* ]] || {
+  echo "FAIL: failed upload did not return the transport status" >&2
+  echo "$failed_upload_output" >&2
+  exit 1
+}
+[[ -f "$failure_workspace/ram-volume-attestation.json" && -f "$failure_workspace/upload-reconciliation.json" ]] || {
+  echo "FAIL: failed upload did not persist RAM and reconciliation evidence" >&2
+  exit 1
+}
+/usr/bin/python3 - "$failure_workspace/upload-reconciliation.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert payload["result"] == "reconciliation-required"
+assert payload["reason"] == "upload-result-ambiguous"
+assert payload["transportExitCode"] == 42
+PY
+
+export GRADUS_CANDIDATE_LEDGER_PATH="$behavior_ledger"
+export GRADUS_CANDIDATE_RECEIPT_PATH="$behavior_receipt"
+export GRADUS_TEST_KEY_LOG="$behavior_key_log"
+export GRADUS_TEST_XCRUN_LOG="$behavior_xcrun_log"
+export PATH="$behavior_bin:$behavior_path"
+unset GRADUS_UPLOAD_FAILURE_STATUS
+
 set +e
 resume_output="$(main 2>&1)"
 resume_status=$?
@@ -492,7 +596,7 @@ grep -Fq -- '--upload-package' "$behavior_xcrun_log" || {
   exit 1
 }
 grep -Fq -- '-d' "$behavior_key_log" || {
-  echo "FAIL: normal resume did not create the temporary API-key directory" >&2
+  echo "FAIL: normal resume did not create the hermetic RAM-volume fixture" >&2
   exit 1
 }
 export PATH="$behavior_path"
@@ -675,6 +779,10 @@ grep -Fq 'read_prepared_candidate' "$UPLOAD_SCRIPT" || {
   echo "FAIL: archive wrapper has no prepared-candidate retry path" >&2
   exit 1
 }
+grep -Fq -- '--upload-only requires an existing prepared candidate' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: upload-only path does not fail closed without a prepared candidate" >&2
+  exit 1
+}
 grep -Fq 'Revalidating fresh producer evidence before resumed upload' "$UPLOAD_SCRIPT" || {
   echo "FAIL: resumed upload does not require fresh producer evidence" >&2
   exit 1
@@ -683,7 +791,7 @@ prepare_line="$(grep -n 'Persisting machine-written candidate ledger before walk
 walkthrough_line="$(grep -n -- '-m release_candidate.walkthrough' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 uploading_line="$(grep -n 'transition_candidate_state "\$candidate_ledger_path" uploading' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 prepare_only_line="$(grep -n 'if (( prepare_only )); then' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
-key_dir_line="$(grep -n 'KEY_DIR="\$(mktemp -d)"' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+key_dir_line="$(grep -n '^  create_ram_key_volume$' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 altool_line="$(grep -n 'xcrun altool --upload-package' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 [[ -n "$prepare_line" && -n "$walkthrough_line" && -n "$uploading_line" \
   && -n "$prepare_only_line" && -n "$key_dir_line" && -n "$altool_line" \
@@ -694,6 +802,19 @@ altool_line="$(grep -n 'xcrun altool --upload-package' "$UPLOAD_SCRIPT" | tail -
 [[ "$walkthrough_line" -lt "$prepare_only_line" && "$prepare_only_line" -lt "$uploading_line" \
   && "$prepare_only_line" -lt "$key_dir_line" && "$prepare_only_line" -lt "$altool_line" ]] || {
   echo "FAIL: prepare-only exit is not before upload transition or key/altool setup" >&2
+  exit 1
+}
+
+grep -Fq 'persist_identity_allocation' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: identity allocation is not persisted before candidate freeze" >&2
+  exit 1
+}
+grep -Fq 'allocated-but-unfrozen' "$SCRIPT_DIR/release_candidate/allocation.py" || {
+  echo "FAIL: allocated-but-unfrozen recovery state is missing" >&2
+  exit 1
+}
+grep -Fq 'persist_ram_volume_attestation' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: RAM-volume detach proof is not persisted" >&2
   exit 1
 }
 

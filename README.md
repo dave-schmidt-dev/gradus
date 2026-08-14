@@ -78,6 +78,19 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
 - A terminal that supports ANSI color
 
+### VM profile-free test configuration
+
+`app/Gradus.xcodeproj` provides the named `VMProfileFreeTest` configuration for
+agent-driven macOS/iOS simulator builds. It sets exactly
+`CODE_SIGN_ENTITLEMENTS = ""`, `CODE_SIGN_IDENTITY = "-"`, and
+`CODE_SIGN_STYLE = Manual`; it declares no `DEVELOPMENT_TEAM`,
+`PROVISIONING_PROFILE_SPECIFIER`, or provisioning profile. Use it with
+`xcodebuild build-for-testing ... -configuration VMProfileFreeTest`.
+
+This configuration is intentionally capability-limited: CloudKit containers,
+iCloud entitlements, and APNs/push registration are unavailable. Tests that
+exercise CloudKit or push require a separately signed profile-bearing build.
+
 ## Run
 
 ```bash
@@ -424,55 +437,49 @@ launched locally to verify the publish, and only then is the iOS build uploaded.
 The Mac does not need notarization for that local republish; a Mac artifact
 distributed to users still requires the notarization workflow.
 
-### Deploying GradusiOS
+### GradusiOS release workflow (profile 2.0 adopted)
 
 Release versioning follows [`VERSIONING.md`](VERSIONING.md): use
 `MAJOR.MINOR.PATCH` for product releases, and keep Apple's build number as a
 separate upload counter. A new TestFlight build is reserved for a completed,
 gate-green release candidate or a release-blocking correction; small
-non-blocking tweaks are batched into the next patch release.
+non-blocking tweaks are batched into the next patch release. The two public
+entry points are:
 
-```bash
-cd app
-./test-gate.sh                                    # must be green first
-# set the next semantic MARKETING_VERSION before the release gate when the
-# product release changes; archive-upload-ios.sh owns the build counter
-bws-secret-exec app-store-connect-upload --        # archives, codesigns, uploads; auto-bumps CURRENT_PROJECT_VERSION only
-# An assigned candidate is never replaced implicitly. Rollover is attended and
-# must name the release-blocking reason; the old ledger/evidence/receipts are
-# archived under .release-state/archived/<candidate-id>/ first.
-# The rollover emits archive-start and archive-complete progress before the
-# replacement is prepared.
-bws-secret-exec app-store-connect-upload -- ./archive-upload-ios.sh \
-  --rollover-assigned --supersession-reason "release-blocking correction"
-# Generate and persist the candidate IPA, evidence, and walkthrough without
-# contacting App Store Connect. The release owner reviews the walkthrough, then
-# reruns the same command without --prepare-only to resume the exact candidate.
-bws-secret-exec app-store-connect-upload -- ./archive-upload-ios.sh \
-  --prepare-only --rollover-assigned --supersession-reason "release-blocking correction"
-bws-secret-exec app-store-connect-testflight-setup -- <candidate-id> <build> \
-  --group-id <confirmed-internal-group-id> --group-name "<confirmed-group-name>" \
-  --ledger .release-state/candidate.json \
-  --evidence <candidate-state-dir>/candidate-evidence.json \
-  --receipt-journal <candidate-state-dir>/receipt.json
-```
+- `app/release-testflight` — prepare or upload the immutable candidate using
+  the registered Gradus consumer.
+- `app/release-status` — read the current local candidate status.
 
-Resuming a prepared upload rechecks the checkout's Git revision and clean
-status against the candidate ledger before any upload work; source drift or
-an unrelated untracked file fails closed.
+Profile 2.0 is adopted for the verified Gradus candidate
+`gradus-ios-18-a4acb3118b78faff`. The candidate-bound bridge canary returned
+`adoption-authorized` after broker identity lookup, Xcode signing verification,
+and App Store Connect reconciliation. This authorizes the typed bridge and
+resume path; it does not authorize an upload without the reviewed walkthrough
+and explicit owner handoff. The legacy scripts remain rollback-compatible
+implementation pieces, not a second public trigger.
+
+The legacy `archive-upload-ios.sh`, `testflight-setup.py`, and
+`testflight-setup-safe.sh` entry points remain available for compatibility
+until that adoption result is recorded; they are not additional public
+release routes. A prepared upload rechecks the checkout revision and clean
+status against its candidate record before any upload work, and source drift
+fails closed.
+
+The central fleet audit reports Gradus as adopted. The fixed pre-push hook runs
+`bash app/test-gate.sh` and propagates its exit status; local gate results remain
+separate from the candidate-bound canary evidence.
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
 its release summary and test-focus text into App Store Connect's “What to
 Test” field; keep individual candidate-build details and re-upload reasons in
 `HISTORY.md`.
 
-The assignment trigger requires the release-owner-confirmed candidate ID,
+The release workflow requires the release-owner-confirmed candidate ID,
 internal-group identity, candidate ledger, candidate-specific evidence file,
-and a receipt journal inside that candidate's workspace. The assignment tool
-records that workspace-local receipt path before it can transition the ledger
-to `assigned`; external receipt-journal paths are rejected. The upload wrapper
-prints the durable candidate state directory and does not guess any of those
-values. During rollover it reports archive start/completion on stderr.
+and a receipt journal inside that candidate's workspace. Assignment records
+the workspace-local receipt before transitioning the ledger to `assigned`;
+external receipt-journal paths are rejected. Status and long-running release
+progress remain visible on their documented output channels.
 
 The source checkout must be clean for upload, local installation, and
 notarization. The only allowed untracked path is the exact internal verification
@@ -591,8 +598,9 @@ uv run pre-commit install   # installs both pre-commit and pre-push hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **pre-push** (heavier): the full `pytest` suite (~0.2s), so nothing lands on the
-  remote without the gate tests passing.
+- **pre-push** (authoritative): `bash app/test-gate.sh` runs the full counted
+  macOS/iOS, Swift package, Python, release, and UI gate and propagates its
+  exit status, so nothing lands on the remote without every leg passing.
 
 Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
 `.swiftformat`, Swift source scope and generated directory exclusions in

@@ -30,6 +30,18 @@ version policy, and redacted processing/compliance/assignment receipt predicates
 These checks prove local candidate safety only; they do not prove Apple upload,
 processing, installability, or App Store submission.
 
+The public release surface is intentionally two commands: `app/release-testflight`
+for the candidate prepare/upload workflow and `app/release-status` for local
+candidate status. The legacy `archive-upload-ios.sh` and `testflight-setup*`
+entry points remain readable and runnable only as compatibility implementation
+pieces; the candidate-bound bridge canary is now authorized.
+
+Profile 2.0 is adopted for the verified candidate. The current canary result is
+`adoption-authorized`; the fixed wrappers route through the central CLI and
+remain fail-closed until the reviewed walkthrough and explicit upload handoff
+are present. Local adapter and fixture checks do not replace upload, processing,
+device, or user-visible TestFlight evidence.
+
 `app/test_walkthrough.py` additionally proves that the dated release-owner
 walkthrough is bound to the candidate's source revision, project/artifact
 digests, version/build, and ledger record. It rejects missing route/control,
@@ -95,8 +107,9 @@ product but never its test targets, and XcodeGen cannot add them to a scheme's
 `test:` block since they are not project targets. Without step 2 the package's
 tests — the reconciliation core both apps import — do not run at all.
 
-Note that `test-gate.sh` is **not** yet invoked by any git hook; `pre-push` runs
-`pytest` only, so the Swift half is gated locally but not enforced on push.
+The `pre-push` hook invokes `bash app/test-gate.sh` with no filename narrowing
+and propagates its exit status. This keeps the full cross-platform gate, rather
+than a subset of Python tests, authoritative for pushes.
 
 ## Cross-language rules: shared truth tables
 
