@@ -66,7 +66,8 @@ struct ProviderDensityCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .padding(metrics.cardPadding)
         .background(
-            .quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: metrics.cornerRadius))
+            .quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: metrics.cornerRadius)
+        )
         .overlay {
             RoundedRectangle(cornerRadius: metrics.cornerRadius)
                 .strokeBorder(ProviderDensityCardStructuralToken.color, lineWidth: 1)
@@ -83,13 +84,14 @@ struct ProviderDensityCard: View {
             VStack(spacing: metrics.rowGap) {
                 ForEach(Array(visibleWindows.enumerated()), id: \.offset) { _, window in
                     WindowRow(
-                        window: window, now: now, showsReset: showsReset, metrics: metrics)
+                        window: window, now: now, showsReset: showsReset, metrics: metrics
+                    )
                 }
-                if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+                if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
                     errorText
                 }
             }
-        } else if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+        } else if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
             errorText
                 .frame(height: metrics.rowHeight, alignment: .leading)
         } else {

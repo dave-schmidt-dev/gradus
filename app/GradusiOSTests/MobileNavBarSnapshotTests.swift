@@ -1,8 +1,7 @@
+@testable import GradusiOS
 import SnapshotTesting
 import SwiftUI
 import Testing
-
-@testable import GradusiOS
 
 // P2/T2.3 gate: title + one trailing `IconButton`, light+dark, following
 // `DashboardSnapshotTests.swift`'s exact `.image(layout: .fixed)` pattern.
@@ -13,7 +12,8 @@ import Testing
         IconButton(Icon.settings) {}
     }
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .light))
+    )
 }
 
 @MainActor
@@ -22,5 +22,6 @@ import Testing
         IconButton(Icon.settings) {}
     }
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .dark))
+    )
 }

@@ -24,8 +24,8 @@ public enum SignalLevel: String, Sendable, CaseIterable, Codable {
     /// happened to agree whenever pace was known.
     public var needsAttention: Bool {
         switch self {
-        case .orange, .red: return true
-        case .green, .yellow, .unknown: return false
+        case .orange, .red: true
+        case .green, .yellow, .unknown: false
         }
     }
 
@@ -40,11 +40,11 @@ public enum SignalLevel: String, Sendable, CaseIterable, Codable {
     /// no ramp at all.
     public var rgbHex: UInt32? {
         switch self {
-        case .green: return 0x87D787
-        case .yellow: return 0xFFD75F
-        case .orange: return 0xFFAF5F
-        case .red: return 0xFF5F5F
-        case .unknown: return nil
+        case .green: 0x87D787
+        case .yellow: 0xFFD75F
+        case .orange: 0xFFAF5F
+        case .red: 0xFF5F5F
+        case .unknown: nil
         }
     }
 }
@@ -87,18 +87,32 @@ private let paceOrangeFloor = -0.25
 ///     ahead of schedule. Not clamped (INV-4).
 public func signalLevel(percentLeft: Double?, paceDelta: Double?) -> SignalLevel {
     guard percentIsValid(percentLeft), let percentLeft else { return .unknown }
-    if percentIsDepleted(percentLeft) { return .red }
-
-    guard let paceDelta, paceDelta.isFinite else {
-        if percentLeft >= 70 { return .green }
-        if percentLeft >= 40 { return .yellow }
-        if percentLeft >= 20 { return .orange }
+    if percentIsDepleted(percentLeft) {
         return .red
     }
 
-    if paceDelta >= paceGreenFloor { return .green }
-    if paceDelta >= paceYellowFloor { return .yellow }
-    if paceDelta >= paceOrangeFloor { return .orange }
+    guard let paceDelta, paceDelta.isFinite else {
+        if percentLeft >= 70 {
+            return .green
+        }
+        if percentLeft >= 40 {
+            return .yellow
+        }
+        if percentLeft >= 20 {
+            return .orange
+        }
+        return .red
+    }
+
+    if paceDelta >= paceGreenFloor {
+        return .green
+    }
+    if paceDelta >= paceYellowFloor {
+        return .yellow
+    }
+    if paceDelta >= paceOrangeFloor {
+        return .orange
+    }
     return .red
 }
 

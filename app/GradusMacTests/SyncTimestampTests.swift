@@ -74,10 +74,10 @@ struct SyncTimestampTests {
         withScratchDefaults("failure") { defaults in
             let viewModel = PublisherViewModel(defaults: defaults)
             viewModel.syncEnabled = true
-            guard let ok = viewModel.cloudSyncDidStart() else { return }
-            viewModel.cloudSyncDidSucceed(operationID: ok, at: stamp)
-            guard let bad = viewModel.cloudSyncDidStart() else { return }
-            viewModel.cloudSyncDidFail(operationID: bad)
+            guard let firstOperationID = viewModel.cloudSyncDidStart() else { return }
+            viewModel.cloudSyncDidSucceed(operationID: firstOperationID, at: stamp)
+            guard let secondOperationID = viewModel.cloudSyncDidStart() else { return }
+            viewModel.cloudSyncDidFail(operationID: secondOperationID)
 
             #expect(viewModel.syncState == .failed)
             #expect(viewModel.lastSyncedAt == stamp, "a failure must not erase the last good sync")

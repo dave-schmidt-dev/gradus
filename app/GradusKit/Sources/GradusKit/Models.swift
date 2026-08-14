@@ -96,9 +96,9 @@ extension SnapshotPayload: Decodable {
         guard version == supportedSchemaVersion else {
             throw SnapshotDecodeError.unsupportedSchemaVersion(version)
         }
-        self.schemaVersion = version
-        self.updatedAt = try container.decode(String.self, forKey: .updatedAt)
-        self.providers = try container.decode([ProviderEntry].self, forKey: .providers)
+        schemaVersion = version
+        updatedAt = try container.decode(String.self, forKey: .updatedAt)
+        providers = try container.decode([ProviderEntry].self, forKey: .providers)
     }
 }
 

@@ -1,6 +1,5 @@
-import Testing
-
 @testable import GradusiOS
+import Testing
 
 // P4/T4.1 gate: every observed schema-v2 window id maps to a non-blank
 // human label, and unknown future ids fall back to the raw string.

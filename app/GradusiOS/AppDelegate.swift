@@ -49,8 +49,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     private var remoteRegistrationStarted = false
     private var remoteRegistrationFailed = false
 
-    private static let systemNotificationAuthorizationRequest: (UIApplication, @escaping (Bool) -> Void) -> Void = {
-        _, resolved in
+    private static let systemNotificationAuthorizationRequest: (UIApplication, @escaping (Bool) -> Void) -> Void = { _, resolved in
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
             DispatchQueue.main.async {
                 UNUserNotificationCenter.current().getNotificationSettings { settings in
@@ -202,8 +201,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_: UIApplication, didReceiveRemoteNotification _: [AnyHashable: Any]) async
-        -> UIBackgroundFetchResult
-    {
+        -> UIBackgroundFetchResult {
         await handleRemoteNotificationOnMainActor()
     }
 

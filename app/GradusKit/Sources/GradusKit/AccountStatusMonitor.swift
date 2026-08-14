@@ -116,8 +116,7 @@ public actor AccountStatusMonitor {
             // request that completed after observation was stopped.
             guard !refreshesSuspended, generation == lifecycleGeneration else { return }
             if retryTemporaryState,
-               status == .couldNotDetermine || status == .temporarilyUnavailable
-            {
+               status == .couldNotDetermine || status == .temporarilyUnavailable {
                 await refresh(retryTemporaryState: false)
                 return
             }

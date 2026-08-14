@@ -1,9 +1,8 @@
+@testable import GradusiOS
 import SnapshotTesting
 import SwiftUI
 import Testing
 import UIKit
-
-@testable import GradusiOS
 
 // P2/T2.4 gate: confirms the rendered tap target is >= 44x44pt regardless
 // of the icon glyph's intrinsic size -- via `UIHostingController`'s actual
@@ -37,12 +36,14 @@ import UIKit
 @Test func iconButtonSnapshotLight() {
     let view = IconButton(Icon.settings) {}
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 44, height: 44), traits: UITraitCollection(userInterfaceStyle: .light)))
+        of: view, as: .image(layout: .fixed(width: 44, height: 44), traits: UITraitCollection(userInterfaceStyle: .light))
+    )
 }
 
 @MainActor
 @Test func iconButtonSnapshotDark() {
     let view = IconButton(Icon.settings) {}
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 44, height: 44), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        of: view, as: .image(layout: .fixed(width: 44, height: 44), traits: UITraitCollection(userInterfaceStyle: .dark))
+    )
 }

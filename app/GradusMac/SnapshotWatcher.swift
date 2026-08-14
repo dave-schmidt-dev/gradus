@@ -29,8 +29,8 @@ public actor SnapshotWatcher {
     }
 
     private func watch() {
-        let fd = open(path.path, O_EVTONLY)
-        guard fd >= 0 else {
+        let fileDescriptor = open(path.path, O_EVTONLY)
+        guard fileDescriptor >= 0 else {
             // File doesn't exist yet (e.g. launchd hasn't run once). Retry
             // shortly rather than giving up on the watcher permanently.
             Task {
@@ -41,7 +41,10 @@ public actor SnapshotWatcher {
         }
 
         let newSource = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: [.write, .delete, .rename, .extend], queue: .global(qos: .utility))
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .delete, .rename, .extend],
+            queue: .global(qos: .utility)
+        )
         newSource.setEventHandler { [weak self] in
             guard let self else { return }
             let flags = newSource.data
@@ -54,7 +57,7 @@ public actor SnapshotWatcher {
                 }
             }
         }
-        newSource.setCancelHandler { close(fd) }
+        newSource.setCancelHandler { close(fileDescriptor) }
         newSource.resume()
         source = newSource
     }
@@ -68,7 +71,8 @@ public actor SnapshotWatcher {
     private func readAndEmit() {
         guard let data = try? Data(contentsOf: path) else {
             GradusLog.snapshot.warning(
-                "could not read snapshot at \(path.path); watcher will retry on the next write event")
+                "could not read snapshot at \(path.path); watcher will retry on the next write event"
+            )
             return
         }
         guard let payload = try? JSONDecoder().decode(SnapshotPayload.self, from: data) else {
@@ -82,7 +86,8 @@ public actor SnapshotWatcher {
             // has stopped running, and neither shows up anywhere else.
             GradusLog.snapshot.warning(
                 "snapshot at \(path.path) did not decode as SnapshotPayload (\(data.count) bytes); "
-                    + "expected occasionally as a write race, persistent means a contract mismatch")
+                    + "expected occasionally as a write race, persistent means a contract mismatch"
+            )
             return
         }
         onUpdate(payload)

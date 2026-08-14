@@ -41,7 +41,7 @@ private func sampleProviders() -> [ProviderStatus] {
                 ProviderWindow(
                     id: "weekly", percentLeft: 62, resetISO: "2026-08-08T05:00:00-04:00", windowHours: 168,
                     paceDelta: -0.05
-                ),
+                )
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-30)),
@@ -58,7 +58,7 @@ private func sampleProviders() -> [ProviderStatus] {
             observedAt: nil,
             snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
             publishedAt: fixedNow
-        ),
+        )
     ]
 }
 

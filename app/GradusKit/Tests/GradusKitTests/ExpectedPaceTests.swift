@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 @Test func expectedRemainingUsesRemainingPercentageAndFractionalPace() {
     #expect(expectedRemaining(percentLeft: 72, paceDelta: 0.12) == 60)

@@ -36,8 +36,7 @@ enum RequiredICloudMigration {
         }
     ) -> RequiredICloudMode {
         let mode: RequiredICloudMode = if let stored = defaults.object(forKey: modeKey) as? String,
-                                          let storedMode = RequiredICloudMode(rawValue: stored)
-        {
+                                          let storedMode = RequiredICloudMode(rawValue: stored) {
             // The new authority wins if both generations are present. Re-write
             // its version before removing the legacy value so a partial write
             // remains safely re-runnable.
@@ -719,11 +718,9 @@ public final class DashboardViewModel: ObservableObject {
 
         var failed = await !sync()
         if let subscriptionManager {
-            do { try await subscriptionManager.subscribeToZoneChanges() }
-            catch { failed = true }
+            do { try await subscriptionManager.subscribeToZoneChanges() } catch { failed = true }
             if notificationsEnabled {
-                do { try await subscriptionManager.subscribeToWarnings() }
-                catch { failed = true }
+                do { try await subscriptionManager.subscribeToWarnings() } catch { failed = true }
             }
         }
         liveLifecycleNeedsRetry = failed

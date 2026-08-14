@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 private func makeTempStore() -> FileLocalCacheStore {
     let directory = FileManager.default.temporaryDirectory

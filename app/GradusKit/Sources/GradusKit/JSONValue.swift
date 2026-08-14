@@ -27,20 +27,24 @@ public enum JSONValue: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
-        case .string(let value): try container.encode(value)
-        case .double(let value): try container.encode(value)
-        case .bool(let value): try container.encode(value)
+        case let .string(value): try container.encode(value)
+        case let .double(value): try container.encode(value)
+        case let .bool(value): try container.encode(value)
         case .null: try container.encodeNil()
         }
     }
 
     public var doubleValue: Double? {
-        if case .double(let value) = self { return value }
+        if case let .double(value) = self {
+            return value
+        }
         return nil
     }
 
     public var stringValue: String? {
-        if case .string(let value) = self { return value }
+        if case let .string(value) = self {
+            return value
+        }
         return nil
     }
 }

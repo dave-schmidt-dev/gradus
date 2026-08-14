@@ -55,13 +55,16 @@ struct AppIconTests {
         let rep = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         image.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
         NSGraphicsContext.restoreGraphicsState()
 
-        func alpha(_ x: Int, _ y: Int) -> CGFloat { rep.colorAt(x: x, y: y)?.alphaComponent ?? -1 }
+        func alpha(_ x: Int, _ y: Int) -> CGFloat {
+            rep.colorAt(x: x, y: y)?.alphaComponent ?? -1
+        }
 
         // Outside the rounded shape: must be cut away, not painted.
         #expect(alpha(0, 0) == 0, "corner is opaque -- full-bleed iOS artwork, not a macOS icon")

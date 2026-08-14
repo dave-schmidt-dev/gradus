@@ -45,7 +45,8 @@ struct ListRow: View {
             icon: icon,
             label: label,
             accessory: .toggle(isOn),
-            accessibilityIdentifier: accessibilityIdentifier)
+            accessibilityIdentifier: accessibilityIdentifier
+        )
     }
 
     /// A row with a trailing chevron, for navigation rows.
@@ -72,16 +73,17 @@ struct ListRow: View {
     @ViewBuilder
     private var trailingAccessory: some View {
         switch accessory {
-        case .toggle(let isOn):
+        case let .toggle(isOn):
             Toggle(isOn: isOn) { EmptyView() }
                 .labelsHidden()
                 .accessibilityLabel(label)
                 .accessibilityIdentifier(
-                    accessibilityIdentifier ?? accessibilityIdentifier(for: label))
+                    accessibilityIdentifier ?? accessibilityIdentifier(for: label)
+                )
         case .chevron:
             Icon.chevronRight
                 .foregroundStyle(.secondary)
-        case .value(let text):
+        case let .value(text):
             Text(text)
                 .foregroundStyle(.secondary)
         }

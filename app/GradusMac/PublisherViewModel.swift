@@ -24,8 +24,7 @@ enum RequiredICloudMigration {
         }
     ) -> RequiredICloudMode {
         let mode: RequiredICloudMode = if let stored = defaults.object(forKey: modeKey) as? String,
-                                          let storedMode = RequiredICloudMode(rawValue: stored)
-        {
+                                          let storedMode = RequiredICloudMode(rawValue: stored) {
             storedMode
         } else if defaults.object(forKey: legacyKey) == nil {
             .confirmed

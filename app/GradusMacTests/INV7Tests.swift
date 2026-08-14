@@ -11,12 +11,13 @@ import Testing
 private func publisherSourceFiles() -> [URL] {
     let thisFile = URL(fileURLWithPath: #filePath)
     let gradusMacDir = thisFile
-        .deletingLastPathComponent()  // GradusMacTests/
-        .deletingLastPathComponent()  // app/
+        .deletingLastPathComponent() // GradusMacTests/
+        .deletingLastPathComponent() // app/
         .appendingPathComponent("GradusMac")
     guard
         let enumerator = FileManager.default.enumerator(
-            at: gradusMacDir, includingPropertiesForKeys: nil)
+            at: gradusMacDir, includingPropertiesForKeys: nil
+        )
     else { return [] }
     return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
 }
@@ -36,7 +37,7 @@ private let filenameTerms: Set<String> = [".env", ".ssh", ".netrc"]
 private func referencesForbiddenTerm(_ term: String, in lowered: String) -> Bool {
     guard filenameTerms.contains(term) else { return lowered.contains(term) }
     var searchStart = lowered.startIndex
-    while let range = lowered.range(of: term, range: searchStart..<lowered.endIndex) {
+    while let range = lowered.range(of: term, range: searchStart ..< lowered.endIndex) {
         let next = range.upperBound
         if next == lowered.endIndex || !lowered[next].isLetter {
             return true
@@ -65,7 +66,7 @@ private func strippingLineComments(_ contents: String) -> String {
         .components(separatedBy: .newlines)
         .map { line -> Substring in
             guard let marker = line.range(of: "//") else { return line[...] }
-            return line[line.startIndex..<marker.lowerBound]
+            return line[line.startIndex ..< marker.lowerBound]
         }
         .joined(separator: "\n")
 }
@@ -73,10 +74,10 @@ private func strippingLineComments(_ contents: String) -> String {
 /// The narrowing must not blind the wire it narrows.
 @Test func lineCommentStrippingStillCountsRealCallSites() {
     let source = """
-        // NSHomeDirectory() belongs in exactly one file.
-        let home = URL(fileURLWithPath: NSHomeDirectory())  // and NSHomeDirectory() again
-        /// Doc comment mentioning NSHomeDirectory() as well.
-        """
+    // NSHomeDirectory() belongs in exactly one file.
+    let home = URL(fileURLWithPath: NSHomeDirectory())  // and NSHomeDirectory() again
+    /// Doc comment mentioning NSHomeDirectory() as well.
+    """
     let stripped = strippingLineComments(source)
     #expect(stripped.components(separatedBy: "NSHomeDirectory()").count - 1 == 1)
     // The real call survived intact, not just the count.
@@ -86,7 +87,7 @@ private func strippingLineComments(_ contents: String) -> String {
 @Test func publisherSourceReferencesNoCredentialPath() throws {
     let forbidden = [
         ".env", "credentials", "secret", "password", "api_key", "apikey",
-        "keychain", ".ssh", "id_rsa", ".netrc", "bws",
+        "keychain", ".ssh", "id_rsa", ".netrc", "bws"
     ]
     let files = publisherSourceFiles()
     #expect(!files.isEmpty, "expected to find GradusMac source files to scan")
@@ -128,7 +129,7 @@ private func strippingLineComments(_ contents: String) -> String {
     let files = publisherSourceFiles()
     var occurrences: [(file: String, count: Int)] = []
     for file in files {
-        let contents = strippingLineComments(try String(contentsOf: file, encoding: .utf8))
+        let contents = try strippingLineComments(String(contentsOf: file, encoding: .utf8))
         let count = contents.components(separatedBy: "NSHomeDirectory()").count - 1
         if count > 0 {
             occurrences.append((file.lastPathComponent, count))

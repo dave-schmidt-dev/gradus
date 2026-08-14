@@ -5,10 +5,10 @@ let package = Package(
     name: "GradusKit",
     platforms: [
         .macOS(.v13),
-        .iOS(.v16),
+        .iOS(.v16)
     ],
     products: [
-        .library(name: "GradusKit", targets: ["GradusKit"]),
+        .library(name: "GradusKit", targets: ["GradusKit"])
     ],
     targets: [
         .target(
@@ -22,8 +22,8 @@ let package = Package(
             resources: [
                 .copy("Fixtures/golden-v2-snapshot.json"),
                 .copy("Fixtures/signal-levels.json"),
-                .copy("Fixtures/percent-format.json"),
+                .copy("Fixtures/percent-format.json")
             ]
-        ),
+        )
     ]
 )

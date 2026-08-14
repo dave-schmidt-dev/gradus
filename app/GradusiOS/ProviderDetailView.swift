@@ -49,11 +49,11 @@ struct ProviderDetailView: View {
                 ForEach(Array(provider.windows.enumerated()), id: \.offset) { _, window in
                     windowCard(window)
                 }
-                if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+                if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
                     errorText
                 }
             }
-        } else if !provider.ok && !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+        } else if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
             errorText
         } else if IOSProviderRetryAccessibility.isCarriedFailure(provider) {
             // A nonempty window list is retained transient data. The real
@@ -118,11 +118,11 @@ struct ProviderDetailView: View {
     private var observedFooterText: String {
         switch freshness(observedAt: provider.observedAt, now: now) {
         case .fresh:
-            return "observed: just now"
-        case .stale(let ageDisplay):
-            return "observed: \(ageDisplay) ago"
+            "observed: just now"
+        case let .stale(ageDisplay):
+            "observed: \(ageDisplay) ago"
         case .unknown:
-            return "observed: unknown"
+            "observed: unknown"
         }
     }
 }

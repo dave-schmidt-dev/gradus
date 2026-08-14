@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 // The shared truth table is the contract; these tests are its Swift half.
 // `tests/test_ui.py::SignalLevelTruthTableTest` asserts the same rows against
@@ -16,8 +15,12 @@ private struct TruthTableCase {
     /// `null` -> nil, `"nan"` -> NaN, number -> itself. JSON has no non-finite
     /// literal, hence the string sentinel.
     static func number(_ raw: Any?) -> Double? {
-        if raw == nil || raw is NSNull { return nil }
-        if let text = raw as? String, text == "nan" { return Double.nan }
+        if raw == nil || raw is NSNull {
+            return nil
+        }
+        if let text = raw as? String, text == "nan" {
+            return Double.nan
+        }
         return (raw as? NSNumber)?.doubleValue
     }
 }
@@ -30,10 +33,10 @@ private func loadTruthTable() throws -> [TruthTableCase] {
     let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
     let cases = try #require(root?["cases"] as? [[String: Any]])
     return try cases.map { row in
-        TruthTableCase(
+        try TruthTableCase(
             percentLeft: TruthTableCase.number(row["percent_left"]),
             paceDelta: TruthTableCase.number(row["pace_delta"]),
-            level: try #require(SignalLevel(rawValue: row["level"] as? String ?? "")),
+            level: #require(SignalLevel(rawValue: row["level"] as? String ?? "")),
             why: row["why"] as? String ?? ""
         )
     }
@@ -76,7 +79,9 @@ private func loadTruthTable() throws -> [TruthTableCase] {
     var checkedWithoutPace = 0
     for row in try loadTruthTable() {
         guard let percentLeft = row.percentLeft else { continue }
-        if row.paceDelta == nil || !(row.paceDelta ?? 0).isFinite { checkedWithoutPace += 1 }
+        if row.paceDelta == nil || !(row.paceDelta ?? 0).isFinite {
+            checkedWithoutPace += 1
+        }
 
         let window = ProviderWindow(
             id: "truth-table", percentLeft: percentLeft, resetISO: nil,
@@ -112,9 +117,11 @@ private func loadTruthTable() throws -> [TruthTableCase] {
     // into the future, which is a data anomaly rather than a state to pin a
     // rule on.
     let calmButNearlyEmpty = ProviderWindow(
-        id: "five_hour", percentLeft: 5, resetISO: nil, windowHours: 5, paceDelta: 0.02)
+        id: "five_hour", percentLeft: 5, resetISO: nil, windowHours: 5, paceDelta: 0.02
+    )
     let fullButBurning = ProviderWindow(
-        id: "weekly", percentLeft: 70, resetISO: nil, windowHours: 168, paceDelta: -0.28)
+        id: "weekly", percentLeft: 70, resetISO: nil, windowHours: 168, paceDelta: -0.28
+    )
 
     #expect(!windowWarns(calmButNearlyEmpty))
     #expect(windowWarns(fullButBurning))

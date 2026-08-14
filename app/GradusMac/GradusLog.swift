@@ -59,22 +59,22 @@ enum GradusLogLevel: Int, Comparable, Sendable {
 
     var osLogType: OSLogType {
         switch self {
-        case .debug: return .debug
-        case .info: return .info
-        case .notice: return .default
-        case .warning: return .error
-        case .error: return .fault
+        case .debug: .debug
+        case .info: .info
+        case .notice: .default
+        case .warning: .error
+        case .error: .fault
         }
     }
 
     /// Fixed width so the file's level column stays aligned and greppable.
     var fileLabel: String {
         switch self {
-        case .debug: return "DEBUG  "
-        case .info: return "INFO   "
-        case .notice: return "NOTICE "
-        case .warning: return "WARNING"
-        case .error: return "ERROR  "
+        case .debug: "DEBUG  "
+        case .info: "INFO   "
+        case .notice: "NOTICE "
+        case .warning: "WARNING"
+        case .error: "ERROR  "
         }
     }
 }
@@ -89,14 +89,28 @@ struct GradusLogger: Sendable {
 
     init(category: String) {
         self.category = category
-        self.logger = Logger(subsystem: GradusLog.subsystem, category: category)
+        logger = Logger(subsystem: GradusLog.subsystem, category: category)
     }
 
-    func debug(_ message: String) { emit(.debug, message) }
-    func info(_ message: String) { emit(.info, message) }
-    func notice(_ message: String) { emit(.notice, message) }
-    func warning(_ message: String) { emit(.warning, message) }
-    func error(_ message: String) { emit(.error, message) }
+    func debug(_ message: String) {
+        emit(.debug, message)
+    }
+
+    func info(_ message: String) {
+        emit(.info, message)
+    }
+
+    func notice(_ message: String) {
+        emit(.notice, message)
+    }
+
+    func warning(_ message: String) {
+        emit(.warning, message)
+    }
+
+    func error(_ message: String) {
+        emit(.error, message)
+    }
 
     private func emit(_ level: GradusLogLevel, _ message: String) {
         // `.public` is explicit and deliberate. os_log redacts interpolated
@@ -131,8 +145,12 @@ final class GradusLogFile: @unchecked Sendable {
     /// GradusDebugLogging -bool YES`) or the `GRADUS_DEBUG_LOGGING` environment
     /// variable for a run from the terminal.
     static var minimumLevel: GradusLogLevel {
-        if ProcessInfo.processInfo.environment["GRADUS_DEBUG_LOGGING"] != nil { return .debug }
-        if UserDefaults.standard.bool(forKey: "GradusDebugLogging") { return .debug }
+        if ProcessInfo.processInfo.environment["GRADUS_DEBUG_LOGGING"] != nil {
+            return .debug
+        }
+        if UserDefaults.standard.bool(forKey: "GradusDebugLogging") {
+            return .debug
+        }
         return .warning
     }
 
@@ -192,7 +210,9 @@ final class GradusLogFile: @unchecked Sendable {
     /// wiring is one `xcodegen generate` away from quietly disappearing while
     /// still looking configured. This cannot be un-wired by regenerating.
     static var isRunningUnderTest: Bool {
-        if NSClassFromString("XCTestCase") != nil { return true }
+        if NSClassFromString("XCTestCase") != nil {
+            return true
+        }
         let environment = ProcessInfo.processInfo.environment
         return environment["XCTestConfigurationFilePath"] != nil
             || environment["XCTestBundlePath"] != nil
@@ -224,7 +244,9 @@ final class GradusLogFile: @unchecked Sendable {
         self.formatter = formatter
     }
 
-    var fileURL: URL { directory.appendingPathComponent("GradusMac.log") }
+    var fileURL: URL {
+        directory.appendingPathComponent("GradusMac.log")
+    }
 
     func append(level: GradusLogLevel, category: String, message: String, at date: Date = Date()) {
         let line = "\(formatter.string(from: date)) \(level.fileLabel) [\(category)] \(message)\n"

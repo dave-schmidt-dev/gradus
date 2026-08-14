@@ -7,12 +7,7 @@ import SwiftUI
 /// sheet; pushed provider detail uses the system navigation bar back action.
 struct MobileNavBar<Trailing: View>: View {
     let title: String
-    let trailing: Trailing
-
-    init(title: String, @ViewBuilder trailing: () -> Trailing) {
-        self.title = title
-        self.trailing = trailing()
-    }
+    @ViewBuilder let trailing: Trailing
 
     var body: some View {
         HStack {

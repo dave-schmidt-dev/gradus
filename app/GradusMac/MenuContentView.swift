@@ -432,7 +432,7 @@ struct MenuUITestFixtureView: View {
                                 id: "weekly", percentLeft: 44,
                                 resetISO: "2026-08-12T09:00:00-04:00", windowHours: 168,
                                 paceDelta: -0.02
-                            ),
+                            )
                         ],
                         data: [:], observedAt: "2026-08-10T12:00:00-04:00"
                     ),
@@ -445,10 +445,10 @@ struct MenuUITestFixtureView: View {
                                 id: "monthly", percentLeft: 0,
                                 resetISO: "2026-08-31T23:59:00-04:00", windowHours: 720,
                                 paceDelta: -0.5
-                            ),
+                            )
                         ],
                         data: [:], observedAt: "2026-08-10T12:00:00-04:00"
-                    ),
+                    )
                 ]
             )
         )

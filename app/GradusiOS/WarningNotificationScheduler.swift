@@ -24,11 +24,15 @@ struct WarningNotificationContent: Equatable {
                 title: String(
                     format: NSLocalizedString(
                         "WARN_PROVIDER_TITLE_FMT", value: "%@ warning",
-                        comment: "Provider-level local warning notification title"),
-                    provider.providerDisplayName),
+                        comment: "Provider-level local warning notification title"
+                    ),
+                    provider.providerDisplayName
+                ),
                 body: NSLocalizedString(
                     "WARN_PROVIDER_BODY", value: "A provider warning was reported. Open Gradus for details.",
-                    comment: "Provider-level local warning notification body"))
+                    comment: "Provider-level local warning notification body"
+                )
+            )
         }
 
         let windowLabel = ProviderWindowLabel.label(for: window.id)
@@ -37,25 +41,36 @@ struct WarningNotificationContent: Equatable {
         return Self(
             title: String(
                 format: NSLocalizedString(
-                    "WARN_TITLE_FMT", value: "%@ %@ warning", comment: "Local warning notification title"),
-                provider.providerDisplayName, windowLabel),
+                    "WARN_TITLE_FMT", value: "%@ %@ warning", comment: "Local warning notification title"
+                ),
+                provider.providerDisplayName, windowLabel
+            ),
             body: String(
                 format: NSLocalizedString(
                     "WARN_BODY_FMT", value: "%@%% remaining, below your %@%% warning threshold.",
-                    comment: "Local warning notification body"),
-                remaining, threshold))
+                    comment: "Local warning notification body"
+                ),
+                remaining, threshold
+            )
+        )
     }
 
     private static func windowOrdering(_ lhs: ProviderWindow, _ rhs: ProviderWindow) -> Bool {
-        if lhs.percentLeft != rhs.percentLeft { return lhs.percentLeft < rhs.percentLeft }
+        if lhs.percentLeft != rhs.percentLeft {
+            return lhs.percentLeft < rhs.percentLeft
+        }
         return lhs.id < rhs.id
     }
 
     private static func percentageText(_ value: Double) -> String {
         guard value.rounded() != value else { return String(Int(value)) }
         var text = String(format: "%.2f", value)
-        while text.last == "0" { text.removeLast() }
-        if text.last == "." { text.removeLast() }
+        while text.last == "0" {
+            text.removeLast()
+        }
+        if text.last == "." {
+            text.removeLast()
+        }
         return text
     }
 }
@@ -72,14 +87,16 @@ public final class LocalWarningNotificationScheduler: WarningNotificationSchedul
 
     public func scheduleWarningNotification(for provider: ProviderStatus, thresholdPercent: Double) {
         guard let notification = WarningNotificationContent.make(
-            for: provider, thresholdPercent: thresholdPercent) else { return }
+            for: provider, thresholdPercent: thresholdPercent
+        ) else { return }
         let content = UNMutableNotificationContent()
         content.title = notification.title
         content.body = notification.body
         content.sound = .default
 
         let request = UNNotificationRequest(
-            identifier: "gradus-warning-\(UUID().uuidString)", content: content, trigger: nil)
+            identifier: "gradus-warning-\(UUID().uuidString)", content: content, trigger: nil
+        )
         center.add(request)
     }
 }

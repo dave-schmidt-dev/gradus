@@ -82,7 +82,9 @@ enum SettingsWindow {
     /// process-lifetime singleton. If the Mac ever holds more than one
     /// `PublisherViewModel`, this cache has to be keyed or dropped.
     static func makeWindow(viewModel: PublisherViewModel) -> NSWindow {
-        if let existing = window { return existing }
+        if let existing = window {
+            return existing
+        }
 
         let controller = NSHostingController(rootView: MacSettingsView(viewModel: viewModel))
         let window = NSWindow(contentViewController: controller)

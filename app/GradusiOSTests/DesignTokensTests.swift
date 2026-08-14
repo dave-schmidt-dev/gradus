@@ -1,9 +1,8 @@
+@testable import GradusiOS
 import GradusKit
 import SwiftUI
 import Testing
 import UIKit
-
-@testable import GradusiOS
 
 // `SignalColor` is now only the SwiftUI rendering of `GradusKit.SignalLevel` --
 // the classification itself is tested against the shared cross-language truth

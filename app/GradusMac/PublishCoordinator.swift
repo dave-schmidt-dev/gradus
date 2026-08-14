@@ -78,7 +78,7 @@ public actor PublishCoordinator: CloudPublisher {
         for status in statuses {
             let hash = Self.contentHash(for: status)
             let previous = state[status.providerName]
-            if status.isWarning && !(previous?.wasWarning ?? false) {
+            if status.isWarning, !(previous?.wasWarning ?? false) {
                 newlyWarning.insert(status.providerName)
             }
             var updated = previous ?? ProviderPublishState()
@@ -86,7 +86,7 @@ public actor PublishCoordinator: CloudPublisher {
             state[status.providerName] = updated
 
             if previous?.lastSavedContentHash == hash {
-                continue  // PM-2: only the timestamp changed, nothing to save.
+                continue // PM-2: only the timestamp changed, nothing to save.
             }
             toSave.append((status, hash))
         }
@@ -95,12 +95,14 @@ public actor PublishCoordinator: CloudPublisher {
         guard !toSave.isEmpty else {
             try writeProducerEvidenceIfConfigured()
             GradusLog.publish.info(
-                "no changes to publish: all \(statuses.count) provider(s) matched their last saved content hash")
+                "no changes to publish: all \(statuses.count) provider(s) matched their last saved content hash"
+            )
             return
         }
         GradusLog.publish.info(
             "publishing \(toSave.count) of \(statuses.count) provider(s); "
-                + "\(statuses.count - toSave.count) suppressed by content hash")
+                + "\(statuses.count - toSave.count) suppressed by content hash"
+        )
 
         let records = try toSave.map { try $0.status.toCKRecord(zoneID: zoneID) }
         var outcome = await database.modifyRecords(toSave: records, savePolicy: .changedKeys)
@@ -120,8 +122,9 @@ public actor PublishCoordinator: CloudPublisher {
                 // succeeded. This is the gap RELEASE_CHECKLIST step 3 calls
                 // out — "a failed one is still invisible".
                 GradusLog.publish.warning(
-                    "save failed for \(status.providerName): \(Self.describe(outcome.results[recordID]))")
-                continue  // Well-defined state: leave prior lastSavedContentHash/publishedAt untouched.
+                    "save failed for \(status.providerName): \(Self.describe(outcome.results[recordID]))"
+                )
+                continue // Well-defined state: leave prior lastSavedContentHash/publishedAt untouched.
             }
             var updated = state[status.providerName] ?? ProviderPublishState()
             updated.lastSavedContentHash = hash
@@ -132,7 +135,8 @@ public actor PublishCoordinator: CloudPublisher {
             // Successful records retain their committed state, while the
             // caller receives a sanitized aggregate signal suitable for UI.
             GradusLog.publish.error(
-                "publish incomplete: \(failedRecordCount) of \(toSave.count) record(s) failed to save")
+                "publish incomplete: \(failedRecordCount) of \(toSave.count) record(s) failed to save"
+            )
             throw PublishCoordinatorError.recordFailures(failedRecordCount)
         }
         try writeProducerEvidenceIfConfigured()
@@ -198,7 +202,7 @@ public actor PublishCoordinator: CloudPublisher {
     /// of the same `userInfo` and can carry server-supplied text.
     static func describe(_ result: Result<CKRecord, Error>?) -> String {
         guard let result else { return "no result returned for this record" }
-        guard case .failure(let error) = result else { return "success" }
+        guard case let .failure(error) = result else { return "success" }
         guard let ckError = error as? CKError else {
             let nsError = error as NSError
             return "\(type(of: error)) (code \(nsError.code), domain \(nsError.domain))"
@@ -220,42 +224,42 @@ public actor PublishCoordinator: CloudPublisher {
     /// number: honest, and one line short of ideal, rather than wrong.
     private static func name(for code: CKError.Code) -> String {
         switch code {
-        case .internalError: return "internalError"
-        case .partialFailure: return "partialFailure"
-        case .networkUnavailable: return "networkUnavailable"
-        case .networkFailure: return "networkFailure"
-        case .badContainer: return "badContainer"
-        case .serviceUnavailable: return "serviceUnavailable"
-        case .requestRateLimited: return "requestRateLimited"
-        case .missingEntitlement: return "missingEntitlement"
-        case .notAuthenticated: return "notAuthenticated"
-        case .permissionFailure: return "permissionFailure"
-        case .unknownItem: return "unknownItem"
-        case .invalidArguments: return "invalidArguments"
-        case .serverRecordChanged: return "serverRecordChanged"
-        case .serverRejectedRequest: return "serverRejectedRequest"
-        case .assetFileNotFound: return "assetFileNotFound"
-        case .assetFileModified: return "assetFileModified"
-        case .incompatibleVersion: return "incompatibleVersion"
-        case .constraintViolation: return "constraintViolation"
-        case .operationCancelled: return "operationCancelled"
-        case .changeTokenExpired: return "changeTokenExpired"
-        case .batchRequestFailed: return "batchRequestFailed"
-        case .zoneBusy: return "zoneBusy"
-        case .badDatabase: return "badDatabase"
-        case .quotaExceeded: return "quotaExceeded"
-        case .zoneNotFound: return "zoneNotFound"
-        case .limitExceeded: return "limitExceeded"
-        case .userDeletedZone: return "userDeletedZone"
-        case .tooManyParticipants: return "tooManyParticipants"
-        case .alreadyShared: return "alreadyShared"
-        case .referenceViolation: return "referenceViolation"
-        case .managedAccountRestricted: return "managedAccountRestricted"
-        case .participantMayNeedVerification: return "participantMayNeedVerification"
-        case .serverResponseLost: return "serverResponseLost"
-        case .assetNotAvailable: return "assetNotAvailable"
-        case .accountTemporarilyUnavailable: return "accountTemporarilyUnavailable"
-        default: return "unmappedCKErrorCode"
+        case .internalError: "internalError"
+        case .partialFailure: "partialFailure"
+        case .networkUnavailable: "networkUnavailable"
+        case .networkFailure: "networkFailure"
+        case .badContainer: "badContainer"
+        case .serviceUnavailable: "serviceUnavailable"
+        case .requestRateLimited: "requestRateLimited"
+        case .missingEntitlement: "missingEntitlement"
+        case .notAuthenticated: "notAuthenticated"
+        case .permissionFailure: "permissionFailure"
+        case .unknownItem: "unknownItem"
+        case .invalidArguments: "invalidArguments"
+        case .serverRecordChanged: "serverRecordChanged"
+        case .serverRejectedRequest: "serverRejectedRequest"
+        case .assetFileNotFound: "assetFileNotFound"
+        case .assetFileModified: "assetFileModified"
+        case .incompatibleVersion: "incompatibleVersion"
+        case .constraintViolation: "constraintViolation"
+        case .operationCancelled: "operationCancelled"
+        case .changeTokenExpired: "changeTokenExpired"
+        case .batchRequestFailed: "batchRequestFailed"
+        case .zoneBusy: "zoneBusy"
+        case .badDatabase: "badDatabase"
+        case .quotaExceeded: "quotaExceeded"
+        case .zoneNotFound: "zoneNotFound"
+        case .limitExceeded: "limitExceeded"
+        case .userDeletedZone: "userDeletedZone"
+        case .tooManyParticipants: "tooManyParticipants"
+        case .alreadyShared: "alreadyShared"
+        case .referenceViolation: "referenceViolation"
+        case .managedAccountRestricted: "managedAccountRestricted"
+        case .participantMayNeedVerification: "participantMayNeedVerification"
+        case .serverResponseLost: "serverResponseLost"
+        case .assetNotAvailable: "assetNotAvailable"
+        case .accountTemporarilyUnavailable: "accountTemporarilyUnavailable"
+        default: "unmappedCKErrorCode"
         }
     }
 
@@ -266,8 +270,8 @@ public actor PublishCoordinator: CloudPublisher {
         _ outcome: RecordSaveOutcome, toSave: [(status: ProviderStatus, hash: String)]
     ) async -> RecordSaveOutcome {
         let conflicted = toSave.filter { entry in
-            guard case .failure(let error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)],
-                let ckError = error as? CKError
+            guard case let .failure(error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)],
+                  let ckError = error as? CKError
             else { return false }
             return ckError.code == .serverRecordChanged
         }
@@ -277,7 +281,7 @@ public actor PublishCoordinator: CloudPublisher {
         for entry in conflicted {
             let recordID = CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)
             guard let serverRecord = try? await database.fetchRecord(recordID),
-                let freshRecord = try? entry.status.toCKRecord(zoneID: zoneID)
+                  let freshRecord = try? entry.status.toCKRecord(zoneID: zoneID)
             else { continue }
             for key in freshRecord.allKeys() {
                 serverRecord[key] = freshRecord[key]
@@ -303,8 +307,8 @@ public actor PublishCoordinator: CloudPublisher {
         guard attempt <= Self.maxBackoffAttempts else { return outcome }
 
         let retryable = toSave.filter { entry in
-            guard case .failure(let error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)],
-                let ckError = error as? CKError
+            guard case let .failure(error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)],
+                  let ckError = error as? CKError
             else { return false }
             return ckError.retryAfterSeconds != nil
                 || ckError.code == .zoneBusy || ckError.code == .limitExceeded
@@ -312,11 +316,11 @@ public actor PublishCoordinator: CloudPublisher {
         guard !retryable.isEmpty else { return outcome }
 
         let retryAfterSeconds = retryable.lazy.compactMap { entry -> Double? in
-                guard case .failure(let error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: self.zoneID)],
-                    let ckError = error as? CKError
-                else { return nil }
-                return ckError.retryAfterSeconds
-            }
+            guard case let .failure(error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: self.zoneID)],
+                  let ckError = error as? CKError
+            else { return nil }
+            return ckError.retryAfterSeconds
+        }
         let delaySeconds = Self.retryDelaySeconds(retryAfter: Array(retryAfterSeconds), attempt: attempt)
         try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
 
@@ -417,12 +421,12 @@ private let snapshotDataAllowedKeys: Set<String> = [
     "billing_cycle_end",
     "billing_cycle_end_iso",
     "premium_percent_left",
-    "premium_reset",
+    "premium_reset"
 ]
 
-private let snapshotDataMaxStringBytes = 4_096
-private let snapshotDataMaxAggregateBytes = 32_768
-private let snapshotErrorMaxBytes = 4_096
+private let snapshotDataMaxStringBytes = 4096
+private let snapshotDataMaxAggregateBytes = 32768
+private let snapshotErrorMaxBytes = 4096
 
 func validatedSnapshotData(_ data: [String: JSONValue]) throws -> [String: JSONValue] {
     for (key, value) in data {
@@ -430,11 +434,11 @@ func validatedSnapshotData(_ data: [String: JSONValue]) throws -> [String: JSONV
             throw SnapshotDataValidationError.unsupportedKey(key)
         }
         switch value {
-        case .string(let string):
+        case let .string(string):
             guard string.utf8.count <= snapshotDataMaxStringBytes else {
                 throw SnapshotDataValidationError.valueTooLarge(key)
             }
-        case .double(let number):
+        case let .double(number):
             guard number.isFinite else {
                 throw SnapshotDataValidationError.nonFiniteNumber(key)
             }
@@ -459,13 +463,13 @@ func makeProviderStatus(
     if let error = entry.error, error.utf8.count > snapshotErrorMaxBytes {
         throw SnapshotDataValidationError.errorMessageTooLarge
     }
-    return ProviderStatus(
+    return try ProviderStatus(
         providerName: entry.name,
         providerDisplayName: entry.name,
         ok: entry.ok,
         errorMessage: entry.error,
         windows: entry.windows,
-        data: try validatedSnapshotData(entry.data),
+        data: validatedSnapshotData(entry.data),
         observedAt: entry.observedAt,
         snapshotUpdatedAt: snapshotUpdatedAt,
         publishedAt: publishedAt,

@@ -46,13 +46,15 @@ func feasibleColumnStops(
         scaledFixedColumnWidth: scaledFixedColumnWidth,
         cardPadding: cardPadding,
         cardGap: cardGap,
-        minimumBarWidth: minimumBarWidth)
+        minimumBarWidth: minimumBarWidth
+    )
     let oneColumnBarWidth = cardWidth(
         containerWidth: containerWidth,
         columns: 1,
-        cardGap: cardGap)
+        cardGap: cardGap
+    )
         - cardPadding * 2
         - scaledFixedColumnWidth
     guard oneColumnBarWidth >= minimumBarWidth else { return [] }
-    return Array(1...largestColumnCount)
+    return Array(1 ... largestColumnCount)
 }

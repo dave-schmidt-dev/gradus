@@ -1,9 +1,8 @@
+@testable import GradusiOS
 import GradusKit
 import SnapshotTesting
 import SwiftUI
 import Testing
-
-@testable import GradusiOS
 
 // P4/T4.2 gate: `ProviderDetailView` renders every window in
 // `provider.windows`, not just the worst one -- so this needs a
@@ -14,14 +13,14 @@ import Testing
 
 private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 
-// Opt in only while intentionally refreshing the carried-failure baseline:
-// OTHER_SWIFT_FLAGS='$(inherited) -D PROVIDER_DETAIL_SNAPSHOT_RECORD'
+/// Opt in only while intentionally refreshing the carried-failure baseline:
+/// OTHER_SWIFT_FLAGS='$(inherited) -D PROVIDER_DETAIL_SNAPSHOT_RECORD'
 private let providerDetailSnapshotRecording: SnapshotTestingConfiguration.Record = {
-#if PROVIDER_DETAIL_SNAPSHOT_RECORD
-    return .all
-#else
-    return .never
-#endif
+    #if PROVIDER_DETAIL_SNAPSHOT_RECORD
+        return .all
+    #else
+        return .never
+    #endif
 }()
 
 private func multiWindowProvider() -> ProviderStatus {
@@ -33,13 +32,16 @@ private func multiWindowProvider() -> ProviderStatus {
         windows: [
             ProviderWindow(
                 id: "five_hour", percentLeft: 82, resetISO: "2026-08-03T01:00:00-04:00", windowHours: 5,
-                paceDelta: 0.02),
+                paceDelta: 0.02
+            ),
             ProviderWindow(
                 id: "weekly", percentLeft: 47, resetISO: "2026-08-08T05:00:00-04:00", windowHours: 168,
-                paceDelta: -0.08),
+                paceDelta: -0.08
+            ),
             ProviderWindow(
                 id: "monthly", percentLeft: 15, resetISO: "2026-08-30T05:00:00-04:00", windowHours: 720,
-                paceDelta: -0.15),
+                paceDelta: -0.15
+            )
         ],
         data: [:],
         observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-30)),
@@ -57,7 +59,8 @@ private func erroredProvider() -> ProviderStatus {
         windows: [
             ProviderWindow(
                 id: "five_hour", percentLeft: 62, resetISO: "2026-08-03T01:00:00-04:00",
-                windowHours: 5, paceDelta: -0.05),
+                windowHours: 5, paceDelta: -0.05
+            )
         ],
         data: [:],
         observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-600)),
@@ -71,7 +74,8 @@ private func erroredProvider() -> ProviderStatus {
     let view = ProviderDetailView(provider: multiWindowProvider(), now: fixedNow)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .light)))
+        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .light))
+    )
 }
 
 @MainActor
@@ -79,7 +83,8 @@ private func erroredProvider() -> ProviderStatus {
     let view = ProviderDetailView(provider: multiWindowProvider(), now: fixedNow)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .dark)))
+        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .dark))
+    )
 }
 
 @MainActor
@@ -88,5 +93,6 @@ private func erroredProvider() -> ProviderStatus {
     assertSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 390, height: 360), traits: UITraitCollection(userInterfaceStyle: .light)),
-        record: providerDetailSnapshotRecording)
+        record: providerDetailSnapshotRecording
+    )
 }

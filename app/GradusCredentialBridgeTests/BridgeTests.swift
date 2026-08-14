@@ -1,6 +1,6 @@
 import Foundation
-import XCTest
 @testable import GradusCredentialBridgeCore
+import XCTest
 
 final class BridgeTests: XCTestCase {
     func testParserReadsOnlyStructuredCookieFields() throws {
@@ -26,7 +26,7 @@ final class BridgeTests: XCTestCase {
             ("opencode.ai", "auth", "opencode-auth"),
             ("console.mistral.ai", "ory_session_fixture", "mistral-session"),
             ("console.mistral.ai", "csrftoken", "mistral-csrf"),
-            ("evilclaude.ai", "sessionKey", "must-not-leak"),
+            ("evilclaude.ai", "sessionKey", "must-not-leak")
         ]).write(to: source)
 
         try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
@@ -102,11 +102,18 @@ final class BridgeTests: XCTestCase {
         return file
     }
 
-    private func littleEndian(_ value: Int) -> Data { littleEndian(UInt32(value)) }
+    private func littleEndian(_ value: Int) -> Data {
+        littleEndian(UInt32(value))
+    }
+
     private func littleEndian(_ value: UInt32) -> Data {
         withUnsafeBytes(of: value.littleEndian) { Data($0) }
     }
-    private func bigEndian(_ value: Int) -> Data { bigEndian(UInt32(value)) }
+
+    private func bigEndian(_ value: Int) -> Data {
+        bigEndian(UInt32(value))
+    }
+
     private func bigEndian(_ value: UInt32) -> Data {
         withUnsafeBytes(of: value.bigEndian) { Data($0) }
     }

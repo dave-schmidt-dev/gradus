@@ -1,13 +1,12 @@
 import GradusKit
+@testable import GradusMac
 import Testing
 
-@testable import GradusMac
-
-@Test func macMarkerFractionMatchesSharedExpectedRemaining() {
+@Test func macMarkerFractionMatchesSharedExpectedRemaining() throws {
     let percentLeft = 62.0
     let paceDelta = -0.05
 
-    let expectedFraction = try! #require(
+    let expectedFraction = try #require(
         expectedRemaining(percentLeft: percentLeft, paceDelta: paceDelta).map { $0 / 100 }
     )
 

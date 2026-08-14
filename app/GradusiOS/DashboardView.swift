@@ -30,7 +30,7 @@ struct DashboardView: View {
     /// Test-only initial state for the explicit permission-requesting UI.
     /// Production callers use the default and derive this state from a user
     /// interaction with Warning alerts.
-    let initialWarningAlertPermissionRequestPending: Bool
+    let initialWarningAlertsPending: Bool
 
     init(
         viewModel: DashboardViewModel,
@@ -38,14 +38,14 @@ struct DashboardView: View {
         onExploreSample: @escaping () -> Void = {},
         onRetryICloud: @escaping () -> Void = {},
         isSampleEntryInProgress: Bool = false,
-        initialWarningAlertPermissionRequestPending: Bool = false
+        initialWarningAlertsPending: Bool = false
     ) {
         self.viewModel = viewModel
         self.now = now
         self.onExploreSample = onExploreSample
         self.onRetryICloud = onRetryICloud
         self.isSampleEntryInProgress = isSampleEntryInProgress
-        self.initialWarningAlertPermissionRequestPending = initialWarningAlertPermissionRequestPending
+        self.initialWarningAlertsPending = initialWarningAlertsPending
     }
 
     var body: some View {
@@ -56,7 +56,7 @@ struct DashboardView: View {
                 onExploreSample: onExploreSample,
                 onRetryICloud: onRetryICloud,
                 isSampleEntryInProgress: isSampleEntryInProgress,
-                initialWarningAlertPermissionRequestPending: initialWarningAlertPermissionRequestPending
+                initialWarningAlertsPending: initialWarningAlertsPending
             )
         }
     }
@@ -131,7 +131,7 @@ struct DashboardContent: View {
     let onExitSample: () -> Void
     let onResetSample: () -> Void
     let isSampleEntryInProgress: Bool
-    let initialWarningAlertPermissionRequestPending: Bool
+    let initialWarningAlertsPending: Bool
 
     // The grid must resolve its column count before the child WindowRows are
     // installed. Keep the same compile-time style mapping as WindowRow here;
@@ -158,7 +158,7 @@ struct DashboardContent: View {
         onExitSample: @escaping () -> Void = {},
         onResetSample: @escaping () -> Void = {},
         isSampleEntryInProgress: Bool = false,
-        initialWarningAlertPermissionRequestPending: Bool = false
+        initialWarningAlertsPending: Bool = false
     ) {
         self.viewModel = viewModel
         self.now = now
@@ -170,7 +170,7 @@ struct DashboardContent: View {
         self.onExitSample = onExitSample
         self.onResetSample = onResetSample
         self.isSampleEntryInProgress = isSampleEntryInProgress
-        self.initialWarningAlertPermissionRequestPending = initialWarningAlertPermissionRequestPending
+        self.initialWarningAlertsPending = initialWarningAlertsPending
     }
 
     var layout: DashboardLayout {
@@ -223,7 +223,7 @@ struct DashboardContent: View {
                 onExitSample: onExitSample,
                 onResetSample: onResetSample,
                 isSampleEntryInProgress: isSampleEntryInProgress,
-                initialWarningAlertPermissionRequestPending: initialWarningAlertPermissionRequestPending
+                initialWarningAlertsPending: initialWarningAlertsPending
             )
         }
     }
@@ -365,8 +365,7 @@ struct DashboardContent: View {
     ) -> Int {
         let metrics = density.metrics
         let fixedColumnWidth: CGFloat = if scaledFixedColumnWidth(for: density, showsReset: true)
-            > metrics.fixedColumnWidth(showsReset: true)
-        {
+            > metrics.fixedColumnWidth(showsReset: true) {
             scaledFixedColumnWidth(for: density, showsReset: false)
         } else {
             max(

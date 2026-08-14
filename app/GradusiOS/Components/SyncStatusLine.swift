@@ -35,13 +35,13 @@ struct SyncStatusLine: View {
     var renderedText: String? {
         switch (publishedAt, source?.computerName) {
         case let (publishedAt?, computerName?):
-            return "synced \(ageLabel(since: publishedAt, now: now)) ago · \(computerName)"
+            "synced \(ageLabel(since: publishedAt, now: now)) ago · \(computerName)"
         case let (publishedAt?, nil):
-            return "synced \(ageLabel(since: publishedAt, now: now)) ago"
+            "synced \(ageLabel(since: publishedAt, now: now)) ago"
         case let (nil, computerName?):
-            return computerName
+            computerName
         case (nil, nil):
-            return nil
+            nil
         }
     }
 }

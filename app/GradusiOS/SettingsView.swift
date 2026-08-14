@@ -23,7 +23,7 @@ struct SettingsView: View {
     let isSampleEntryInProgress: Bool
     /// Only supplied by the UI-test launch fixture. Normal launches start
     /// false and enter this state only after the user enables Warning alerts.
-    let initialWarningAlertPermissionRequestPending: Bool
+    let initialWarningAlertsPending: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var warningAlertPermissionRequestPending = false
@@ -35,7 +35,7 @@ struct SettingsView: View {
         onExitSample: @escaping () -> Void = {},
         onResetSample: @escaping () -> Void = {},
         isSampleEntryInProgress: Bool = false,
-        initialWarningAlertPermissionRequestPending: Bool = false
+        initialWarningAlertsPending: Bool = false
     ) {
         self.dashboardViewModel = dashboardViewModel
         self.isSampleMode = isSampleMode
@@ -43,9 +43,9 @@ struct SettingsView: View {
         self.onExitSample = onExitSample
         self.onResetSample = onResetSample
         self.isSampleEntryInProgress = isSampleEntryInProgress
-        self.initialWarningAlertPermissionRequestPending = initialWarningAlertPermissionRequestPending
+        self.initialWarningAlertsPending = initialWarningAlertsPending
         _warningAlertPermissionRequestPending = State(
-            initialValue: initialWarningAlertPermissionRequestPending
+            initialValue: initialWarningAlertsPending
         )
     }
 
@@ -63,8 +63,7 @@ struct SettingsView: View {
             set: { newValue in
                 guard newValue != dashboardViewModel.notificationsEnabled else { return }
                 if newValue,
-                   dashboardViewModel.systemNotificationAuthorization == .notDetermined
-                {
+                   dashboardViewModel.systemNotificationAuthorization == .notDetermined {
                     warningAlertPermissionRequestPending = true
                 }
                 Task { await dashboardViewModel.setNotificationsEnabled(newValue) }
@@ -307,8 +306,7 @@ struct SettingsView: View {
             return "Waiting for your iOS notification choice. This does not affect iCloud syncing."
         }
         if dashboardViewModel.systemNotificationAuthorization == .denied,
-           dashboardViewModel.notificationsEnabled
-        {
+           dashboardViewModel.notificationsEnabled {
             return "iOS is blocking warning alerts. Open iOS Settings to allow them. This does not affect iCloud syncing."
         }
         return "Notifies you when a provider reaches your warning threshold. Optional and separate from iCloud syncing."

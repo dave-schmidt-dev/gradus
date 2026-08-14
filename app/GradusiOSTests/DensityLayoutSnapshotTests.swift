@@ -39,31 +39,31 @@ func fullProviderSet() -> [ProviderStatus] {
         p("opencode", "OpenCode Go", [
             w("five_hour", 100, 0.30, "2026-07-25T15:05:00-04:00"),
             w("monthly", 7, -0.42, "2026-08-23T21:30:00-04:00"),
-            w("weekly", 61, -0.12, "2026-08-01T20:00:00-04:00"),
+            w("weekly", 61, -0.12, "2026-08-01T20:00:00-04:00")
         ]),
         p("codex", "Codex", [w("weekly", 76, -0.05, "2026-07-28T09:19:00-04:00")]),
         p("codex-spark", "Codex (Spark)", [w("weekly", 90, 0.12, "2026-08-08T05:00:00-04:00")]),
         p("antigravity", "Antigravity", [
             w("five_hour", 100, 0.22, "2026-07-25T15:00:00-04:00"),
-            w("weekly", 80, 0.04, "2026-07-28T14:16:00-04:00"),
+            w("weekly", 80, 0.04, "2026-07-28T14:16:00-04:00")
         ]),
         p("claude", "Claude", [
             w("five_hour", 97, 0.18, "2026-07-25T15:00:00-04:00"),
-            w("weekly", 99, 0.31, "2026-07-28T21:59:00-04:00"),
+            w("weekly", 99, 0.31, "2026-07-28T21:59:00-04:00")
         ]),
         p("copilot", "Copilot", [w("premium", 100, 0.44, "2026-08-31T20:00:00-04:00")]),
         p("vibe", "Vibe", [w("billing_cycle", 100, 0.51, "2026-09-01T00:00:00-04:00")]),
         p("antigravity-claude", "Antigravity (Claude)", [
             w("five_hour", 100, 0.28, "2026-07-25T15:24:00-04:00"),
-            w("weekly", 0, -0.60, "2026-07-25T13:26:00-04:00"),
+            w("weekly", 0, -0.60, "2026-07-25T13:26:00-04:00")
         ]),
         // Cursor's real schema-v2 pool ids are "ap"/"ac", not "api"/"auto" --
         // see ProviderWindowLabel. Using the wrong ids here would have quietly
         // exercised the raw-id fallback instead of the real label mapping.
         p("cursor", "Cursor", [
             w("ap", 0, -0.55, "2026-08-12T07:46:00-04:00"),
-            w("ac", 0, -0.55, "2026-08-12T07:46:00-04:00"),
-        ]),
+            w("ac", 0, -0.55, "2026-08-12T07:46:00-04:00")
+        ])
     ]
 }
 
@@ -81,13 +81,13 @@ private enum DensitySnapshotFixture {
             [
                 UITraitCollection(userInterfaceIdiom: .pad),
                 UITraitCollection(horizontalSizeClass: .regular),
-                UITraitCollection(verticalSizeClass: .regular),
+                UITraitCollection(verticalSizeClass: .regular)
             ]
         case .phone:
             [
                 UITraitCollection(userInterfaceIdiom: .phone),
                 UITraitCollection(horizontalSizeClass: .compact),
-                UITraitCollection(verticalSizeClass: .regular),
+                UITraitCollection(verticalSizeClass: .regular)
             ]
         }
     }
@@ -110,7 +110,7 @@ private func densitySnapshotTraits(
 ) -> UITraitCollection {
     var traits = fixture.traits + [
         UITraitCollection(displayScale: densitySnapshotDisplayScale),
-        UITraitCollection(userInterfaceStyle: style),
+        UITraitCollection(userInterfaceStyle: style)
     ]
     if let contentSizeCategory {
         traits.append(UITraitCollection(preferredContentSizeCategory: contentSizeCategory))
@@ -161,7 +161,7 @@ private func denseDashboard(density: DashboardDensity? = nil) -> some View {
         ("premium", "Monthly"),
         ("billing_cycle", "Monthly"),
         ("ac", "Auto"),
-        ("ap", "API"),
+        ("ap", "API")
     ]
     let windows = expected.map { id, _ in
         ProviderWindow(

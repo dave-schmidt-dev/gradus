@@ -27,13 +27,15 @@ struct UsageBar: View {
     let height: CGFloat
 
     init(window: ProviderWindow, color: Color? = nil, height: CGFloat = 4) {
-        self.percentLeft = window.percentLeft
-        self.paceDelta = window.paceDelta
+        percentLeft = window.percentLeft
+        paceDelta = window.paceDelta
         self.color = color ?? SignalColor.forWindow(window)
         self.height = height
     }
 
-    private var markerHeight: CGFloat { height + Self.markerOverhang * 2 }
+    private var markerHeight: CGFloat {
+        height + Self.markerOverhang * 2
+    }
 
     var body: some View {
         GeometryReader { geometry in

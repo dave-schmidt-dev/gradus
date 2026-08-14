@@ -92,7 +92,7 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
         errorMessage: nil,
         windows: [
             ProviderWindow(id: "five_hour", percentLeft: 20, resetISO: nil, windowHours: 5, paceDelta: nil),
-            ProviderWindow(id: "weekly", percentLeft: 80, resetISO: nil, windowHours: 168, paceDelta: nil),
+            ProviderWindow(id: "weekly", percentLeft: 80, resetISO: nil, windowHours: 168, paceDelta: nil)
         ], data: [:], observedAt: nil, snapshotUpdatedAt: "2026-08-11T12:00:00Z",
         publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true
     )
@@ -108,7 +108,7 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
         providerName: "opencode-go", providerDisplayName: "OpenCode Go", ok: true,
         errorMessage: nil,
         windows: [
-            ProviderWindow(id: "five_hour", percentLeft: 62, resetISO: nil, windowHours: 5, paceDelta: -0.20),
+            ProviderWindow(id: "five_hour", percentLeft: 62, resetISO: nil, windowHours: 5, paceDelta: -0.20)
         ], data: [:], observedAt: nil, snapshotUpdatedAt: "2026-08-11T12:00:00Z",
         publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true
     )
@@ -124,7 +124,7 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
     let cache = tempCache()
     let scheduler = RecordingWarningNotificationScheduler()
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("opencode-go")], deletedProviderNames: [], newToken: nil),
+        .success(changed: [makeStatus("opencode-go")], deletedProviderNames: [], newToken: nil)
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
 
@@ -369,7 +369,7 @@ private func tempCache() -> FileLocalCacheStore {
     let cache = tempCache()
     try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("cursor")], deletedProviderNames: [], newToken: Data([1, 2, 3])),
+        .success(changed: [makeStatus("cursor")], deletedProviderNames: [], newToken: Data([1, 2, 3]))
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
     await viewModel.handleRemoteNotification()
@@ -384,7 +384,7 @@ private func tempCache() -> FileLocalCacheStore {
     let cache = tempCache()
     try? cache.saveCachedStatuses([makeStatus("codex"), makeStatus("cursor")], syncedAt: Date())
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [], deletedProviderNames: ["cursor"], newToken: nil),
+        .success(changed: [], deletedProviderNames: ["cursor"], newToken: nil)
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
     await viewModel.handleRemoteNotification()
@@ -398,7 +398,7 @@ private func tempCache() -> FileLocalCacheStore {
     try? cache.saveChangeToken(Data([9, 9]))
     let fetcher = MockZoneChangesFetcher(outcomes: [
         .changeTokenExpired,
-        .success(changed: [makeStatus("codex")], deletedProviderNames: [], newToken: Data([4, 5])),
+        .success(changed: [makeStatus("codex")], deletedProviderNames: [], newToken: Data([4, 5]))
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
     await viewModel.handleRemoteNotification()
@@ -463,7 +463,7 @@ private func tempCache() -> FileLocalCacheStore {
     let cache = tempCache()
     let scheduler = RecordingWarningNotificationScheduler()
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil)
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
 
@@ -480,7 +480,7 @@ private func tempCache() -> FileLocalCacheStore {
     let warning = makeStatus("codex", isWarning: true)
     let fetcher = MockZoneChangesFetcher(outcomes: [
         .success(changed: [warning], deletedProviderNames: [], newToken: nil),
-        .success(changed: [warning], deletedProviderNames: [], newToken: nil),
+        .success(changed: [warning], deletedProviderNames: [], newToken: nil)
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
 
@@ -498,7 +498,7 @@ private func tempCache() -> FileLocalCacheStore {
     let fetcher = MockZoneChangesFetcher(outcomes: [
         .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
         .success(changed: [makeStatus("codex")], deletedProviderNames: [], newToken: nil),
-        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil)
     ])
     let viewModel = makeViewModel(cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler)
 
@@ -517,7 +517,7 @@ private func tempCache() -> FileLocalCacheStore {
     try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
     let scheduler = RecordingWarningNotificationScheduler()
     let fetcher = MockZoneChangesFetcher(outcomes: [
-        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil),
+        .success(changed: [makeStatus("codex", isWarning: true)], deletedProviderNames: [], newToken: nil)
     ])
     let viewModel = makeViewModel(
         cache: cache, fetcher: fetcher, warningNotificationScheduler: scheduler, userDefaults: defaults

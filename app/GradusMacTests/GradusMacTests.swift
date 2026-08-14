@@ -125,7 +125,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
         "billing_cycle_end": .string("2026-09-01T00:00:00Z"),
         "billing_cycle_end_iso": .string("2026-09-01T00:00:00Z"),
         "premium_percent_left": .double(40),
-        "premium_reset": .string("in 10d"),
+        "premium_reset": .string("in 10d")
     ]
 
     let expectedProducerKeys: Set = [
@@ -152,7 +152,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
         "billing_cycle_end",
         "billing_cycle_end_iso",
         "premium_percent_left",
-        "premium_reset",
+        "premium_reset"
     ]
 
     #expect(data.count == 24)
@@ -182,7 +182,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     }
     let data = Dictionary(uniqueKeysWithValues: [
         "credits", "five_hour_reset", "weekly_reset", "primary_reset",
-        "secondary_reset", "opus_reset", "reset_at", "start_date", "end_date",
+        "secondary_reset", "opus_reset", "reset_at", "start_date", "end_date"
     ].map { ($0, JSONValue.string(String(repeating: "x", count: 4000))) })
     #expect(throws: SnapshotDataValidationError.aggregateTooLarge) {
         try validatedSnapshotData(data)
@@ -282,8 +282,8 @@ private func recordID(_ name: String) -> CKRecord.ID {
     await database.setScriptedResponses([
         [
             recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A"))),
-            recordID("B"): .failure(CKError(.zoneNotFound)),
-        ],
+            recordID("B"): .failure(CKError(.zoneNotFound))
+        ]
     ])
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
     let publishedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -303,7 +303,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     // Next cycle: A unchanged (suppressed), B retried because its hash was
     // never recorded as saved.
     await database.setScriptedResponses([
-        [recordID("B"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("B")))],
+        [recordID("B"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("B")))]
     ])
     try await coordinator.upsert([status(name: "A", publishedAt: publishedAt), status(name: "B", publishedAt: publishedAt)])
     let secondCallRecords = await database.recordsPerCall[1]
@@ -352,7 +352,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     let database = MockCloudDatabase()
     await database.setScriptedResponses([
         [recordID("A"): .failure(CKError(.serverRecordChanged))],
-        [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))],
+        [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))]
     ])
     let serverRecord = CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A"))
     await database.setFetchRecordHandler { _ in serverRecord }
@@ -373,7 +373,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     let database = MockCloudDatabase()
     await database.setScriptedResponses([
         [recordID("A"): .failure(CKError(.zoneBusy, userInfo: [CKErrorRetryAfterKey: 0.01]))],
-        [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))],
+        [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))]
     ])
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
     let publishedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -390,7 +390,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
     let database = MockCloudDatabase()
     await database.setScriptedResponses([
         [recordID("A"): .failure(CKError(.limitExceeded, userInfo: [CKErrorRetryAfterKey: 0.01]))],
-        [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))],
+        [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))]
     ])
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
     let publishedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -406,7 +406,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
 @Test func backoffGivesUpAfterMaxAttemptsAndStaysFailed() async throws {
     let database = MockCloudDatabase()
     await database.setScriptedResponses([
-        [recordID("A"): .failure(CKError(.zoneBusy, userInfo: [CKErrorRetryAfterKey: 0.01]))],
+        [recordID("A"): .failure(CKError(.zoneBusy, userInfo: [CKErrorRetryAfterKey: 0.01]))]
     ]) // every call (script repeats) fails the same way
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
 
@@ -518,7 +518,7 @@ private func recordID(_ name: String) -> CKRecord.ID {
         .serverRejectedRequest,
         userInfo: [
             NSLocalizedDescriptionKey: "rejected: weekly_percent_left=3",
-            CKRecordChangedErrorServerRecordKey: record,
+            CKRecordChangedErrorServerRecordKey: record
         ]
     )
 

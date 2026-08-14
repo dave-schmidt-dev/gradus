@@ -48,7 +48,7 @@ public enum CredentialBridge {
             throw BridgeError.invalidCookieFile
         }
         let pageCount = try data.uint32BE(at: 4)
-        guard pageCount <= 1_024 else { throw BridgeError.invalidCookieFile }
+        guard pageCount <= 1024 else { throw BridgeError.invalidCookieFile }
 
         var offset = 8
         var pageSizes: [Int] = []
@@ -66,16 +66,16 @@ public enum CredentialBridge {
             offset += pageSize
             guard page.count >= 8 else { continue }
             let cookieCount = try page.uint32LE(at: 4)
-            guard cookieCount <= 4_096, 8 + Int(cookieCount) * 4 <= page.count else {
+            guard cookieCount <= 4096, 8 + Int(cookieCount) * 4 <= page.count else {
                 throw BridgeError.invalidCookieFile
             }
             for index in 0 ..< cookieCount {
-                let cookieOffset = Int(try page.uint32LE(at: 8 + Int(index) * 4))
+                let cookieOffset = try Int(page.uint32LE(at: 8 + Int(index) * 4))
                 guard cookieOffset + 48 <= page.count else { continue }
                 let cookie = page.subdata(in: cookieOffset ..< page.count)
-                guard let rawURL = cookie.cString(at: try cookie.uint32LE(at: 16)),
-                      let name = cookie.cString(at: try cookie.uint32LE(at: 20)),
-                      let value = cookie.cString(at: try cookie.uint32LE(at: 28)),
+                guard let rawURL = try cookie.cString(at: cookie.uint32LE(at: 16)),
+                      let name = try cookie.cString(at: cookie.uint32LE(at: 20)),
+                      let value = try cookie.cString(at: cookie.uint32LE(at: 28)),
                       let host = URLComponents(string: rawURL)?.host?.lowercased(),
                       !name.isEmpty,
                       !value.isEmpty
@@ -93,7 +93,7 @@ public enum CredentialBridge {
             "sessionKey": sessionKey,
             "cf_clearance": values["cf_clearance"] ?? "",
             "lastActiveOrg": org,
-            "cached_at": cachedAt,
+            "cached_at": cachedAt
         ]
     }
 
@@ -123,7 +123,7 @@ public enum CredentialBridge {
             "ory_session_name": sessionName,
             "ory_session_value": sessionValue,
             "csrftoken": csrf,
-            "cached_at": cachedAt,
+            "cached_at": cachedAt
         ]
     }
 

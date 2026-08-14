@@ -1,9 +1,9 @@
 import Foundation
 
-/// Pure functions mirroring `gradus/snapshot.py`'s `percent_is_valid`,
-/// `percent_is_depleted`, and `window_warns` (CR-11/INV-3, CV-2). Kept as a
-/// single source of truth consumed by both the Mac publisher and iOS
-/// consumer so the two apps cannot drift into two definitions of "warning".
+// Pure functions mirroring `gradus/snapshot.py`'s `percent_is_valid`,
+// `percent_is_depleted`, and `window_warns` (CR-11/INV-3, CV-2). Kept as a
+// single source of truth consumed by both the Mac publisher and iOS
+// consumer so the two apps cannot drift into two definitions of "warning".
 
 /// A remaining percentage is valid iff it is finite and within 0...100
 /// (INV-3: normalized once, never negative, never over 100).

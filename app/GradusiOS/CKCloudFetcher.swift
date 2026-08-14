@@ -19,7 +19,7 @@ public struct CKCloudFetcher: CloudFetcher {
         let query = CKQuery(recordType: CloudKitConstants.recordType, predicate: NSPredicate(value: true))
         let (matchResults, _) = try await database.records(matching: query, inZoneWith: zoneID)
         return matchResults.compactMap { _, result in
-            guard case .success(let record) = result else { return nil }
+            guard case let .success(record) = result else { return nil }
             return try? ProviderStatus(record: record)
         }
     }

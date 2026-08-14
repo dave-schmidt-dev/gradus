@@ -1,10 +1,9 @@
 import AppKit
 import GradusKit
+@testable import GradusMac
 import SnapshotTesting
 import SwiftUI
 import Testing
-
-@testable import GradusMac
 
 private let fixedNow = ISO8601DateFormatter().date(from: "2026-08-02T20:00:00-04:00")!
 
@@ -24,7 +23,7 @@ private let fixedNow = ISO8601DateFormatter().date(from: "2026-08-02T20:00:00-04
 /// `Toggle`/`Button` controls are covered by the plan's manual
 /// status-item check instead, not this automated gate.
 @MainActor
-private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
+private func snapshotImage(_ view: some View, size: CGSize) -> NSImage {
     let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
     renderer.scale = 1
     guard let image = renderer.nsImage else {
@@ -33,9 +32,9 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
     return image
 }
 
-// T2b.1/T2b.4 gate: XCUITest can't drive a LSUIElement status item, so the
-// provider rows are rendered standalone (fixture data, no CloudKit/file
-// watching) and snapshot-tested instead.
+/// T2b.1/T2b.4 gate: XCUITest can't drive a LSUIElement status item, so the
+/// provider rows are rendered standalone (fixture data, no CloudKit/file
+/// watching) and snapshot-tested instead.
 @MainActor
 @Test func providerListViewRendersFromFixtureData() {
     let viewModel = PublisherViewModel()
@@ -105,7 +104,7 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
                     ],
                     data: [:],
                     observedAt: "2026-08-02T17:55:00Z"
-                ),
+                )
             ]
         )
     )
@@ -192,7 +191,7 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
                 // red: past the -0.25 floor.
                 rampProvider("Burning", percentLeft: 20, paceDelta: -0.35),
                 // red with no pace at all -- percent-only fallback, 19 < 20.
-                rampProvider("Slow Burn", percentLeft: 19, paceDelta: nil),
+                rampProvider("Slow Burn", percentLeft: 19, paceDelta: nil)
             ]
         )
     )
@@ -206,7 +205,8 @@ private func snapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
         uniqueKeysWithValues: providers.compactMap { entry -> (String, SignalLevel)? in
             guard let window = entry.windows.first else { return nil }
             return (entry.name, signalLevel(for: window))
-        })
+        }
+    )
     #expect(levelsByName["Healthy"] == .green)
     #expect(levelsByName["Drifting"] == .yellow)
     #expect(levelsByName["Behind"] == .orange)

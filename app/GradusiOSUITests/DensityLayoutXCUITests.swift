@@ -37,13 +37,16 @@ final class DensityLayoutXCUITests: XCTestCase {
                 windows: [
                     ProviderWindow(
                         id: "five_hour", percentLeft: 100, resetISO: "2026-08-08T05:00:00-04:00",
-                        windowHours: 5, paceDelta: 0.30),
+                        windowHours: 5, paceDelta: 0.30
+                    ),
                     ProviderWindow(
                         id: "weekly", percentLeft: 61, resetISO: "2026-08-08T20:00:00-04:00",
-                        windowHours: 168, paceDelta: -0.12),
+                        windowHours: 168, paceDelta: -0.12
+                    ),
                     ProviderWindow(
                         id: "monthly", percentLeft: 7, resetISO: "2026-08-23T21:30:00-04:00",
-                        windowHours: 720, paceDelta: -0.42),
+                        windowHours: 720, paceDelta: -0.42
+                    )
                 ],
                 data: [:],
                 observedAt: "2026-08-02T19:59:30-04:00",
@@ -58,15 +61,16 @@ final class DensityLayoutXCUITests: XCTestCase {
                 windows: [
                     ProviderWindow(
                         id: "weekly", percentLeft: 76, resetISO: "2026-08-08T09:19:00-04:00",
-                        windowHours: 168, paceDelta: -0.05)
+                        windowHours: 168, paceDelta: -0.05
+                    )
                 ],
                 data: [:],
                 observedAt: "2026-08-02T19:59:30-04:00",
                 snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
                 publishedAt: Date()
-            ),
+            )
         ]
-        return String(data: try JSONEncoder().encode(providers), encoding: .utf8)!
+        return try String(data: JSONEncoder().encode(providers), encoding: .utf8)!
     }
 
     func testDenseCardShowsEveryWindowAndPushesProviderDetail() throws {
@@ -81,7 +85,9 @@ final class DensityLayoutXCUITests: XCTestCase {
         func dismissKnownSystemDialogs() {
             for label in ["Allow", "Not Now"] {
                 let button = springboard.buttons[label]
-                if button.exists { button.tap() }
+                if button.exists {
+                    button.tap()
+                }
             }
         }
 
@@ -131,7 +137,8 @@ final class DensityLayoutXCUITests: XCTestCase {
         card.tap()
         XCTAssertTrue(
             app.staticTexts["OpenCode Go"].waitForExistence(timeout: 5),
-            "Tapping a dense card did not push Provider Detail")
+            "Tapping a dense card did not push Provider Detail"
+        )
         XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
         app.navigationBars.buttons.firstMatch.tap()
 

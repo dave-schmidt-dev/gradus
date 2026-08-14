@@ -50,7 +50,11 @@ public func ageLabel(since date: Date, now: Date) -> String {
 /// dashboard reads the same way as the terminal.
 private func formattedAge(_ seconds: TimeInterval) -> String {
     let totalSeconds = Int(seconds)
-    if totalSeconds < 60 { return "<1m" }
-    if totalSeconds < 3600 { return "\(totalSeconds / 60)m" }
+    if totalSeconds < 60 {
+        return "<1m"
+    }
+    if totalSeconds < 3600 {
+        return "\(totalSeconds / 60)m"
+    }
     return "\(totalSeconds / 3600)h"
 }

@@ -32,7 +32,7 @@ public func friendlyDateLabel(
     if dayOffset == 1 {
         return format(date, as: "'Tomorrow' h:mm a", calendar: calendar)
     }
-    if let dayOffset, (2...6).contains(dayOffset) {
+    if let dayOffset, (2 ... 6).contains(dayOffset) {
         return format(date, as: "EEE h:mm a", calendar: calendar)
     }
     return format(date, as: "MMM d, h:mm a", calendar: calendar)
@@ -41,7 +41,9 @@ public func friendlyDateLabel(
 private func parseISO8601Date(_ value: String) -> Date? {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = formatter.date(from: value) { return date }
+    if let date = formatter.date(from: value) {
+        return date
+    }
     formatter.formatOptions = [.withInternetDateTime]
     return formatter.date(from: value)
 }

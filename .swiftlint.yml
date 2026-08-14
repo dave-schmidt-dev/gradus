@@ -14,3 +14,19 @@ excluded:
   - app/Packages
   - app/Generated
   - app/**/Generated
+
+identifier_name:
+  # Specifying `excluded` replaces SwiftLint's built-in default rather than
+  # adding to it, so `id` (implicitly allowed by the stock default even
+  # though `swiftlint rules identifier_name` only documents ok/x/y) is
+  # listed explicitly here to avoid regressing it. `ok` mirrors the
+  # snapshot/CloudKit wire format's canonical field name (ProviderStatus.ok,
+  # ProviderEntry.ok, and every JSON/CloudKit record that carries it); `x`/`y`
+  # are conventional graphics coordinate pair names. Renaming these locally
+  # would either fork the Swift name from the wire contract or replace a
+  # universally-understood pair with a less clear one.
+  excluded:
+    - id
+    - ok
+    - x
+    - y

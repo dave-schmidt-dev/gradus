@@ -1,8 +1,7 @@
 import Foundation
+@testable import GradusiOS
 import GradusKit
 import Testing
-
-@testable import GradusiOS
 
 // P3/T3.1 gate: `rankProviders`'s total order (errored -> attention-needed
 // -> normal, percent-ascending within tier, providerName tie-break) and
@@ -137,7 +136,7 @@ private func makeProvider(
 @Test func tieBreakerDeterministicAcrossRepeatedRuns() {
     let providerZ = makeProvider(name: "zeta", windows: [makeWindow(percentLeft: 50)])
     let providerA = makeProvider(name: "alpha", windows: [makeWindow(percentLeft: 50)])
-    for _ in 0..<10 {
+    for _ in 0 ..< 10 {
         let ranked = rankProviders([providerZ, providerA], localThreshold: 20)
         #expect(ranked.map(\.providerName) == ["alpha", "zeta"])
     }
@@ -150,28 +149,32 @@ private func makeProvider(
     let urgent = makeProvider(
         name: "urgent",
         windows: [makeWindow(percentLeft: 10, resetISO: "2026-08-06T12:00:00Z")],
-        isWarning: true)
+        isWarning: true
+    )
     let resetSoon = makeProvider(
         name: "reset",
         windows: [makeWindow(percentLeft: 80, resetISO: "2026-08-05T12:00:00Z")],
-        isWarning: true)
+        isWarning: true
+    )
     let noData = makeProvider(name: "no-data", windows: [], isWarning: true)
     let normal = makeProvider(
         name: "normal",
-        windows: [makeWindow(percentLeft: 50, resetISO: "2026-08-07T12:00:00Z")])
+        windows: [makeWindow(percentLeft: 50, resetISO: "2026-08-07T12:00:00Z")]
+    )
     let exhausted = makeProvider(
         name: "aardvark-exhausted",
-        windows: [makeWindow(percentLeft: 0, resetISO: "2026-08-04T12:00:00Z")])
+        windows: [makeWindow(percentLeft: 0, resetISO: "2026-08-04T12:00:00Z")]
+    )
     let providers = [normal, exhausted, resetSoon, noData, urgent, error]
 
     #expect(rankProviders(providers, localThreshold: 20, sortOption: .mostUrgent).map(\.providerName) == [
-        "error", "urgent", "reset", "no-data", "normal", "aardvark-exhausted",
+        "error", "urgent", "reset", "no-data", "normal", "aardvark-exhausted"
     ])
     #expect(rankProviders(providers, localThreshold: 20, sortOption: .resetSoonest).map(\.providerName) == [
-        "reset", "urgent", "normal", "error", "no-data", "aardvark-exhausted",
+        "reset", "urgent", "normal", "error", "no-data", "aardvark-exhausted"
     ])
     #expect(rankProviders(providers, localThreshold: 20, sortOption: .nameAZ).map(\.providerName) == [
-        "error", "no-data", "normal", "reset", "urgent", "aardvark-exhausted",
+        "error", "no-data", "normal", "reset", "urgent", "aardvark-exhausted"
     ])
 }
 
@@ -191,10 +194,12 @@ private func makeProvider(
 @Test func mostUrgentUsesVisibleSignalBeforeRemainingPercentage() {
     let green = makeProvider(
         name: "green",
-        windows: [makeWindow(percentLeft: 73, paceDelta: 0.10)])
+        windows: [makeWindow(percentLeft: 73, paceDelta: 0.10)]
+    )
     let yellow = makeProvider(
         name: "yellow",
-        windows: [makeWindow(percentLeft: 92, paceDelta: -0.05)])
+        windows: [makeWindow(percentLeft: 92, paceDelta: -0.05)]
+    )
 
     #expect(rankProviders([green, yellow], localThreshold: 20, sortOption: .mostUrgent)
         .map(\.providerName) == ["yellow", "green"])

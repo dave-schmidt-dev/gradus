@@ -1,11 +1,11 @@
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 private func window(percentLeft: Double, paceDelta: Double? = nil) -> ProviderWindow {
     ProviderWindow(
-        id: "test", percentLeft: percentLeft, resetISO: nil, windowHours: nil, paceDelta: paceDelta)
+        id: "test", percentLeft: percentLeft, resetISO: nil, windowHours: nil, paceDelta: paceDelta
+    )
 }
 
 // CV-2: generated truth table over the percent_left / pace_delta combinations
@@ -18,19 +18,20 @@ private func window(percentLeft: Double, paceDelta: Double? = nil) -> ProviderWi
 // percent-only ramp (70/40/20), which is what `signalLevel` does with a window
 // that has no reset timestamp.
 private let truthTable: [(percentLeft: Double, paceDelta: Double?, expectWarns: Bool)] = {
-    func fallbackWarns(_ percentLeft: Double) -> Bool { percentLeft < 40 }
+    func fallbackWarns(_ percentLeft: Double) -> Bool {
+        percentLeft < 40
+    }
 
     var cases: [(Double, Double?, Bool)] = []
     for percentLeft in [0.0, 0.4, 1.0, 50.0, 99.0, 100.0] {
         let depleted = percentLeft < 0.5
-        for paceDelta in [Optional<Double>.none, -0.5, -0.10, -0.099, 0.0, 0.5] {
-            let warns: Bool
-            if depleted {
-                warns = true
+        for paceDelta in [Double?.none, -0.5, -0.10, -0.099, 0.0, 0.5] {
+            let warns: Bool = if depleted {
+                true
             } else if let paceDelta, paceDelta.isFinite {
-                warns = paceDelta < -0.10
+                paceDelta < -0.10
             } else {
-                warns = fallbackWarns(percentLeft)
+                fallbackWarns(percentLeft)
             }
             cases.append((percentLeft, paceDelta, warns))
         }
@@ -42,8 +43,8 @@ private let truthTable: [(percentLeft: Double, paceDelta: Double?, expectWarns: 
 func windowWarnsMatchesGeneratedTruthTable(
     _ testCase: (percentLeft: Double, paceDelta: Double?, expectWarns: Bool)
 ) {
-    let w = window(percentLeft: testCase.percentLeft, paceDelta: testCase.paceDelta)
-    #expect(windowWarns(w) == testCase.expectWarns)
+    let resolvedWindow = window(percentLeft: testCase.percentLeft, paceDelta: testCase.paceDelta)
+    #expect(windowWarns(resolvedWindow) == testCase.expectWarns)
 }
 
 @Test func invalidPercentNeverWarns() {

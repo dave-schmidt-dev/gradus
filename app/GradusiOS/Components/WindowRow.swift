@@ -24,13 +24,15 @@ enum WindowRowLabelForegroundToken {
     var effectiveForeground: (light: ContrastRGB, dark: ContrastRGB) {
         switch self {
         case .readable:
-            return (
+            (
                 light: ContrastRGB(49, 49, 49),
-                dark: ContrastRGB(207, 207, 207))
+                dark: ContrastRGB(207, 207, 207)
+            )
         case .recessed:
-            return (
+            (
                 light: ContrastRGB(131, 131, 135),
-                dark: ContrastRGB(148, 148, 155))
+                dark: ContrastRGB(148, 148, 155)
+            )
         }
     }
 }

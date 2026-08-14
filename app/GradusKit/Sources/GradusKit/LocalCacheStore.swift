@@ -30,8 +30,8 @@ public final class FileLocalCacheStore: LocalCacheStore {
     private let tokenFileURL: URL
 
     public init(directory: URL) {
-        self.cacheFileURL = directory.appendingPathComponent("last-synced-cache.json")
-        self.tokenFileURL = directory.appendingPathComponent("change-token.data")
+        cacheFileURL = directory.appendingPathComponent("last-synced-cache.json")
+        tokenFileURL = directory.appendingPathComponent("change-token.data")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 

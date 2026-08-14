@@ -9,7 +9,9 @@ public enum ProviderSortOption: String, CaseIterable, Identifiable {
     case resetSoonest
     case nameAZ
 
-    public var id: Self { self }
+    public var id: Self {
+        self
+    }
 
     public var title: String {
         switch self {
@@ -77,7 +79,9 @@ struct RankedProviders<P: RankableProvider> {
     let active: [P]
     let exhausted: [P]
 
-    var all: [P] { active + exhausted }
+    var all: [P] {
+        active + exhausted
+    }
 }
 
 /// The single, total-order ranking function for both platforms' provider
@@ -149,20 +153,28 @@ private func sortPartition<P: RankableProvider>(
         case .mostUrgent:
             let lhsTier = attentionTier(for: lhs, localThreshold: localThreshold)
             let rhsTier = attentionTier(for: rhs, localThreshold: localThreshold)
-            if lhsTier != rhsTier { return lhsTier < rhsTier }
+            if lhsTier != rhsTier {
+                return lhsTier < rhsTier
+            }
 
             // Most-urgent has no useful ordering signal for a provider with
             // no windows, so those stay at the end of their urgency tier.
             let lhsHasWindows = !lhs.rankingWindows.isEmpty
             let rhsHasWindows = !rhs.rankingWindows.isEmpty
-            if lhsHasWindows != rhsHasWindows { return lhsHasWindows }
+            if lhsHasWindows != rhsHasWindows {
+                return lhsHasWindows
+            }
 
             let lhsSignal = mostUrgentSignalRank(lhs)
             let rhsSignal = mostUrgentSignalRank(rhs)
-            if lhsSignal != rhsSignal { return lhsSignal > rhsSignal }
+            if lhsSignal != rhsSignal {
+                return lhsSignal > rhsSignal
+            }
             let lhsPercent = worstPercentForRanking(lhs)
             let rhsPercent = worstPercentForRanking(rhs)
-            if lhsPercent != rhsPercent { return lhsPercent < rhsPercent }
+            if lhsPercent != rhsPercent {
+                return lhsPercent < rhsPercent
+            }
         case .resetSoonest:
             let lhsReset = earliestResetForRanking(lhs)
             let rhsReset = earliestResetForRanking(rhs)
@@ -188,7 +200,7 @@ private func sortPartition<P: RankableProvider>(
 /// Warning eligibility and presentation order answer different questions:
 /// yellow does not notify, but it is still more urgent than green when the
 /// user explicitly chooses the "Most urgent" display order.
-private func mostUrgentSignalRank<P: RankableProvider>(_ provider: P) -> Int {
+private func mostUrgentSignalRank(_ provider: some RankableProvider) -> Int {
     provider.rankingWindows.map { window in
         switch signalLevel(for: window) {
         case .red: 4
@@ -201,7 +213,7 @@ private func mostUrgentSignalRank<P: RankableProvider>(_ provider: P) -> Int {
 }
 
 /// 0 = errored, 1 = ok + attention-needed, 2 = ok + normal.
-private func attentionTier<P: RankableProvider>(for provider: P, localThreshold: Double) -> Int {
+private func attentionTier(for provider: some RankableProvider, localThreshold: Double) -> Int {
     guard provider.rankingIsOK else { return 0 }
     return provider.rankingNeedsAttention(localThreshold: localThreshold) ? 1 : 2
 }
@@ -210,14 +222,14 @@ private func attentionTier<P: RankableProvider>(for provider: P, localThreshold:
 /// `.infinity` when there are none -- `.infinity` sorts last within any
 /// ascending comparison, giving "no data" the correct last-in-tier position
 /// without a separate nil-handling branch.
-private func worstPercentForRanking<P: RankableProvider>(_ provider: P) -> Double {
+private func worstPercentForRanking(_ provider: some RankableProvider) -> Double {
     provider.rankingWindows.map(\.percentLeft).min() ?? .infinity
 }
 
 /// The earliest parseable provider reset. Missing or malformed timestamps stay
 /// absent so presentation code can sort deterministically without inventing a
 /// reset date.
-private func earliestResetForRanking<P: RankableProvider>(_ provider: P) -> Date? {
+private func earliestResetForRanking(_ provider: some RankableProvider) -> Date? {
     let formatter = ISO8601DateFormatter()
     return provider.rankingWindows.compactMap { window in
         window.resetISO.flatMap(formatter.date(from:))

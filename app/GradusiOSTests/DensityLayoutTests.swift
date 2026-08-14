@@ -73,7 +73,7 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
     let viewModel = makeDensityViewModel(providers: [threeWindows])
     let presentations: [(layout: DashboardLayout, width: CGFloat, expectedReset: Bool)] = [
         (.denseSingleColumn, 361, false),
-        (.denseGrid, 802, true),
+        (.denseGrid, 802, true)
     ]
 
     for presentation in presentations {
@@ -135,7 +135,7 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
             windows: [
                 window("five_hour", 82, pace: 0.02),
                 window("weekly", 47, pace: -0.08),
-                window("monthly", 31, pace: -0.04),
+                window("monthly", 31, pace: -0.04)
             ]
         ),
         now: fixedNow
@@ -252,7 +252,7 @@ private func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewM
         ),
         MeasuredDevice(
             name: "iPad Pro 11-inch (M5) landscape", cardWidth: landscapeCardWidth, columns: landscapeColumns
-        ),
+        )
     ] {
         let heights = providers.map { provider in
             UIHostingController(
@@ -350,12 +350,12 @@ private let deviceContentWidths: [(name: String, width: CGFloat, isGrid: Bool)] 
     ("iPhone portrait", 393 - dashboardHorizontalInset * 2, false),
     ("iPad 11\" portrait", 834 - dashboardHorizontalInset * 2, true),
     ("iPad 11\" landscape", 1194 - dashboardHorizontalInset * 2, true),
-    ("iPad 13\" landscape", 1366 - dashboardHorizontalInset * 2, true),
+    ("iPad 13\" landscape", 1366 - dashboardHorizontalInset * 2, true)
 ]
 
 private let densityPropertyDynamicTypeSizes: [DynamicTypeSize] = [
     .xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge,
-    .accessibility1, .accessibility2, .accessibility3, .accessibility4, .accessibility5,
+    .accessibility1, .accessibility2, .accessibility3, .accessibility4, .accessibility5
 ]
 
 private let densityPropertyProviderCounts = [1, 2, 4, 8]
@@ -506,7 +506,7 @@ private let compactHistoricalTightCase = (
         (3, standard.exhaustedGap, 260.67,
          "densityStandardPadPortraitLight, exhausted cell at y=536pt spans 16.0->276.7"),
         (2, large.exhaustedGap, 395,
-         "densityLargePadPortraitLight, exhausted cell at y=1074pt spans 16.0->411.0"),
+         "densityLargePadPortraitLight, exhausted cell at y=1074pt spans 16.0->411.0")
     ]
 
     for (columns, gap, rendered, source) in measured {
@@ -553,8 +553,7 @@ private let compactHistoricalTightCase = (
                     let metrics = density.metrics
 
                     if providerCount == densityPropertyProviderCounts.first,
-                       usesTwoLineRow(at: dynamicTypeSize)
-                    {
+                       usesTwoLineRow(at: dynamicTypeSize) {
                         let traits = UITraitCollection(
                             preferredContentSizeCategory: uiContentSizeCategory(for: dynamicTypeSize)
                         )
@@ -583,8 +582,7 @@ private let compactHistoricalTightCase = (
                         density: density, dynamicTypeSize: dynamicTypeSize
                     )
                     let fixedDemand: CGFloat = if scaledColumns.total(showsReset: true, columnGap: metrics.columnGap)
-                        > metrics.fixedColumnWidth(showsReset: true)
-                    {
+                        > metrics.fixedColumnWidth(showsReset: true) {
                         scaledColumns.total(
                             showsReset: false, columnGap: metrics.columnGap
                         )
@@ -698,7 +696,7 @@ private let compactHistoricalTightCase = (
     let cases: [(container: CGFloat, fixed: CGFloat, padding: CGFloat, gap: CGFloat, minimum: CGFloat)] = [
         (802, 246, 12, 12, 48),
         (1162, 246, 12, 16, 48),
-        (1334, 246, 12, 20, 48),
+        (1334, 246, 12, 20, 48)
     ]
 
     #expect(
@@ -930,7 +928,7 @@ private func feasibleStops(
         ("premium", "Monthly"),
         ("billing_cycle", "Monthly"),
         ("ac", "Auto"),
-        ("ap", "API"),
+        ("ap", "API")
     ]
 
     for dynamicTypeSize in [DynamicTypeSize.large, .xxxLarge] {
@@ -1059,7 +1057,7 @@ private let phoneContentWidths: [(name: String, content: CGFloat)] = [
     ("iPhone 16 (393pt)", 361),
     ("iPhone 16 Pro (402pt)", 370),
     ("iPhone 16 Plus (430pt)", 398),
-    ("iPhone 16 Pro Max (440pt)", 408),
+    ("iPhone 16 Pro Max (440pt)", 408)
 ]
 
 /// The exhausted grid on a phone is the one part of this section no snapshot
@@ -1127,7 +1125,7 @@ private let exhaustedTextStyles:
     [(density: DashboardDensity, title: UIFont.TextStyle, reset: UIFont.TextStyle)] = [
         (.compact, .subheadline, .caption1),
         (.standard, .callout, .footnote),
-        (.large, .body, .subheadline),
+        (.large, .body, .subheadline)
     ]
 
 private func exhaustedFont(
@@ -1177,7 +1175,7 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
     let longestReset = "resets Aug 12, 7:46 PM"
 
     for (density, titleStyle, resetStyle) in exhaustedTextStyles {
-        let m = density.metrics
+        let metrics = density.metrics
         // Every phone and iPad width, at every supported text size. The reset
         // demand is the runtime solver input; the title is verified too because
         // both labels may wrap at accessibility sizes.
@@ -1198,14 +1196,14 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
                 let columns = maxColumns(
                     containerWidth: device.content,
                     scaledFixedColumnWidth: resetDemand,
-                    cardPadding: m.cardPadding,
-                    cardGap: m.exhaustedGap,
+                    cardPadding: metrics.cardPadding,
+                    cardGap: metrics.exhaustedGap,
                     minimumBarWidth: 0
                 )
                 let cellWidth = cardWidth(
-                    containerWidth: device.content, columns: columns, cardGap: m.exhaustedGap
+                    containerWidth: device.content, columns: columns, cardGap: metrics.exhaustedGap
                 )
-                let textWidth = cellWidth - m.cardPadding * 2
+                let textWidth = cellWidth - metrics.cardPadding * 2
                 #expect(
                     textWidth >= needed,
                     """
@@ -1228,11 +1226,11 @@ private func widestUnbreakableTokenWidth(in string: String, font: UIFont) -> CGF
         let titleFont = exhaustedFont(titleStyle)
         let resetFont = exhaustedFont(resetStyle)
         let twoLines =
-            titleFont.lineHeight + resetFont.lineHeight + m.exhaustedLineGap + m.exhaustedGap * 2
+            titleFont.lineHeight + resetFont.lineHeight + metrics.exhaustedLineGap + metrics.exhaustedGap * 2
         #expect(
-            m.exhaustedRowHeight >= twoLines,
+            metrics.exhaustedRowHeight >= twoLines,
             """
-            \(density.rawValue): exhaustedRowHeight is \(m.exhaustedRowHeight)pt against \
+            \(density.rawValue): exhaustedRowHeight is \(metrics.exhaustedRowHeight)pt against \
             \(twoLines)pt of content, so the minimum no longer decides the row.
             """
         )

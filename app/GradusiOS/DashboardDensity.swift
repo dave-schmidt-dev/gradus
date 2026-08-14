@@ -32,7 +32,9 @@ public enum DashboardDensity: String, CaseIterable, Identifiable, Sendable {
     case standard
     case large
 
-    public var id: Self { self }
+    public var id: Self {
+        self
+    }
 
     public var title: String {
         switch self {
@@ -60,11 +62,10 @@ public enum DashboardDensity: String, CaseIterable, Identifiable, Sendable {
         preferred: DashboardDensity? = nil,
         fits: (DashboardDensity) -> Bool
     ) -> (rung: DashboardDensity, didFit: Bool) {
-        let candidates: [DashboardDensity]
-        if let preferred, let index = Self.allCases.firstIndex(of: preferred) {
-            candidates = Array(Self.allCases.prefix(index + 1))
+        let candidates: [DashboardDensity] = if let preferred, let index = Self.allCases.firstIndex(of: preferred) {
+            Array(Self.allCases.prefix(index + 1))
         } else {
-            candidates = Array(Self.allCases)
+            Array(Self.allCases)
         }
         for rung in candidates.reversed() where fits(rung) {
             return (rung, true)
@@ -141,6 +142,7 @@ public struct DensityMetrics: Equatable, Sendable {
     public let exhaustedGap: CGFloat
     public let exhaustedRowHeight: CGFloat
     public let exhaustedCornerRadius: CGFloat
+
     // MARK: grid
 
     /// A density metric because David chose to scale type as well as spacing
@@ -193,7 +195,7 @@ public struct DensityMetrics: Equatable, Sendable {
         scaledFixedColumnWidth: CGFloat? = nil
     ) -> Bool {
         let content = cardWidth - cardPadding * 2
-        let resetDemand = scaledFixedColumnWidth ?? self.fixedColumnWidth(showsReset: true)
+        let resetDemand = scaledFixedColumnWidth ?? fixedColumnWidth(showsReset: true)
         return content - resetDemand >= Self.minimumBarWidth
     }
 

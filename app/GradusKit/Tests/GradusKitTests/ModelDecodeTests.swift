@@ -16,7 +16,7 @@ private func loadGoldenFixtureData() throws -> Data {
     #expect(
         names == [
             "Codex", "Codex (Spark)", "Claude", "Antigravity", "Antigravity (Claude)", "Copilot", "Cursor",
-            "OpenCode Go", "Vibe",
+            "OpenCode Go", "Vibe"
         ]
     )
 }

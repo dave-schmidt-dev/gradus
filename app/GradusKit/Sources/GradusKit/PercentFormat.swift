@@ -1,14 +1,14 @@
 import Foundation
 
-/// How a remaining-budget percentage is written on every surface.
-///
-/// Mirrors `gradus/ui.py`'s `_percent_str` / `_format_percent_value`. The
-/// shared truth table at `Tests/GradusKitTests/Fixtures/percent-format.json`
-/// is read by both suites, so a one-sided change to either fails on both.
-///
-/// Vends the number alone. The `%` suffix and the spoken "percent remaining"
-/// phrasing belong to the call site, the same way `SignalLevel` vends
-/// `rgbHex` and leaves `Color(hex:)` to each app.
+// How a remaining-budget percentage is written on every surface.
+//
+// Mirrors `gradus/ui.py`'s `_percent_str` / `_format_percent_value`. The
+// shared truth table at `Tests/GradusKitTests/Fixtures/percent-format.json`
+// is read by both suites, so a one-sided change to either fails on both.
+//
+// Vends the number alone. The `%` suffix and the spoken "percent remaining"
+// phrasing belong to the call site, the same way `SignalLevel` vends
+// `rgbHex` and leaves `Color(hex:)` to each app.
 
 /// Largest percentage still drawn with a decimal place.
 ///

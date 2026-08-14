@@ -7,9 +7,11 @@ enum IOSProviderRetryAccessibility {
 
     static func label(for provider: ProviderStatus) -> String? {
         guard provider.providerName == "Antigravity", !provider.ok else { return nil }
-        if provider.errorMessage == retryingLabel { return retryingLabel }
+        if provider.errorMessage == retryingLabel {
+            return retryingLabel
+        }
         guard let error = provider.errorMessage?.lowercased(),
-            error.contains("session expired") || error.contains("re-authenticate") || error.contains("run `agy`")
+              error.contains("session expired") || error.contains("re-authenticate") || error.contains("run `agy`")
         else { return nil }
         return reauthenticationLabel
     }
@@ -38,13 +40,21 @@ enum IOSProviderRetryAccessibility {
 /// rather than recomputed: the publisher's answer is the one the push
 /// notification was sent about, and recomputing here could disagree with it.
 extension ProviderStatus: RankableProvider {
-    var rankingName: String { providerName }
+    var rankingName: String {
+        providerName
+    }
 
-    var rankingWindows: [ProviderWindow] { windows }
+    var rankingWindows: [ProviderWindow] {
+        windows
+    }
 
-    var rankingIsOK: Bool { ok || IOSProviderRetryAccessibility.isCarriedFailure(self) }
+    var rankingIsOK: Bool {
+        ok || IOSProviderRetryAccessibility.isCarriedFailure(self)
+    }
 
-    var rankingIsDepleted: Bool { isDepleted }
+    var rankingIsDepleted: Bool {
+        isDepleted
+    }
 
     /// The union documented on `rankedPartition` (Key decision #6): the stored
     /// `isWarning` guarantees anything CloudKit already pushed about is never
@@ -54,8 +64,12 @@ extension ProviderStatus: RankableProvider {
     /// same function the Mac evaluates locally — so reading it through here is
     /// no longer a *different* answer from the Mac's, just a cheaper one.
     func rankingNeedsAttention(localThreshold: Double) -> Bool {
-        if IOSProviderRetryAccessibility.isCarriedFailure(self) { return false }
-        if IOSProviderRetryAccessibility.isRetrying(self) { return false }
+        if IOSProviderRetryAccessibility.isCarriedFailure(self) {
+            return false
+        }
+        if IOSProviderRetryAccessibility.isRetrying(self) {
+            return false
+        }
         return isWarning || windows.contains { localIsUrgent($0, threshold: localThreshold) }
     }
 }

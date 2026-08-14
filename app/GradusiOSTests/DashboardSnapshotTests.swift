@@ -36,7 +36,7 @@ private func sampleProviders() -> [ProviderStatus] {
                 ProviderWindow(
                     id: "weekly", percentLeft: 62, resetISO: "2026-08-08T05:00:00-04:00", windowHours: 168,
                     paceDelta: -0.05
-                ),
+                )
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-30)),
@@ -53,7 +53,7 @@ private func sampleProviders() -> [ProviderStatus] {
                 ProviderWindow(
                     id: "weekly", percentLeft: 4, resetISO: "2026-08-05T00:00:00-04:00", windowHours: 168,
                     paceDelta: -0.30
-                ),
+                )
             ],
             data: [:],
             // Carried-forward and stale: > staleThresholdSeconds old (T3.4/CR-1).
@@ -71,7 +71,7 @@ private func sampleProviders() -> [ProviderStatus] {
             observedAt: nil,
             snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
             publishedAt: fixedNow
-        ),
+        )
     ]
 }
 
@@ -106,7 +106,7 @@ private func exhaustedProvider(named name: String) -> ProviderStatus {
             ProviderWindow(
                 id: "weekly", percentLeft: 0, resetISO: "2026-08-05T00:00:00-04:00", windowHours: 168,
                 paceDelta: -0.30
-            ),
+            )
         ],
         data: [:],
         observedAt: ISO8601DateFormatter().string(from: fixedNow),
@@ -131,8 +131,7 @@ private func exhaustedProvider(named name: String) -> ProviderStatus {
 /// clock would be unreachable in production and a bad thing to pin pixels to.
 private func truncationDivergentProviders() -> [ProviderStatus] {
     func provider(_ name: String, percentLeft: Double, paceDelta: Double, resetISO: String)
-        -> ProviderStatus
-    {
+        -> ProviderStatus {
         ProviderStatus(
             providerName: name,
             providerDisplayName: name.capitalized,
@@ -142,7 +141,7 @@ private func truncationDivergentProviders() -> [ProviderStatus] {
                 ProviderWindow(
                     id: "weekly", percentLeft: percentLeft, resetISO: resetISO,
                     windowHours: 168, paceDelta: paceDelta
-                ),
+                )
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow),
@@ -165,7 +164,7 @@ private func truncationDivergentProviders() -> [ProviderStatus] {
         // VoiceOver, as fully exhausted.
         provider(
             "copilot", percentLeft: 0.7, paceDelta: -0.30, resetISO: "2026-07-27T16:54:33-04:00"
-        ),
+        )
     ]
 }
 
@@ -198,7 +197,7 @@ private func paceDivergentProviders() -> [ProviderStatus] {
                 ProviderWindow(
                     id: "weekly", percentLeft: 3, resetISO: "2026-07-25T15:00:48-04:00", windowHours: 168,
                     paceDelta: 0.02
-                ),
+                )
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow),
@@ -214,13 +213,13 @@ private func paceDivergentProviders() -> [ProviderStatus] {
                 ProviderWindow(
                     id: "weekly", percentLeft: 72, resetISO: "2026-08-01T09:58:24-04:00", windowHours: 168,
                     paceDelta: -0.26
-                ),
+                )
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow),
             snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
             publishedAt: fixedNow
-        ),
+        )
     ]
 }
 
@@ -343,7 +342,7 @@ final class DashboardSnapshotTests: XCTestCase {
         assertSampleProviders(providers)
         let viewModel = makeViewModel(providers: providers + [
             exhaustedProvider(named: "vibe"),
-            exhaustedProvider(named: "copilot"),
+            exhaustedProvider(named: "copilot")
         ])
 
         for sortOption in ProviderSortOption.allCases {
@@ -370,7 +369,7 @@ final class DashboardSnapshotTests: XCTestCase {
             ok: true,
             errorMessage: nil,
             windows: [
-                ProviderWindow(id: "weekly", percentLeft: 10, resetISO: nil, windowHours: 168, paceDelta: nil),
+                ProviderWindow(id: "weekly", percentLeft: 10, resetISO: nil, windowHours: 168, paceDelta: nil)
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow),
@@ -383,7 +382,7 @@ final class DashboardSnapshotTests: XCTestCase {
             ok: true,
             errorMessage: nil,
             windows: [
-                ProviderWindow(id: "weekly", percentLeft: 90, resetISO: nil, windowHours: 168, paceDelta: nil),
+                ProviderWindow(id: "weekly", percentLeft: 90, resetISO: nil, windowHours: 168, paceDelta: nil)
             ],
             data: [:],
             observedAt: ISO8601DateFormatter().string(from: fixedNow),
@@ -435,7 +434,7 @@ final class DashboardSnapshotTests: XCTestCase {
         assertSampleProviders(providers)
         let viewModel = makeViewModel(providers: providers + [
             exhaustedProvider(named: "vibe"),
-            exhaustedProvider(named: "copilot"),
+            exhaustedProvider(named: "copilot")
         ])
 
         assertSnapshot(
@@ -490,7 +489,7 @@ final class DashboardSnapshotTests: XCTestCase {
         let snapshots: [(String, CGFloat, CGFloat, DashboardLayout, DashboardDensity)] = [
             ("sampleDataDashboardIPhone", 393, 852, .denseSingleColumn, .compact),
             ("sampleDataDashboardIPhoneLarge", 430, 932, .denseSingleColumn, .compact),
-            ("sampleDataDashboardIPad", 1024, 1366, .denseGrid, .compact),
+            ("sampleDataDashboardIPad", 1024, 1366, .denseGrid, .compact)
         ]
         for (name, width, height, layout, density) in snapshots {
             let viewModel = makeViewModel(providers: providers)

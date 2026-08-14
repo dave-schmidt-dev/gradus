@@ -1,9 +1,8 @@
 import AppKit
 import Foundation
 import GradusKit
-import Testing
-
 @testable import GradusMac
+import Testing
 
 /// Covers the Mac's three local display preferences — sort order, warning
 /// threshold, and exhausted-provider visibility — which exist to match iOS's
@@ -121,7 +120,7 @@ struct DisplayPreferenceTests {
                     updatedAt: "2026-08-05T12:00:00Z",
                     providers: [
                         provider("Codex", percentLeft: 62),
-                        provider("Copilot", percentLeft: 0),
+                        provider("Copilot", percentLeft: 0)
                     ]
                 )
             )

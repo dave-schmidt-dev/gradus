@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 @Test func nilObservedAtIsUnknown() {
     #expect(freshness(observedAt: nil, now: Date()) == .unknown)

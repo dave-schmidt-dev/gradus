@@ -1,8 +1,7 @@
 import CloudKit
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
 
@@ -87,14 +86,16 @@ private func sampleStatus(
     #expect(try ProviderStatus(record: record).syncSource == nil)
 }
 
-@Test func derivesIsWarningFromWindowsWhenNotExplicitlySet() throws {
+@Test func derivesIsWarningFromWindowsWhenNotExplicitlySet() {
     let depleted = sampleStatus(
-        windows: [ProviderWindow(id: "weekly", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)])
+        windows: [ProviderWindow(id: "weekly", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)]
+    )
     #expect(depleted.isWarning == true)
     #expect(depleted.isDepleted == true)
 
     let healthy = sampleStatus(
-        windows: [ProviderWindow(id: "weekly", percentLeft: 80.0, resetISO: nil, windowHours: nil, paceDelta: 0.1)])
+        windows: [ProviderWindow(id: "weekly", percentLeft: 80.0, resetISO: nil, windowHours: nil, paceDelta: 0.1)]
+    )
     #expect(healthy.isWarning == false)
     #expect(healthy.isDepleted == false)
 }

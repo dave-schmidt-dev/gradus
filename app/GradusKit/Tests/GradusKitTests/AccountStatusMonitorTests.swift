@@ -94,7 +94,7 @@ func everyNonAvailableStatusIsBlocked(_ status: CKAccountStatus) {
 @Test func startRetriesOneTemporaryStatusBeforePublishingAvailable() async {
     let source = SequencedAccountStatusSource([
         .success(.temporarilyUnavailable),
-        .success(.available),
+        .success(.available)
     ])
     let reported = ReportedStatuses()
     let monitor = AccountStatusMonitor(source: source, notificationCenter: NotificationCenter()) { status in

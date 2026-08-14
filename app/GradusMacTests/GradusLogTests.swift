@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusMac
+import Testing
 
 /// Covers the file sink, which is the half of `GradusLog` that can be wrong
 /// quietly.
@@ -15,9 +14,8 @@ struct GradusLogTests {
     /// Each test gets its own directory so rotation counts can't bleed between
     /// them, and so nothing here touches the real `~/Library/Logs/Gradus`.
     private func temporaryDirectory() -> URL {
-        let url = FileManager.default.temporaryDirectory
+        FileManager.default.temporaryDirectory
             .appendingPathComponent("GradusLogTests-\(UUID().uuidString)", isDirectory: true)
-        return url
     }
 
     private func contents(_ url: URL) -> String {
@@ -99,7 +97,7 @@ struct GradusLogTests {
         // below is the same length, which keeps that exact.
         let cap = lineBytes * 2 + 1
         let file = GradusLogFile(directory: directory, maxBytes: cap, keptRotations: 2)
-        for index in 1...4 {
+        for index in 1 ... 4 {
             file.append(level: .warning, category: "publish", message: "line \(index)")
         }
         file.flush()
@@ -109,12 +107,12 @@ struct GradusLogTests {
 
         let liveSize =
             (try? FileManager.default.attributesOfItem(atPath: file.fileURL.path))?[.size]
-            as? NSNumber
+                as? NSNumber
         #expect((liveSize?.intValue ?? .max) <= cap)
 
         // Nothing is lost in the move: every line is still somewhere.
         let everything = contents(file.fileURL) + contents(rotated)
-        for index in 1...4 {
+        for index in 1 ... 4 {
             #expect(everything.contains("line \(index)"))
         }
     }
@@ -128,7 +126,7 @@ struct GradusLogTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let file = GradusLogFile(directory: directory, maxBytes: 120, keptRotations: 2)
-        for index in 1...12 {
+        for index in 1 ... 12 {
             file.append(level: .warning, category: "publish", message: "line \(index)")
         }
         file.flush()
@@ -160,7 +158,8 @@ struct GradusLogTests {
     @Test func theSharedSinkDoesNotWriteToTheRealLogDirectoryDuringTests() {
         #expect(
             GradusLogFile.isRunningUnderTest,
-            "test-run detection failed, so the suite is writing to the production log")
+            "test-run detection failed, so the suite is writing to the production log"
+        )
 
         let real = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Gradus", isDirectory: true)
@@ -178,14 +177,16 @@ struct GradusLogTests {
     @Test func theEnvironmentOverrideWinsOverBothOtherBranches() {
         let override = GradusLogFile.defaultDirectory(
             environment: [GradusLogFile.directoryOverrideKey: "/tmp/gradus-override"],
-            isTestRun: true)
+            isTestRun: true
+        )
         #expect(override.path == "/tmp/gradus-override")
 
         // An unset variable and a variable set to nothing are the same
         // intention. Treating "" as a path would send the log to the
         // process's working directory, which for a launched .app is `/`.
         let empty = GradusLogFile.defaultDirectory(
-            environment: [GradusLogFile.directoryOverrideKey: ""], isTestRun: false)
+            environment: [GradusLogFile.directoryOverrideKey: ""], isTestRun: false
+        )
         #expect(empty.path.hasSuffix("Library/Logs/Gradus"))
     }
 

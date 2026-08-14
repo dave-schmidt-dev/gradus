@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// Per-provider brand accent colors.
-///
-/// `Color(hex:)` and the `SignalColor` usage ramp used to live here too; both
-/// moved to `app/Shared/SignalColor.swift` when the Mac app adopted the same
-/// ramp, so there is one copy compiled into both targets rather than a
-/// per-platform pair.
+// Per-provider brand accent colors.
+//
+// `Color(hex:)` and the `SignalColor` usage ramp used to live here too; both
+// moved to `app/Shared/SignalColor.swift` when the Mac app adopted the same
+// ramp, so there is one copy compiled into both targets rather than a
+// per-platform pair.
 
 /// Per-provider brand-accent hues (distinct from the urgency ramp above --
 /// these identify a provider, not a percent-remaining state).

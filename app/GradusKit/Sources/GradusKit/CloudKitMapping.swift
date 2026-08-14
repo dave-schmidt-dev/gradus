@@ -103,31 +103,31 @@ extension ProviderStatus {
         }
 
         self.providerName = providerName
-        self.providerDisplayName = (record["providerDisplayName"] as? String) ?? providerName
-        self.ok = okNumber.boolValue
-        self.errorMessage = record["errorMessage"] as? String
-        self.windows = Self.decodeWindows(from: record["windowsJSON"] as? String)
-        self.data = Self.decodeData(from: record["dataJSON"] as? String)
-        self.observedAt = record["observedAt"] as? String
+        providerDisplayName = (record["providerDisplayName"] as? String) ?? providerName
+        ok = okNumber.boolValue
+        errorMessage = record["errorMessage"] as? String
+        windows = Self.decodeWindows(from: record["windowsJSON"] as? String)
+        data = Self.decodeData(from: record["dataJSON"] as? String)
+        observedAt = record["observedAt"] as? String
         self.snapshotUpdatedAt = snapshotUpdatedAt
         self.publishedAt = publishedAt
-        self.isWarning = (record["isWarning"] as? NSNumber)?.boolValue
+        isWarning = (record["isWarning"] as? NSNumber)?.boolValue
             ?? windows.contains(where: windowWarns)
-        self.isDepleted = (record["isDepleted"] as? NSNumber)?.boolValue
+        isDepleted = (record["isDepleted"] as? NSNumber)?.boolValue
             ?? windows.contains { percentIsDepleted($0.percentLeft) }
         if let computerName = record["sourceComputerName"] as? String,
            let userName = record["sourceUserName"] as? String,
            !computerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !userName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.syncSource = SyncSource(computerName: computerName, userName: userName)
+            syncSource = SyncSource(computerName: computerName, userName: userName)
         } else {
-            self.syncSource = nil
+            syncSource = nil
         }
     }
 
     private static func decodeWindows(from json: String?) -> [ProviderWindow] {
         guard let json, let data = json.data(using: .utf8),
-            let windows = try? JSONDecoder().decode([ProviderWindow].self, from: data)
+              let windows = try? JSONDecoder().decode([ProviderWindow].self, from: data)
         else {
             return []
         }
@@ -136,7 +136,7 @@ extension ProviderStatus {
 
     private static func decodeData(from json: String?) -> [String: JSONValue] {
         guard let json, let data = json.data(using: .utf8),
-            let value = try? JSONDecoder().decode([String: JSONValue].self, from: data)
+              let value = try? JSONDecoder().decode([String: JSONValue].self, from: data)
         else {
             return [:]
         }

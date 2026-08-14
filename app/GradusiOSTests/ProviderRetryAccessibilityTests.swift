@@ -1,8 +1,7 @@
 import Foundation
+@testable import GradusiOS
 import GradusKit
 import Testing
-
-@testable import GradusiOS
 
 @Suite("Provider retry accessibility")
 struct ProviderRetryAccessibilityTests {

@@ -28,11 +28,12 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
 
         return await withCheckedContinuation { continuation in
             let operation = CKFetchRecordZoneChangesOperation(
-                recordZoneIDs: [zoneID], configurationsByRecordZoneID: [zoneID: config])
+                recordZoneIDs: [zoneID], configurationsByRecordZoneID: [zoneID: config]
+            )
             operation.fetchAllChanges = true
 
-            operation.recordWasChangedBlock = { recordID, result in
-                guard case .success(let record) = result, let status = try? ProviderStatus(record: record) else { return }
+            operation.recordWasChangedBlock = { _, result in
+                guard case let .success(record) = result, let status = try? ProviderStatus(record: record) else { return }
                 changed.append(status)
             }
             operation.recordWithIDWasDeletedBlock = { recordID, _ in
@@ -42,7 +43,7 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
             var zoneOutcome: ZoneChangesOutcome?
             operation.recordZoneFetchResultBlock = { _, result in
                 switch result {
-                case .success(let (serverChangeToken, _, _)):
+                case let .success((serverChangeToken, _, _)):
                     // `serverChangeToken` is non-optional on success --
                     // confirmed empirically (an initial `.flatMap` guess
                     // assuming it was optional crashed the type-checker's
@@ -50,7 +51,7 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
                     // isolated via a standalone `swiftc -typecheck` probe).
                     let newToken = Self.encodeToken(serverChangeToken)
                     zoneOutcome = .success(changed: changed, deletedProviderNames: deletedProviderNames, newToken: newToken)
-                case .failure(let error):
+                case let .failure(error):
                     zoneOutcome = Self.classify(error)
                 }
             }
@@ -59,7 +60,7 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
                 switch result {
                 case .success:
                     continuation.resume(returning: zoneOutcome ?? .failure)
-                case .failure(let error):
+                case let .failure(error):
                     continuation.resume(returning: zoneOutcome ?? Self.classify(error))
                 }
             }

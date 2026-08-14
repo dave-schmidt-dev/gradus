@@ -1,14 +1,13 @@
 import AppKit
 import GradusKit
+@testable import GradusMac
 import SnapshotTesting
 import SwiftUI
 import Testing
 
-@testable import GradusMac
-
 @MainActor
-@Test func menuProgressBarPlacesMarkerAtSharedExpectedRemainingPosition() {
-    let markerFraction = try! #require(
+@Test func menuProgressBarPlacesMarkerAtSharedExpectedRemainingPosition() throws {
+    let markerFraction = try #require(
         ProgressBar.expectedRemainingMarkerFraction(percentLeft: 62, paceDelta: -0.05)
     )
 
@@ -47,7 +46,7 @@ import Testing
 private let menuDensityNow = ISO8601DateFormatter().date(from: "2026-08-02T20:00:00-04:00")!
 
 @MainActor
-private func menuSnapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
+private func menuSnapshotImage(_ view: some View, size: CGSize) -> NSImage {
     let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
     renderer.scale = 1
     guard let image = renderer.nsImage else {
@@ -57,12 +56,12 @@ private func menuSnapshotImage<V: View>(_ view: V, size: CGSize) -> NSImage {
 }
 
 private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [ProviderEntry] {
-    (0..<providerCount).map { providerIndex in
+    (0 ..< providerCount).map { providerIndex in
         ProviderEntry(
             name: "Provider \(providerIndex + 1)",
             ok: true,
             error: nil,
-            windows: (0..<windowsPerProvider).map { windowIndex in
+            windows: (0 ..< windowsPerProvider).map { windowIndex in
                 ProviderWindow(
                     id: "window-\(windowIndex + 1)",
                     percentLeft: Double(90 - windowIndex * 10),
@@ -94,7 +93,7 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
 @Test func menuMixedWindowCountsShareTheBarLeadingEdge() {
     let providers = [
         menuFixture(providerCount: 1, windowsPerProvider: 1)[0],
-        menuFixture(providerCount: 2, windowsPerProvider: 2)[1],
+        menuFixture(providerCount: 2, windowsPerProvider: 2)[1]
     ]
     let image = menuSnapshotImage(
         ProviderListView(providers: providers, now: menuDensityNow),
@@ -109,7 +108,7 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
     let referenceHeight = MenuVerticalBudget.referenceHeight(visibleScreenHeight: visibleScreenHeight)
     #expect(referenceHeight == 840)
     #expect(MenuVerticalBudget.referenceHeight(visibleScreenHeight: 500) == MenuVerticalBudget.minimumReferenceHeight)
-    #expect(MenuVerticalBudget.referenceHeight(visibleScreenHeight: 1_600) == MenuVerticalBudget.maximumReferenceHeight)
+    #expect(MenuVerticalBudget.referenceHeight(visibleScreenHeight: 1600) == MenuVerticalBudget.maximumReferenceHeight)
     #expect(MenuVerticalBudget.referenceHeight(visibleScreenHeight: nil) == MenuVerticalBudget.fallbackReferenceHeight)
     #expect(MenuVerticalBudget.providerViewportHeight(for: referenceHeight) == 688)
 
@@ -180,8 +179,8 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
             now: menuDensityNow,
             availableMenuHeight: referenceHeight
         )
-            .environment(\.dynamicTypeSize, .medium)
-            .frame(width: MenuContentView.columnWidth, alignment: .leading)
+        .environment(\.dynamicTypeSize, .medium)
+        .frame(width: MenuContentView.columnWidth, alignment: .leading)
     )
     #expect(overflowHostingView.fittingSize.height <= viewportHeight)
     #expect(intrinsicListHeight > viewportHeight)
@@ -223,7 +222,7 @@ private func menuVisibleFixture() -> [ProviderEntry] {
             name: "Provider \(index + 1)",
             ok: true,
             error: nil,
-            windows: (0..<windowCount).map { windowIndex in
+            windows: (0 ..< windowCount).map { windowIndex in
                 ProviderWindow(
                     id: "window-\(windowIndex + 1)",
                     percentLeft: 80,

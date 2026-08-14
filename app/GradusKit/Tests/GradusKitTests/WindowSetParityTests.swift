@@ -1,6 +1,5 @@
-import Testing
-
 @testable import GradusKit
+import Testing
 
 /// The Mac menu and iOS dense card consume the same schema-v2 window array.
 /// Keep this model-level contract separate from the Mac snapshot: the package
@@ -41,7 +40,7 @@ struct WindowSetParityTests {
                     resetISO: "2026-08-03T01:00:00Z",
                     windowHours: 5,
                     paceDelta: -0.12
-                ),
+                )
             ],
             data: [:],
             observedAt: "2026-08-02T17:55:00Z"

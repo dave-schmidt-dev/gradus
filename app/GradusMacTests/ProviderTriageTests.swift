@@ -1,7 +1,6 @@
 import GradusKit
-import Testing
-
 @testable import GradusMac
+import Testing
 
 /// Locks the menu's ordering and its "needs attention" rule.
 ///
@@ -88,9 +87,11 @@ struct ProviderTriageTests {
                 // `providerAttentionAsksAboutEveryWindowNotJustTheWorst` in
                 // GradusKitTests for why 80%/-0.5 would not be.
                 ProviderWindow(
-                    id: "five_hour", percentLeft: 5, resetISO: nil, windowHours: 5, paceDelta: 0.02),
+                    id: "five_hour", percentLeft: 5, resetISO: nil, windowHours: 5, paceDelta: 0.02
+                ),
                 ProviderWindow(
-                    id: "weekly", percentLeft: 70, resetISO: nil, windowHours: 168, paceDelta: -0.28),
+                    id: "weekly", percentLeft: 70, resetISO: nil, windowHours: 168, paceDelta: -0.28
+                )
             ],
             data: [:],
             observedAt: nil
@@ -114,7 +115,7 @@ struct ProviderTriageTests {
         #expect(ranked([
             provider("Healthy", percentLeft: 90, paceDelta: 0.10),
             provider("Broken", ok: false),
-            provider("Critical", percentLeft: 5, paceDelta: -0.50),
+            provider("Critical", percentLeft: 5, paceDelta: -0.50)
         ]) == ["Broken", "Critical", "Healthy"])
     }
 
@@ -123,14 +124,14 @@ struct ProviderTriageTests {
             provider("Green", percentLeft: 80, paceDelta: 0.10),
             provider("Orange", percentLeft: 60, paceDelta: -0.20),
             provider("Yellow", percentLeft: 70, paceDelta: -0.05),
-            provider("Red", percentLeft: 40, paceDelta: -0.40),
+            provider("Red", percentLeft: 40, paceDelta: -0.40)
         ]) == ["Red", "Orange", "Yellow", "Green"])
     }
 
     @Test func mostUrgentUsesVisibleSignalBeforeRemainingPercentage() {
         #expect(ranked([
             provider("Green", percentLeft: 73, paceDelta: 0.10),
-            provider("Yellow", percentLeft: 92, paceDelta: -0.05),
+            provider("Yellow", percentLeft: 92, paceDelta: -0.05)
         ]) == ["Yellow", "Green"])
     }
 
@@ -147,7 +148,7 @@ struct ProviderTriageTests {
             provider(
                 "Mike reset", percentLeft: 80, paceDelta: 0.10,
                 resetISO: "2026-08-09T12:00:00Z"
-            ),
+            )
         ]
 
         #expect(ranked(input, .nameAZ) == ["Alpha calm", "Mike reset", "Zulu urgent"])
@@ -161,7 +162,7 @@ struct ProviderTriageTests {
         let input = [
             provider("Zulu", percentLeft: 50, paceDelta: 0.10),
             provider("Alpha", percentLeft: 50, paceDelta: 0.10),
-            provider("Mike", percentLeft: 20, paceDelta: 0.10),
+            provider("Mike", percentLeft: 20, paceDelta: 0.10)
         ]
         #expect(ranked(input) == ["Mike", "Alpha", "Zulu"])
         #expect(ranked(input.reversed()) == ["Mike", "Alpha", "Zulu"])
@@ -178,7 +179,7 @@ struct ProviderTriageTests {
         #expect(ranked([
             provider("Spent", percentLeft: 0, paceDelta: -0.90),
             provider("Healthy", percentLeft: 90, paceDelta: 0.10),
-            provider("Broken", ok: false),
+            provider("Broken", ok: false)
         ]) == ["Broken", "Healthy", "Spent"])
     }
 
@@ -188,7 +189,7 @@ struct ProviderTriageTests {
         let input = [
             provider("Spent", percentLeft: 0, paceDelta: -0.90),
             provider("Zulu", percentLeft: 60, paceDelta: 0.10),
-            provider("Alpha", percentLeft: 80, paceDelta: 0.10),
+            provider("Alpha", percentLeft: 80, paceDelta: 0.10)
         ]
         for option in ProviderSortOption.allCases {
             #expect(ranked(input, option).last == "Spent", "sort mode \(option.rawValue)")
@@ -200,7 +201,7 @@ struct ProviderTriageTests {
             [
                 provider("Spent", percentLeft: 0, paceDelta: -0.90),
                 provider("AlsoSpent", percentLeft: 0.4, paceDelta: 0),
-                provider("Healthy", percentLeft: 90, paceDelta: 0.10),
+                provider("Healthy", percentLeft: 90, paceDelta: 0.10)
             ],
             localThreshold: threshold
         )
@@ -241,12 +242,11 @@ struct ProviderTriageTests {
             error: nil,
             windows: [
                 ProviderWindow(id: "5h", percentLeft: 80, resetISO: nil, windowHours: 5, paceDelta: 0),
-                ProviderWindow(id: "weekly", percentLeft: 12, resetISO: nil, windowHours: 168, paceDelta: 0),
+                ProviderWindow(id: "weekly", percentLeft: 12, resetISO: nil, windowHours: 168, paceDelta: 0)
             ],
             data: [:],
             observedAt: nil
         )
         #expect(ProviderTriage.worstWindow(entry)?.id == "weekly")
     }
-
 }

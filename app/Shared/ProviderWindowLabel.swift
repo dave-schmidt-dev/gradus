@@ -14,7 +14,7 @@ enum ProviderWindowLabel {
         "cg1w": "Weekly (CG)",
         "cg_five_hour": "5 Hour (CG)",
         "cg_weekly": "Weekly (CG)",
-        "billing_cycle": "Monthly",
+        "billing_cycle": "Monthly"
     ]
 
     /// Retain an unfamiliar identifier rather than hiding data or failing.

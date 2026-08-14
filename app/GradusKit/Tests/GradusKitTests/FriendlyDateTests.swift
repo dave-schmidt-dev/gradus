@@ -1,7 +1,6 @@
 import Foundation
-import Testing
-
 @testable import GradusKit
+import Testing
 
 private var easternCalendar: Calendar {
     var calendar = Calendar(identifier: .gregorian)

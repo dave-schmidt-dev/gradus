@@ -197,7 +197,7 @@ private enum GradusUITestFixture: String {
     }
 }
 
-private struct GradusUITestNotificationAuthorizationSource: NotificationAuthorizationSource {
+private struct UITestNotificationAuthorizationSource: NotificationAuthorizationSource {
     let authorization: NotificationAuthorization
 
     func currentAuthorization() async -> NotificationAuthorization {
@@ -376,7 +376,7 @@ struct GradusiOSApp: App {
             : Self.makeCloudKitDependencies()
         let warningNotificationScheduler = LocalWarningNotificationScheduler()
         let notificationAuthorizationSource: NotificationAuthorizationSource =
-            uiTestFixture.map { GradusUITestNotificationAuthorizationSource(authorization: $0.notificationAuthorization) }
+            uiTestFixture.map { UITestNotificationAuthorizationSource(authorization: $0.notificationAuthorization) }
                 ?? SystemNotificationAuthorizationSource()
 
         let viewModel = DashboardViewModel(
@@ -447,7 +447,7 @@ struct GradusiOSApp: App {
                         onExploreSample: enterSample,
                         onRetryICloud: retryLiveLifecycle,
                         isSampleEntryInProgress: sampleEntryInProgress,
-                        initialWarningAlertPermissionRequestPending: uiTestFixture?.startsWarningAlertRequest ?? false
+                        initialWarningAlertsPending: uiTestFixture?.startsWarningAlertRequest ?? false
                     )
                 }
             }
