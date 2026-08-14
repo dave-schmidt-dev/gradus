@@ -79,11 +79,17 @@ func rgb(_ hex: UInt32) -> CGColor {
 let BACKGROUND = rgb(0x141419)
 let TRACK = rgb(0x4E4E4E)
 
-/// (y, filled width, fill colour) per bar. x/height/radius are shared.
-let BARS: [(y: CGFloat, filled: CGFloat, color: CGColor)] = [
-    (292, 672, rgb(0x87D787)), // green  -- full
-    (476, 404, rgb(0xFFD75F)), // yellow -- partial
-    (660, 148, rgb(0xFF5F5F)) // red    -- low
+/// A bar's y position, filled width, and fill colour. x/height/radius are shared.
+struct Bar {
+    let y: CGFloat
+    let filled: CGFloat
+    let color: CGColor
+}
+
+let BARS: [Bar] = [
+    Bar(y: 292, filled: 672, color: rgb(0x87D787)), // green  -- full
+    Bar(y: 476, filled: 404, color: rgb(0xFFD75F)), // yellow -- partial
+    Bar(y: 660, filled: 148, color: rgb(0xFF5F5F)) // red    -- low
 ]
 let barX: CGFloat = 176
 let barW: CGFloat = 672
