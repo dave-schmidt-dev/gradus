@@ -431,7 +431,14 @@ create_ram_key_volume() {
     }
     newfs_hfs "$device" >/dev/null
     mount -t hfs -o noowners "$device" "$mountpoint"
-    mount_type="$(mount | /usr/bin/awk -v path="$mountpoint" '$0 ~ " on " path " " {print $3; exit}')"
+    # Match on $device (always a canonical /dev/diskN, unlike the mktemp
+    # mountpoint, which mount(8) reports through its /private-resolved
+    # symlink target and would never string-match otherwise) and read the
+    # filesystem token out of field 4 ("(hfs,"), not field 3 (the mountpoint).
+    mount_type="$(mount | /usr/bin/awk -v dev="$device" '$1 == dev {print $4; exit}')"
+    mount_type="${mount_type#\(}"
+    mount_type="${mount_type%,}"
+    mount_type="${mount_type%\)}"
     [[ "$mount_type" == "hfs" || "$mount_type" == "apfs" ]] || {
       echo "FAIL: key volume mount type was not verified" >&2
       return 1
@@ -1292,8 +1299,6 @@ PY
     echo "==> Prepared candidate $candidate_id build $NEXT_BUILD; upload deferred"
     return 0
   fi
-  transition_candidate_state "$candidate_ledger_path" uploading
-
 # altool's --api-key auth looks for AuthKey_<key-id>.p8 in a fixed set of
 # directories (or $API_PRIVATE_KEYS_DIR). Keep that regular file only on a
 # verified RAM-backed volume; a disk-backed temporary directory is forbidden.
@@ -1308,6 +1313,13 @@ PY
   printf '%s' "$APP_STORE_CONNECT_API_KEY" > "${RAM_VOLUME_MOUNTPOINT}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
   chmod 600 "${RAM_VOLUME_MOUNTPOINT}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
   export API_PRIVATE_KEYS_DIR="$RAM_VOLUME_MOUNTPOINT"
+
+  # Record "uploading" only once local pre-flight work (RAM volume, key
+  # material) has succeeded and the next step is the network call itself.
+  # A failure before this point is unambiguously local-only and must leave
+  # the candidate in a retryable "prepared" state rather than stranding it
+  # in "uploading", which only forward-transitions to failed/abandoned.
+  transition_candidate_state "$candidate_ledger_path" uploading
 
   echo "==> Uploading to App Store Connect"
   export GRADUS_UPLOAD_ATTEMPTED=1
