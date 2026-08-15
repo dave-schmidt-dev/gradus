@@ -11,10 +11,28 @@ from pathlib import Path
 from gradus.snapshot import V2_WINDOW_SPECS
 
 ROOT = Path(__file__).resolve().parents[1]
+_IOS_TESTS = ROOT / "app/GradusiOSTests"
+# A suite's windows are counted across every file that declares them, because
+# `006356d` moved most of them into companion `*SnapshotFixtures.swift` files
+# without changing a single one. Pinning the count to the `*Tests.swift` file
+# alone made a pure relocation look like a 6-window loss. The totals below are
+# unchanged from before that split -- what moved is where they live.
 FIXTURE_COUNTS = {
-    ROOT / "app/GradusiOSTests/DashboardSnapshotTests.swift": 8,
-    ROOT / "app/GradusiOSTests/DensityLayoutSnapshotTests.swift": 15,
-    ROOT / "app/GradusiOSTests/SettingsViewSnapshotTests.swift": 1,
+    "dashboard": (
+        (
+            _IOS_TESTS / "DashboardSnapshotTests.swift",
+            _IOS_TESTS / "DashboardSnapshotFixtures.swift",
+        ),
+        8,
+    ),
+    "density-layout": (
+        (
+            _IOS_TESTS / "DensityLayoutSnapshotTests.swift",
+            _IOS_TESTS / "DensityLayoutSnapshotFixtures.swift",
+        ),
+        15,
+    ),
+    "settings": ((_IOS_TESTS / "SettingsViewSnapshotTests.swift",), 1),
 }
 BASELINE_DIRS = (
     ROOT / "app/GradusiOSTests/__Snapshots__",
@@ -52,18 +70,28 @@ def validate_fixture_source(source: str, expected_count: int) -> list[str]:
     return ids
 
 
+def suite_source(paths: tuple[Path, ...]) -> str:
+    """Concatenate a suite's fixture-declaring files into one source blob."""
+    missing = [str(path.relative_to(ROOT)) for path in paths if not path.is_file()]
+    assert not missing, f"fixture source has moved or been deleted: {missing}"
+    return "\n".join(path.read_text() for path in paths)
+
+
 def test_snapshot_fixture_window_ids_are_registered_and_extracted() -> None:
-    for path, expected_count in FIXTURE_COUNTS.items():
-        validate_fixture_source(path.read_text(), expected_count)
+    # Every suite is checked before failing. Reporting only the first hid that
+    # the same refactor had broken two of the three suites, not one.
+    failures: list[str] = []
+    for suite, (paths, expected_count) in FIXTURE_COUNTS.items():
+        try:
+            validate_fixture_source(suite_source(paths), expected_count)
+        except AssertionError as exc:
+            failures.append(f"{suite}: {exc}")
+    assert not failures, "snapshot fixture drift:\n  " + "\n  ".join(failures)
 
 
 def test_snapshot_fixture_extractor_rejects_under_matching() -> None:
-    path, expected_count = next(
-        path_and_count
-        for path_and_count in FIXTURE_COUNTS.items()
-        if "DensityLayout" in path_and_count[0].name
-    )
-    source = path.read_text().replace('w("ap",', 'not_a_window("ap",', 1)
+    paths, expected_count = FIXTURE_COUNTS["density-layout"]
+    source = suite_source(paths).replace('w("ap",', 'not_a_window("ap",', 1)
     try:
         validate_fixture_source(source, expected_count)
     except AssertionError:

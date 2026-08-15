@@ -38,7 +38,7 @@ _REQUIRED_VISIBLE_SAMPLE_CONTROLS = {
 _SOURCE_ROUTE_MARKERS = {
     "required-icloud-lifecycle": ("GradusiOS/EmptyStateView.swift", "struct EmptyStateView"),
     "empty-state": ("GradusiOS/EmptyStateView.swift", "struct EmptyStateView"),
-    "sample-dashboard": ("GradusiOS/GradusiOSApp.swift", "struct SampleDataDashboard"),
+    "sample-dashboard": ("GradusiOS/SampleDataViews.swift", "struct SampleDataDashboard"),
     "ios-settings": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
     "ios-settings-sample": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
     "mac-menu": ("GradusMac/MenuContentView.swift", "struct MenuContentView"),
@@ -63,23 +63,23 @@ _SOURCE_CONTROL_MARKERS = {
         ),
     },
     "sample-dashboard": {
-        "sample-data-banner": ("GradusiOS/GradusiOSApp.swift", "struct SampleDataBanner"),
+        "sample-data-banner": ("GradusiOS/SampleDataViews.swift", "struct SampleDataBanner"),
         "sample-data-reset": (
-            "GradusiOS/GradusiOSApp.swift",
+            "GradusiOS/SampleDataViews.swift",
             'accessibilityIdentifier("sample-data-reset")',
         ),
         "sample-data-exit": (
-            "GradusiOS/GradusiOSApp.swift",
+            "GradusiOS/SampleDataViews.swift",
             'accessibilityIdentifier("sample-data-exit")',
         ),
     },
     "ios-settings": {
         "explore-sample-settings": (
-            "GradusiOS/SettingsView.swift",
+            "GradusiOS/SettingsView+SampleMode.swift",
             'accessibilityIdentifier("explore-sample-settings")',
         ),
         "sample-entry-in-progress": (
-            "GradusiOS/SettingsView.swift",
+            "GradusiOS/SettingsView+SampleMode.swift",
             ".disabled(isSampleEntryInProgress)",
         ),
         "warning-alerts": (
@@ -97,11 +97,11 @@ _SOURCE_CONTROL_MARKERS = {
     },
     "ios-settings-sample": {
         "sample-data-reset-settings": (
-            "GradusiOS/SettingsView.swift",
+            "GradusiOS/SettingsView+SampleMode.swift",
             'accessibilityIdentifier("sample-data-reset-settings")',
         ),
         "sample-data-exit-settings": (
-            "GradusiOS/SettingsView.swift",
+            "GradusiOS/SettingsView+SampleMode.swift",
             'accessibilityIdentifier("sample-data-exit-settings")',
         ),
     },
@@ -486,40 +486,50 @@ def validate_manifest(
 
 
 def _validate_source_markers(manifest: Mapping[str, Any], source_root: Path) -> None:
-    """Reject a route inventory that drifts from the shipped iOS source."""
+    """Reject a route inventory that drifts from the shipped iOS source.
+
+    Every marker is checked before raising, and all failures are reported
+    together. Bailing on the first one hides the scale of a drift: when
+    `006356d` split the sample-mode views into their own files it invalidated
+    eight markers at once, but only one was ever visible, so each repair
+    round-trip surfaced exactly one more. A refactor that moves a file breaks
+    markers in batches, so the gate should report in batches too.
+    """
     routes = {route["id"]: route for route in [*manifest["onboarding"], *manifest["screens"]]}
+    problems: list[str] = []
+
+    def source_of(path: Path, label: str) -> str | None:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            problems.append(f"cannot read source for {label}: {path}")
+            return None
+
     for route_id, (relative_path, marker) in _SOURCE_ROUTE_MARKERS.items():
         route = routes.get(route_id)
         if route is None:
-            raise WalkthroughError(f"source-backed route is missing from manifest: {route_id}")
-        source_path = source_root / relative_path
-        try:
-            source = source_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise WalkthroughError(
-                f"cannot read source for route {route_id}: {source_path}"
-            ) from exc
-        if marker not in source:
-            raise WalkthroughError(f"source route marker is missing for {route_id}: {marker}")
+            problems.append(f"source-backed route is missing from manifest: {route_id}")
+            continue
+        source = source_of(source_root / relative_path, f"route {route_id}")
+        if source is not None and marker not in source:
+            problems.append(f"source route marker is missing for {route_id}: {marker}")
         route_control_ids = {control["id"] for control in route["controls"]}
         for control_id, (control_path, control_marker) in _SOURCE_CONTROL_MARKERS.get(
             route_id, {}
         ).items():
             if control_id not in route_control_ids:
-                raise WalkthroughError(
-                    f"source-backed control is missing from {route_id}: {control_id}"
-                )
-            path = source_root / control_path
-            try:
-                control_source = path.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise WalkthroughError(
-                    f"cannot read source for control {control_id}: {path}"
-                ) from exc
-            if control_marker not in control_source:
-                raise WalkthroughError(
+                problems.append(f"source-backed control is missing from {route_id}: {control_id}")
+                continue
+            control_source = source_of(source_root / control_path, f"control {control_id}")
+            if control_source is not None and control_marker not in control_source:
+                problems.append(
                     f"source control marker is missing for {route_id}/{control_id}: {control_marker}"
                 )
+
+    if problems:
+        raise WalkthroughError(
+            f"{len(problems)} source marker problem(s):\n  " + "\n  ".join(problems)
+        )
 
 
 def _load_manifest(path: str | Path | None) -> Mapping[str, Any]:
