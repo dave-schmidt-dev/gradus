@@ -10,7 +10,9 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
+import gradus.history as history
 from gradus.history import (
     HISTORY_LOCK_NAME,
     HISTORY_SCHEMA_VERSION,
@@ -508,7 +510,166 @@ class HistoryQueryTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(partition.stat().st_mode), before_file)
 
 
+class HistoryReadCostTests(unittest.TestCase):
+    """Reads must be bounded by the question asked, not by what is retained.
+
+    Every append used to scan the whole journal three times -- once for the
+    monotonicity check, once for the rolling auth-failure window, once for
+    retention -- so the dashboard's cost per refresh grew with its own history
+    until it was a multi-second freeze on the render thread. These lock that
+    down at the only place it can be measured deterministically: how many
+    partitions get opened.
+    """
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.history_dir = Path(self.tmpdir.name) / "history"
+        self.store = HistoryStore(self.history_dir)
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def _append(self, when: datetime) -> bool:
+        return self.store.append(_payload(when), [], now=when)
+
+    def _seed_daily_partitions(self, base: datetime, days: int) -> None:
+        """One record per day ending the day before ``base``, oldest first."""
+        for offset in range(days, 0, -1):
+            when = base - timedelta(days=offset)
+            self.assertTrue(self._append(when))
+
+    def _partitions_read_during_append(self, when: datetime) -> list[str]:
+        opened: list[str] = []
+        real_read = history._read_partition
+
+        def counting_read(path: Path):
+            opened.append(Path(path).name)
+            return real_read(path)
+
+        with patch.object(history, "_read_partition", counting_read):
+            self.assertTrue(self._append(when))
+        return opened
+
+    def test_append_partition_reads_do_not_grow_with_retained_history(self) -> None:
+        base = datetime(2026, 3, 15, 12, tzinfo=UTC)
+        # A retention window wide enough to hold every seeded day, so the
+        # difference under test is purely "how much history exists" and not
+        # "how much of it expired".
+        with patch.object(history, "HISTORY_RETENTION_DAYS", 90):
+            self._seed_daily_partitions(base, days=30)
+            self.assertEqual(len(list(self.history_dir.glob("*.jsonl"))), 30)
+            deep = self._partitions_read_during_append(base)
+
+        self.tearDown()
+        self.setUp()
+
+        with patch.object(history, "HISTORY_RETENTION_DAYS", 90):
+            self._seed_daily_partitions(base, days=2)
+            self.assertEqual(len(list(self.history_dir.glob("*.jsonl"))), 2)
+            shallow = self._partitions_read_during_append(base)
+
+        self.assertEqual(len(deep), len(shallow))
+        self.assertLessEqual(len(deep), 2)
+
+    def test_prune_leaves_partitions_inside_the_window_untouched(self) -> None:
+        base = datetime(2026, 3, 15, 12, tzinfo=UTC)
+        # Eight days back, so one partition is genuinely past the seven-day
+        # boundary while the rest sit inside it. The record at exactly the
+        # cutoff is retained, which is why the expired day has to be day eight.
+        self._seed_daily_partitions(base, days=8)
+        # Rewriting goes through mkstemp + os.replace, so an unchanged inode is
+        # proof a partition was never read-modify-written.
+        before = {
+            path.name: (path.stat().st_ino, path.read_bytes())
+            for path in self.history_dir.glob("*.jsonl")
+        }
+        expired_partition = f"{(base - timedelta(days=8)).date().isoformat()}.jsonl"
+
+        opened = self._partitions_read_during_append(base)
+
+        # Only the expired partition and the one the cutoff lands in are worth
+        # opening; the five fully-inside-the-window days are pure overhead.
+        self.assertNotIn(f"{(base - timedelta(days=3)).date().isoformat()}.jsonl", opened)
+        self.assertLessEqual(len(opened), 3)
+        self.assertFalse((self.history_dir / expired_partition).exists())
+        for name, (inode, payload) in before.items():
+            if name == expired_partition:
+                continue
+            path = self.history_dir / name
+            self.assertTrue(path.exists(), name)
+            self.assertEqual(path.stat().st_ino, inode, f"{name} was rewritten")
+            self.assertEqual(path.read_bytes(), payload, name)
+
+    def test_backdated_append_is_rejected_against_a_newer_partition(self) -> None:
+        """The monotonicity check must still see across partition boundaries."""
+        base = datetime(2026, 3, 15, 12, tzinfo=UTC)
+        self.assertTrue(self._append(base))
+        self.assertFalse(self._append(base - timedelta(days=1)))
+        self.assertEqual(len(self.store.records()), 1)
+
+    def test_first_record_of_a_new_day_is_accepted(self) -> None:
+        base = datetime(2026, 3, 15, 12, tzinfo=UTC)
+        self.assertTrue(self._append(base))
+        self.assertTrue(self._append(base + timedelta(days=1)))
+        self.assertEqual(len(self.store.records()), 2)
+
+
 class AuthFailureJournalTests(unittest.TestCase):
+    def _append_auth_failure(self, history_dir: Path, when: datetime) -> None:
+        error = "Antigravity refresh retrying; values may be stale"
+        payload = _payload(when, [_entry("Antigravity", when, ok=False, error=error)])
+        probe = ProviderSnapshot(
+            name="Antigravity",
+            ok=False,
+            source="api",
+            error=error,
+            debug_detail="auth_failure",
+        )
+        self.assertTrue(HistoryStore(history_dir).append(payload, [probe], now=when))
+
+    def test_window_spanning_utc_midnight_still_counts_the_prior_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            history_dir = Path(tmp) / "history"
+            now = datetime(2026, 3, 15, 0, 4, tzinfo=UTC)
+            # Both failures land in the *previous* day's partition. 23:52 is
+            # outside the 600s window, 23:58 inside it -- so a read scoped to
+            # `now`'s date alone would wrongly report zero.
+            self._append_auth_failure(history_dir, now - timedelta(minutes=12))
+            self._append_auth_failure(history_dir, now - timedelta(minutes=6))
+            self.assertEqual(
+                [path.name for path in history_dir.glob("*.jsonl")], ["2026-03-14.jsonl"]
+            )
+            self.assertEqual(
+                recent_auth_failure_count("Antigravity", as_of=now, history_dir=history_dir),
+                1,
+            )
+
+    def test_counter_opens_only_the_partitions_its_window_spans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            history_dir = Path(tmp) / "history"
+            now = datetime(2026, 3, 15, 0, 4, tzinfo=UTC)
+            for days_back in range(5, 0, -1):
+                self._append_auth_failure(history_dir, now - timedelta(days=days_back))
+            # Inside the window, on the previous UTC date.
+            self._append_auth_failure(history_dir, now - timedelta(minutes=6))
+            # Exactly at `now`, so it opens a partition on today's date without
+            # being counted -- the window's upper bound is exclusive.
+            self._append_auth_failure(history_dir, now)
+            self.assertEqual(len(list(history_dir.glob("*.jsonl"))), 6)
+
+            opened: list[str] = []
+            real_read = history._read_partition_read_only
+
+            def counting_read(path: Path):
+                opened.append(Path(path).name)
+                return real_read(path)
+
+            with patch.object(history, "_read_partition_read_only", counting_read):
+                count = recent_auth_failure_count("Antigravity", as_of=now, history_dir=history_dir)
+
+            self.assertEqual(count, 1)
+            self.assertEqual(sorted(opened), ["2026-03-14.jsonl", "2026-03-15.jsonl"])
+
     def test_counter_reads_prior_auth_failures_only_in_rolling_window(self) -> None:
         tmpdir = tempfile.TemporaryDirectory()
         history_dir = Path(tmpdir.name) / "history"

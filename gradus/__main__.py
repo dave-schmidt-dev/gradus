@@ -1142,15 +1142,33 @@ def main() -> int:
         set_headless(True)
     providers, cleanup = initialize_providers(cwd, enabled_providers)
     notified_providers: set[str] = set()
+    # `_check_warnings` shells out to `osascript` per newly warning provider,
+    # each a blocking call with a 5s timeout. On the render thread that is a
+    # stall the user sees as a frozen frame. One worker, not more: serialized
+    # submissions keep `notified_providers` single-threaded, so the "only mark
+    # notified once osascript accepted it" retry rule still holds.
+    notify_executor = ThreadPoolExecutor(max_workers=1)
 
-    def _persist_snapshot(snaps: list[ProviderSnapshot], when: datetime) -> None:
+    def _persist_snapshot(
+        snaps: list[ProviderSnapshot],
+        when: datetime,
+        *,
+        on_status: Callable[[str], None] | None = None,
+    ) -> None:
         """Persist a router-facing snapshot without ever crashing the dashboard.
 
         Args:
             snaps: The freshly collected provider snapshots.
             when: The instant the snapshot was captured.
+            on_status: Optional progress channel forwarded to the writers, so a
+                caller holding the screen can repaint between steps instead of
+                leaving a frozen frame up. INV-8 requires the unattended
+                refresh to report progress through persistence waits; the
+                dashboard owes the watching user the same.
         """
-        v1_ok, v2_ok, history_ok = _write_snapshot_versions(snaps, when, journal_history=True)
+        v1_ok, v2_ok, history_ok = _write_snapshot_versions(
+            snaps, when, journal_history=True, on_status=on_status
+        )
         if not (v1_ok and v2_ok and history_ok):
             log.warning(
                 "snapshot persist partially failed: v1=%s v2=%s history=%s",
@@ -1270,8 +1288,22 @@ def main() -> int:
                         live.refresh()
                         time.sleep(0.12)
                     current = future.result()
-                    _check_warnings(current, notified_providers, datetime.now())
-                    _persist_snapshot(current, datetime.now())
+
+                    def loading_status(message: str) -> None:
+                        """Keep the startup timer live while the writers run."""
+                        live.update(
+                            build_loading_screen(
+                                f"Saving snapshot… {message}",
+                                datetime.now(),
+                                time.monotonic() - started,
+                            )
+                        )
+                        live.refresh()
+
+                    notify_executor.submit(
+                        _check_warnings, current, notified_providers, datetime.now()
+                    )
+                    _persist_snapshot(current, datetime.now(), on_status=loading_status)
                 finally:
                     executor.shutdown(wait=False, cancel_futures=True)
 
@@ -1347,8 +1379,25 @@ def main() -> int:
                                 time.sleep(0.12)
                         if not quit_requested:
                             current = refresh_future.result()
-                            _check_warnings(current, notified_providers, datetime.now())
-                            _persist_snapshot(current, updated_at)
+
+                            def refresh_status(message: str) -> None:
+                                """Hold the updating spinner across the writers."""
+                                live.update(
+                                    build_dashboard(
+                                        current,
+                                        datetime.now(),
+                                        0,
+                                        updating=True,
+                                        update_elapsed=time.monotonic() - refresh_started,
+                                        fix_actions=fix_actions,
+                                    )
+                                )
+                                live.refresh()
+
+                            notify_executor.submit(
+                                _check_warnings, current, notified_providers, datetime.now()
+                            )
+                            _persist_snapshot(current, updated_at, on_status=refresh_status)
                     finally:
                         refresh_executor.shutdown(wait=False, cancel_futures=True)
 
@@ -1358,6 +1407,10 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
+        # Not cancel_futures: a queued warning is the user's notification, and
+        # dropping it silently is worse than the brief wait an in-flight
+        # osascript costs on the way out.
+        notify_executor.shutdown(wait=False)
         for provider in cleanup:
             provider.close()
 

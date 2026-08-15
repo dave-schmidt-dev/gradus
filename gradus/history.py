@@ -16,7 +16,7 @@ import re
 import tempfile
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -118,7 +118,15 @@ def recent_auth_failure_count(
         return 0
     current = _utc_now(as_of)
     cutoff = current - timedelta(seconds=float(window_seconds))
-    records, status = read_history_evidence(history_dir)
+    # Only the partitions the window actually spans -- two at most for the
+    # default 600s, and only when it straddles UTC midnight. Reading the whole
+    # 7-day journal to answer a ten-minute question is what put seconds of
+    # blocking JSON parsing on the dashboard's startup path.
+    records, status = read_history_evidence(
+        history_dir,
+        since=cutoff.date(),
+        until=current.date(),
+    )
     if status not in {"ok", "empty"}:
         return 0
     count = 0
@@ -430,6 +438,26 @@ def _partition_paths(history_dir: Path) -> list[Path]:
     return sorted(paths)
 
 
+def _partition_date(path: Path) -> date | None:
+    """The UTC date a partition's filename encodes.
+
+    Every record reaches disk through :meth:`HistoryStore.append`, which files
+    it by :func:`history_partition_path` -- so a partition named ``D.jsonl``
+    holds records whose ``updated_at`` falls on UTC date ``D``. That invariant
+    is what lets the readers below open only the partitions a date-bounded
+    question can touch instead of parsing the whole 7-day journal.
+
+    Returns:
+        The parsed date, or None when the name matches ``_PARTITION_RE``'s
+        shape but is not a real calendar date (``2026-13-45.jsonl``). Callers
+        treat None as "cannot be date-scoped" and fall back to reading it.
+    """
+    try:
+        return date.fromisoformat(path.stem)
+    except ValueError:
+        return None
+
+
 def _read_partition(path: Path) -> tuple[list[dict[str, Any]], bool]:
     path.chmod(0o600)
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -481,6 +509,53 @@ def _all_records_locked(history_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _record_timestamps(records: Iterable[Mapping[str, Any]]) -> list[datetime]:
+    return [
+        timestamp
+        for record in records
+        if (timestamp := _history_record_timestamp(record)) is not None
+    ]
+
+
+def _latest_timestamp_locked(
+    history_dir: Path,
+    target: Path,
+    target_records: list[dict[str, Any]],
+) -> datetime | None:
+    """The newest committed timestamp, without reading the whole journal.
+
+    Partitions sort by the UTC date they are named for, so the newest record
+    on disk lives in the newest non-empty partition (see :func:`_partition_date`).
+    Walking back from the newest and stopping at the first partition holding a
+    readable record answers the append path's monotonicity question exactly,
+    while reading at most one partition the caller had not already read.
+
+    ``target`` is considered alongside the newest partition rather than instead
+    of it, so a backdated append is still rejected against the true maximum.
+
+    Args:
+        history_dir: The exclusively locked history directory.
+        target: The partition the incoming record would be written to.
+        target_records: Already-read contents of ``target``, reused as-is.
+
+    Returns:
+        The newest timestamp on disk, or None when nothing readable is stored.
+    """
+    stamps = _record_timestamps(target_records)
+    for path in reversed(_partition_paths(history_dir)):
+        if path == target:
+            # Already represented by `target_records`. An empty target cannot
+            # bound anything, so keep walking back to an older partition.
+            if stamps:
+                break
+            continue
+        partition_stamps = _record_timestamps(_read_partition(path)[0])
+        if partition_stamps:
+            stamps.extend(partition_stamps)
+            break
+    return max(stamps, default=None)
+
+
 def _write_partition(path: Path, records: list[Mapping[str, Any]]) -> None:
     history_dir = path.parent
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=history_dir)
@@ -516,6 +591,20 @@ def _write_partition(path: Path, records: list[Mapping[str, Any]]) -> None:
 def _prune_locked(history_dir: Path, now: datetime) -> None:
     cutoff = _utc_now(now) - timedelta(days=HISTORY_RETENTION_DAYS)
     for path in _partition_paths(history_dir):
+        # Only the partition the cutoff lands in, and any older, can hold an
+        # expired record (see `_partition_date`): a partition dated after the
+        # cutoff's date starts at a midnight later than the cutoff itself, so
+        # every record in it is retained and reading it can only ever be a
+        # no-op rewrite. Skipping those is what keeps prune -- which runs on
+        # every single append -- off the whole-journal read path.
+        #
+        # The tradeoff: a torn final line in a skipped partition is no longer
+        # rewritten away on the next append, only once that partition ages past
+        # the cutoff. Every reader already tolerates one -- `_read_partition`
+        # drops an unparseable tail -- so this costs tidiness, not correctness.
+        partition_date = _partition_date(path)
+        if partition_date is not None and partition_date > cutoff.date():
+            continue
         records, incomplete_tail = _read_partition(path)
         retained = [
             record
@@ -563,21 +652,21 @@ class HistoryStore:
             return False
         try:
             with _history_lock(self.history_dir, exclusive=True):
-                existing = _all_records_locked(self.history_dir)
-                latest = max(
-                    (candidate for candidate in existing if _history_record_timestamp(candidate)),
-                    key=lambda candidate: _history_record_timestamp(candidate),
-                    default=None,
-                )
-                if latest is not None:
-                    latest_timestamp = _history_record_timestamp(latest)
-                    if latest_timestamp is not None and timestamp <= latest_timestamp:
-                        return False
-
+                # Read the target first so the monotonicity check can reuse it
+                # rather than re-deriving the newest timestamp from the whole
+                # journal. Appending to the newest partition is the common
+                # case, and there the check then costs no extra read.
                 target = history_partition_path(timestamp, self.history_dir)
                 target_records: list[dict[str, Any]] = []
                 if target.exists() and not target.is_symlink():
                     target_records, _ = _read_partition(target)
+
+                latest_timestamp = _latest_timestamp_locked(
+                    self.history_dir, target, target_records
+                )
+                if latest_timestamp is not None and timestamp <= latest_timestamp:
+                    return False
+
                 target_records.append(record)
                 _write_partition(target, target_records)
                 _prune_locked(self.history_dir, retention_now)
@@ -632,14 +721,40 @@ def read_history_records(history_dir: Path = HISTORY_DIR) -> list[dict[str, Any]
     return HistoryStore(history_dir).records()
 
 
+def _partition_in_range(path: Path, since: date | None, until: date | None) -> bool:
+    """Whether a partition's date can contribute to a ``[since, until]`` read."""
+    partition_date = _partition_date(path)
+    if partition_date is None:
+        # Not a real calendar date, so it cannot be excluded on date grounds.
+        # Read it rather than silently drop records a caller asked for.
+        return True
+    if since is not None and partition_date < since:
+        return False
+    return until is None or partition_date <= until
+
+
 def read_history_evidence(
     history_dir: Path = HISTORY_DIR,
+    *,
+    since: date | None = None,
+    until: date | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """Read history without creating or changing any filesystem object.
 
     Returns ``(records, status)`` where status is one of ``missing``, ``empty``,
     ``ok``, or ``corrupt``.  An incomplete final JSONL line is intentionally
     tolerated and does not make an otherwise readable partition corrupt.
+
+    Args:
+        history_dir: The journal directory to read.
+        since: When set, skip partitions dated before this UTC date.
+        until: When set, skip partitions dated after this UTC date.
+
+    Bounding the read scopes ``corrupt`` to the requested dates too, which is
+    the honest answer for a bounded question: a caller asking about a
+    ten-minute window is answered from the partitions that window touches
+    rather than being zeroed by damage a week away from it. Left unset, the
+    read covers the whole journal exactly as before.
     """
     history_dir = Path(history_dir)
     try:
@@ -648,7 +763,10 @@ def read_history_evidence(
         paths = sorted(
             path
             for path in history_dir.iterdir()
-            if _PARTITION_RE.fullmatch(path.name) and not path.is_symlink() and path.is_file()
+            if _PARTITION_RE.fullmatch(path.name)
+            and not path.is_symlink()
+            and path.is_file()
+            and _partition_in_range(path, since, until)
         )
         if not paths:
             return [], "empty"
