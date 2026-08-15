@@ -12,7 +12,8 @@ import Testing
         IconButton(Icon.settings) {}
     }
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .light))
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .light))
     )
 }
 
@@ -22,6 +23,7 @@ import Testing
         IconButton(Icon.settings) {}
     }
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .dark))
+        of: view,
+        as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .dark))
     )
 }

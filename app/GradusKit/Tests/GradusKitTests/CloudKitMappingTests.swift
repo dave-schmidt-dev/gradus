@@ -7,7 +7,9 @@ private let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, owner
 
 private func sampleStatus(
     ok: Bool = true,
-    windows: [ProviderWindow] = [ProviderWindow(id: "weekly", percentLeft: 58.0, resetISO: nil, windowHours: 168.0, paceDelta: -0.2)],
+    windows: [ProviderWindow] = [
+        ProviderWindow(id: "weekly", percentLeft: 58.0, resetISO: nil, windowHours: 168.0, paceDelta: -0.2)
+    ],
     syncSource: SyncSource? = SyncSource(computerName: "Dave's MacBook Pro", userName: "dave")
 ) -> ProviderStatus {
     ProviderStatus(
@@ -101,7 +103,9 @@ private func sampleStatus(
 }
 
 @Test func decodeToleratesMissingWindowsJSON() throws {
-    let record = CKRecord(recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID))
+    let record = CKRecord(
+        recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
+    )
     record["providerName"] = "Codex" as CKRecordValue
     record["ok"] = NSNumber(value: true)
     record["snapshotUpdatedAt"] = "2026-08-02T20:00:00-04:00" as CKRecordValue
@@ -114,7 +118,9 @@ private func sampleStatus(
 }
 
 @Test func decodeToleratesMalformedWindowsJSON() throws {
-    let record = CKRecord(recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID))
+    let record = CKRecord(
+        recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
+    )
     record["providerName"] = "Codex" as CKRecordValue
     record["ok"] = NSNumber(value: true)
     record["snapshotUpdatedAt"] = "2026-08-02T20:00:00-04:00" as CKRecordValue
@@ -128,7 +134,9 @@ private func sampleStatus(
 }
 
 @Test func decodeThrowsOnMissingRequiredIdentityField() throws {
-    let record = CKRecord(recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID))
+    let record = CKRecord(
+        recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
+    )
     // providerName deliberately absent — this must throw, not silently degrade.
     record["ok"] = NSNumber(value: true)
 
@@ -141,7 +149,9 @@ private func sampleStatus(
     // A record whose stored isWarning/isDepleted flags disagree with what the
     // (now-missing) windows would recompute — decode must trust the stored
     // flags rather than silently recomputing from absent data.
-    let record = CKRecord(recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID))
+    let record = CKRecord(
+        recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
+    )
     record["providerName"] = "Codex" as CKRecordValue
     record["ok"] = NSNumber(value: true)
     record["snapshotUpdatedAt"] = "2026-08-02T20:00:00-04:00" as CKRecordValue

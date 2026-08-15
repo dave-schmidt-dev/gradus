@@ -142,7 +142,9 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
     )
 
     #expect(MenuVerticalBudget.resolve(providers: fitProviders, dynamicTypeSize: .medium, referenceHeight: 840).didFit)
-    #expect(!MenuVerticalBudget.resolve(providers: overflowProviders, dynamicTypeSize: .medium, referenceHeight: 520).didFit)
+    #expect(
+        !MenuVerticalBudget.resolve(providers: overflowProviders, dynamicTypeSize: .medium, referenceHeight: 520).didFit
+    )
     #expect(fitImage.size.width == MenuContentView.columnWidth)
     #expect(overflowImage.size.height == viewportHeight)
 }

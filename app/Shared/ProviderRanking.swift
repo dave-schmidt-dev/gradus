@@ -149,50 +149,74 @@ private func sortPartition<P: RankableProvider>(
     sortOption: ProviderSortOption
 ) -> [P] {
     providers.sorted { lhs, rhs in
-        switch sortOption {
-        case .mostUrgent:
-            let lhsTier = attentionTier(for: lhs, localThreshold: localThreshold)
-            let rhsTier = attentionTier(for: rhs, localThreshold: localThreshold)
-            if lhsTier != rhsTier {
-                return lhsTier < rhsTier
+        // Each comparator returns `nil` when it has no opinion, deferring to
+        // the deterministic name tie-break below -- exactly what the old
+        // fallthrough-to-the-bottom-of-the-switch did.
+        let comparison: Bool? =
+            switch sortOption {
+            case .mostUrgent:
+                compareMostUrgent(lhs, rhs, localThreshold: localThreshold)
+            case .resetSoonest:
+                compareResetSoonest(lhs, rhs)
+            case .nameAZ:
+                nil
             }
+        return comparison ?? (lhs.rankingName < rhs.rankingName)
+    }
+}
 
-            // Most-urgent has no useful ordering signal for a provider with
-            // no windows, so those stay at the end of their urgency tier.
-            let lhsHasWindows = !lhs.rankingWindows.isEmpty
-            let rhsHasWindows = !rhs.rankingWindows.isEmpty
-            if lhsHasWindows != rhsHasWindows {
-                return lhsHasWindows
-            }
+/// The `mostUrgent` comparator: urgency tier, then windows-present, then
+/// visible signal, then worst percentage. `nil` means every one of those
+/// tied, so the caller falls back to the name tie-break.
+private func compareMostUrgent<P: RankableProvider>(
+    _ lhs: P,
+    _ rhs: P,
+    localThreshold: Double
+) -> Bool? {
+    let lhsTier = attentionTier(for: lhs, localThreshold: localThreshold)
+    let rhsTier = attentionTier(for: rhs, localThreshold: localThreshold)
+    if lhsTier != rhsTier {
+        return lhsTier < rhsTier
+    }
 
-            let lhsSignal = mostUrgentSignalRank(lhs)
-            let rhsSignal = mostUrgentSignalRank(rhs)
-            if lhsSignal != rhsSignal {
-                return lhsSignal > rhsSignal
-            }
-            let lhsPercent = worstPercentForRanking(lhs)
-            let rhsPercent = worstPercentForRanking(rhs)
-            if lhsPercent != rhsPercent {
-                return lhsPercent < rhsPercent
-            }
-        case .resetSoonest:
-            let lhsReset = earliestResetForRanking(lhs)
-            let rhsReset = earliestResetForRanking(rhs)
-            switch (lhsReset, rhsReset) {
-            case let (lhsReset?, rhsReset?) where lhsReset != rhsReset:
-                return lhsReset < rhsReset
-            case (nil, .some):
-                return false
-            case (.some, nil):
-                return true
-            default:
-                break
-            }
-        case .nameAZ:
-            return lhs.rankingName < rhs.rankingName
-        }
+    // Most-urgent has no useful ordering signal for a provider with
+    // no windows, so those stay at the end of their urgency tier.
+    let lhsHasWindows = !lhs.rankingWindows.isEmpty
+    let rhsHasWindows = !rhs.rankingWindows.isEmpty
+    if lhsHasWindows != rhsHasWindows {
+        return lhsHasWindows
+    }
 
-        return lhs.rankingName < rhs.rankingName
+    let lhsSignal = mostUrgentSignalRank(lhs)
+    let rhsSignal = mostUrgentSignalRank(rhs)
+    if lhsSignal != rhsSignal {
+        return lhsSignal > rhsSignal
+    }
+
+    let lhsPercent = worstPercentForRanking(lhs)
+    let rhsPercent = worstPercentForRanking(rhs)
+    if lhsPercent != rhsPercent {
+        return lhsPercent < rhsPercent
+    }
+
+    return nil
+}
+
+/// The `resetSoonest` comparator: earliest reset first, missing reset last.
+/// `nil` means both sides tied (equal resets, or both missing), so the
+/// caller falls back to the name tie-break.
+private func compareResetSoonest<P: RankableProvider>(_ lhs: P, _ rhs: P) -> Bool? {
+    let lhsReset = earliestResetForRanking(lhs)
+    let rhsReset = earliestResetForRanking(rhs)
+    switch (lhsReset, rhsReset) {
+    case let (lhsReset?, rhsReset?) where lhsReset != rhsReset:
+        return lhsReset < rhsReset
+    case (nil, .some):
+        return false
+    case (.some, nil):
+        return true
+    default:
+        return nil
     }
 }
 

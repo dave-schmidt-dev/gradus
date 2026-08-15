@@ -28,6 +28,23 @@ import GradusKit
             let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
             let database = CKDatabaseAdapter(database: container.privateCloudDatabase)
 
+            await ensureZone(zoneID, database: database)
+
+            let status = schemaGateStatus()
+            let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
+
+            await saveStatus(status, recordID: recordID, zoneID: zoneID, database: database)
+            await verifyFetch(status, recordID: recordID, database: database)
+            await cleanUpRecord(recordID, container: container)
+
+            print(
+                "T2.5 SCHEMA GATE: PASS (all ProviderStatus fields registered; "
+                    + "save->fetch round-trips in this environment)"
+            )
+            exit(0)
+        }
+
+        private static func ensureZone(_ zoneID: CKRecordZone.ID, database: CKDatabaseAdapter) async {
             do {
                 try await database.saveZoneIfNeeded(CKRecordZone(zoneID: zoneID))
                 print("PASS: GradusZone created/confirmed in this environment")
@@ -35,36 +52,44 @@ import GradusKit
                 print("FAIL: zone save threw: \(error)")
                 exit(1)
             }
+        }
 
-            let publishedAt = Date()
-            // Every field populated non-nil, including the two optionals that
-            // earlier spikes left unset, so this run forces their types to
-            // register in schema.
-            let status = ProviderStatus(
+        /// Every field populated non-nil, including the two optionals that
+        /// earlier spikes left unset, so this run forces their types to
+        /// register in schema.
+        private static func schemaGateStatus() -> ProviderStatus {
+            ProviderStatus(
                 providerName: "t2-5-schema-gate",
                 providerDisplayName: "T2.5 Schema Gate",
                 ok: false,
                 errorMessage: "schema-gate probe error field",
-                windows: [
-                    ProviderWindow(
-                        id: "5h",
-                        percentLeft: 42,
-                        resetISO: "2026-08-02T23:00:00Z",
-                        windowHours: 5,
-                        paceDelta: -0.1
-                    )
-                ],
+                windows: [schemaGateWindow()],
                 data: ["probe": .string("schema-gate")],
                 observedAt: "2026-08-02T00:00:00Z",
                 snapshotUpdatedAt: "2026-08-02T00:00:00Z",
-                publishedAt: publishedAt,
+                publishedAt: Date(),
                 isWarning: true,
                 isDepleted: false,
                 syncSource: SyncSource(computerName: "Schema Gate Mac", userName: "schema-gate")
             )
+        }
 
-            let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
+        private static func schemaGateWindow() -> ProviderWindow {
+            ProviderWindow(
+                id: "5h",
+                percentLeft: 42,
+                resetISO: "2026-08-02T23:00:00Z",
+                windowHours: 5,
+                paceDelta: -0.1
+            )
+        }
 
+        private static func saveStatus(
+            _ status: ProviderStatus,
+            recordID: CKRecord.ID,
+            zoneID: CKRecordZone.ID,
+            database: CKDatabaseAdapter
+        ) async {
             do {
                 let record = try status.toCKRecord(zoneID: zoneID)
                 let outcome = await database.modifyRecords(toSave: [record], savePolicy: .changedKeys)
@@ -81,51 +106,17 @@ import GradusKit
                 print("FAIL: toCKRecord/save threw: \(error)")
                 exit(1)
             }
+        }
 
+        private static func verifyFetch(
+            _ status: ProviderStatus,
+            recordID: CKRecord.ID,
+            database: CKDatabaseAdapter
+        ) async {
             do {
                 let record = try await database.fetchRecord(recordID)
                 let fetched = try ProviderStatus(record: record)
-                // `publishedAt` is compared with a tolerance rather than exact
-                // `Date` equality: CloudKit's TIMESTAMP field round-trips at
-                // millisecond precision, so a bit-exact comparison against a
-                // sub-millisecond `Date()` would spuriously fail.
-                var mismatches: [String] = []
-                if fetched.providerName != status.providerName {
-                    mismatches.append("providerName")
-                }
-                if fetched.providerDisplayName != status.providerDisplayName {
-                    mismatches.append("providerDisplayName")
-                }
-                if fetched.ok != status.ok {
-                    mismatches.append("ok")
-                }
-                if fetched.errorMessage != status.errorMessage {
-                    mismatches.append("errorMessage")
-                }
-                if fetched.windows != status.windows {
-                    mismatches.append("windows")
-                }
-                if fetched.data != status.data {
-                    mismatches.append("data")
-                }
-                if fetched.observedAt != status.observedAt {
-                    mismatches.append("observedAt")
-                }
-                if fetched.snapshotUpdatedAt != status.snapshotUpdatedAt {
-                    mismatches.append("snapshotUpdatedAt")
-                }
-                if abs(fetched.publishedAt.timeIntervalSince(status.publishedAt)) > 0.01 {
-                    mismatches.append("publishedAt")
-                }
-                if fetched.isWarning != status.isWarning {
-                    mismatches.append("isWarning")
-                }
-                if fetched.isDepleted != status.isDepleted {
-                    mismatches.append("isDepleted")
-                }
-                if fetched.syncSource != status.syncSource {
-                    mismatches.append("syncSource")
-                }
+                let mismatches = mismatchedFields(fetched: fetched, status: status)
 
                 guard mismatches.isEmpty else {
                     print("FAIL: fetched ProviderStatus mismatches on: \(mismatches.joined(separator: ", "))")
@@ -138,16 +129,70 @@ import GradusKit
                 print("FAIL: fetch/decode threw: \(error)")
                 exit(1)
             }
+        }
 
+        private static func mismatchedFields(fetched: ProviderStatus, status: ProviderStatus) -> [String] {
+            simpleFieldMismatches(fetched: fetched, status: status)
+                + toleranceFieldMismatches(fetched: fetched, status: status)
+        }
+
+        private static func simpleFieldMismatches(fetched: ProviderStatus, status: ProviderStatus) -> [String] {
+            var mismatches: [String] = []
+            if fetched.providerName != status.providerName {
+                mismatches.append("providerName")
+            }
+            if fetched.providerDisplayName != status.providerDisplayName {
+                mismatches.append("providerDisplayName")
+            }
+            if fetched.ok != status.ok {
+                mismatches.append("ok")
+            }
+            if fetched.errorMessage != status.errorMessage {
+                mismatches.append("errorMessage")
+            }
+            if fetched.windows != status.windows {
+                mismatches.append("windows")
+            }
+            if fetched.data != status.data {
+                mismatches.append("data")
+            }
+            return mismatches
+        }
+
+        /// `publishedAt` is compared with a tolerance rather than exact
+        /// `Date` equality: CloudKit's TIMESTAMP field round-trips at
+        /// millisecond precision, so a bit-exact comparison against a
+        /// sub-millisecond `Date()` would spuriously fail.
+        private static func toleranceFieldMismatches(fetched: ProviderStatus, status: ProviderStatus) -> [String] {
+            var mismatches: [String] = []
+            if fetched.observedAt != status.observedAt {
+                mismatches.append("observedAt")
+            }
+            if fetched.snapshotUpdatedAt != status.snapshotUpdatedAt {
+                mismatches.append("snapshotUpdatedAt")
+            }
+            if abs(fetched.publishedAt.timeIntervalSince(status.publishedAt)) > 0.01 {
+                mismatches.append("publishedAt")
+            }
+            if fetched.isWarning != status.isWarning {
+                mismatches.append("isWarning")
+            }
+            if fetched.isDepleted != status.isDepleted {
+                mismatches.append("isDepleted")
+            }
+            if fetched.syncSource != status.syncSource {
+                mismatches.append("syncSource")
+            }
+            return mismatches
+        }
+
+        private static func cleanUpRecord(_ recordID: CKRecord.ID, container: CKContainer) async {
             do {
                 _ = try await container.privateCloudDatabase.deleteRecord(withID: recordID)
                 print("PASS: cleaned up schema-gate record")
             } catch {
                 print("WARN: cleanup delete threw (non-fatal): \(error)")
             }
-
-            print("T2.5 SCHEMA GATE: PASS (all ProviderStatus fields registered; save->fetch round-trips in this environment)")
-            exit(0)
         }
     }
 #endif

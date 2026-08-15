@@ -18,7 +18,10 @@ final class DashboardXCUITests: XCTestCase {
     func testFreshAccountDiscoveryShowsLiveProgress() {
         let app = launch(.freshAccountDiscovery)
 
-        XCTAssertTrue(staticText(containing: "Checking your iCloud account. Your cached data remains available.", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            staticText(containing: "Checking your iCloud account. Your cached data remains available.", in: app)
+                .waitForExistence(timeout: 5)
+        )
         assertExploreSampleControl(in: app)
     }
 
@@ -79,7 +82,9 @@ final class DashboardXCUITests: XCTestCase {
         openSettings(in: app)
 
         XCTAssertTrue(app.staticTexts["Requesting warning-alert permission…"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Waiting for your iOS notification choice. iCloud syncing continues either way."].exists)
+        XCTAssertTrue(
+            app.staticTexts["Waiting for your iOS notification choice. iCloud syncing continues either way."].exists
+        )
         XCTAssertFalse(app.alerts.firstMatch.exists)
     }
 
@@ -87,7 +92,10 @@ final class DashboardXCUITests: XCTestCase {
         let app = launch(.warningAlertsDenied)
         openSettings(in: app)
 
-        XCTAssertTrue(app.staticTexts["iOS is not allowing Gradus to show warning alerts. iCloud syncing is unaffected."].waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            app.staticTexts["iOS is not allowing Gradus to show warning alerts. iCloud syncing is unaffected."]
+                .waitForExistence(timeout: 5)
+        )
         let settings = app.buttons["Open iOS Settings"]
         XCTAssertTrue(settings.exists)
         XCTAssertTrue(app.switches["warning-alerts-toggle"].exists)

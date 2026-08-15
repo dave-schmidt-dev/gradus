@@ -162,7 +162,11 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
+        of: view,
+        as: .image(
+            layout: .fixed(width: 390, height: settingsSnapshotHeight),
+            traits: UITraitCollection(userInterfaceStyle: .light)
+        ),
         record: settingsSnapshotRecording
     )
 }
@@ -172,7 +176,11 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        of: view,
+        as: .image(
+            layout: .fixed(width: 390, height: settingsSnapshotHeight),
+            traits: UITraitCollection(userInterfaceStyle: .dark)
+        ),
         record: settingsSnapshotRecording
     )
 }
@@ -182,7 +190,11 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
+        of: view,
+        as: .image(
+            layout: .fixed(width: 390, height: settingsSnapshotHeight),
+            traits: UITraitCollection(userInterfaceStyle: .light)
+        ),
         record: settingsSnapshotRecording
     )
 }
@@ -192,7 +204,11 @@ private let settingsSnapshotHeight: CGFloat = 1150
     let viewModel = makeViewModel(notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        of: view,
+        as: .image(
+            layout: .fixed(width: 390, height: settingsSnapshotHeight),
+            traits: UITraitCollection(userInterfaceStyle: .dark)
+        ),
         record: settingsSnapshotRecording
     )
 }
@@ -209,7 +225,11 @@ private let settingsSnapshotHeight: CGFloat = 1150
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .light)),
+        of: view,
+        as: .image(
+            layout: .fixed(width: 390, height: settingsSnapshotHeight),
+            traits: UITraitCollection(userInterfaceStyle: .light)
+        ),
         record: settingsSnapshotRecording
     )
 }
@@ -221,7 +241,11 @@ private let settingsSnapshotHeight: CGFloat = 1150
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
     assertSnapshot(
-        of: view, as: .image(layout: .fixed(width: 390, height: settingsSnapshotHeight), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        of: view,
+        as: .image(
+            layout: .fixed(width: 390, height: settingsSnapshotHeight),
+            traits: UITraitCollection(userInterfaceStyle: .dark)
+        ),
         record: settingsSnapshotRecording
     )
 }

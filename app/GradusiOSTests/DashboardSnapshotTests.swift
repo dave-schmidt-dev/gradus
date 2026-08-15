@@ -12,221 +12,24 @@ import XCTest
 // (a real unit-test bundle), not `GradusiOSUITests` -- a `bundle.ui-testing`
 // target doesn't link against the app's compiled code at all, so
 // `@testable import GradusiOS` type-checks there but fails at link time.
-
-private let fixedNow = Date(timeIntervalSince1970: 1_786_219_200) // Matches SampleData.json publication timestamp.
-
-/// Opt in only while intentionally refreshing these baselines:
-/// OTHER_SWIFT_FLAGS='$(inherited) -D DASHBOARD_SNAPSHOT_RECORD'
-private let dashboardSnapshotRecording: SnapshotTestingConfiguration.Record = {
-    #if DASHBOARD_SNAPSHOT_RECORD
-        return .all
-    #else
-        return .never
-    #endif
-}()
-
-private func sampleProviders() -> [ProviderStatus] {
-    [
-        ProviderStatus(
-            providerName: "codex",
-            providerDisplayName: "Codex",
-            ok: true,
-            errorMessage: nil,
-            windows: [
-                ProviderWindow(
-                    id: "weekly", percentLeft: 62, resetISO: "2026-08-08T05:00:00-04:00", windowHours: 168,
-                    paceDelta: -0.05
-                )
-            ],
-            data: [:],
-            observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-30)),
-            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow,
-            syncSource: SyncSource(computerName: "Dave's MacBook Pro", userName: "dave")
-        ),
-        ProviderStatus(
-            providerName: "antigravity-claude",
-            providerDisplayName: "Antigravity (Claude)",
-            ok: true,
-            errorMessage: nil,
-            windows: [
-                ProviderWindow(
-                    id: "weekly", percentLeft: 4, resetISO: "2026-08-05T00:00:00-04:00", windowHours: 168,
-                    paceDelta: -0.30
-                )
-            ],
-            data: [:],
-            // Carried-forward and stale: > staleThresholdSeconds old (T3.4/CR-1).
-            observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-900)),
-            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
-        ),
-        ProviderStatus(
-            providerName: "cursor",
-            providerDisplayName: "Cursor",
-            ok: false,
-            errorMessage: "transient fetch failure",
-            windows: [],
-            data: [:],
-            observedAt: nil,
-            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
-        )
-    ]
-}
-
-private func assertSampleProviders(_ providers: [ProviderStatus]) {
-    XCTAssertEqual(providers.count, 3)
-    XCTAssertTrue(providers.contains { $0.ok && !$0.windows.isEmpty })
-    XCTAssertTrue(providers.contains { !$0.ok && $0.windows.isEmpty })
-}
-
-private func bundledSampleProviders() throws -> [ProviderStatus] {
-    try SampleDataMode.bundledProviders(bundle: Bundle(for: AppDelegate.self))
-}
-
-@MainActor
-private func makeViewModel(providers: [ProviderStatus], showExhausted: Bool = true) -> DashboardViewModel {
-    let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("gradus-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
-    let cache = FileLocalCacheStore(directory: directory)
-    let defaults = UserDefaults(suiteName: "gradus-dashboard-snapshots-\(UUID().uuidString)")!
-    defaults.set(showExhausted, forKey: DashboardViewModel.showExhaustedKey)
-    try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
-    return DashboardViewModel(cache: cache, userDefaults: defaults)
-}
-
-private func exhaustedProvider(named name: String) -> ProviderStatus {
-    ProviderStatus(
-        providerName: name,
-        providerDisplayName: name.capitalized,
-        ok: true,
-        errorMessage: nil,
-        windows: [
-            ProviderWindow(
-                id: "weekly", percentLeft: 0, resetISO: "2026-08-05T00:00:00-04:00", windowHours: 168,
-                paceDelta: -0.30
-            )
-        ],
-        data: [:],
-        observedAt: ISO8601DateFormatter().string(from: fixedNow),
-        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-        publishedAt: fixedNow
-    )
-}
-
-/// Fixtures whose *displayed number* differs under truncation and rounding, so
-/// a dashboard rendered with the old `Int(window.percentLeft)` cannot match
-/// this file's baseline.
-///
-/// Every other percentage in the image suite is a whole number. Those below
-/// ten (0, 1, 3, 4, 5) do move -- they gain a decimal -- so a wholesale revert
-/// to `Int()` would be caught without this fixture. What no whole number can
-/// catch is the defect TASKS row 29 actually described: truncation versus
-/// rounding at or above ten, where `Int(47)` and `round(47)` agree and only a
-/// fractional value disagrees. `47.8` is that value.
-/// Each reset time is derived from its pace rather than picked, on the same
-/// `paceDelta == fractionLeft - fractionOfWindowRemaining` identity
-/// `paceDivergentProviders` uses -- a fixture whose pace contradicts its own
-/// clock would be unreachable in production and a bad thing to pin pixels to.
-private func truncationDivergentProviders() -> [ProviderStatus] {
-    func provider(_ name: String, percentLeft: Double, paceDelta: Double, resetISO: String)
-        -> ProviderStatus {
-        ProviderStatus(
-            providerName: name,
-            providerDisplayName: name.capitalized,
-            ok: true,
-            errorMessage: nil,
-            windows: [
-                ProviderWindow(
-                    id: "weekly", percentLeft: percentLeft, resetISO: resetISO,
-                    windowHours: 168, paceDelta: paceDelta
-                )
-            ],
-            data: [:],
-            observedAt: ISO8601DateFormatter().string(from: fixedNow),
-            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
-        )
-    }
-    return [
-        // Rounds to 48, truncates to 47 -- the value David saw disagree
-        // between the TUI and the phone.
-        provider(
-            "codex", percentLeft: 47.8, paceDelta: -0.05, resetISO: "2026-07-29T06:02:14-04:00"
-        ),
-        // Rounds up across the decimal band to "10.0", truncates to "9.9".
-        provider(
-            "cursor", percentLeft: 9.97, paceDelta: -0.12, resetISO: "2026-07-27T02:14:34-04:00"
-        ),
-        // The one that matters most: above the 0.5 depleted ceiling, so this
-        // is a LIVE window, but `Int(0.7)` is 0 -- it rendered, and spoke to
-        // VoiceOver, as fully exhausted.
-        provider(
-            "copilot", percentLeft: 0.7, paceDelta: -0.30, resetISO: "2026-07-27T16:54:33-04:00"
-        )
-    ]
-}
-
-/// Fixtures whose signal level is the *opposite* of what the pre-pace,
-/// percent-only ramp produced, so a dashboard rendered with the old ramp
-/// cannot match this file's baseline.
-///
-/// Every other fixture in this file coincidentally agrees under both ramps
-/// (62%/-0.05 is yellow either way; 4%/-0.30 and 0%/-0.30 are red either
-/// way), which left the dashboard's adoption of the ramp with no pixel
-/// coverage at all. These two invert in both directions:
-///
-/// - `opencode` 3% left, +0.02 pace: nearly empty but the window is nearly
-///   over — David's motivating case. Old ramp: red. New: green.
-/// - `claude` 72% left, -0.26 pace: plenty left but almost none of the week
-///   spent. Old ramp: green. New: red.
-///
-/// Both are physically reachable: `paceDelta == fractionLeft -
-/// fractionOfWindowRemaining`, so the fixtures' reset timestamps are set to
-/// the window fraction each pace value implies (1% and 98% of 168h from
-/// `fixedNow`) rather than to arbitrary dates that would contradict them.
-private func paceDivergentProviders() -> [ProviderStatus] {
-    [
-        ProviderStatus(
-            providerName: "opencode",
-            providerDisplayName: "OpenCode",
-            ok: true,
-            errorMessage: nil,
-            windows: [
-                ProviderWindow(
-                    id: "weekly", percentLeft: 3, resetISO: "2026-07-25T15:00:48-04:00", windowHours: 168,
-                    paceDelta: 0.02
-                )
-            ],
-            data: [:],
-            observedAt: ISO8601DateFormatter().string(from: fixedNow),
-            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
-        ),
-        ProviderStatus(
-            providerName: "claude",
-            providerDisplayName: "Claude",
-            ok: true,
-            errorMessage: nil,
-            windows: [
-                ProviderWindow(
-                    id: "weekly", percentLeft: 72, resetISO: "2026-08-01T09:58:24-04:00", windowHours: 168,
-                    paceDelta: -0.26
-                )
-            ],
-            data: [:],
-            observedAt: ISO8601DateFormatter().string(from: fixedNow),
-            snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
-        )
-    ]
-}
+//
+// The suite is split across four files to stay under SwiftLint's
+// file_length limit. Every test that calls `assertSnapshot` stays in this
+// file: swift-snapshot-testing resolves each test's `__Snapshots__` baseline
+// directory from the physical source file of the call site, not the
+// enclosing type, so moving an image assertion to a different file would
+// silently point it at an empty, wrongly-named baseline directory instead of
+// the existing one. This file therefore holds dense-card rendering, ranking,
+// pace/truncation coverage, the Sample Data screenshot sizes, and the empty
+// states -- everything with pixels to check. DashboardSnapshotTests+SampleData.swift
+// and DashboardSnapshotTests+EmptyStates.swift hold their themes' remaining,
+// non-image assertions, and DashboardSnapshotFixtures.swift holds shared
+// fixtures/helpers all four draw on.
 
 /// P3/T3.3 gate: under the corrected ranking (Key decision #6), `cursor`
 /// (errored, tier 1) sorts first -- not `codex` (62%, the highest percent) --
 /// so these snapshots assert the errored provider's card renders first, with
-/// the rest of `sampleProviders()` following in ranked order. The hero tile
+/// the rest of `dashboardSampleProviders()` following in ranked order. The hero tile
 /// these were written against is gone (INV-12 dense layout); the ranking
 /// assertion survives it because ordering, not tile size, is what P3/T3.3
 /// gates.
@@ -240,6 +43,17 @@ private func paceDivergentProviders() -> [ProviderStatus] {
 /// offscreen hosting is what caused a SIGSEGV earlier this session (see
 /// `DashboardContent`'s doc comment in DashboardView.swift) -- this keeps
 /// these tests independent of `DashboardView`'s outer shell entirely.
+/// One App Store screenshot size to render the bundled Sample Data dashboard
+/// at. Named fields (rather than a tuple) so `testSampleDataDashboardAtAppStoreScreenshotSizes`
+/// stays within SwiftLint's large_tuple limit.
+private struct SampleDataScreenshotFixture {
+    let name: String
+    let width: CGFloat
+    let height: CGFloat
+    let layout: DashboardLayout
+    let density: DashboardDensity
+}
+
 final class DashboardSnapshotTests: XCTestCase {
     /// Recorded at 393x852 — a real iPhone 16 in points, not the old 390x600.
     /// The height matters now: these assert what a phone actually shows without
@@ -247,11 +61,11 @@ final class DashboardSnapshotTests: XCTestCase {
     /// is density.
     @MainActor
     func testDashboardRendersDenseCardsCompactLight() {
-        let providers = sampleProviders()
+        let providers = dashboardSampleProviders()
         assertSampleProviders(providers)
         let viewModel = makeViewModel(providers: providers)
         XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
-        let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
+        let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
         assertSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .light)),
@@ -262,11 +76,11 @@ final class DashboardSnapshotTests: XCTestCase {
 
     @MainActor
     func testDashboardRendersDenseCardsCompactDark() {
-        let providers = sampleProviders()
+        let providers = dashboardSampleProviders()
         assertSampleProviders(providers)
         let viewModel = makeViewModel(providers: providers)
         XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
-        let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
+        let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
         assertSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .dark)),
@@ -290,7 +104,7 @@ final class DashboardSnapshotTests: XCTestCase {
         XCTAssertTrue(levels.contains(.green))
         XCTAssertTrue(levels.contains(.red))
         let viewModel = makeViewModel(providers: providers)
-        let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
+        let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
         assertSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 400), traits: UITraitCollection(userInterfaceStyle: .light)),
@@ -327,7 +141,7 @@ final class DashboardSnapshotTests: XCTestCase {
             }
         )
         let viewModel = makeViewModel(providers: providers)
-        let view = DashboardContent(viewModel: viewModel, now: fixedNow, layout: .denseSingleColumn)
+        let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
         assertSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 520), traits: UITraitCollection(userInterfaceStyle: .light)),
@@ -338,7 +152,7 @@ final class DashboardSnapshotTests: XCTestCase {
 
     @MainActor
     func testDashboardSeparatesActiveProvidersBeforeCompactExhaustedSection() {
-        let providers = sampleProviders()
+        let providers = dashboardSampleProviders()
         assertSampleProviders(providers)
         let viewModel = makeViewModel(providers: providers + [
             exhaustedProvider(named: "vibe"),
@@ -372,9 +186,9 @@ final class DashboardSnapshotTests: XCTestCase {
                 ProviderWindow(id: "weekly", percentLeft: 10, resetISO: nil, windowHours: 168, paceDelta: nil)
             ],
             data: [:],
-            observedAt: ISO8601DateFormatter().string(from: fixedNow),
+            observedAt: ISO8601DateFormatter().string(from: dashboardSnapshotFixedNow),
             snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
+            publishedAt: dashboardSnapshotFixedNow
         )
         let codexSpark = ProviderStatus(
             providerName: "codex-spark",
@@ -385,9 +199,9 @@ final class DashboardSnapshotTests: XCTestCase {
                 ProviderWindow(id: "weekly", percentLeft: 90, resetISO: nil, windowHours: 168, paceDelta: nil)
             ],
             data: [:],
-            observedAt: ISO8601DateFormatter().string(from: fixedNow),
+            observedAt: ISO8601DateFormatter().string(from: dashboardSnapshotFixedNow),
             snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
-            publishedAt: fixedNow
+            publishedAt: dashboardSnapshotFixedNow
         )
 
         let viewModel = makeViewModel(providers: [codexSpark, codex])
@@ -430,7 +244,7 @@ final class DashboardSnapshotTests: XCTestCase {
     /// silently regress.
     @MainActor
     func testDashboardRendersExhaustedProvidersAsCompactCells() {
-        let providers = sampleProviders()
+        let providers = dashboardSampleProviders()
         assertSampleProviders(providers)
         let viewModel = makeViewModel(providers: providers + [
             exhaustedProvider(named: "vibe"),
@@ -440,7 +254,7 @@ final class DashboardSnapshotTests: XCTestCase {
         assertSnapshot(
             of: DashboardContent(
                 viewModel: viewModel,
-                now: fixedNow,
+                now: dashboardSnapshotFixedNow,
                 layout: .denseSingleColumn,
                 density: .compact
             ),
@@ -452,7 +266,7 @@ final class DashboardSnapshotTests: XCTestCase {
         assertSnapshot(
             of: DashboardContent(
                 viewModel: viewModel,
-                now: fixedNow,
+                now: dashboardSnapshotFixedNow,
                 layout: .denseGrid,
                 density: .compact
             ),
@@ -464,7 +278,7 @@ final class DashboardSnapshotTests: XCTestCase {
 
     @MainActor
     func testDashboardHidesExhaustedCellsWhenPreferenceIsOff() {
-        let providers = sampleProviders()
+        let providers = dashboardSampleProviders()
         assertSampleProviders(providers)
         let viewModel = makeViewModel(
             providers: providers + [exhaustedProvider(named: "vibe")],
@@ -480,94 +294,43 @@ final class DashboardSnapshotTests: XCTestCase {
     /// distinct frame so a marker or populated card cannot be cropped away.
     @MainActor
     func testSampleDataDashboardAtAppStoreScreenshotSizes() throws {
-        XCTAssertEqual(SampleDataMode.fixedNow, fixedNow)
+        XCTAssertEqual(SampleDataMode.fixedNow, dashboardSnapshotFixedNow)
         let providers = try bundledSampleProviders()
         XCTAssertFalse(providers.isEmpty)
         XCTAssertTrue(providers.allSatisfy { $0.providerDisplayName.hasPrefix("Sample ") })
         XCTAssertTrue(providers.allSatisfy { !$0.windows.isEmpty })
 
-        let snapshots: [(String, CGFloat, CGFloat, DashboardLayout, DashboardDensity)] = [
-            ("sampleDataDashboardIPhone", 393, 852, .denseSingleColumn, .compact),
-            ("sampleDataDashboardIPhoneLarge", 430, 932, .denseSingleColumn, .compact),
-            ("sampleDataDashboardIPad", 1024, 1366, .denseGrid, .compact)
+        let snapshots: [SampleDataScreenshotFixture] = [
+            SampleDataScreenshotFixture(
+                name: "sampleDataDashboardIPhone", width: 393, height: 852,
+                layout: .denseSingleColumn, density: .compact
+            ),
+            SampleDataScreenshotFixture(
+                name: "sampleDataDashboardIPhoneLarge", width: 430, height: 932,
+                layout: .denseSingleColumn, density: .compact
+            ),
+            SampleDataScreenshotFixture(
+                name: "sampleDataDashboardIPad", width: 1024, height: 1366,
+                layout: .denseGrid, density: .compact
+            )
         ]
-        for (name, width, height, layout, density) in snapshots {
+        for fixture in snapshots {
             let viewModel = makeViewModel(providers: providers)
             assertSnapshot(
                 of: SampleDataDashboard(
                     viewModel: viewModel,
-                    now: fixedNow,
-                    layout: layout,
-                    density: density
+                    now: dashboardSnapshotFixedNow,
+                    layout: fixture.layout,
+                    density: fixture.density
                 ),
                 as: .image(
-                    layout: .fixed(width: width, height: height),
+                    layout: .fixed(width: fixture.width, height: fixture.height),
                     traits: UITraitCollection(userInterfaceStyle: .light)
                 ),
                 record: dashboardSnapshotRecording,
-                testName: name
+                testName: fixture.name
             )
         }
-    }
-
-    func testSampleDataModeKeepsLegacyLaunchArgumentDebugOnly() {
-        XCTAssertTrue(SampleDataMode.isEnabled(arguments: ["GradusiOS", SampleDataMode.launchArgument], isDebugBuild: true))
-        XCTAssertFalse(SampleDataMode.isEnabled(arguments: ["GradusiOS", SampleDataMode.launchArgument], isDebugBuild: false))
-        XCTAssertFalse(SampleDataMode.isEnabled(arguments: ["GradusiOS"], isDebugBuild: true))
-    }
-
-    func testFreshInstallDefersLiveLifecycleUntilSyncIsEnabled() {
-        XCTAssertFalse(GradusiOSApp.shouldRunLiveLifecycle(
-            isUITesting: false, sampleDataModeEnabled: false, syncEnabled: false
-        ))
-        XCTAssertTrue(GradusiOSApp.shouldRunLiveLifecycle(
-            isUITesting: false, sampleDataModeEnabled: false, syncEnabled: true
-        ))
-    }
-
-    func testSampleDataModeDisablesLiveLifecycle() {
-        XCTAssertFalse(GradusiOSApp.shouldRunLiveLifecycle(isUITesting: false, sampleDataModeEnabled: true))
-        XCTAssertFalse(GradusiOSApp.shouldRunLiveLifecycle(isUITesting: true, sampleDataModeEnabled: false))
-        XCTAssertTrue(GradusiOSApp.shouldRunLiveLifecycle(isUITesting: false, sampleDataModeEnabled: false))
-    }
-
-    func testSampleDataBannerUsesFixedLabel() {
-        XCTAssertEqual(SampleDataMode.bannerText, "Explore Sample")
-        XCTAssertEqual(SampleDataMode.bannerDetail, "Local-only sample data")
-        XCTAssertEqual(SampleDataBanner.minimumHeight, 60)
-        XCTAssertNil(SampleDataBanner.maximumHeight)
-    }
-
-    @MainActor
-    func testSampleDataSessionIsolatedAndResettable() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("gradus-sample-session-\(UUID().uuidString)", isDirectory: true)
-        let liveDirectory = root.appendingPathComponent("Live", isDirectory: true)
-        let sampleDirectory = SampleDataMode.storageDirectory(baseDirectory: root)
-        let liveCache = FileLocalCacheStore(directory: liveDirectory)
-        let defaultsName = "gradus-sample-session-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
-        let liveStatus = sampleProviders()[0]
-        try liveCache.saveCachedStatuses([liveStatus], syncedAt: fixedNow)
-
-        let session = SampleDataSession(
-            directory: sampleDirectory,
-            bundle: Bundle(for: AppDelegate.self),
-            defaults: defaults,
-            preferencesSuiteName: defaultsName
-        )
-        XCTAssertFalse(session.viewModel.hasLiveLifecycleDependencies)
-        XCTAssertFalse(sampleDirectory == liveDirectory)
-        XCTAssertFalse(session.viewModel.providers.isEmpty)
-        XCTAssertEqual(liveCache.loadCachedStatuses(), [liveStatus])
-
-        try FileLocalCacheStore(directory: sampleDirectory).saveCachedStatuses([liveStatus], syncedAt: fixedNow)
-        session.reset()
-        XCTAssertEqual(
-            FileLocalCacheStore(directory: sampleDirectory).loadCachedStatuses().map(\.providerName),
-            try bundledSampleProviders().map(\.providerName)
-        )
-        XCTAssertEqual(liveCache.loadCachedStatuses(), [liveStatus])
     }
 
     @MainActor
@@ -579,45 +342,6 @@ final class DashboardSnapshotTests: XCTestCase {
             record: dashboardSnapshotRecording,
             testName: "emptyStateNotSignedIn"
         )
-    }
-
-    func testICloudRecoveryActionsDoNotOpenAppSettings() {
-        XCTAssertEqual(EmptyStateView.actionTitle(for: .notSignedIn), "Try Again")
-        XCTAssertEqual(EmptyStateView.actionTitle(for: .tryAgain), "Try Again")
-        XCTAssertEqual(EmptyStateView.actionTitle(for: .restricted), "Try Again")
-        XCTAssertEqual(EmptyStateView.actionTitle(for: .syncDisabled), "Continue")
-        XCTAssertEqual(EmptyStateView.actionTitle(for: .awaitingConfirmation), "Continue")
-    }
-
-    /// The temporary-unavailable state stays separate from confirmed no-account
-    /// and restricted states. These state-level assertions complement the image
-    /// baselines without requiring a live CloudKit account in a snapshot test.
-    func testTemporaryUnavailableAndRestrictedICloudRecoveryActionsStayDistinct() {
-        XCTAssertEqual(DashboardContent.iCloudRecoveryAction(for: .tryAgain), .retryLiveLifecycle)
-        XCTAssertEqual(DashboardContent.iCloudRecoveryAction(for: .notSignedIn), .retryLiveLifecycle)
-        XCTAssertEqual(DashboardContent.iCloudRecoveryAction(for: .restricted), .retryLiveLifecycle)
-        XCTAssertNotEqual(DashboardContent.iCloudRecoveryAction(for: .tryAgain), .confirmRequiredICloud)
-    }
-
-    @MainActor
-    func testICloudRetryStartsFreshLifecycle() {
-        let viewModel = makeViewModel(providers: [])
-        var retryCount = 0
-        let dashboard = DashboardContent(
-            viewModel: viewModel,
-            now: fixedNow,
-            layout: .denseSingleColumn,
-            onRetryICloud: { retryCount += 1 }
-        )
-
-        XCTAssertEqual(DashboardContent.iCloudRecoveryAction(for: .awaitingConfirmation), .confirmRequiredICloud)
-        XCTAssertEqual(DashboardContent.iCloudRecoveryAction(for: .tryAgain), .retryLiveLifecycle)
-        XCTAssertEqual(DashboardContent.iCloudRecoveryAction(for: .notSignedIn), .retryLiveLifecycle)
-        XCTAssertEqual(DashboardContent.iCloudRecoveryAction(for: .restricted), .retryLiveLifecycle)
-
-        dashboard.performICloudRecovery(for: .notSignedIn)
-
-        XCTAssertEqual(retryCount, 1)
     }
 
     @MainActor

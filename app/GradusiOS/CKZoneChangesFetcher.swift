@@ -33,7 +33,9 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
             operation.fetchAllChanges = true
 
             operation.recordWasChangedBlock = { _, result in
-                guard case let .success(record) = result, let status = try? ProviderStatus(record: record) else { return }
+                guard case let .success(record) = result, let status = try? ProviderStatus(record: record) else {
+                    return
+                }
                 changed.append(status)
             }
             operation.recordWithIDWasDeletedBlock = { recordID, _ in
@@ -50,7 +52,9 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
                     // diagnostic engine rather than reporting cleanly;
                     // isolated via a standalone `swiftc -typecheck` probe).
                     let newToken = Self.encodeToken(serverChangeToken)
-                    zoneOutcome = .success(changed: changed, deletedProviderNames: deletedProviderNames, newToken: newToken)
+                    zoneOutcome = .success(
+                        changed: changed, deletedProviderNames: deletedProviderNames, newToken: newToken
+                    )
                 case let .failure(error):
                     zoneOutcome = Self.classify(error)
                 }

@@ -50,40 +50,68 @@ public enum CredentialBridge {
         let pageCount = try data.uint32BE(at: 4)
         guard pageCount <= 1024 else { throw BridgeError.invalidCookieFile }
 
+        let pageSizes = try readPageSizes(count: pageCount, in: data)
+        return try readCookies(fromPages: pageSizes, in: data)
+    }
+
+    /// Reads the page-size table that follows the file header, one big-endian
+    /// `UInt32` per page, starting at offset 8.
+    private static func readPageSizes(count: UInt32, in data: Data) throws -> [Int] {
         var offset = 8
         var pageSizes: [Int] = []
-        for _ in 0 ..< pageCount {
+        for _ in 0 ..< count {
             let pageSize = try data.uint32BE(at: offset)
             guard pageSize >= 8, pageSize <= data.count else { throw BridgeError.invalidCookieFile }
             pageSizes.append(Int(pageSize))
             offset += 4
         }
+        return pageSizes
+    }
 
+    /// Walks the pages described by `pageSizes`, starting immediately after the
+    /// page-size table, and collects the cookies parsed from each page.
+    private static func readCookies(fromPages pageSizes: [Int], in data: Data) throws -> [Cookie] {
+        var offset = 8 + pageSizes.count * 4
         var cookies: [Cookie] = []
         for pageSize in pageSizes {
             guard offset + pageSize <= data.count else { throw BridgeError.invalidCookieFile }
             let page = data.subdata(in: offset ..< offset + pageSize)
             offset += pageSize
-            guard page.count >= 8 else { continue }
-            let cookieCount = try page.uint32LE(at: 4)
-            guard cookieCount <= 4096, 8 + Int(cookieCount) * 4 <= page.count else {
-                throw BridgeError.invalidCookieFile
-            }
-            for index in 0 ..< cookieCount {
-                let cookieOffset = try Int(page.uint32LE(at: 8 + Int(index) * 4))
-                guard cookieOffset + 48 <= page.count else { continue }
-                let cookie = page.subdata(in: cookieOffset ..< page.count)
-                guard let rawURL = try cookie.cString(at: cookie.uint32LE(at: 16)),
-                      let name = try cookie.cString(at: cookie.uint32LE(at: 20)),
-                      let value = try cookie.cString(at: cookie.uint32LE(at: 28)),
-                      let host = URLComponents(string: rawURL)?.host?.lowercased(),
-                      !name.isEmpty,
-                      !value.isEmpty
-                else { continue }
-                cookies.append(Cookie(host: host, name: name, value: value))
+            try cookies.append(contentsOf: readCookies(inPage: page))
+        }
+        return cookies
+    }
+
+    /// Parses every cookie record referenced by a single page's offset table.
+    private static func readCookies(inPage page: Data) throws -> [Cookie] {
+        guard page.count >= 8 else { return [] }
+        let cookieCount = try page.uint32LE(at: 4)
+        guard cookieCount <= 4096, 8 + Int(cookieCount) * 4 <= page.count else {
+            throw BridgeError.invalidCookieFile
+        }
+        var cookies: [Cookie] = []
+        for index in 0 ..< cookieCount {
+            let cookieOffset = try Int(page.uint32LE(at: 8 + Int(index) * 4))
+            guard cookieOffset + 48 <= page.count else { continue }
+            if let cookie = try readCookie(at: cookieOffset, in: page) {
+                cookies.append(cookie)
             }
         }
         return cookies
+    }
+
+    /// Decodes a single cookie record starting at `cookieOffset` within `page`,
+    /// or returns `nil` if any required field is missing, unparseable, or empty.
+    private static func readCookie(at cookieOffset: Int, in page: Data) throws -> Cookie? {
+        let cookie = page.subdata(in: cookieOffset ..< page.count)
+        guard let rawURL = try cookie.cString(at: cookie.uint32LE(at: 16)),
+              let name = try cookie.cString(at: cookie.uint32LE(at: 20)),
+              let value = try cookie.cString(at: cookie.uint32LE(at: 28)),
+              let host = URLComponents(string: rawURL)?.host?.lowercased(),
+              !name.isEmpty,
+              !value.isEmpty
+        else { return nil }
+        return Cookie(host: host, name: name, value: value)
     }
 
     private static func claudePayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {
@@ -137,7 +165,11 @@ public enum CredentialBridge {
 
     private static func write(_ payload: [String: String], named filename: String, to directory: URL) throws {
         let manager = FileManager.default
-        try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try manager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
         try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
         let target = directory.appendingPathComponent(filename)

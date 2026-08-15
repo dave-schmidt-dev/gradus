@@ -90,7 +90,10 @@ private func loadTruthTable() throws -> [TruthTableCase] {
         let alarming = row.level == .orange || row.level == .red
         #expect(
             windowWarns(window) == alarming,
-            "pace=\(String(describing: row.paceDelta)) percent=\(percentLeft): windowWarns and the \(row.level.rawValue) ramp disagree"
+            """
+            pace=\(String(describing: row.paceDelta)) percent=\(percentLeft): windowWarns and the \
+            \(row.level.rawValue) ramp disagree
+            """
         )
     }
     #expect(

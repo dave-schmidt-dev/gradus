@@ -164,7 +164,10 @@ struct GradusLogTests {
         let real = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/Gradus", isDirectory: true)
         #expect(GradusLogFile.defaultDirectory().standardizedFileURL != real.standardizedFileURL)
-        #expect(GradusLogFile.shared.fileURL.standardizedFileURL.path != real.appendingPathComponent("GradusMac.log").standardizedFileURL.path)
+        #expect(
+            GradusLogFile.shared.fileURL.standardizedFileURL.path
+                != real.appendingPathComponent("GradusMac.log").standardizedFileURL.path
+        )
     }
 
     /// Shipping behavior, which no test can observe directly from inside a

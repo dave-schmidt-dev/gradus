@@ -21,9 +21,22 @@ import GradusKit
             let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
             let database = CKDatabaseAdapter(database: container.privateCloudDatabase)
             let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
+            let status = seamGateStatus()
+            let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
 
-            let publishedAt = Date()
-            let status = ProviderStatus(
+            await upsertStatus(status, coordinator: coordinator)
+            await verifyFetch(status, recordID: recordID, database: database, zoneID: zoneID)
+            await cleanUpRecord(recordID, container: container)
+
+            print(
+                "T1.7 SEAM GATE: PASS (save->fetch proven on real Dev DB; "
+                    + "subscribe->receive-change deferred to Phase 4)"
+            )
+            exit(0)
+        }
+
+        private static func seamGateStatus() -> ProviderStatus {
+            ProviderStatus(
                 providerName: "t1-7-seam-gate",
                 providerDisplayName: "T1.7 Seam Gate",
                 ok: true,
@@ -32,35 +45,51 @@ import GradusKit
                 data: [:],
                 observedAt: "2026-08-02T00:00:00Z",
                 snapshotUpdatedAt: "2026-08-02T00:00:00Z",
-                publishedAt: publishedAt,
+                publishedAt: Date(),
                 isWarning: false,
                 isDepleted: false
             )
+        }
 
+        private static func upsertStatus(_ status: ProviderStatus, coordinator: PublishCoordinator) async {
             do {
                 try await coordinator.upsert([status])
             } catch {
                 print("FAIL: CloudPublisher.upsert threw: \(error)")
                 exit(1)
             }
+        }
 
-            let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
-
-            /// upsert() intentionally swallows per-record failures (CV-4's
-            /// partial-write contract) -- if the fetch below fails, re-save
-            /// directly through the adapter to surface the real per-record error.
-            func diagnoseSaveFailure() async {
-                let record = try? status.toCKRecord(zoneID: zoneID)
-                guard let record else { return }
-                let outcome = await database.modifyRecords(toSave: [record], savePolicy: .changedKeys)
-                if case let .failure(error) = outcome.results[recordID] {
-                    print("DIAGNOSIS: direct modifyRecords per-record result: \(error)")
-                } else if case .success = outcome.results[recordID] {
-                    print("DIAGNOSIS: direct modifyRecords reported success this time (was the first save actually applied?)")
-                } else {
-                    print("DIAGNOSIS: no per-record result at all for \(recordID)")
-                }
+        /// upsert() intentionally swallows per-record failures (CV-4's
+        /// partial-write contract) -- if the fetch below fails, re-save
+        /// directly through the adapter to surface the real per-record error.
+        private static func diagnoseSaveFailure(
+            status: ProviderStatus,
+            recordID: CKRecord.ID,
+            zoneID: CKRecordZone.ID,
+            database: CKDatabaseAdapter
+        ) async {
+            let record = try? status.toCKRecord(zoneID: zoneID)
+            guard let record else { return }
+            let outcome = await database.modifyRecords(toSave: [record], savePolicy: .changedKeys)
+            if case let .failure(error) = outcome.results[recordID] {
+                print("DIAGNOSIS: direct modifyRecords per-record result: \(error)")
+            } else if case .success = outcome.results[recordID] {
+                print(
+                    "DIAGNOSIS: direct modifyRecords reported success this time "
+                        + "(was the first save actually applied?)"
+                )
+            } else {
+                print("DIAGNOSIS: no per-record result at all for \(recordID)")
             }
+        }
+
+        private static func verifyFetch(
+            _ status: ProviderStatus,
+            recordID: CKRecord.ID,
+            database: CKDatabaseAdapter,
+            zoneID: CKRecordZone.ID
+        ) async {
             do {
                 let record = try await database.fetchRecord(recordID)
                 let fetched = try ProviderStatus(record: record)
@@ -74,19 +103,18 @@ import GradusKit
                 print("PASS: fetched record decodes back to an equivalent ProviderStatus via the real mapping code")
             } catch {
                 print("FAIL: fetch/decode threw: \(error)")
-                await diagnoseSaveFailure()
+                await diagnoseSaveFailure(status: status, recordID: recordID, zoneID: zoneID, database: database)
                 exit(1)
             }
+        }
 
+        private static func cleanUpRecord(_ recordID: CKRecord.ID, container: CKContainer) async {
             do {
                 _ = try await container.privateCloudDatabase.deleteRecord(withID: recordID)
                 print("PASS: cleaned up seam-gate record")
             } catch {
                 print("WARN: cleanup delete threw (non-fatal): \(error)")
             }
-
-            print("T1.7 SEAM GATE: PASS (save->fetch proven on real Dev DB; subscribe->receive-change deferred to Phase 4)")
-            exit(0)
         }
     }
 #endif

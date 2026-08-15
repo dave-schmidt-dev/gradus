@@ -17,12 +17,18 @@ private func window(percentLeft: Double, paceDelta: Double? = nil) -> ProviderWi
 // used to contribute `false` unconditionally, and now falls through to the
 // percent-only ramp (70/40/20), which is what `signalLevel` does with a window
 // that has no reset timestamp.
-private let truthTable: [(percentLeft: Double, paceDelta: Double?, expectWarns: Bool)] = {
+private struct WarnsTruthTableCase: Sendable {
+    let percentLeft: Double
+    let paceDelta: Double?
+    let expectWarns: Bool
+}
+
+private let truthTable: [WarnsTruthTableCase] = {
     func fallbackWarns(_ percentLeft: Double) -> Bool {
         percentLeft < 40
     }
 
-    var cases: [(Double, Double?, Bool)] = []
+    var cases: [WarnsTruthTableCase] = []
     for percentLeft in [0.0, 0.4, 1.0, 50.0, 99.0, 100.0] {
         let depleted = percentLeft < 0.5
         for paceDelta in [Double?.none, -0.5, -0.10, -0.099, 0.0, 0.5] {
@@ -33,18 +39,16 @@ private let truthTable: [(percentLeft: Double, paceDelta: Double?, expectWarns: 
             } else {
                 fallbackWarns(percentLeft)
             }
-            cases.append((percentLeft, paceDelta, warns))
+            cases.append(WarnsTruthTableCase(percentLeft: percentLeft, paceDelta: paceDelta, expectWarns: warns))
         }
     }
     return cases
 }()
 
 @Test(arguments: truthTable)
-func windowWarnsMatchesGeneratedTruthTable(
-    _ testCase: (percentLeft: Double, paceDelta: Double?, expectWarns: Bool)
-) {
-    let resolvedWindow = window(percentLeft: testCase.percentLeft, paceDelta: testCase.paceDelta)
-    #expect(windowWarns(resolvedWindow) == testCase.expectWarns)
+private func windowWarnsMatchesGeneratedTruthTable(_ testCase: WarnsTruthTableCase) {
+    let w = window(percentLeft: testCase.percentLeft, paceDelta: testCase.paceDelta)
+    #expect(windowWarns(w) == testCase.expectWarns)
 }
 
 @Test func invalidPercentNeverWarns() {

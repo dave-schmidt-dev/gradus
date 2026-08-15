@@ -42,70 +42,7 @@ private func snapshotImage(_ view: some View, size: CGSize) -> NSImage {
         SnapshotPayload(
             schemaVersion: 2,
             updatedAt: "2026-08-02T18:00:00Z",
-            providers: [
-                ProviderEntry(
-                    name: "Codex",
-                    ok: true,
-                    error: nil,
-                    windows: [
-                        ProviderWindow(
-                            id: "5h",
-                            percentLeft: 62,
-                            resetISO: "2026-08-02T23:00:00Z",
-                            windowHours: 5,
-                            paceDelta: -0.05
-                        )
-                    ],
-                    data: [:],
-                    observedAt: "2026-08-02T17:55:00Z"
-                ),
-                ProviderEntry(
-                    name: "Antigravity (Claude)",
-                    ok: true,
-                    error: nil,
-                    windows: [
-                        ProviderWindow(
-                            id: "weekly",
-                            percentLeft: 4,
-                            resetISO: "2026-08-05T00:00:00Z",
-                            windowHours: 168,
-                            paceDelta: -0.30
-                        )
-                    ],
-                    data: [:],
-                    observedAt: "2026-08-02T17:55:00Z"
-                ),
-                ProviderEntry(
-                    name: "Cursor",
-                    ok: false,
-                    error: "transient fetch failure",
-                    windows: [],
-                    data: [:],
-                    observedAt: nil
-                ),
-                // Depleted, and deliberately listed first-ish in the input so
-                // the baseline proves the *sort* moved it, not the fixture
-                // order. Its presence is the point: with no depleted provider
-                // in this fixture the exhausted section never renders, and the
-                // whole compact treatment could be deleted with a green gate --
-                // exactly how the equivalent iOS cell was lost (TASKS row 21).
-                ProviderEntry(
-                    name: "Copilot",
-                    ok: true,
-                    error: nil,
-                    windows: [
-                        ProviderWindow(
-                            id: "weekly",
-                            percentLeft: 0,
-                            resetISO: "2026-08-04T04:00:00Z",
-                            windowHours: 168,
-                            paceDelta: -0.60
-                        )
-                    ],
-                    data: [:],
-                    observedAt: "2026-08-02T17:55:00Z"
-                )
-            ]
+            providers: fixtureDataProviders()
         )
     )
 
@@ -117,6 +54,89 @@ private func snapshotImage(_ view: some View, size: CGSize) -> NSImage {
         size: CGSize(width: 256, height: 260)
     )
     assertSnapshot(of: image, as: .image)
+}
+
+private func fixtureCodexEntry() -> ProviderEntry {
+    ProviderEntry(
+        name: "Codex",
+        ok: true,
+        error: nil,
+        windows: [
+            ProviderWindow(
+                id: "5h",
+                percentLeft: 62,
+                resetISO: "2026-08-02T23:00:00Z",
+                windowHours: 5,
+                paceDelta: -0.05
+            )
+        ],
+        data: [:],
+        observedAt: "2026-08-02T17:55:00Z"
+    )
+}
+
+private func fixtureAntigravityEntry() -> ProviderEntry {
+    ProviderEntry(
+        name: "Antigravity (Claude)",
+        ok: true,
+        error: nil,
+        windows: [
+            ProviderWindow(
+                id: "weekly",
+                percentLeft: 4,
+                resetISO: "2026-08-05T00:00:00Z",
+                windowHours: 168,
+                paceDelta: -0.30
+            )
+        ],
+        data: [:],
+        observedAt: "2026-08-02T17:55:00Z"
+    )
+}
+
+private func fixtureCursorEntry() -> ProviderEntry {
+    ProviderEntry(
+        name: "Cursor",
+        ok: false,
+        error: "transient fetch failure",
+        windows: [],
+        data: [:],
+        observedAt: nil
+    )
+}
+
+private func fixtureDepletedCopilotEntry() -> ProviderEntry {
+    ProviderEntry(
+        name: "Copilot",
+        ok: true,
+        error: nil,
+        windows: [
+            ProviderWindow(
+                id: "weekly",
+                percentLeft: 0,
+                resetISO: "2026-08-04T04:00:00Z",
+                windowHours: 168,
+                paceDelta: -0.60
+            )
+        ],
+        data: [:],
+        observedAt: "2026-08-02T17:55:00Z"
+    )
+}
+
+private func fixtureDataProviders() -> [ProviderEntry] {
+    [
+        fixtureCodexEntry(),
+        fixtureAntigravityEntry(),
+        fixtureCursorEntry(),
+        // Depleted, and deliberately listed first-ish in the input so
+        // the baseline proves the *sort* moved it, not the fixture
+        // order. Its presence is the point: with no depleted provider
+        // in this fixture the exhausted section never renders, and the
+        // whole compact treatment could be deleted with a green gate --
+        // exactly how the equivalent iOS cell was lost (TASKS row 21).
+        fixtureDepletedCopilotEntry()
+    ]
 }
 
 /// A failed refresh still carries the last known-good windows. The menu must

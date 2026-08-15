@@ -8,7 +8,9 @@ struct ProviderRetryAccessibilityTests {
         name: String = "Antigravity",
         error: String,
         ok: Bool = false,
-        windows: [ProviderWindow] = [ProviderWindow(id: "five_hour", percentLeft: 80, resetISO: nil, windowHours: 5, paceDelta: nil)]
+        windows: [ProviderWindow] = [
+            ProviderWindow(id: "five_hour", percentLeft: 80, resetISO: nil, windowHours: 5, paceDelta: nil)
+        ]
     ) -> ProviderEntry {
         ProviderEntry(
             name: name,
@@ -30,7 +32,10 @@ struct ProviderRetryAccessibilityTests {
     @Test func reauthenticationIsActionableAndDistinct() {
         let provider = provider(error: "Antigravity session expired: run `agy` to re-authenticate", windows: [])
         #expect(ProviderRetryAccessibility.label(for: provider) == ProviderRetryAccessibility.reauthenticationLabel)
-        #expect(ProviderRetryAccessibility.displayLabel(for: provider) == ProviderRetryAccessibility.reauthenticationLabel)
+        #expect(
+            ProviderRetryAccessibility.displayLabel(for: provider)
+                == ProviderRetryAccessibility.reauthenticationLabel
+        )
         #expect(ProviderRetryAccessibility.label(for: provider) != ProviderRetryAccessibility.retryingLabel)
         #expect(provider.rankingNeedsAttention(localThreshold: 30))
     }

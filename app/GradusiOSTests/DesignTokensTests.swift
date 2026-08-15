@@ -22,14 +22,20 @@ private func window(percentLeft: Double, paceDelta: Double?) -> ProviderWindow {
     )
 }
 
-private func rgbComponents(_ color: Color) -> (red: Double, green: Double, blue: Double) {
+private struct RGBComponents {
+    let red: Double
+    let green: Double
+    let blue: Double
+}
+
+private func rgbComponents(_ color: Color) -> RGBComponents {
     let uiColor = UIColor(color)
     var red: CGFloat = 0
     var green: CGFloat = 0
     var blue: CGFloat = 0
     var alpha: CGFloat = 0
     uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-    return (Double(red), Double(green), Double(blue))
+    return RGBComponents(red: Double(red), green: Double(green), blue: Double(blue))
 }
 
 private func expectSameColor(_ lhs: Color, _ rhs: Color, sourceLocation: SourceLocation = #_sourceLocation) {

@@ -73,23 +73,7 @@ public actor PublishCoordinator: CloudPublisher {
     public func upsert(_ statuses: [ProviderStatus]) async throws {
         try await database.saveZoneIfNeeded(CKRecordZone(zoneID: zoneID))
 
-        var newlyWarning: Set<String> = []
-        var toSave: [(status: ProviderStatus, hash: String)] = []
-        for status in statuses {
-            let hash = Self.contentHash(for: status)
-            let previous = state[status.providerName]
-            if status.isWarning, !(previous?.wasWarning ?? false) {
-                newlyWarning.insert(status.providerName)
-            }
-            var updated = previous ?? ProviderPublishState()
-            updated.wasWarning = status.isWarning
-            state[status.providerName] = updated
-
-            if previous?.lastSavedContentHash == hash {
-                continue // PM-2: only the timestamp changed, nothing to save.
-            }
-            toSave.append((status, hash))
-        }
+        let (newlyWarning, toSave) = diffAgainstState(statuses)
         newlyWarningProviders = newlyWarning
 
         guard !toSave.isEmpty else {
@@ -143,6 +127,34 @@ public actor PublishCoordinator: CloudPublisher {
         GradusLog.publish.notice("published \(toSave.count) record(s) successfully")
     }
 
+    /// Walks `statuses` against `state` once: records the warning 0→1 edge
+    /// (CR-2) and the content-hash save-suppression decision (PM-2) for each
+    /// provider, committing `wasWarning` into `state` as it goes. Kept
+    /// synchronous (no `await`) so this runs atomically with the
+    /// `newlyWarningProviders` assignment immediately after it in `upsert`.
+    private func diffAgainstState(
+        _ statuses: [ProviderStatus]
+    ) -> (newlyWarning: Set<String>, toSave: [(status: ProviderStatus, hash: String)]) {
+        var newlyWarning: Set<String> = []
+        var toSave: [(status: ProviderStatus, hash: String)] = []
+        for status in statuses {
+            let hash = Self.contentHash(for: status)
+            let previous = state[status.providerName]
+            if status.isWarning, !(previous?.wasWarning ?? false) {
+                newlyWarning.insert(status.providerName)
+            }
+            var updated = previous ?? ProviderPublishState()
+            updated.wasWarning = status.isWarning
+            state[status.providerName] = updated
+
+            if previous?.lastSavedContentHash == hash {
+                continue // PM-2: only the timestamp changed, nothing to save.
+            }
+            toSave.append((status, hash))
+        }
+        return (newlyWarning, toSave)
+    }
+
     private func writeProducerEvidenceIfConfigured() throws {
         guard let evidencePath else { return }
         guard let producerBuildNumber,
@@ -194,75 +206,6 @@ public actor PublishCoordinator: CloudPublisher {
         try data.write(to: path, options: .atomic)
     }
 
-    /// Describes a save result for the log by error *code*, not by dumping the
-    /// error whole. A `CKError`'s `userInfo` can carry the offending record and
-    /// its fields, and these records hold the user's provider usage data —
-    /// there is no reason for any of it to reach a log file to explain why a
-    /// save failed. That rules out `localizedDescription` too: it is read out
-    /// of the same `userInfo` and can carry server-supplied text.
-    static func describe(_ result: Result<CKRecord, Error>?) -> String {
-        guard let result else { return "no result returned for this record" }
-        guard case let .failure(error) = result else { return "success" }
-        guard let ckError = error as? CKError else {
-            let nsError = error as NSError
-            return "\(type(of: error)) (code \(nsError.code), domain \(nsError.domain))"
-        }
-        return "\(name(for: ckError.code)) (CKError \(ckError.code.rawValue))"
-    }
-
-    /// `CKError.Code` is imported from an Objective-C `NS_ENUM`, so it has no
-    /// synthesized case names: interpolating it yields
-    /// `CKErrorCode(rawValue: 26)` — the number twice and the name never. The
-    /// first release-checklist line this ever produced read
-    /// `save failed for B: CKError.CKErrorCode(rawValue: 26) (26)`, which
-    /// tells a reader at 2am to go look up 26 rather than telling them the
-    /// zone is gone.
-    ///
-    /// Spelled out rather than derived, because the alternative that needs no
-    /// table is `localizedDescription`, and that reaches into the `userInfo`
-    /// this function exists to stay out of. An unmapped code still prints its
-    /// number: honest, and one line short of ideal, rather than wrong.
-    private static func name(for code: CKError.Code) -> String {
-        switch code {
-        case .internalError: "internalError"
-        case .partialFailure: "partialFailure"
-        case .networkUnavailable: "networkUnavailable"
-        case .networkFailure: "networkFailure"
-        case .badContainer: "badContainer"
-        case .serviceUnavailable: "serviceUnavailable"
-        case .requestRateLimited: "requestRateLimited"
-        case .missingEntitlement: "missingEntitlement"
-        case .notAuthenticated: "notAuthenticated"
-        case .permissionFailure: "permissionFailure"
-        case .unknownItem: "unknownItem"
-        case .invalidArguments: "invalidArguments"
-        case .serverRecordChanged: "serverRecordChanged"
-        case .serverRejectedRequest: "serverRejectedRequest"
-        case .assetFileNotFound: "assetFileNotFound"
-        case .assetFileModified: "assetFileModified"
-        case .incompatibleVersion: "incompatibleVersion"
-        case .constraintViolation: "constraintViolation"
-        case .operationCancelled: "operationCancelled"
-        case .changeTokenExpired: "changeTokenExpired"
-        case .batchRequestFailed: "batchRequestFailed"
-        case .zoneBusy: "zoneBusy"
-        case .badDatabase: "badDatabase"
-        case .quotaExceeded: "quotaExceeded"
-        case .zoneNotFound: "zoneNotFound"
-        case .limitExceeded: "limitExceeded"
-        case .userDeletedZone: "userDeletedZone"
-        case .tooManyParticipants: "tooManyParticipants"
-        case .alreadyShared: "alreadyShared"
-        case .referenceViolation: "referenceViolation"
-        case .managedAccountRestricted: "managedAccountRestricted"
-        case .participantMayNeedVerification: "participantMayNeedVerification"
-        case .serverResponseLost: "serverResponseLost"
-        case .assetNotAvailable: "assetNotAvailable"
-        case .accountTemporarilyUnavailable: "accountTemporarilyUnavailable"
-        default: "unmappedCKErrorCode"
-        }
-    }
-
     /// `.serverRecordChanged` means our change tag was stale. Fetch the
     /// current server record (which carries the fresh tag), reapply our
     /// field values onto it, and resave once.
@@ -270,7 +213,8 @@ public actor PublishCoordinator: CloudPublisher {
         _ outcome: RecordSaveOutcome, toSave: [(status: ProviderStatus, hash: String)]
     ) async -> RecordSaveOutcome {
         let conflicted = toSave.filter { entry in
-            guard case let .failure(error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)],
+            let recordID = CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)
+            guard case let .failure(error) = outcome.results[recordID],
                   let ckError = error as? CKError
             else { return false }
             return ckError.code == .serverRecordChanged
@@ -307,7 +251,8 @@ public actor PublishCoordinator: CloudPublisher {
         guard attempt <= Self.maxBackoffAttempts else { return outcome }
 
         let retryable = toSave.filter { entry in
-            guard case let .failure(error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)],
+            let recordID = CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)
+            guard case let .failure(error) = outcome.results[recordID],
                   let ckError = error as? CKError
             else { return false }
             return ckError.retryAfterSeconds != nil
@@ -316,7 +261,8 @@ public actor PublishCoordinator: CloudPublisher {
         guard !retryable.isEmpty else { return outcome }
 
         let retryAfterSeconds = retryable.lazy.compactMap { entry -> Double? in
-            guard case let .failure(error) = outcome.results[CKRecord.ID(recordName: entry.status.providerName, zoneID: self.zoneID)],
+            let recordID = CKRecord.ID(recordName: entry.status.providerName, zoneID: self.zoneID)
+            guard case let .failure(error) = outcome.results[recordID],
                   let ckError = error as? CKError
             else { return nil }
             return ckError.retryAfterSeconds
@@ -382,97 +328,4 @@ public actor PublishCoordinator: CloudPublisher {
         }
         return encoded.base64EncodedString()
     }
-}
-
-/// Maps a decoded `ProviderEntry` (GradusKit's Python-mirroring model) to
-/// the CloudKit-facing `ProviderStatus`. `providerDisplayName` is the same
-/// string as `name` — the Python producer already emits human-readable
-/// names ("Codex", "Antigravity (Claude)", ...), there is no separate
-/// display-name table.
-enum SnapshotDataValidationError: Error, Equatable {
-    case unsupportedKey(String)
-    case nonFiniteNumber(String)
-    case valueTooLarge(String)
-    case errorMessageTooLarge
-    case aggregateTooLarge
-}
-
-private let snapshotDataAllowedKeys: Set<String> = [
-    "credits",
-    "five_hour_percent_left",
-    "weekly_percent_left",
-    "five_hour_reset",
-    "weekly_reset",
-    "session_percent_left",
-    "opus_percent_left",
-    "primary_reset",
-    "secondary_reset",
-    "opus_reset",
-    "usage_percent",
-    "reset_at",
-    "payg_enabled",
-    "start_date",
-    "end_date",
-    "monthly_percent_left",
-    "monthly_reset",
-    "auto_percent_used",
-    "api_percent_used",
-    "billing_cycle_start",
-    "billing_cycle_end",
-    "billing_cycle_end_iso",
-    "premium_percent_left",
-    "premium_reset"
-]
-
-private let snapshotDataMaxStringBytes = 4096
-private let snapshotDataMaxAggregateBytes = 32768
-private let snapshotErrorMaxBytes = 4096
-
-func validatedSnapshotData(_ data: [String: JSONValue]) throws -> [String: JSONValue] {
-    for (key, value) in data {
-        guard snapshotDataAllowedKeys.contains(key) else {
-            throw SnapshotDataValidationError.unsupportedKey(key)
-        }
-        switch value {
-        case let .string(string):
-            guard string.utf8.count <= snapshotDataMaxStringBytes else {
-                throw SnapshotDataValidationError.valueTooLarge(key)
-            }
-        case let .double(number):
-            guard number.isFinite else {
-                throw SnapshotDataValidationError.nonFiniteNumber(key)
-            }
-        case .bool, .null:
-            break
-        }
-    }
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys]
-    guard let encoded = try? encoder.encode(data), encoded.count <= snapshotDataMaxAggregateBytes else {
-        throw SnapshotDataValidationError.aggregateTooLarge
-    }
-    return data
-}
-
-func makeProviderStatus(
-    from entry: ProviderEntry,
-    snapshotUpdatedAt: String,
-    publishedAt: Date,
-    syncSource: SyncSource? = nil
-) throws -> ProviderStatus {
-    if let error = entry.error, error.utf8.count > snapshotErrorMaxBytes {
-        throw SnapshotDataValidationError.errorMessageTooLarge
-    }
-    return try ProviderStatus(
-        providerName: entry.name,
-        providerDisplayName: entry.name,
-        ok: entry.ok,
-        errorMessage: entry.error,
-        windows: entry.windows,
-        data: validatedSnapshotData(entry.data),
-        observedAt: entry.observedAt,
-        snapshotUpdatedAt: snapshotUpdatedAt,
-        publishedAt: publishedAt,
-        syncSource: syncSource
-    )
 }

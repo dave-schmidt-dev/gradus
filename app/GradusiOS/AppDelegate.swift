@@ -49,15 +49,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     private var remoteRegistrationStarted = false
     private var remoteRegistrationFailed = false
 
-    private static let systemNotificationAuthorizationRequest: (UIApplication, @escaping (Bool) -> Void) -> Void = { _, resolved in
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
-            DispatchQueue.main.async {
-                UNUserNotificationCenter.current().getNotificationSettings { settings in
-                    DispatchQueue.main.async { resolved(settings.authorizationStatus != .denied) }
+    private static let systemNotificationAuthorizationRequest:
+        (UIApplication, @escaping (Bool) -> Void) -> Void = { _, resolved in
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
+                DispatchQueue.main.async {
+                    UNUserNotificationCenter.current().getNotificationSettings { settings in
+                        DispatchQueue.main.async { resolved(settings.authorizationStatus != .denied) }
+                    }
                 }
             }
         }
-    }
 
     override init() {
         // AppDelegate is constructed before the SwiftUI App initializer. Run

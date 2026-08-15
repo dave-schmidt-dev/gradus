@@ -2,319 +2,6 @@ import CloudKit
 import GradusKit
 import SwiftUI
 
-/// Serializes live lifecycle work with the local sample transition.
-///
-/// The epoch invalidates a suspended operation before it can start its next
-/// seam call. The active-operation count lets sample entry wait for a call
-/// already in flight to return before the sample UI becomes visible.
-@MainActor
-final class LiveLifecycleGate {
-    typealias Epoch = UInt64
-
-    private(set) var isSuspended: Bool
-    private var epoch: Epoch = 0
-    private var activeOperations = 0
-    private var quiescenceWaiters: [CheckedContinuation<Void, Never>] = []
-
-    init(initiallySuspended: Bool = false) {
-        isSuspended = initiallySuspended
-    }
-
-    var isLive: Bool {
-        !isSuspended
-    }
-
-    func begin() -> Epoch? {
-        guard !isSuspended else { return nil }
-        activeOperations += 1
-        return epoch
-    }
-
-    func finish() {
-        guard activeOperations > 0 else { return }
-        activeOperations -= 1
-        guard activeOperations == 0 else { return }
-        let waiters = quiescenceWaiters
-        quiescenceWaiters.removeAll()
-        waiters.forEach { $0.resume() }
-    }
-
-    func isCurrent(_ operationEpoch: Epoch) -> Bool {
-        !isSuspended && operationEpoch == epoch
-    }
-
-    func withOperation<T>(_ operation: (Epoch) async -> T) async -> T? {
-        guard let operationEpoch = begin() else { return nil }
-        defer { finish() }
-        return await operation(operationEpoch)
-    }
-
-    /// Invalidates new work immediately, then waits for calls that started
-    /// before this transition to finish. The caller may safely present local
-    /// sample data after this returns.
-    func suspend() async {
-        if isSuspended {
-            guard activeOperations > 0 else { return }
-            await withCheckedContinuation { continuation in
-                quiescenceWaiters.append(continuation)
-            }
-            return
-        }
-        isSuspended = true
-        epoch &+= 1
-        guard activeOperations > 0 else { return }
-        await withCheckedContinuation { continuation in
-            quiescenceWaiters.append(continuation)
-        }
-    }
-
-    func resume() {
-        isSuspended = false
-        epoch &+= 1
-    }
-}
-
-enum CloudKitRuntimeConfiguration {
-    /// CloudKit is available on a simulator only when that simulator build
-    /// carries the container entitlement. The current generated debug
-    /// simulator app does not, so its launch must stay on the offline path.
-    static func shouldUseCloudKit(isSimulator: Bool, hasCloudKitEntitlement: Bool) -> Bool {
-        !isSimulator || hasCloudKitEntitlement
-    }
-
-    /// Device/release builds are signed with `GradusiOS.entitlements`; the
-    /// generated simulator debug app is intentionally treated as offline.
-    static var currentValue: Bool {
-        #if targetEnvironment(simulator)
-            return shouldUseCloudKit(isSimulator: true, hasCloudKitEntitlement: false)
-        #else
-            return shouldUseCloudKit(isSimulator: false, hasCloudKitEntitlement: true)
-        #endif
-    }
-}
-
-enum SampleDataMode {
-    static let launchArgument = "--sample-data"
-    static let bannerText = "Explore Sample"
-    static let bannerDetail = "Local-only sample data"
-    /// Pinned to the bundled fixture's publication timestamp so reset labels
-    /// and age indicators are deterministic without aging between launches.
-    static let fixedNow = Date(timeIntervalSince1970: 1_786_219_200)
-    static let storageDirectoryName = "Sample"
-    static let preferencesSuiteName = "com.zerodelta.gradus.sample-preferences"
-
-    enum Error: Swift.Error {
-        case missingBundledData
-    }
-
-    /// The legacy launch argument remains Debug-only; the normal shipped path
-    /// enters through the visible Explore Sample controls instead.
-    static func isEnabled(arguments: [String], isDebugBuild: Bool) -> Bool {
-        isDebugBuild && arguments.contains(launchArgument)
-    }
-
-    static func bundledProviders(bundle: Bundle = .main) throws -> [ProviderStatus] {
-        guard let url = bundle.url(forResource: "SampleData", withExtension: "json") else {
-            throw Error.missingBundledData
-        }
-        return try JSONDecoder().decode([ProviderStatus].self, from: Data(contentsOf: url))
-    }
-
-    static func storageDirectory(baseDirectory: URL) -> URL {
-        baseDirectory.appendingPathComponent(storageDirectoryName, isDirectory: true)
-    }
-}
-
-/// Deterministic, test-only launch states for the UI suite. The fixture is
-/// accepted only through a process environment variable supplied by
-/// `XCUIApplication`; it is never persisted by normal launches and never
-/// changes a production recovery path.
-private enum GradusUITestFixture: String {
-    static let environmentKey = "GRADUS_UITEST_FIXTURE"
-
-    case freshAccountDiscovery = "fresh-account-discovery"
-    case legacyAwaitingConfirmation = "legacy-awaiting-confirmation"
-    case temporaryRetry = "temporary-retry"
-    case noAccount = "no-account"
-    case restricted
-    case warningAlertsOff = "warning-alerts-off"
-    case warningAlertsRequesting = "warning-alerts-requesting"
-    case warningAlertsDenied = "warning-alerts-denied"
-
-    static var current: Self? {
-        ProcessInfo.processInfo.environment[environmentKey].flatMap(Self.init(rawValue:))
-    }
-
-    var warningAlertsEnabled: Bool {
-        switch self {
-        case .warningAlertsRequesting, .warningAlertsDenied:
-            true
-        default:
-            false
-        }
-    }
-
-    var notificationAuthorization: NotificationAuthorization {
-        self == .warningAlertsDenied ? .denied : .notDetermined
-    }
-
-    var startsWarningAlertRequest: Bool {
-        self == .warningAlertsRequesting
-    }
-
-    @MainActor
-    func prepare(defaults: UserDefaults) {
-        // Each UI-test process starts from a known app-preference state. This
-        // test-only reset prevents a previous fixture from leaking into the
-        // next independent workflow; ordinary app launches never enter here.
-        if let bundleIdentifier = Bundle.main.bundleIdentifier {
-            defaults.removePersistentDomain(forName: bundleIdentifier)
-        }
-        defaults.removeObject(forKey: DashboardViewModel.syncEnabledKey)
-        defaults.removeObject(forKey: DashboardViewModel.requiredICloudModeKey)
-        defaults.removeObject(forKey: DashboardViewModel.requiredICloudModeVersionKey)
-        defaults.set(warningAlertsEnabled, forKey: DashboardViewModel.notificationsEnabledKey)
-
-        if self == .legacyAwaitingConfirmation {
-            // The migration sees exactly the historical opt-out and converts
-            // it into the required-iCloud confirmation state.
-            defaults.set(false, forKey: DashboardViewModel.syncEnabledKey)
-        }
-    }
-
-    @MainActor
-    func apply(to viewModel: DashboardViewModel) {
-        switch self {
-        case .temporaryRetry:
-            viewModel.accountAvailabilityCheckFailed()
-        case .noAccount:
-            viewModel.updateAccountStatus(.noAccount)
-        case .restricted:
-            viewModel.updateAccountStatus(.restricted)
-        default:
-            break
-        }
-    }
-}
-
-private struct UITestNotificationAuthorizationSource: NotificationAuthorizationSource {
-    let authorization: NotificationAuthorization
-
-    func currentAuthorization() async -> NotificationAuthorization {
-        authorization
-    }
-}
-
-/// Owns the sample cache and preferences independently from the live iCloud
-/// cache. It deliberately has no CloudKit, account, subscription, or
-/// notification dependencies, so entering this path cannot start live work.
-@MainActor
-final class SampleDataSession: ObservableObject {
-    @Published private(set) var viewModel: DashboardViewModel
-    private let cache: FileLocalCacheStore
-    private let bundle: Bundle
-    private let defaults: UserDefaults
-    private let preferencesSuiteName: String
-
-    init(
-        directory: URL,
-        bundle: Bundle = .main,
-        defaults: UserDefaults = UserDefaults(suiteName: SampleDataMode.preferencesSuiteName)!,
-        preferencesSuiteName: String = SampleDataMode.preferencesSuiteName
-    ) {
-        cache = FileLocalCacheStore(directory: directory)
-        self.bundle = bundle
-        self.defaults = defaults
-        self.preferencesSuiteName = preferencesSuiteName
-        Self.seed(cache: cache, bundle: bundle)
-        viewModel = DashboardViewModel(cache: cache, userDefaults: defaults)
-    }
-
-    func reset() {
-        try? cache.clear()
-        defaults.removePersistentDomain(forName: preferencesSuiteName)
-        Self.seed(cache: cache, bundle: bundle)
-        viewModel = DashboardViewModel(cache: cache, userDefaults: defaults)
-    }
-
-    private static func seed(cache: FileLocalCacheStore, bundle: Bundle) {
-        guard let providers = try? SampleDataMode.bundledProviders(bundle: bundle) else { return }
-        try? cache.saveCachedStatuses(providers, syncedAt: SampleDataMode.fixedNow)
-    }
-}
-
-/// The banner makes the local-only state and its reversible controls visible
-/// on both iPhone and iPad, including in screenshot/test builds.
-struct SampleDataBanner: View {
-    /// A minimum keeps the marker legible at standard text sizes; there is no
-    /// upper bound so Dynamic Type can expand the banner instead of clipping
-    /// its disclosure or controls.
-    static let minimumHeight: CGFloat = 60
-    static let maximumHeight: CGFloat? = nil
-
-    let onExit: () -> Void
-    let onReset: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(SampleDataMode.bannerText)
-                    .font(.caption.weight(.semibold))
-                Text(SampleDataMode.bannerDetail)
-                    .font(.caption2)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("sample-data-banner")
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Reset", action: onReset)
-                .accessibilityIdentifier("sample-data-reset")
-            Button("Exit", action: onExit)
-                .accessibilityIdentifier("sample-data-exit")
-        }
-        .foregroundStyle(.black)
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, minHeight: Self.minimumHeight, maxHeight: Self.maximumHeight)
-        .background(.yellow)
-    }
-}
-
-struct SampleDataDashboard: View {
-    @ObservedObject var viewModel: DashboardViewModel
-    let now: Date
-    let layout: DashboardLayout?
-    let density: DashboardDensity?
-    let onExit: () -> Void
-    let onReset: () -> Void
-
-    init(
-        viewModel: DashboardViewModel,
-        now: Date = Date(),
-        layout: DashboardLayout? = nil,
-        density: DashboardDensity? = nil,
-        onExit: @escaping () -> Void = {},
-        onReset: @escaping () -> Void = {}
-    ) {
-        self.viewModel = viewModel
-        self.now = now
-        self.layout = layout
-        self.density = density
-        self.onExit = onExit
-        self.onReset = onReset
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                SampleDataBanner(onExit: onExit, onReset: onReset)
-                DashboardContent(
-                    viewModel: viewModel, now: now, layout: layout, density: density,
-                    isSampleMode: true, onExitSample: onExit, onResetSample: onReset
-                )
-            }
-        }
-    }
-}
-
 @main
 struct GradusiOSApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -328,7 +15,7 @@ struct GradusiOSApp: App {
     private let subscriptionManager: CKSubscriptionManager?
     private let uiTestFixture: GradusUITestFixture?
 
-    private struct CloudKitDependencies {
+    struct CloudKitDependencies {
         let fetcher: CloudFetcher?
         let accountSource: AccountStatusSource?
         let zoneChangesFetcher: ZoneChangesFetcher?
@@ -356,7 +43,9 @@ struct GradusiOSApp: App {
             }
         #endif
 
-        let launchSampleMode = SampleDataMode.isEnabled(arguments: CommandLine.arguments, isDebugBuild: Self.isDebugBuild)
+        let launchSampleMode = SampleDataMode.isEnabled(
+            arguments: CommandLine.arguments, isDebugBuild: Self.isDebugBuild
+        )
         // UI fixtures are wholly deterministic. Keep the gate closed from
         // construction onward so no live lifecycle callback can overwrite a
         // fixture before SwiftUI's `.task` takes its UI-testing short path.
@@ -375,9 +64,7 @@ struct GradusiOSApp: App {
             ? CloudKitDependencies.offline
             : Self.makeCloudKitDependencies()
         let warningNotificationScheduler = LocalWarningNotificationScheduler()
-        let notificationAuthorizationSource: NotificationAuthorizationSource =
-            uiTestFixture.map { UITestNotificationAuthorizationSource(authorization: $0.notificationAuthorization) }
-                ?? SystemNotificationAuthorizationSource()
+        let notificationAuthorizationSource = Self.makeNotificationAuthorizationSource(fixture: uiTestFixture)
 
         let viewModel = DashboardViewModel(
             cache: cache, fetcher: dependencies.fetcher, accountSource: dependencies.accountSource,
@@ -392,43 +79,14 @@ struct GradusiOSApp: App {
         // PM-16: mid-session account-status reset (sign-out/switch-account
         // while the app is running), reusing the same actor Phase 2a wired
         // on the Mac side (moved to GradusKit in Phase 3 for exactly this).
-        let accountMonitor: AccountStatusMonitor? = if !launchSampleMode, let accountSource = dependencies.accountSource {
-            AccountStatusMonitor(
-                source: accountSource,
-                onChange: { status in
-                    Task { @MainActor in
-                        viewModel.updateAccountStatus(status)
-                        guard status == .available else { return }
-                        await viewModel.reconcileLiveLifecycle()
-                    }
-                },
-                onRefreshFailure: {
-                    Task { @MainActor in viewModel.accountAvailabilityCheckFailed() }
-                }
-            )
-        } else {
-            nil
-        }
-        self.accountMonitor = accountMonitor
+        accountMonitor = Self.makeAccountMonitor(
+            launchSampleMode: launchSampleMode, accountSource: dependencies.accountSource, viewModel: viewModel
+        )
         subscriptionManager = dependencies.subscriptionManager
 
-        let delegate = appDelegate
-        delegate.liveActivitySuppressed = launchSampleMode || uiTestFixture != nil
-        delegate.onRemoteNotification = {
-            guard !delegate.liveActivitySuppressed else { return }
-            await viewModel.handleRemoteNotification()
-        }
-
-        delegate.onAuthorizationResolved = {
-            guard !delegate.liveActivitySuppressed else { return }
-            Task {
-                await viewModel.refreshNotificationAuthorization()
-                delegate.updateWarningAlertAuthorization(viewModel.systemNotificationAuthorization)
-            }
-        }
-        delegate.onRemoteRegistrationFailure = {
-            Task { @MainActor in viewModel.noteLiveLifecycleFailure() }
-        }
+        Self.configureDelegate(
+            appDelegate, viewModel: viewModel, liveActivitySuppressed: launchSampleMode || uiTestFixture != nil
+        )
     }
 
     var body: some Scene {
@@ -521,7 +179,73 @@ struct GradusiOSApp: App {
             }
         }
     }
+}
 
+/// init() helpers: pure factories, called in a fixed order from `init()`
+/// (fixture prep -> migration -> sample/UI-test seeding -> dependency and
+/// view-model construction -> delegate wiring). Kept as static functions
+/// rather than reordered so that ordering-sensitive setup stays visible at
+/// each call site in `init()`.
+extension GradusiOSApp {
+    private static func makeNotificationAuthorizationSource(
+        fixture: GradusUITestFixture?
+    ) -> NotificationAuthorizationSource {
+        fixture.map { GradusUITestNotificationAuthorizationSource(authorization: $0.notificationAuthorization) }
+            ?? SystemNotificationAuthorizationSource()
+    }
+
+    /// PM-16: mid-session account-status reset (sign-out/switch-account while
+    /// the app is running), reusing the same actor Phase 2a wired on the Mac
+    /// side (moved to GradusKit in Phase 3 for exactly this).
+    private static func makeAccountMonitor(
+        launchSampleMode: Bool,
+        accountSource: AccountStatusSource?,
+        viewModel: DashboardViewModel
+    ) -> AccountStatusMonitor? {
+        guard !launchSampleMode, let accountSource else { return nil }
+        return AccountStatusMonitor(
+            source: accountSource,
+            onChange: { status in
+                Task { @MainActor in
+                    viewModel.updateAccountStatus(status)
+                    guard status == .available else { return }
+                    await viewModel.reconcileLiveLifecycle()
+                }
+            },
+            onRefreshFailure: {
+                Task { @MainActor in viewModel.accountAvailabilityCheckFailed() }
+            }
+        )
+    }
+
+    @MainActor
+    private static func configureDelegate(
+        _ delegate: AppDelegate,
+        viewModel: DashboardViewModel,
+        liveActivitySuppressed: Bool
+    ) {
+        delegate.liveActivitySuppressed = liveActivitySuppressed
+        delegate.onRemoteNotification = {
+            guard !delegate.liveActivitySuppressed else { return }
+            await viewModel.handleRemoteNotification()
+        }
+
+        delegate.onAuthorizationResolved = {
+            guard !delegate.liveActivitySuppressed else { return }
+            Task {
+                await viewModel.refreshNotificationAuthorization()
+                delegate.updateWarningAlertAuthorization(viewModel.systemNotificationAuthorization)
+            }
+        }
+        delegate.onRemoteRegistrationFailure = {
+            Task { @MainActor in viewModel.noteLiveLifecycleFailure() }
+        }
+    }
+}
+
+/// Live lifecycle sequencing: (re-)entering the live iCloud path, subscribing
+/// once opted in, and the sample-mode enter/exit/reset transitions.
+extension GradusiOSApp {
     /// Subscription creation is idempotent (PM-8-style, see
     /// `CKSubscriptionManager`) but still gated on opt-in + an available
     /// account -- creating a private-DB subscription with no signed-in user
@@ -578,34 +302,6 @@ struct GradusiOSApp: App {
         Task { await startLiveLifecycle() }
     }
 
-    private static func makeCloudKitDependencies() -> CloudKitDependencies {
-        guard CloudKitRuntimeConfiguration.currentValue else { return .offline }
-
-        let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
-        let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
-        let database = container.privateCloudDatabase
-        let fetcher = CKCloudFetcher(database: database, zoneID: zoneID)
-        let zoneChangesFetcher = CKZoneChangesFetcher(database: database, zoneID: zoneID)
-        let accountSource = ContainerAccountStatusSource(containerIdentifier: CloudKitConstants.containerIdentifier)
-        let subscriptionManager = CKSubscriptionManager(
-            database: CKSubscriptionDatabaseAdapter(database: database), zoneID: zoneID
-        )
-        return CloudKitDependencies(
-            fetcher: fetcher, accountSource: accountSource, zoneChangesFetcher: zoneChangesFetcher,
-            subscriptionManager: subscriptionManager
-        )
-    }
-
-    private static func cacheDirectory() -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("Gradus", isDirectory: true)
-    }
-
-    private static func sampleCacheDirectory() -> URL {
-        SampleDataMode.storageDirectory(baseDirectory: cacheDirectory())
-    }
-
     private func enterSample() {
         guard !sampleModeActive, !sampleEntryInProgress else { return }
         sampleEntryInProgress = true
@@ -634,73 +330,5 @@ struct GradusiOSApp: App {
 
     private func resetSample() {
         sampleSession.reset()
-    }
-
-    /// T3.5's XCUITest asserts the dashboard renders from a seeded offline
-    /// cache without needing a live CloudKit round-trip in CI. The XCUITest
-    /// passes fixture JSON via `launchEnvironment`; this writes it straight
-    /// into the on-disk cache before the view model's `init` reads it, so
-    /// the very first frame already shows seeded data.
-    private static func seedCacheForUITestsIfRequested(into cache: FileLocalCacheStore) {
-        guard let seedJSON = ProcessInfo.processInfo.environment["GRADUS_UITEST_SEED_JSON"],
-              let data = seedJSON.data(using: .utf8),
-              let seeded = try? JSONDecoder().decode([ProviderStatus].self, from: data)
-        else { return }
-        try? cache.saveCachedStatuses(seeded, syncedAt: Date())
-    }
-
-    /// Legacy launch-argument seeding remains available for Debug screenshot
-    /// launches. The shipped user path uses `SampleDataSession` instead.
-    static func seedSampleDataIfRequested(
-        into cache: FileLocalCacheStore,
-        arguments: [String] = CommandLine.arguments,
-        isDebugBuild: Bool = Self.isDebugBuild,
-        bundle: Bundle = .main
-    ) -> Bool {
-        guard SampleDataMode.isEnabled(arguments: arguments, isDebugBuild: isDebugBuild),
-              let providers = try? SampleDataMode.bundledProviders(bundle: bundle)
-        else { return false }
-
-        guard (try? cache.saveCachedStatuses(providers, syncedAt: SampleDataMode.fixedNow)) != nil else { return false }
-        return true
-    }
-
-    static func shouldRunLiveLifecycle(
-        isUITesting: Bool,
-        sampleDataModeEnabled: Bool,
-        syncEnabled: Bool = true
-    ) -> Bool {
-        !isUITesting && !sampleDataModeEnabled && syncEnabled
-    }
-
-    private static var isDebugBuild: Bool {
-        #if DEBUG
-            true
-        #else
-            false
-        #endif
-    }
-
-    /// True whenever a UITest has seeded the offline cache (see above). Also
-    /// gates `accountMonitor.start()`/`sync()`/subscription creation off of a
-    /// real, live CloudKit round-trip: on the shared dev simulator, the
-    /// signed-in Apple ID genuinely needs periodic re-verification, so a real
-    /// `CKContainer.accountStatus()` call (inside `AccountStatusMonitor.start()`)
-    /// surfaces a full-screen, OS-level "Apple Account Verification" dialog
-    /// that's unrelated to app correctness and can recur mid-test (observed:
-    /// it reappeared after being dismissed once). This is a genuine,
-    /// independent OS-level nag on the shared simulator's real signed-in
-    /// Apple ID -- confirmed to resurface roughly every 5s on its own,
-    /// unrelated to any particular view lifecycle event (an earlier
-    /// hypothesis blaming `NavigationSplitView` collapse transitions
-    /// rerunning `.task` was investigated and ruled out: the dialog kept
-    /// recurring even with CloudKit calls gated off entirely). Fixture data
-    /// from `GRADUS_UITEST_SEED_JSON` already renders the dashboard fully
-    /// from the on-disk cache with no CloudKit involvement at all, so
-    /// skipping these calls under UI tests removes a source of flakiness
-    /// without weakening what's under test.
-    private static var isUITesting: Bool {
-        ProcessInfo.processInfo.environment["GRADUS_UITEST_SEED_JSON"] != nil
-            || GradusUITestFixture.current != nil
     }
 }

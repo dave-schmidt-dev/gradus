@@ -4,7 +4,9 @@ import XCTest
 
 final class BridgeTests: XCTestCase {
     func testParserReadsOnlyStructuredCookieFields() throws {
-        let parsed = try CredentialBridge.parseCookies(binaryCookies([("console.mistral.ai", "csrftoken", "fixture")]))
+        let parsed = try CredentialBridge.parseCookies(
+            binaryCookies([.init(host: "console.mistral.ai", name: "csrftoken", value: "fixture")])
+        )
         XCTAssertEqual(parsed, [.init(host: "console.mistral.ai", name: "csrftoken", value: "fixture")])
     }
 
@@ -20,13 +22,13 @@ final class BridgeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: temporary) }
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         try binaryCookies([
-            ("claude.ai", "sessionKey", "claude-session"),
-            ("claude.ai", "lastActiveOrg", "claude-org"),
-            ("cursor.com", "WorkosCursorSessionToken", "user%3A%3Acursor-token"),
-            ("opencode.ai", "auth", "opencode-auth"),
-            ("console.mistral.ai", "ory_session_fixture", "mistral-session"),
-            ("console.mistral.ai", "csrftoken", "mistral-csrf"),
-            ("evilclaude.ai", "sessionKey", "must-not-leak")
+            .init(host: "claude.ai", name: "sessionKey", value: "claude-session"),
+            .init(host: "claude.ai", name: "lastActiveOrg", value: "claude-org"),
+            .init(host: "cursor.com", name: "WorkosCursorSessionToken", value: "user%3A%3Acursor-token"),
+            .init(host: "opencode.ai", name: "auth", value: "opencode-auth"),
+            .init(host: "console.mistral.ai", name: "ory_session_fixture", value: "mistral-session"),
+            .init(host: "console.mistral.ai", name: "csrftoken", value: "mistral-csrf"),
+            .init(host: "evilclaude.ai", name: "sessionKey", value: "must-not-leak")
         ]).write(to: source)
 
         try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
@@ -43,7 +45,9 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(vibe["ory_session_value"], "mistral-session")
         XCTAssertEqual(vibe["csrftoken"], "mistral-csrf")
         for filename in ["claude_cookies.json", "cursor_token.json", "opencode_go_cookies.json", "vibe_cookies.json"] {
-            let attributes = try FileManager.default.attributesOfItem(atPath: cache.appendingPathComponent(filename).path)
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: cache.appendingPathComponent(filename).path
+            )
             XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         }
         let directoryAttributes = try FileManager.default.attributesOfItem(atPath: cache.path)
@@ -58,13 +62,13 @@ final class BridgeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: temporary) }
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
 
-        try binaryCookies([("console.mistral.ai", "csrftoken", "fixture")]).write(to: source)
+        try binaryCookies([.init(host: "console.mistral.ai", name: "csrftoken", value: "fixture")]).write(to: source)
         try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: cache.appendingPathComponent("opencode_go_cookies.json").path)
         )
 
-        try binaryCookies([("opencode.ai", "auth", "restored-cookie")]).write(to: source)
+        try binaryCookies([.init(host: "opencode.ai", name: "auth", value: "restored-cookie")]).write(to: source)
         try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
         let restored = try payload(named: "opencode_go_cookies.json", in: cache)
         XCTAssertEqual(restored["auth"], "restored-cookie")
@@ -75,11 +79,11 @@ final class BridgeTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
     }
 
-    private func binaryCookies(_ entries: [(String, String, String)]) -> Data {
+    private func binaryCookies(_ entries: [CredentialBridge.Cookie]) -> Data {
         var cookies: [Data] = []
-        for (host, name, value) in entries {
-            let url = "https://" + host + "/"
-            let strings = [url, name, value].map { Data(($0 + "\0").utf8) }
+        for entry in entries {
+            let url = "https://" + entry.host + "/"
+            let strings = [url, entry.name, entry.value].map { Data(($0 + "\0").utf8) }
             var cookie = Data(repeating: 0, count: 48)
             cookie.replaceSubrange(16 ..< 20, with: littleEndian(48))
             cookie.replaceSubrange(20 ..< 24, with: littleEndian(48 + strings[0].count))

@@ -8,7 +8,9 @@ struct ProviderRetryAccessibilityTests {
     private func provider(
         name: String = "Antigravity",
         error: String,
-        windows: [ProviderWindow] = [ProviderWindow(id: "five_hour", percentLeft: 80, resetISO: nil, windowHours: 5, paceDelta: nil)]
+        windows: [ProviderWindow] = [
+            ProviderWindow(id: "five_hour", percentLeft: 80, resetISO: nil, windowHours: 5, paceDelta: nil)
+        ]
     ) -> ProviderStatus {
         ProviderStatus(
             providerName: name,
@@ -28,14 +30,23 @@ struct ProviderRetryAccessibilityTests {
         let provider = provider(error: IOSProviderRetryAccessibility.retryingLabel)
         #expect(IOSProviderRetryAccessibility.label(for: provider) == IOSProviderRetryAccessibility.retryingLabel)
         #expect(IOSProviderRetryAccessibility.displayLabel(for: provider) == nil)
-        #expect(SyncStatusLine.providerRetryAccessibilityLabel(for: provider) == IOSProviderRetryAccessibility.retryingLabel)
+        #expect(
+            SyncStatusLine.providerRetryAccessibilityLabel(for: provider)
+                == IOSProviderRetryAccessibility.retryingLabel
+        )
         #expect(!provider.rankingNeedsAttention(localThreshold: 30))
     }
 
     @Test func reauthenticationIsActionableAndDistinct() {
         let provider = provider(error: "Antigravity session expired: run `agy` to re-authenticate", windows: [])
-        #expect(IOSProviderRetryAccessibility.label(for: provider) == IOSProviderRetryAccessibility.reauthenticationLabel)
-        #expect(IOSProviderRetryAccessibility.displayLabel(for: provider) == IOSProviderRetryAccessibility.reauthenticationLabel)
+        #expect(
+            IOSProviderRetryAccessibility.label(for: provider)
+                == IOSProviderRetryAccessibility.reauthenticationLabel
+        )
+        #expect(
+            IOSProviderRetryAccessibility.displayLabel(for: provider)
+                == IOSProviderRetryAccessibility.reauthenticationLabel
+        )
         #expect(IOSProviderRetryAccessibility.label(for: provider) != IOSProviderRetryAccessibility.retryingLabel)
         #expect(provider.rankingNeedsAttention(localThreshold: 30))
     }
@@ -64,7 +75,10 @@ struct ProviderRetryAccessibilityTests {
     @Test func retainedAuthenticationAndStaleFailuresKeepRemediesVisible() {
         let auth = provider(error: "Antigravity session expired: run `agy` to re-authenticate")
         #expect(!IOSProviderRetryAccessibility.isCarriedFailure(auth))
-        #expect(IOSProviderRetryAccessibility.displayLabel(for: auth) == IOSProviderRetryAccessibility.reauthenticationLabel)
+        #expect(
+            IOSProviderRetryAccessibility.displayLabel(for: auth)
+                == IOSProviderRetryAccessibility.reauthenticationLabel
+        )
         #expect(!auth.rankingIsOK)
 
         let stale = provider(name: "Copilot", error: "stale — offline for 5m")

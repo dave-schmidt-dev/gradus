@@ -23,25 +23,37 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     defaults.set(false, forKey: DashboardViewModel.syncEnabledKey)
-    #expect(RequiredICloudMigration.migrate(defaults: defaults, legacyKey: DashboardViewModel.syncEnabledKey) == .awaitingConfirmation)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: defaults, legacyKey: DashboardViewModel.syncEnabledKey)
+            == .awaitingConfirmation
+    )
     #expect(defaults.object(forKey: DashboardViewModel.syncEnabledKey) == nil)
 
     let trueSuite = "gradus-required-icloud-true-\(UUID().uuidString)"
     let trueDefaults = try #require(UserDefaults(suiteName: trueSuite))
     defer { trueDefaults.removePersistentDomain(forName: trueSuite) }
     trueDefaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
-    #expect(RequiredICloudMigration.migrate(defaults: trueDefaults, legacyKey: DashboardViewModel.syncEnabledKey) == .confirmed)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: trueDefaults, legacyKey: DashboardViewModel.syncEnabledKey)
+            == .confirmed
+    )
 
     defaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
     defaults.set(RequiredICloudMode.awaitingConfirmation.rawValue, forKey: RequiredICloudMigration.modeKey)
-    #expect(RequiredICloudMigration.migrate(defaults: defaults, legacyKey: DashboardViewModel.syncEnabledKey) == .awaitingConfirmation)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: defaults, legacyKey: DashboardViewModel.syncEnabledKey)
+            == .awaitingConfirmation
+    )
 }
 
 @Test func requiredICloudMigrationFreshAndInterruptedWritesAreDeterministic() throws {
     let freshSuite = "gradus-required-icloud-fresh-\(UUID().uuidString)"
     let fresh = try #require(UserDefaults(suiteName: freshSuite))
     defer { fresh.removePersistentDomain(forName: freshSuite) }
-    #expect(RequiredICloudMigration.migrate(defaults: fresh, legacyKey: DashboardViewModel.syncEnabledKey) == .confirmed)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: fresh, legacyKey: DashboardViewModel.syncEnabledKey)
+            == .confirmed
+    )
 
     let interruptedSuite = "gradus-required-icloud-interrupted-\(UUID().uuidString)"
     let interrupted = try #require(UserDefaults(suiteName: interruptedSuite))
@@ -55,7 +67,10 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
     #expect(interruptedMode == .awaitingConfirmation)
     #expect(interrupted.object(forKey: DashboardViewModel.syncEnabledKey) as? Bool == false)
     #expect(interrupted.object(forKey: RequiredICloudMigration.modeKey) == nil)
-    #expect(RequiredICloudMigration.migrate(defaults: interrupted, legacyKey: DashboardViewModel.syncEnabledKey) == .awaitingConfirmation)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: interrupted, legacyKey: DashboardViewModel.syncEnabledKey)
+            == .awaitingConfirmation
+    )
     #expect(interrupted.object(forKey: DashboardViewModel.syncEnabledKey) == nil)
 }
 
@@ -76,7 +91,10 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
     #expect(relaunched.requiredICloudMode == .confirmed)
     #expect(relaunched.syncEnabled)
     #expect(defaults.object(forKey: DashboardViewModel.syncEnabledKey) == nil)
-    #expect(defaults.integer(forKey: DashboardViewModel.requiredICloudModeVersionKey) == DashboardViewModel.requiredICloudModeVersion)
+    #expect(
+        defaults.integer(forKey: DashboardViewModel.requiredICloudModeVersionKey)
+            == DashboardViewModel.requiredICloudModeVersion
+    )
 }
 
 @MainActor

@@ -74,10 +74,10 @@ struct SyncTimestampTests {
         withScratchDefaults("failure") { defaults in
             let viewModel = PublisherViewModel(defaults: defaults)
             viewModel.syncEnabled = true
-            guard let firstOperationID = viewModel.cloudSyncDidStart() else { return }
-            viewModel.cloudSyncDidSucceed(operationID: firstOperationID, at: stamp)
-            guard let secondOperationID = viewModel.cloudSyncDidStart() else { return }
-            viewModel.cloudSyncDidFail(operationID: secondOperationID)
+            guard let ok = viewModel.cloudSyncDidStart() else { return }
+            viewModel.cloudSyncDidSucceed(operationID: ok, at: stamp)
+            guard let bad = viewModel.cloudSyncDidStart() else { return }
+            viewModel.cloudSyncDidFail(operationID: bad)
 
             #expect(viewModel.syncState == .failed)
             #expect(viewModel.lastSyncedAt == stamp, "a failure must not erase the last good sync")
@@ -105,19 +105,28 @@ struct SyncTimestampTests {
     let falseDefaults = try #require(UserDefaults(suiteName: falseSuite))
     defer { falseDefaults.removePersistentDomain(forName: falseSuite) }
     falseDefaults.set(false, forKey: PublisherViewModel.syncEnabledKey)
-    #expect(RequiredICloudMigration.migrate(defaults: falseDefaults, legacyKey: PublisherViewModel.syncEnabledKey) == .awaitingConfirmation)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: falseDefaults, legacyKey: PublisherViewModel.syncEnabledKey)
+            == .awaitingConfirmation
+    )
     #expect(falseDefaults.object(forKey: PublisherViewModel.syncEnabledKey) == nil)
 
     let trueSuite = "com.zerodelta.gradus.mac.tests.required-icloud-true-\(UUID().uuidString)"
     let trueDefaults = try #require(UserDefaults(suiteName: trueSuite))
     defer { trueDefaults.removePersistentDomain(forName: trueSuite) }
     trueDefaults.set(true, forKey: PublisherViewModel.syncEnabledKey)
-    #expect(RequiredICloudMigration.migrate(defaults: trueDefaults, legacyKey: PublisherViewModel.syncEnabledKey) == .confirmed)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: trueDefaults, legacyKey: PublisherViewModel.syncEnabledKey)
+            == .confirmed
+    )
 
     let freshSuite = "com.zerodelta.gradus.mac.tests.required-icloud-fresh-\(UUID().uuidString)"
     let freshDefaults = try #require(UserDefaults(suiteName: freshSuite))
     defer { freshDefaults.removePersistentDomain(forName: freshSuite) }
-    #expect(RequiredICloudMigration.migrate(defaults: freshDefaults, legacyKey: PublisherViewModel.syncEnabledKey) == .confirmed)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: freshDefaults, legacyKey: PublisherViewModel.syncEnabledKey)
+            == .confirmed
+    )
 }
 
 @Test func requiredICloudMigrationNewModeWinsAndInterruptedWriteReruns() throws {
@@ -126,16 +135,27 @@ struct SyncTimestampTests {
     defer { defaults.removePersistentDomain(forName: suite) }
     defaults.set(true, forKey: PublisherViewModel.syncEnabledKey)
     defaults.set(RequiredICloudMode.awaitingConfirmation.rawValue, forKey: RequiredICloudMigration.modeKey)
-    #expect(RequiredICloudMigration.migrate(defaults: defaults, legacyKey: PublisherViewModel.syncEnabledKey) == .awaitingConfirmation)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: defaults, legacyKey: PublisherViewModel.syncEnabledKey)
+            == .awaitingConfirmation
+    )
 
     let interruptedSuite = "com.zerodelta.gradus.mac.tests.required-icloud-interrupted-\(UUID().uuidString)"
     let interrupted = try #require(UserDefaults(suiteName: interruptedSuite))
     defer { interrupted.removePersistentDomain(forName: interruptedSuite) }
     interrupted.set(false, forKey: PublisherViewModel.syncEnabledKey)
-    #expect(RequiredICloudMigration.migrate(defaults: interrupted, legacyKey: PublisherViewModel.syncEnabledKey, writeMode: { _, _ in }) == .awaitingConfirmation)
+    #expect(
+        RequiredICloudMigration.migrate(
+            defaults: interrupted, legacyKey: PublisherViewModel.syncEnabledKey, writeMode: { _, _ in }
+        )
+            == .awaitingConfirmation
+    )
     #expect(interrupted.object(forKey: PublisherViewModel.syncEnabledKey) != nil)
     #expect(interrupted.object(forKey: RequiredICloudMigration.modeKey) == nil)
-    #expect(RequiredICloudMigration.migrate(defaults: interrupted, legacyKey: PublisherViewModel.syncEnabledKey) == .awaitingConfirmation)
+    #expect(
+        RequiredICloudMigration.migrate(defaults: interrupted, legacyKey: PublisherViewModel.syncEnabledKey)
+            == .awaitingConfirmation
+    )
     #expect(interrupted.object(forKey: PublisherViewModel.syncEnabledKey) == nil)
 }
 
@@ -154,5 +174,8 @@ struct SyncTimestampTests {
     #expect(relaunched.requiredICloudMode == .confirmed)
     #expect(relaunched.syncEnabled)
     #expect(defaults.object(forKey: PublisherViewModel.syncEnabledKey) == nil)
-    #expect(defaults.integer(forKey: PublisherViewModel.requiredICloudModeVersionKey) == PublisherViewModel.requiredICloudModeVersion)
+    #expect(
+        defaults.integer(forKey: PublisherViewModel.requiredICloudModeVersionKey)
+            == PublisherViewModel.requiredICloudModeVersion
+    )
 }
