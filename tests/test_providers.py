@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import os
@@ -37,6 +38,7 @@ from gradus.providers import (
     _write_debug_dump,
     fetch_provider_snapshot,
 )
+from gradus.providers import claude as claude_provider_module
 from gradus.providers._codex_helpers import _extract_spark_window
 from gradus.snapshot import _is_transient_probe_error
 
@@ -957,11 +959,17 @@ class ClaudeCookieCacheTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self._cache_path = Path(self._tmpdir.name) / "claude_cookies.json"
-        self._patcher = patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._cache_path)
-        self._patcher.start()
+        self._status_cache_path = Path(self._tmpdir.name) / "claude-usage.json"
+        self._patchers = [
+            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._cache_path),
+            patch.object(ClaudeHttpProvider, "_STATUS_CACHE_PATH", self._status_cache_path),
+        ]
+        for patcher in self._patchers:
+            patcher.start()
 
     def tearDown(self) -> None:
-        self._patcher.stop()
+        for patcher in self._patchers:
+            patcher.stop()
         self._tmpdir.cleanup()
 
     def test_cache_is_the_only_credential_source(self) -> None:
@@ -1011,12 +1019,9 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             encoding="utf-8",
         )
         provider = ClaudeHttpProvider()
-        with (
-            patch(
-                "gradus.providers._base._http_json",
-                side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
-            ),
-            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
+        with patch(
+            "gradus.providers._base._http_json",
+            side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
         ):
             with self.assertRaises(ProbeFailure):
                 provider.fetch()
@@ -1035,12 +1040,9 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             encoding="utf-8",
         )
         provider = ClaudeHttpProvider()
-        with (
-            patch(
-                "gradus.providers._base._http_json",
-                side_effect=ProbeFailure("HTTP 400", ""),
-            ),
-            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
+        with patch(
+            "gradus.providers._base._http_json",
+            side_effect=ProbeFailure("HTTP 400", ""),
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -1109,6 +1111,11 @@ class CacheResilienceTests(unittest.TestCase):
         self._patchers = [
             patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
             patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
+            patch.object(
+                ClaudeHttpProvider,
+                "_STATUS_CACHE_PATH",
+                Path(self._tmpdir.name) / "claude-usage.json",
+            ),
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
         ]
         for p in self._patchers:
@@ -1986,30 +1993,41 @@ class ClaudeHttpProviderTests(unittest.TestCase):
     }
     ORGANIZATION_ID = "00000000-0000-4000-8000-000000000001"
     SECOND_ORGANIZATION_ID = "00000000-0000-4000-8000-000000000002"
-    CLI_USAGE_FIXTURE = (
-        b"\x1b[2J\x1b[H"
-        b"Usage\n"
-        b"Current session\n"
-        b"14% 14% used\n"
-        b"Resets 3 hours (tomorrow / 9:00 AM)\n"
-        b"Current week (all models)\n"
-        b"81% 81% used\n"
-        b"Resets in 18 hours 10 minutes (tomorrow / 9:00 AM)\n"
-        b"+50% weekly extra usage expires soon\n"
-        b"Current week (Fable)\n"
-        b"4% 4% used\n"
-        b"Resets in 18 hours 10 minutes (tomorrow / 9:00 AM)\n"
-    )
+
+    def test_provider_has_no_terminal_or_process_probe(self) -> None:
+        """Claude usage must come from structured data, never terminal scraping."""
+        source = Path(claude_provider_module.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported_roots = {
+            name
+            for node in ast.walk(tree)
+            for name in (
+                [alias.name.split(".", 1)[0] for alias in node.names]
+                if isinstance(node, ast.Import)
+                else (
+                    [node.module.split(".", 1)[0]]
+                    if isinstance(node, ast.ImportFrom) and node.module
+                    else []
+                )
+            )
+        }
+        self.assertTrue({"pty", "subprocess", "pexpect"}.isdisjoint(imported_roots))
 
     def setUp(self) -> None:
         # Isolate bridge-managed cache fixtures from the repository's live cache.
         self._tmpdir = tempfile.TemporaryDirectory()
         self._cache_path = Path(self._tmpdir.name) / "claude_cookies.json"
-        self._patcher = patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._cache_path)
-        self._patcher.start()
+        self._status_cache_path = Path(self._tmpdir.name) / "claude-usage.json"
+        self._patchers = [
+            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._cache_path),
+            patch.object(ClaudeHttpProvider, "_STATUS_CACHE_PATH", self._status_cache_path),
+        ]
+        for patcher in self._patchers:
+            patcher.start()
 
     def tearDown(self) -> None:
-        self._patcher.stop()
+        for patcher in self._patchers:
+            patcher.stop()
         self._tmpdir.cleanup()
 
     def _make_provider(self) -> ClaudeHttpProvider:
@@ -2024,6 +2042,58 @@ class ClaudeHttpProviderTests(unittest.TestCase):
             encoding="utf-8",
         )
         return ClaudeHttpProvider()
+
+    def test_recent_structured_status_cache_avoids_network_and_credentials(self) -> None:
+        self._status_cache_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "observed_at": time.time(),
+                    "five_hour": {"used_percentage": 1, "resets_at": 1_800_000_000},
+                    "seven_day": {"used_percentage": 81, "resets_at": 1_900_000_000},
+                }
+            ),
+            encoding="utf-8",
+        )
+        provider = ClaudeHttpProvider()
+        with patch("gradus.providers._base._http_json") as http_json:
+            status = provider.fetch()
+        self.assertEqual(status.session_percent_left, 99)
+        self.assertEqual(status.weekly_percent_left, 19)
+        self.assertEqual(status.primary_reset, _format_reset_time(1_800_000_000))
+        self.assertEqual(status.secondary_reset, _format_reset_time(1_900_000_000))
+        http_json.assert_not_called()
+        self.assertFalse(provider._has_cookies)
+
+    def test_stale_status_cache_is_not_used(self) -> None:
+        self._status_cache_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "observed_at": time.time() - 301,
+                    "five_hour": {"used_percentage": 1},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(ProbeFailure):
+            ClaudeHttpProvider().fetch()
+
+    def test_malformed_status_cache_falls_back_to_structured_web_response(self) -> None:
+        self._status_cache_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "observed_at": time.time(),
+                    "five_hour": {"used_percentage": 101},
+                }
+            ),
+            encoding="utf-8",
+        )
+        provider = self._make_provider()
+        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
+            status = provider.fetch()
+        self.assertEqual(status.session_percent_left, 70)
 
     def test_normal_response_field_mapping(self) -> None:
         provider = self._make_provider()
@@ -2114,95 +2184,16 @@ class ClaudeHttpProviderTests(unittest.TestCase):
 
     def test_401_raises_probe_failure(self) -> None:
         provider = self._make_provider()
-        with (
-            patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")),
-            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
-        ):
+        with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertIn("session expired", str(ctx.exception).lower())
 
     def test_missing_cookies_raises_probe_failure(self) -> None:
         provider = ClaudeHttpProvider()
-        with (
-            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
-            self.assertRaises(ProbeFailure) as ctx,
-        ):
+        with self.assertRaises(ProbeFailure) as ctx:
             provider.fetch()
         self.assertIn("claude.ai", str(ctx.exception).lower())
-
-    def test_missing_cookies_use_authenticated_cli_usage(self) -> None:
-        provider = ClaudeHttpProvider()
-        cli_status = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
-        assert cli_status is not None
-        with patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=cli_status):
-            status = provider.fetch()
-        self.assertEqual(status.session_percent_left, 86.0)
-        self.assertEqual(status.weekly_percent_left, 19.0)
-
-    def test_headless_missing_cookies_do_not_spawn_cli(self) -> None:
-        provider = ClaudeHttpProvider()
-        providers.set_headless(True)
-        try:
-            with (
-                patch.object(ClaudeHttpProvider, "_fetch_cli_usage") as cli_usage,
-                self.assertRaises(ProbeFailure),
-            ):
-                provider.fetch()
-            cli_usage.assert_not_called()
-        finally:
-            providers.set_headless(False)
-
-    def test_cli_usage_parser_converts_used_to_remaining(self) -> None:
-        status = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
-        self.assertIsNotNone(status)
-        assert status is not None
-        self.assertEqual(status.session_percent_left, 86.0)
-        self.assertEqual(status.weekly_percent_left, 19.0)
-        self.assertIsNone(status.opus_percent_left)
-        self.assertEqual(status.primary_reset, "Resets 3 hours (tomorrow / 9:00 AM)")
-        self.assertNotIn("Current session", status.raw_text)
-        self.assertNotIn("used", status.raw_text)
-
-    def test_cli_usage_parser_rejects_incomplete_panel(self) -> None:
-        self.assertIsNone(ClaudeHttpProvider._parse_cli_usage(b"Current session\n14% used\n"))
-
-    def test_cli_usage_completion_accepts_percentages_without_reset_rows(self) -> None:
-        partial = b"\n".join(
-            line for line in self.CLI_USAGE_FIXTURE.splitlines() if not line.startswith(b"Resets")
-        )
-        status = ClaudeHttpProvider._parse_cli_usage(partial)
-        self.assertIsNotNone(status)
-        assert status is not None
-        self.assertIsNone(status.primary_reset)
-        self.assertTrue(ClaudeHttpProvider._cli_usage_complete(status))
-        complete = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
-        self.assertTrue(ClaudeHttpProvider._cli_usage_complete(complete))
-
-    def test_cli_usage_parser_ignores_other_model_heading(self) -> None:
-        fixture = self.CLI_USAGE_FIXTURE.replace(b"Current week (Fable)", b"Current week (Sonnet)")
-        status = ClaudeHttpProvider._parse_cli_usage(fixture)
-        self.assertIsNotNone(status)
-        assert status is not None
-        self.assertEqual(status.weekly_percent_left, 19.0)
-        self.assertIsNone(status.opus_percent_left)
-
-    def test_cli_process_termination_reaps_pty_child(self) -> None:
-        child = subprocess.Popen(["sleep", "30"], start_new_session=True)
-        ClaudeHttpProvider._terminate_cli_process(child)
-        self.assertIsNotNone(child.poll())
-
-    def test_403_uses_cli_usage_before_evicting_web_cache(self) -> None:
-        provider = self._make_provider()
-        cli_status = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
-        assert cli_status is not None
-        with (
-            patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 403", "")),
-            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=cli_status),
-        ):
-            status = provider.fetch()
-        self.assertEqual(status.weekly_percent_left, 19.0)
-        self.assertTrue(self._cache_path.exists())
 
 
 class AntigravityProviderTests(unittest.TestCase):
@@ -2816,6 +2807,11 @@ class HeadlessReadOnlyTests(unittest.TestCase):
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
             patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
             patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
+            patch.object(
+                ClaudeHttpProvider,
+                "_STATUS_CACHE_PATH",
+                self._root / "claude-usage.json",
+            ),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2946,6 +2942,11 @@ class LazyAcquireContractTests(unittest.TestCase):
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
             patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
             patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
+            patch.object(
+                ClaudeHttpProvider,
+                "_STATUS_CACHE_PATH",
+                self._root / "claude-usage.json",
+            ),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2992,8 +2993,7 @@ class LazyAcquireContractTests(unittest.TestCase):
         path stopped producing a message containing an auth keyword.
         """
         provider = ClaudeHttpProvider()
-        with patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None):
-            snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
+        snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
 
         self.assertFalse(snapshot.ok)
         self.assertIsNotNone(snapshot.error)

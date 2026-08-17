@@ -321,8 +321,7 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 ## Notes
 
 - Antigravity probing reads `agy`'s Keychain token and POSTs an empty body to `retrieveUserQuotaSummary` (the endpoint rejects a non-empty body with HTTP 400 and the default `Python-urllib` User-Agent with HTTP 403; the provider sets an explicit User-Agent). On an expired token it first nudges `agy` to refresh its own token via `agy models`, then re-reads the Keychain; only if that fails does it surface the "run `agy`" re-authenticate message. The monitor never handles `agy`'s client secret or refresh token — `agy` refreshes its own token via its own OAuth client — so the read-only-toward-`agy`'s-stored-credentials guarantee holds.
-- Claude probing reads the bridge-exported Safari session in `.cache/claude_cookies.json`; the re-auth action opens Safari at `claude.ai` because `claude login` refreshes the CLI session, not the credentials Gradus consumes. The bridge only requires a valid `sessionKey`; when `lastActiveOrg` is absent, the provider resolves the organization through Claude's authenticated `/api/organizations` endpoint and persists only the selected UUID via the private atomic cache writer. Multiple memberships are accepted only when the chat-capability/non-API selection is deterministic; malformed or ambiguous responses fail closed.
-- If Claude's Safari cache is unavailable or its web usage endpoint returns an authentication-class response (400/401/403), Gradus makes one bounded local CLI fallback: it launches the already-authenticated `claude` binary in `/tmp` with safe mode, no tools, and screen-reader output, sends `/usage`, parses only session/week/Opus capacity rows, then terminates and reaps the PTY process group. The panel is never logged or persisted, and other model headings (such as Fable or Sonnet) are ignored because the Claude status schema only defines the Opus bucket.
+- Claude first reads a recent credential-free `.state/claude-usage.json` sample written from Claude Code's documented structured status-line input. The sample contains only percentages, reset epochs, schema version, and observation time; it expires after five minutes and never launches Claude. When no recent sample exists, the provider may use the bridge-exported Safari session in `.cache/claude_cookies.json`; the re-auth action opens Safari at `claude.ai` because `claude login` refreshes the CLI session, not the web credentials. The bridge only requires a valid `sessionKey`; when `lastActiveOrg` is absent, the provider resolves the organization through Claude's authenticated `/api/organizations` endpoint and persists only the selected UUID via the private atomic cache writer. Multiple memberships are accepted only when the chat-capability/non-API selection is deterministic; malformed or ambiguous responses fail closed.
 - During each timed refresh, the header switches from `refresh XXs` to a single in-place `updating …` state until all providers complete, then resumes the countdown.
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
 - In live mode, press `q` to quit or `r` to trigger an immediate refresh.
@@ -335,14 +334,12 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 ## Limitations
 
 - This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `copilot`, `cursor`, `vibe`, and `opencode.ai`.
-- If any vendor changes its TUI wording or layout, the parser may need to be updated.
-- Reset windows are only shown when the CLI output exposes them.
-- Terminal rendering can vary across fonts and terminal emulators.
+- Reset windows are only shown when the provider's structured response exposes them.
 - OpenCode Go uses content-hash server-function IDs from the deployed opencode.ai console build. If opencode rebuilds the console, these hashes change and the probe returns an error until the IDs are updated in the provider. The probe gracefully surfaces this as a clear error message.
 
 ## Known Issues
 
-- **Claude `/usage` may return "only available for subscription plans"** even on valid Team or Pro seats. This is a server-side issue where the Anthropic usage API returns empty limit buckets (`five_hour`, `seven_day`, `seven_day_sonnet` are all null). The PTY probe itself works correctly. When the API starts returning data again, the Claude card will populate automatically.
+- **Claude usage may be unavailable despite valid Safari and CLI sessions.** Gradus accepts only structured provider data; it does not scrape Claude's terminal UI. Claude Code's status-line fields appear only after a CLI API response, and Gradus rejects samples older than five minutes. The card remains unavailable when neither that sample nor the authenticated structured web endpoint is usable.
 - The Antigravity token is minted under `agy`'s own OAuth client, so this path is coupled to `agy`'s internal API. If a future `agy` release changes the Keychain layout or the `retrieveUserQuotaSummary` contract, the card will show an error until the provider is updated.
 
 ## Companion apps (macOS/iOS)
