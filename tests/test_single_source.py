@@ -78,6 +78,9 @@ def test_tui_hydrates_carried_transient_windows_as_cached_only() -> None:
     )
     hydrated = _canonical_snapshots(limited)
     assert hydrated is not None
+    assert [snapshot.name for snapshot in hydrated[0]] == sorted(
+        snapshot.name for snapshot in hydrated[0]
+    )
     claude = next(snapshot for snapshot in hydrated[0] if snapshot.name == "Claude")
     assert claude.ok is True
     assert claude.error == "HTTP 429"

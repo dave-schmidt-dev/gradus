@@ -231,6 +231,10 @@ def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datet
                 error=entry.get("error") if isinstance(entry.get("error"), str) else None,
             )
         )
+    # Preserve the established TUI order. Canonical payload order is a schema
+    # concern; display order historically came from the alphabetically sorted
+    # probe results and should not change when the TUI becomes a pure reader.
+    snapshots.sort(key=lambda item: item.name)
     return snapshots, updated_at
 
 
