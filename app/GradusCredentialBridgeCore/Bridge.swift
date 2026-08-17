@@ -104,14 +104,41 @@ public enum CredentialBridge {
     /// or returns `nil` if any required field is missing, unparseable, or empty.
     private static func readCookie(at cookieOffset: Int, in page: Data) throws -> Cookie? {
         let cookie = page.subdata(in: cookieOffset ..< page.count)
-        guard let rawURL = try cookie.cString(at: cookie.uint32LE(at: 16)),
+        guard let rawDomain = try cookie.cString(at: cookie.uint32LE(at: 16)),
               let name = try cookie.cString(at: cookie.uint32LE(at: 20)),
               let value = try cookie.cString(at: cookie.uint32LE(at: 28)),
-              let host = URLComponents(string: rawURL)?.host?.lowercased(),
+              let host = normalizedHost(rawDomain),
               !name.isEmpty,
               !value.isEmpty
         else { return nil }
         return Cookie(host: host, name: name, value: value)
+    }
+
+    /// WebKit stores a cookie's domain in the URL field. Current Safari jars
+    /// use a bare domain (often with a leading dot), while older fixtures and
+    /// defensive callers may provide a full URL. Normalize both forms without
+    /// accepting malformed or whitespace-bearing hosts.
+    private static func normalizedHost(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let candidate = if let parsed = URLComponents(string: trimmed), let host = parsed.host {
+            host
+        } else {
+            trimmed
+        }
+        let host = candidate.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard !host.isEmpty,
+              host.count <= 253,
+              labels.allSatisfy({ label in
+                  guard !label.isEmpty,
+                        label.first != "-",
+                        label.last != "-"
+                  else { return false }
+                  return label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+              })
+        else { return nil }
+        return host
     }
 
     private static func claudePayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {

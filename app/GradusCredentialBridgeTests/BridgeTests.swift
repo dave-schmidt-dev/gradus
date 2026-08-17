@@ -10,6 +10,18 @@ final class BridgeTests: XCTestCase {
         XCTAssertEqual(parsed, [.init(host: "console.mistral.ai", name: "csrftoken", value: "fixture")])
     }
 
+    func testParserNormalizesSafariDomainAndLegacyFullURLRepresentations() throws {
+        let domain = try CredentialBridge.parseCookies(
+            binaryCookies([.init(host: ".claude.ai", name: "sessionKey", value: "sk-ant-domain")])
+        )
+        XCTAssertEqual(domain, [.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-domain")])
+
+        let fullURL = try CredentialBridge.parseCookies(
+            binaryCookies([.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-url")], encodeFullURL: true)
+        )
+        XCTAssertEqual(fullURL, [.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-url")])
+    }
+
     func testRefreshRejectsNonCacheDirectoryBeforeReadingSafari() {
         XCTAssertThrowsError(try CredentialBridge.refresh(cacheDirectory: URL(fileURLWithPath: "/tmp/not-cache")))
     }
@@ -22,8 +34,8 @@ final class BridgeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: temporary) }
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         try binaryCookies([
-            .init(host: "claude.ai", name: "sessionKey", value: "sk-ant-claude-session"),
-            .init(host: "claude.ai", name: "lastActiveOrg", value: "claude-org"),
+            .init(host: ".claude.ai", name: "sessionKey", value: "sk-ant-claude-session"),
+            .init(host: ".claude.ai", name: "lastActiveOrg", value: "claude-org"),
             .init(host: "cursor.com", name: "WorkosCursorSessionToken", value: "user%3A%3Acursor-token"),
             .init(host: "opencode.ai", name: "auth", value: "opencode-auth"),
             .init(host: "console.mistral.ai", name: "ory_session_fixture", value: "mistral-session"),
@@ -113,10 +125,10 @@ final class BridgeTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
     }
 
-    private func binaryCookies(_ entries: [CredentialBridge.Cookie]) -> Data {
+    private func binaryCookies(_ entries: [CredentialBridge.Cookie], encodeFullURL: Bool = false) -> Data {
         var cookies: [Data] = []
         for entry in entries {
-            let url = "https://" + entry.host + "/"
+            let url = encodeFullURL ? "https://" + entry.host + "/" : entry.host
             let strings = [url, entry.name, entry.value].map { Data(($0 + "\0").utf8) }
             var cookie = Data(repeating: 0, count: 48)
             cookie.replaceSubrange(16 ..< 20, with: littleEndian(48))
