@@ -2388,6 +2388,25 @@ class AntigravityProviderTests(unittest.TestCase):
         ):
             self.assertFalse(provider._trigger_agy_self_refresh())
 
+    def test_nudge_uses_owned_absolute_fallback_when_launchd_path_omits_agy(self) -> None:
+        provider = self._make_provider()
+        provider._token = self._token(expiry="2000-01-01T00:00:00+00:00")
+        fallback = AntigravityProvider._REFRESH_FALLBACK_PATH
+        with (
+            patch("gradus.providers.antigravity.shutil.which", return_value=None),
+            patch.object(
+                Path, "stat", return_value=MagicMock(st_mode=stat.S_IFREG, st_uid=os.getuid())
+            ),
+            patch("gradus.providers.antigravity.os.access", return_value=True),
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch(
+                "gradus.providers.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ) as mock_run,
+        ):
+            self.assertTrue(provider._trigger_agy_self_refresh())
+        self.assertEqual(list(mock_run.call_args.args[0]), [str(fallback), "models"])
+
     def test_nudge_returns_false_when_refreshed_token_has_no_access_token(self) -> None:
         # A malformed re-read (no access_token, no expiry) must not count as success.
         provider = self._make_provider()

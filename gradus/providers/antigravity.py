@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import shutil
+import stat
 import subprocess
 import time
 from datetime import datetime
@@ -46,6 +49,7 @@ class AntigravityProvider:
     _KEYCHAIN_PREFIX = "go-keyring-base64:"
     _SUMMARY_URL = HISTORY_ENDPOINT
     _REFRESH_TRIGGER_CMD = ("agy", "models")
+    _REFRESH_FALLBACK_PATH = Path.home() / ".local" / "bin" / "agy"
     _REFRESH_COOLDOWN_SECONDS = 300
     _USER_AGENT = "gradus (antigravity quota probe)"
     _ACCOUNTS_PATH = Path.home() / ".gemini" / "google_accounts.json"
@@ -123,9 +127,22 @@ class AntigravityProvider:
         if now - self._last_refresh_trigger < self._REFRESH_COOLDOWN_SECONDS:
             return False
         self._last_refresh_trigger = now
+        command = list(self._REFRESH_TRIGGER_CMD)
+        if shutil.which(command[0]) is None:
+            try:
+                fallback_stat = self._REFRESH_FALLBACK_PATH.stat()
+            except OSError:
+                return False
+            if (
+                not stat.S_ISREG(fallback_stat.st_mode)
+                or fallback_stat.st_uid != os.getuid()
+                or not os.access(self._REFRESH_FALLBACK_PATH, os.X_OK)
+            ):
+                return False
+            command[0] = str(self._REFRESH_FALLBACK_PATH)
         try:
             result = subprocess.run(
-                list(self._REFRESH_TRIGGER_CMD),
+                command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
