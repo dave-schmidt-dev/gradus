@@ -967,14 +967,30 @@ class ClaudeCookieCacheTests(unittest.TestCase):
     def test_cache_is_the_only_credential_source(self) -> None:
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
-            json.dumps({"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"}),
+            json.dumps(
+                {
+                    "sessionKey": "sk-ant-test",
+                    "cf_clearance": "cf",
+                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
+                }
+            ),
             encoding="utf-8",
         )
         provider = ClaudeHttpProvider()
         provider._acquire()
-        self.assertEqual(provider._session_key, "sk")
+        self.assertEqual(provider._session_key, "sk-ant-test")
         self.assertEqual(provider._cf_clearance, "cf")
-        self.assertEqual(provider._org_id, "org")
+        self.assertEqual(provider._org_id, "00000000-0000-4000-8000-000000000001")
+
+    def test_malformed_session_key_cache_is_ignored(self) -> None:
+        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cache_path.write_text(
+            json.dumps({"sessionKey": "not-a-claude-session", "lastActiveOrg": "not-a-uuid"}),
+            encoding="utf-8",
+        )
+        provider = ClaudeHttpProvider()
+        provider._acquire()
+        self.assertFalse(provider._has_cookies)
 
     def test_missing_cache_does_not_create_credentials(self) -> None:
         provider = ClaudeHttpProvider()
@@ -985,7 +1001,13 @@ class ClaudeCookieCacheTests(unittest.TestCase):
         """cf_clearance can expire fast; a 403 must evict the cache to recover."""
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
-            json.dumps({"sessionKey": "sk", "cf_clearance": "cf", "lastActiveOrg": "org"}),
+            json.dumps(
+                {
+                    "sessionKey": "sk-ant-test",
+                    "cf_clearance": "cf",
+                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
+                }
+            ),
             encoding="utf-8",
         )
         provider = ClaudeHttpProvider()
@@ -998,13 +1020,14 @@ class ClaudeCookieCacheTests(unittest.TestCase):
         self.assertFalse(self._cache_path.exists())
 
     def test_400_clears_cache(self) -> None:
-        # Regression for the 2026-05-30 cache-poison bug: a cached lastActiveOrg
-        # that is not a valid UUID makes Claude return HTTP 400 (invalid_request_error)
-        # rather than 401/403, so without 400 in the eviction set the poison is sticky.
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
             json.dumps(
-                {"sessionKey": "sk-ant-test", "cf_clearance": "cf_test", "lastActiveOrg": "org-123"}
+                {
+                    "sessionKey": "sk-ant-test",
+                    "cf_clearance": "cf_test",
+                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
+                }
             ),
             encoding="utf-8",
         )
@@ -1955,6 +1978,8 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         "seven_day": {"utilization": 45.0, "resets_at": "2026-04-21T00:00:00Z"},
         "seven_day_opus": {"utilization": 10.0, "resets_at": "2026-04-21T00:00:00Z"},
     }
+    ORGANIZATION_ID = "00000000-0000-4000-8000-000000000001"
+    SECOND_ORGANIZATION_ID = "00000000-0000-4000-8000-000000000002"
 
     def setUp(self) -> None:
         # Isolate bridge-managed cache fixtures from the repository's live cache.
@@ -1973,7 +1998,7 @@ class ClaudeHttpProviderTests(unittest.TestCase):
                 {
                     "sessionKey": "sk-ant-test",
                     "cf_clearance": "cf_test",
-                    "lastActiveOrg": "org-123",
+                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
                 }
             ),
             encoding="utf-8",
@@ -2001,6 +2026,71 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIsInstance(status.session_percent_left, float)
         self.assertIsInstance(status.weekly_percent_left, float)
         self.assertIsInstance(status.opus_percent_left, float)
+
+    def test_session_only_cache_resolves_and_persists_organization(self) -> None:
+        self._cache_path.write_text(
+            json.dumps({"sessionKey": "sk-ant-test", "cf_clearance": "cf_test"}),
+            encoding="utf-8",
+        )
+        provider = ClaudeHttpProvider()
+        with patch(
+            "gradus.providers._base._http_json",
+            side_effect=[
+                [{"uuid": self.ORGANIZATION_ID, "capabilities": ["chat"]}],
+                self.NORMAL_RESPONSE,
+            ],
+        ) as http_json:
+            status = provider.fetch()
+
+        self.assertEqual(status.session_percent_left, 70)
+        self.assertEqual(provider._org_id, self.ORGANIZATION_ID)
+        self.assertEqual(
+            json.loads(self._cache_path.read_text(encoding="utf-8"))["lastActiveOrg"],
+            self.ORGANIZATION_ID,
+        )
+        self.assertEqual(http_json.call_args_list[0].args[0], ClaudeHttpProvider._ORGANIZATIONS_URL)
+
+    def test_multiple_organizations_prefer_single_chat_capable_org(self) -> None:
+        self._cache_path.write_text(json.dumps({"sessionKey": "sk-ant-test"}), encoding="utf-8")
+        provider = ClaudeHttpProvider()
+        with patch(
+            "gradus.providers._base._http_json",
+            side_effect=[
+                [
+                    {"uuid": self.ORGANIZATION_ID, "capabilities": ["api"]},
+                    {"uuid": self.SECOND_ORGANIZATION_ID, "capabilities": ["chat"]},
+                ],
+                self.NORMAL_RESPONSE,
+            ],
+        ):
+            provider.fetch()
+        self.assertEqual(provider._org_id, self.SECOND_ORGANIZATION_ID)
+
+    def test_ambiguous_organizations_fail_closed_without_usage_request(self) -> None:
+        self._cache_path.write_text(json.dumps({"sessionKey": "sk-ant-test"}), encoding="utf-8")
+        provider = ClaudeHttpProvider()
+        with patch(
+            "gradus.providers._base._http_json",
+            return_value=[
+                {"uuid": self.ORGANIZATION_ID},
+                {"uuid": self.SECOND_ORGANIZATION_ID},
+            ],
+        ) as http_json:
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertIn("ambiguous", str(ctx.exception))
+        self.assertEqual(http_json.call_count, 1)
+
+    def test_malformed_organizations_fail_closed_without_response_body(self) -> None:
+        self._cache_path.write_text(json.dumps({"sessionKey": "sk-ant-test"}), encoding="utf-8")
+        provider = ClaudeHttpProvider()
+        with patch(
+            "gradus.providers._base._http_json",
+            return_value=[{"uuid": "not-an-organization-id"}],
+        ):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        self.assertEqual(ctx.exception.raw_text, "")
 
     def test_401_raises_probe_failure(self) -> None:
         provider = self._make_provider()

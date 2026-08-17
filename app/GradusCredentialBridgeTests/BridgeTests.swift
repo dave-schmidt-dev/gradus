@@ -22,7 +22,7 @@ final class BridgeTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: temporary) }
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         try binaryCookies([
-            .init(host: "claude.ai", name: "sessionKey", value: "claude-session"),
+            .init(host: "claude.ai", name: "sessionKey", value: "sk-ant-claude-session"),
             .init(host: "claude.ai", name: "lastActiveOrg", value: "claude-org"),
             .init(host: "cursor.com", name: "WorkosCursorSessionToken", value: "user%3A%3Acursor-token"),
             .init(host: "opencode.ai", name: "auth", value: "opencode-auth"),
@@ -34,7 +34,7 @@ final class BridgeTests: XCTestCase {
         try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
 
         let claude = try payload(named: "claude_cookies.json", in: cache)
-        XCTAssertEqual(claude["sessionKey"], "claude-session")
+        XCTAssertEqual(claude["sessionKey"], "sk-ant-claude-session")
         XCTAssertEqual(claude["cf_clearance"], "")
         let cursor = try payload(named: "cursor_token.json", in: cache)
         XCTAssertEqual(cursor["access_token"], "cursor-token")
@@ -52,6 +52,40 @@ final class BridgeTests: XCTestCase {
         }
         let directoryAttributes = try FileManager.default.attributesOfItem(atPath: cache.path)
         XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+    }
+
+    func testClaudeSessionKeyDoesNotRequireLastActiveOrganizationCookie() throws {
+        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let source = temporary.appendingPathComponent("Cookies.binarycookies")
+        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        try binaryCookies([
+            .init(host: "claude.ai", name: "sessionKey", value: "sk-ant-session-only")
+        ]).write(to: source)
+
+        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+
+        let claude = try payload(named: "claude_cookies.json", in: cache)
+        XCTAssertEqual(claude["sessionKey"], "sk-ant-session-only")
+        XCTAssertNil(claude["lastActiveOrg"])
+    }
+
+    func testClaudeInvalidSessionKeyDoesNotCreateCredentialCache() throws {
+        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let source = temporary.appendingPathComponent("Cookies.binarycookies")
+        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        try binaryCookies([
+            .init(host: "claude.ai", name: "sessionKey", value: "not-a-session-key")
+        ]).write(to: source)
+
+        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cache.appendingPathComponent("claude_cookies.json").path))
     }
 
     func testMissingOpenCodeCookieLeavesCacheMissingUntilAUsableCookieReturns() throws {

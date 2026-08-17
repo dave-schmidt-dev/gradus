@@ -116,13 +116,18 @@ public enum CredentialBridge {
 
     private static func claudePayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {
         let values = values(for: "claude.ai", in: cookies)
-        guard let sessionKey = values["sessionKey"], let org = values["lastActiveOrg"] else { return nil }
-        return [
+        guard let sessionKey = values["sessionKey"],
+              sessionKey.hasPrefix("sk-ant-")
+        else { return nil }
+        var payload = [
             "sessionKey": sessionKey,
             "cf_clearance": values["cf_clearance"] ?? "",
-            "lastActiveOrg": org,
             "cached_at": cachedAt
         ]
+        if let org = values["lastActiveOrg"], !org.isEmpty {
+            payload["lastActiveOrg"] = org
+        }
+        return payload
     }
 
     private static func cursorPayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {
