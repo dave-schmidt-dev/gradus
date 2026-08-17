@@ -43,8 +43,8 @@ COUNTING_LEG_REPORTERS=(
 # nine GradusiOSUITests workflows. Its floor must exceed the image-only
 # result, or a zero-test UI target could be hidden by the snapshot count.
 #
-# GradusiOS-iPhone's floor (index 3) is pinned to its exact current reported
-# count (162, as of the Codex (Spark) bucket work) rather than a loose lower
+# GradusiOS-iPhone's floor (index 3) is pinned to its exact integrated-gate
+# count (171) rather than a loose lower
 # bound, so a test silently dropping out of selection fails the gate instead
 # of hiding under slack. Raise it deliberately when adding tests there. The
 # leg mixes Swift Testing and XCTest in one target, so its reporter is
@@ -52,7 +52,7 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 162 21 6 5 5 5 5 4 2 9)
+COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 5 5 4 2 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"

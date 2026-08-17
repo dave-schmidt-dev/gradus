@@ -230,6 +230,14 @@ mac_ui_block="$(sed -n '/assert_counting_leg "GradusMacUI"/,/PROVISIONING_PROFIL
 iphone_unit_block="$(sed -n '/assert_counting_leg "GradusiOS-iPhone"/,/CODE_SIGNING_ALLOWED=NO/p' "$GATE_SCRIPT")"
 [[ "$iphone_unit_block" == *"-skip-testing:GradusiOSUITests"* ]] ||
   fail "iPhone unit leg must leave UI tests to their dedicated gate"
+iphone_leg_index=-1
+for ((index = 0; index < leg_count; index++)); do
+  if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOS-iPhone" ]]; then
+    iphone_leg_index="$index"
+  fi
+done
+[[ "$iphone_leg_index" -ge 0 && "${COUNTING_LEG_MINIMUMS[iphone_leg_index]}" -eq 171 ]] ||
+  fail "iPhone integrated-gate floor must remain exactly 171"
 iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALLOWED=NO/p' "$GATE_SCRIPT")"
 [[ "$iphone_ui_block" == *"-only-testing:GradusiOSUITests"* ]] ||
   fail "dedicated iPhone UI leg is missing its explicit selector"
