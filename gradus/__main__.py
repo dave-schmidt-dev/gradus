@@ -1195,6 +1195,37 @@ _LOG_PATH = Path(__file__).resolve().parent.parent / ".logs" / "gradus.log"
 # under pytest?" sniff: the override is a behavior a test can assert on, and
 # a detection branch is not.
 _LOG_PATH_ENV_VAR = "GRADUS_LOG_PATH"
+_TUI_SETTINGS_PATH = Path(__file__).resolve().parent.parent / ".state" / "tui-settings.json"
+_TUI_SORT_OPTIONS = ("name", "urgent", "reset")
+
+
+def _load_tui_sort_option() -> str:
+    """Read the device-local TUI sort preference, defaulting to historical A-Z."""
+    try:
+        payload = json.loads(_TUI_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "name"
+    option = payload.get("sort") if isinstance(payload, dict) else None
+    return option if option in _TUI_SORT_OPTIONS else "name"
+
+
+def _save_tui_sort_option(option: str) -> None:
+    """Atomically persist the device-local TUI sort preference."""
+    if option not in _TUI_SORT_OPTIONS:
+        return
+    _TUI_SETTINGS_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = _TUI_SETTINGS_PATH.with_suffix(".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"sort": option}, handle)
+        handle.write("\n")
+    os.replace(temporary, _TUI_SETTINGS_PATH)
+
+
+def _next_tui_sort_option(option: str) -> str:
+    """Return the next sort mode in the visible TUI cycle."""
+    index = _TUI_SORT_OPTIONS.index(option) if option in _TUI_SORT_OPTIONS else 0
+    return _TUI_SORT_OPTIONS[(index + 1) % len(_TUI_SORT_OPTIONS)]
 
 
 def _resolve_log_path() -> Path:
@@ -1338,9 +1369,16 @@ def main() -> int:
         else:
             snapshots, updated_at = canonical
         console = Console(theme=THEME)
+        sort_option = _load_tui_sort_option()
         _check_warnings(snapshots, set(), updated_at)
         console.print(
-            build_dashboard(snapshots, updated_at, 0, fix_actions=_build_fix_actions(snapshots))
+            build_dashboard(
+                snapshots,
+                updated_at,
+                0,
+                fix_actions=_build_fix_actions(snapshots),
+                sort_option=sort_option,
+            )
         )
         return 0
 
@@ -1357,6 +1395,7 @@ def main() -> int:
     notify_executor = ThreadPoolExecutor(max_workers=1)
 
     console = Console(theme=THEME)
+    sort_option = _load_tui_sort_option()
 
     try:
         # Live interactive mode: hydrate and watch the canonical snapshot.
@@ -1414,6 +1453,7 @@ def main() -> int:
                                 updated_at,
                                 remaining,
                                 fix_actions=fix_actions,
+                                sort_option=sort_option,
                             )
                         )
                         live.refresh()
@@ -1429,6 +1469,10 @@ def main() -> int:
                                 if key in ("r", "R"):
                                     refresh_now = True
                                     break
+                                if key in ("s", "S"):
+                                    sort_option = _next_tui_sort_option(sort_option)
+                                    _save_tui_sort_option(sort_option)
+                                    continue
                                 if key in fix_actions:
                                     _, kind, target = fix_actions[key]
                                     _launch_fix(kind, target)
@@ -1462,6 +1506,7 @@ def main() -> int:
                                     updating=True,
                                     update_elapsed=time.monotonic() - refresh_started,
                                     fix_actions=fix_actions,
+                                    sort_option=sort_option,
                                 )
                             )
                             live.refresh()
@@ -1472,6 +1517,9 @@ def main() -> int:
                                     if key in ("q", "Q"):
                                         quit_requested = True
                                         break
+                                    if key in ("s", "S"):
+                                        sort_option = _next_tui_sort_option(sort_option)
+                                        _save_tui_sort_option(sort_option)
                             else:
                                 time.sleep(0.12)
                         if not quit_requested:

@@ -1600,6 +1600,7 @@ def build_dashboard(
     updating: bool = False,
     update_elapsed: float = 0.0,
     fix_actions: dict[str, tuple[str, str, str]] | None = None,
+    sort_option: str = "input",
 ) -> Group:
     """Build the full dashboard as a Rich Group."""
     now = updated_at
@@ -1621,14 +1622,8 @@ def build_dashboard(
     active_snaps = [s for s in snapshots if not _provider_is_empty(s, now)]
     exhausted_snaps = [s for s in snapshots if _provider_is_empty(s, now)]
 
-    _COMPACT = {"Cursor", "Vibe"}
-    active_ordered = sorted(
-        active_snaps,
-        key=lambda s: (
-            (s.name.removesuffix(" [HTTP]") if hasattr(s.name, "removesuffix") else s.name)
-            in _COMPACT
-        ),
-    )
+    active_ordered = _sort_provider_partition(active_snaps, now, sort_option)
+    exhausted_ordered = _sort_provider_partition(exhausted_snaps, now, sort_option)
 
     fix_key_by_name: dict[str, str] = {}
     if fix_actions:
@@ -1641,23 +1636,25 @@ def build_dashboard(
     ]
 
     all_panels: list[RenderableType] = list(active_panels)
-    if len(exhausted_snaps) >= 2:
-        for i in range(0, len(exhausted_snaps), 2):
-            pair = exhausted_snaps[i : i + 2]
+    if len(exhausted_ordered) >= 2:
+        for i in range(0, len(exhausted_ordered), 2):
+            pair = exhausted_ordered[i : i + 2]
             if len(pair) == 2:
                 all_panels.append(DynamicMicroDepletedPair(pair[0], pair[1], now))
             else:
                 all_panels.append(DynamicMicroDepletedSingle(pair[0], now))
-    elif len(exhausted_snaps) == 1:
-        all_panels.append(DynamicMicroDepletedSingle(exhausted_snaps[0], now))
+    elif len(exhausted_ordered) == 1:
+        all_panels.append(DynamicMicroDepletedSingle(exhausted_ordered[0], now))
+
+    ordered_snapshots = active_ordered + exhausted_ordered
 
     # Layout: cards pack into the shorter stack at safe two-column widths.
     if len(all_panels) > 1:
         body: RenderableType = _ResponsiveDashboardBody(
-            all_panels, _build_compact_lines(snapshots, now)
+            all_panels, _build_compact_lines(ordered_snapshots, now)
         )
     elif all_panels:
-        body = _ResponsiveDashboardBody(all_panels, _build_compact_lines(snapshots, now))
+        body = _ResponsiveDashboardBody(all_panels, _build_compact_lines(ordered_snapshots, now))
     else:
         body = Text("No providers configured.", style="text.muted")
 
@@ -1666,6 +1663,9 @@ def build_dashboard(
         " quit  ",
         ("[r]", "cyan"),
         " refresh",
+        "  ",
+        ("[s]", "cyan"),
+        f" sort: {TUI_SORT_LABELS.get(sort_option, TUI_SORT_LABELS['name'])}",
     ]
     if fix_actions:
         for key in sorted(fix_actions):
@@ -1674,6 +1674,55 @@ def build_dashboard(
     footer = Text.assemble(*footer_parts)
 
     return Group(header, Text(""), body, Text(""), footer)
+
+
+TUI_SORT_LABELS = {
+    "urgent": "Most urgent",
+    "reset": "Reset soonest",
+    "name": "Name A-Z",
+}
+
+
+def _sort_provider_partition(
+    snapshots: list[ProviderSnapshot], now: datetime, sort_option: str
+) -> list[ProviderSnapshot]:
+    """Sort one active/exhausted partition using the app-equivalent modes."""
+
+    def percent_values(snapshot: ProviderSnapshot) -> list[float]:
+        if not snapshot.data:
+            return []
+        return [
+            float(value)
+            for key, value in snapshot.data.items()
+            if key.endswith("percent_left") and percent_is_valid(value)
+        ]
+
+    def reset_target(snapshot: ProviderSnapshot) -> float:
+        targets: list[float] = []
+        for key, value in (snapshot.data or {}).items():
+            if not key.endswith("reset") or not isinstance(value, str):
+                continue
+            target = _parse_reset_target(value, now)
+            if target is not None:
+                if target.tzinfo is None:
+                    target = target.replace(tzinfo=now.tzinfo)
+                targets.append(target.timestamp())
+        return min(targets) if targets else math.inf
+
+    if sort_option == "urgent":
+        return sorted(
+            snapshots,
+            key=lambda snapshot: (
+                0 if not snapshot.ok else 1 if warning_window_ids(snapshot, now) else 2,
+                min(percent_values(snapshot), default=math.inf),
+                snapshot.name,
+            ),
+        )
+    if sort_option == "reset":
+        return sorted(snapshots, key=lambda snapshot: (reset_target(snapshot), snapshot.name))
+    if sort_option == "input":
+        return list(snapshots)
+    return sorted(snapshots, key=lambda snapshot: snapshot.name)
 
 
 # ---------------------------------------------------------------------------

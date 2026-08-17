@@ -5,17 +5,22 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import gradus.__main__ as main_module
 from gradus.__main__ import (
     CLAUDE_MIN_PROBE_INTERVAL_SECONDS,
     CLAUDE_RATE_LIMIT_BACKOFF_SECONDS,
     _canonical_snapshots,
     _CanonicalClaudeCooldown,
     _claude_probe_is_due,
+    _load_tui_sort_option,
+    _next_tui_sort_option,
     _refresh_snapshot_once,
+    _save_tui_sort_option,
     main,
 )
 from gradus.providers import ProviderSnapshot
 from gradus.snapshot import RATE_LIMIT_RETENTION_SECONDS, build_snapshot_v2_payload
+from gradus.ui import _sort_provider_partition
 
 
 def _claude(ok: bool, *, error: str | None = None) -> ProviderSnapshot:
@@ -101,6 +106,53 @@ def test_healthy_claude_cooldown_carries_success_unchanged() -> None:
     assert current["ok"] is True
     assert current["observed_at"] == prior["observed_at"]
     assert current["probe_attempted_at"] == prior["probe_attempted_at"]
+
+
+def test_tui_sort_preference_cycles_and_persists(tmp_path, monkeypatch) -> None:
+    settings = tmp_path / ".state" / "tui-settings.json"
+    monkeypatch.setattr(main_module, "_TUI_SETTINGS_PATH", settings)
+
+    assert _load_tui_sort_option() == "name"
+    assert _next_tui_sort_option("name") == "urgent"
+    _save_tui_sort_option("urgent")
+    assert _load_tui_sort_option() == "urgent"
+    assert settings.stat().st_mode & 0o777 == 0o600
+
+
+def test_tui_sort_modes_match_app_choices() -> None:
+    now = datetime(2026, 8, 17, 18, 0, tzinfo=timezone.utc)
+    alpha = ProviderSnapshot(
+        name="Alpha",
+        ok=True,
+        source="snapshot",
+        data={"weekly_percent_left": 80, "weekly_reset": "Resets Aug 19 at 06:00 PM"},
+    )
+    beta = ProviderSnapshot(
+        name="Beta",
+        ok=True,
+        source="snapshot",
+        data={"weekly_percent_left": 10, "weekly_reset": "Resets Aug 18 at 06:00 PM"},
+    )
+    gamma = ProviderSnapshot(
+        name="Gamma",
+        ok=True,
+        source="snapshot",
+        data={"weekly_percent_left": 60, "weekly_reset": None},
+    )
+
+    assert [item.name for item in _sort_provider_partition([beta, alpha], now, "name")] == [
+        "Alpha",
+        "Beta",
+    ]
+    assert [item.name for item in _sort_provider_partition([alpha, beta], now, "urgent")] == [
+        "Beta",
+        "Alpha",
+    ]
+    assert [item.name for item in _sort_provider_partition([gamma, alpha, beta], now, "reset")] == [
+        "Beta",
+        "Alpha",
+        "Gamma",
+    ]
 
 
 def _live_namespace() -> SimpleNamespace:
