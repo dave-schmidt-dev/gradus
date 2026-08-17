@@ -161,7 +161,7 @@ struct GradusiOSApp: App {
                 Task { await startLiveLifecycle() }
             }
             .onChange(of: viewModel.notificationsEnabled) { enabled in
-                // P5/T5.1: re-runs `subscribeIfEnabled()` when
+                // P5/T5.1: re-runs live subscription reconciliation when
                 // notifications are flipped on mid-session (e.g. from
                 // Settings while sync is already active) -- turning off
                 // is handled separately, success-gated, by
@@ -175,7 +175,7 @@ struct GradusiOSApp: App {
                           syncEnabled: viewModel.syncEnabled
                       )
                 else { return }
-                Task { await subscribeIfEnabled() }
+                Task { await reconcileLiveSubscriptions() }
             }
         }
     }
@@ -243,18 +243,19 @@ extension GradusiOSApp {
     }
 }
 
-/// Live lifecycle sequencing: (re-)entering the live iCloud path, subscribing
-/// once opted in, and the sample-mode enter/exit/reset transitions.
+/// Live lifecycle sequencing: (re-)entering the required live-iCloud path,
+/// subscribing after alert selection, and the sample-mode enter/exit/reset
+/// transitions.
 extension GradusiOSApp {
     /// Subscription creation is idempotent (PM-8-style, see
-    /// `CKSubscriptionManager`) but still gated on opt-in + an available
-    /// account -- creating a private-DB subscription with no signed-in user
-    /// or before the user has opted in would just fail/leak silently.
+    /// `CKSubscriptionManager`) but still gated on required live mode and an
+    /// available account. Creating a private-DB subscription with no signed-in
+    /// user would just fail/leak silently.
     /// P5/T5.1: `subscribeToWarnings()` additionally gates on
     /// `notificationsEnabled` -- the zone-sync subscription (silent,
     /// drives the offline cache) is independent of the user-visible warning
     /// opt-out and still runs whenever sync is on.
-    private func subscribeIfEnabled() async {
+    private func reconcileLiveSubscriptions() async {
         guard !sampleModeActive else { return }
         await viewModel.reconcileLiveLifecycle()
     }
@@ -288,8 +289,8 @@ extension GradusiOSApp {
         await viewModel.reconcileLiveLifecycle()
     }
 
-    /// The iCloud recovery controls call this rather than mutating a legacy
-    /// sync preference. It re-enters account discovery, the account monitor,
+    /// The iCloud recovery controls call this rather than mutating the legacy
+    /// Boolean. It re-enters account discovery, the account monitor,
     /// and live reconciliation after the user has corrected their Apple
     /// Account or connectivity outside the app.
     private func retryLiveLifecycle() {

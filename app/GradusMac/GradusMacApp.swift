@@ -101,8 +101,8 @@ struct GradusMacApp: App {
         // custom shapes, and replacing colors with menu text styling. The
         // dropdown shipped that way until 2026-08-05, so `MenuContentView`'s
         // usage bars and four-tier ramp had never been drawn once -- the
-        // giveaway in a screenshot is the sync toggle rendering as an NSMenu
-        // checkmark rather than a switch. The snapshot gate could not catch
+        // giveaway in a screenshot was the old sync toggle rendering as an
+        // NSMenu checkmark rather than a switch. The snapshot gate could not catch
         // it: `ProviderListViewSnapshotTests` renders the subview through
         // `ImageRenderer`, where SwiftUI draws normally, so the baselines were
         // correct and green against a path the user never saw.
@@ -155,8 +155,8 @@ final class PublishPipeline {
     private var accountMonitor: AccountStatusMonitor?
     private var started = false
 
-    /// Local display state + the opt-in sync toggle -- the menu content
-    /// view's single source of truth.
+    /// Local display state + required-iCloud status -- the menu content view's
+    /// single source of truth.
     let viewModel = PublisherViewModel()
 
     static let defaultSnapshotPath = URL(fileURLWithPath: NSHomeDirectory())
@@ -269,8 +269,9 @@ final class PublishPipeline {
         let viewModel = viewModel
         return SnapshotWatcher(path: snapshotPath) { payload in
             Task {
-                // Local display always reflects the on-device snapshot --
-                // only the CloudKit publish is gated on opt-in sync.
+                // Local display always reflects the on-device snapshot;
+                // CloudKit publishing is gated by required-iCloud mode and
+                // account availability.
                 await viewModel.apply(payload)
 
                 guard await viewModel.syncEnabled else { return }

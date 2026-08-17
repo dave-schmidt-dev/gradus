@@ -274,7 +274,7 @@ struct DashboardContent: View {
         viewModel.providers.map {
             DashboardProviderWindowSet(
                 providerName: $0.providerName,
-                windowIDs: $0.windows.map(\.id)
+                windowIDs: CrossSurfaceParity.visibleWindows($0.windows).map(\.id)
             )
         }
     }

@@ -57,6 +57,89 @@ private func makeProvider(
     #expect(localIsUrgent(makeWindow(percentLeft: 0), threshold: 0))
 }
 
+// MARK: - exhausted reset label
+
+@Test func exhaustedResetIgnoresAvailableOpenCodeWindows() {
+    let fiveHourReset = "2026-08-17T14:55:00-04:00"
+    let monthlyReset = "2026-08-23T21:30:00-04:00"
+    let windows = [
+        ProviderWindow(id: "five_hour", percentLeft: 100, resetISO: fiveHourReset, windowHours: 5, paceDelta: nil),
+        ProviderWindow(
+            id: "weekly",
+            percentLeft: 100,
+            resetISO: "2026-08-23T20:00:00-04:00",
+            windowHours: 168,
+            paceDelta: nil
+        ),
+        ProviderWindow(id: "monthly", percentLeft: 0, resetISO: monthlyReset, windowHours: 720, paceDelta: nil)
+    ]
+
+    #expect(earliestResetLabel(windows, now: fixedDate) == "resets \(friendlyResetDate(monthlyReset, now: fixedDate)!)")
+}
+
+@Test func exhaustedResetUsesLatestOfMultipleExhaustedWindows() {
+    let earlierReset = "2026-08-17T14:55:00-04:00"
+    let laterReset = "2026-08-23T21:30:00-04:00"
+    let windows = [
+        ProviderWindow(id: "five_hour", percentLeft: 0, resetISO: earlierReset, windowHours: 5, paceDelta: nil),
+        ProviderWindow(id: "weekly", percentLeft: 0, resetISO: laterReset, windowHours: 168, paceDelta: nil),
+        ProviderWindow(
+            id: "monthly",
+            percentLeft: 100,
+            resetISO: "2026-08-30T21:30:00-04:00",
+            windowHours: 720,
+            paceDelta: nil
+        )
+    ]
+
+    #expect(earliestResetLabel(windows, now: fixedDate) == "resets \(friendlyResetDate(laterReset, now: fixedDate)!)")
+}
+
+@Test func exhaustedResetUsesCanonicalFractionalDepletion() {
+    let fractionalReset = "2026-08-23T21:30:00-04:00"
+    let windows = [
+        ProviderWindow(id: "weekly", percentLeft: 0.49, resetISO: fractionalReset, windowHours: 168, paceDelta: nil),
+        ProviderWindow(
+            id: "monthly",
+            percentLeft: 100,
+            resetISO: "2026-08-30T21:30:00-04:00",
+            windowHours: 720,
+            paceDelta: nil
+        )
+    ]
+
+    #expect(percentIsDepleted(0.49))
+    #expect(
+        earliestResetLabel(windows, now: fixedDate)
+            == "resets \(friendlyResetDate(fractionalReset, now: fixedDate)!)"
+    )
+}
+
+@Test func exhaustedResetIsNilWhenNoWindowIsExhausted() {
+    let windows = [makeWindow(percentLeft: 100, resetISO: "2026-08-23T21:30:00-04:00")]
+
+    #expect(earliestResetLabel(windows, now: fixedDate) == nil)
+}
+
+/// INV-13's iPhone/iPad half: card density may differ, but an invalid upstream
+/// value cannot leak into one layout while the other omits it, and OpenCode's
+/// monthly depletion cannot inherit the healthy five-hour reset.
+@Test func crossSurfaceContractKeepsOnlyValidWindowsAndUsesDepletedReset() {
+    let fiveHourReset = "2026-08-17T14:55:00-04:00"
+    let monthlyReset = "2026-08-23T21:30:00-04:00"
+    let windows = [
+        ProviderWindow(id: "five_hour", percentLeft: 100, resetISO: fiveHourReset, windowHours: 5, paceDelta: nil),
+        ProviderWindow(id: "monthly", percentLeft: 0, resetISO: monthlyReset, windowHours: 720, paceDelta: nil),
+        ProviderWindow(id: "malformed", percentLeft: .nan, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+
+    #expect(CrossSurfaceParity.visibleWindows(windows).map(\.id) == ["five_hour", "monthly"])
+    #expect(
+        CrossSurfaceParity.exhaustedResetLabel(windows, now: fixedDate)
+            == "resets \(friendlyResetDate(monthlyReset, now: fixedDate)!)"
+    )
+}
+
 // MARK: - rankProviders tiering
 
 @Test func erroredProviderWithNoWindowsRanksFirstRegardlessOfOthers() {

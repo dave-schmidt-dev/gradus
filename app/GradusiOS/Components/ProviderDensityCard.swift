@@ -117,6 +117,6 @@ struct ProviderDensityCard: View {
     /// as an `unknown`-colored row: at this density a muted row reads as a real
     /// pool the user has run down, not as missing data.
     var visibleWindows: [ProviderWindow] {
-        provider.windows.filter { percentIsValid($0.percentLeft) }
+        CrossSurfaceParity.visibleWindows(provider.windows)
     }
 }

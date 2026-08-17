@@ -3,7 +3,7 @@ import GradusKit
 import SwiftUI
 
 /// The MenuBarExtra's dropdown content: one row per provider plus a settings
-/// section (sync toggle, launch-at-login, quit). Renders entirely from
+/// section (required-iCloud status, launch-at-login, quit). Renders entirely from
 /// `PublisherViewModel`'s published state -- no direct CloudKit/file
 /// dependency -- so it can be snapshot-tested standalone (T2b.1/T2b.4:
 /// XCUITest can't drive a `LSUIElement` status item, so `swift-snapshot-

@@ -172,3 +172,9 @@ rationale: GradusiOS is one artifact with one version, so a size class is a rend
   the iPad UI target with its 12 canonical image snapshots; its aggregate floor
   is therefore 15, and `test-gate-selfcheck.sh` rejects a snapshot-only iPad
   result or either destination pointed at the other simulator.
+
+### INV-13 — Mac, iPhone, and iPad preserve the same live provider state
+area: ["app/Shared/ProviderRanking.swift", "app/GradusMac/MenuProviderList.swift", "app/GradusiOS/DashboardView.swift", "app/GradusiOS/DashboardView+DenseGrid.swift", "app/GradusiOS/Components/ProviderDensityCard.swift", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/test-gate.sh"]
+gate_test: app/test-gate.sh
+threshold: 3
+rationale: Platform layout may change density, navigation chrome, and exact recovery copy, but the same live snapshot must retain every valid provider/window, put exhausted providers after active providers, and derive an exhausted provider's recovery reset only from depleted windows. iOS exposes account/retry recovery as a full-screen state while the Mac exposes publish/setup recovery in its menu and Settings; both must retain an actionable unavailable state rather than presenting stale data as connected. The shared CrossSurfaceParity seam is the mutation boundary: selecting one window, filtering only on one platform, or deriving a reset from a healthy sibling is a contract violation. Tests exercise iPhone, iPad, and Mac fixtures with the same multi-window exhausted provider and explicit unavailable/recovery states.

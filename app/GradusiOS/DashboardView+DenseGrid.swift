@@ -351,7 +351,7 @@ extension DashboardContent {
                 // fit a full provider name on one line. Let the cell grow
                 // rather than replace part of the name with an ellipsis.
                 .fixedSize(horizontal: false, vertical: true)
-            Text(earliestResetLabel(provider.windows, now: now) ?? "reset unknown")
+            Text(CrossSurfaceParity.exhaustedResetLabel(provider.windows, now: now) ?? "reset unknown")
                 .font(metrics.exhaustedResetFont)
                 .foregroundStyle(.secondary)
                 // The solver prevents a second cramped column. A full reset

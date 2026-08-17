@@ -87,7 +87,7 @@ struct SettingsView: View {
                 if isSampleMode {
                     sampleSection
                 } else {
-                    syncAndNotificationsSection
+                    warningAlertsSection
                     exploreSampleSection
                 }
                 connectedComputerSection
@@ -119,7 +119,7 @@ struct SettingsView: View {
         }
     }
 
-    private var syncAndNotificationsSection: some View {
+    private var warningAlertsSection: some View {
         Section("Warning alerts") {
             ListRow.toggle(
                 icon: Icon.bell,

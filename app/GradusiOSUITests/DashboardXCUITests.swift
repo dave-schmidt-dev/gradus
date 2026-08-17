@@ -74,6 +74,8 @@ final class DashboardXCUITests: XCTestCase {
         let warningAlerts = app.switches["warning-alerts-toggle"]
         XCTAssertTrue(warningAlerts.waitForExistence(timeout: 5))
         XCTAssertEqual(warningAlerts.value as? String, "0")
+        XCTAssertFalse(app.switches["Enable iCloud Sync"].exists)
+        XCTAssertFalse(app.switches["iCloud Sync"].exists)
         XCTAssertTrue(staticText(containing: "iCloud syncing is unaffected", in: app).exists)
     }
 

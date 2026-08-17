@@ -62,22 +62,23 @@ enum RequiredICloudMigration {
 public enum DashboardEmptyState: Equatable {
     case checkingICloud
     case tryAgain
-    /// Not signed in to iCloud at the OS level. The in-app toggle can't fix
-    /// this; only a deep link to Settings can.
+    /// Not signed in to iCloud at the OS level. Gradus cannot fix this in-app;
+    /// recovery waits for the account to become available.
     case notSignedIn
-    /// Signed in, but the in-app "Enable iCloud Sync" toggle is off.
+    /// A migrated installation is waiting for the one-time required-iCloud
+    /// Continue action. This is not a persistent live-mode preference.
     case syncDisabled
     /// Signed in, but CloudKit access is restricted for this account.
     case restricted
     case awaitingConfirmation
-    /// Signed in, toggle on, zero records yet -- waiting for the Mac's
-    /// first publish. iOS has no independent data source (§5.4): this
+    /// Signed in, required mode confirmed, zero records yet -- waiting for the
+    /// Mac's first publish. iOS has no independent data source (§5.4): this
     /// state can only resolve once the Mac writes something.
     case waitingForFirstPublish
 }
 
-/// Observable state the dashboard view renders from -- owns the opt-in
-/// sync toggle, the offline cache, and the CloudKit fetch, mirroring
+/// Observable state the dashboard view renders from -- owns the required-
+/// iCloud mode, the offline cache, and the CloudKit fetch, mirroring
 /// `PublisherViewModel` on the Mac side. Decoupled from live CloudKit so
 /// the view can be snapshot-tested from seeded fixture data (T3.5).
 @MainActor
@@ -95,7 +96,7 @@ public final class DashboardViewModel: ObservableObject {
     @Published public private(set) var requiredICloudMode: RequiredICloudMode = .confirmed
     @Published public internal(set) var iCloudAvailability: ICloudAvailabilityState = .checkingICloud
     @Published public internal(set) var liveLifecycleNeedsRetry = false
-    @Published public var syncEnabled: Bool {
+    @Published public internal(set) var syncEnabled: Bool {
         didSet {
             guard syncEnabled != oldValue else { return }
             commitRequiredICloudMode(syncEnabled ? .confirmed : .awaitingConfirmation)

@@ -49,14 +49,14 @@ public enum CloudSyncState: Equatable, Sendable {
 }
 
 /// Observable state the menu content view renders from, and the single
-/// place the opt-in sync toggle / snapshot data converge. Decoupled from
+/// place the required-iCloud mode / snapshot data converge. Decoupled from
 /// `PublishPipeline`'s CloudKit plumbing so `MenuContentView` can be
 /// snapshot-tested from plain fixture data (T2b.1/T2b.4).
 @MainActor
 public final class PublisherViewModel: ObservableObject {
     @Published public private(set) var providers: [ProviderEntry] = []
     @Published public private(set) var updatedAt: String?
-    @Published public var syncEnabled: Bool {
+    @Published public internal(set) var syncEnabled: Bool {
         didSet {
             guard syncEnabled != oldValue else { return }
             commitRequiredICloudMode(syncEnabled ? .confirmed : .awaitingConfirmation)

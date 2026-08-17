@@ -217,7 +217,7 @@ private struct ProviderRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(provider.windows, id: \.id) { window in
+                ForEach(CrossSurfaceParity.visibleWindows(provider.windows), id: \.id) { window in
                     MenuWindowRow(provider: provider, window: window, now: now, density: density)
                 }
             }

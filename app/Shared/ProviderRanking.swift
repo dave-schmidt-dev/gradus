@@ -260,28 +260,50 @@ private func earliestResetForRanking(_ provider: some RankableProvider) -> Date?
     }.min()
 }
 
-/// "resets Tue 8:00 PM" for the soonest window to come back -- the one thing
-/// worth saying about a provider with nothing left to spend.
+/// "resets Tue 8:00 PM" for the latest depleted window to recover -- the one
+/// thing worth saying about a provider with nothing left to spend.
 ///
-/// Note this is the *earliest* reset, not the worst window. An active row
-/// surfaces the window closest to depletion, because that is what constrains
-/// you; an exhausted provider is constrained by whichever window frees up
-/// first. Different questions, usually different windows.
+/// Only exhausted windows participate. A non-depleted window's reset is not a
+/// recovery time for this provider, and when multiple windows are exhausted the
+/// provider remains blocked until the latest of their resets.
 ///
-/// Shared so the Mac menu's exhausted row and the iOS exhausted cell say the
-/// same words about the same provider.
+/// Shared so the iOS exhausted cell can use the same normalized copy for every
+/// provider shape.
 func earliestResetLabel(_ windows: [ProviderWindow], now: Date) -> String? {
-    // Minimum is taken over the parsed `Date`, never over the rendered label:
-    // "Tue 8:00 PM" sorts before "Wed 3:00 AM" lexicographically but also
-    // before "Mon 9:00 AM", so comparing display strings picks the wrong
-    // window roughly whenever two windows land on different weekdays.
+    // Maximum is taken over parsed `Date`s, never rendered labels. A reset on
+    // a still-available window is not the time this exhausted provider can
+    // recover, so filter it before selecting the latest depleted reset. Use
+    // the shared predicate so this agrees with partitioning and row styling
+    // for fractional values that display as 0% (0.1...0.49).
     let formatter = ISO8601DateFormatter()
-    let earliest = windows
+    let latest = windows
+        .filter { percentIsDepleted($0.percentLeft) }
         .compactMap(\.resetISO)
         .compactMap { iso in formatter.date(from: iso).map { (date: $0, iso: iso) } }
-        .min { $0.date < $1.date }
-    guard let iso = earliest?.iso, let label = friendlyResetDate(iso, now: now) else {
+        .max { $0.date < $1.date }
+    guard let iso = latest?.iso, let label = friendlyResetDate(iso, now: now) else {
         return nil
     }
     return "resets \(label)"
+}
+
+/// The information-bearing portion of a provider row shared by the Mac menu
+/// and both iOS layouts. Pixels may differ by platform, but no surface gets to
+/// select a "primary" window or use a healthy window's reset for an exhausted
+/// provider. Keep this tiny contract beside the shared ranking algorithm so a
+/// future renderer has one explicit seam to use rather than duplicating the
+/// filtering rule.
+enum CrossSurfaceParity {
+    /// Invalid upstream percentages are not user-visible quota windows on any
+    /// surface. Their omission is a degraded-data treatment, not a platform
+    /// rendering choice.
+    static func visibleWindows(_ windows: [ProviderWindow]) -> [ProviderWindow] {
+        windows.filter { percentIsValid($0.percentLeft) }
+    }
+
+    /// The recovery copy for an exhausted provider always comes from its
+    /// depleted windows, never a selected or otherwise healthy sibling.
+    static func exhaustedResetLabel(_ windows: [ProviderWindow], now: Date) -> String? {
+        earliestResetLabel(windows, now: now)
+    }
 }

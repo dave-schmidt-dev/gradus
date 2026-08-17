@@ -1,3 +1,4 @@
+import Foundation
 import GradusKit
 @testable import GradusMac
 import Testing
@@ -29,6 +30,25 @@ struct ProviderTriageTests {
             } ?? [],
             data: [:],
             observedAt: nil
+        )
+    }
+
+    /// INV-13's Mac half. The menu must consume the same window contract as
+    /// iOS, rather than choosing a primary bucket or rendering malformed data.
+    @Test func menuParityContractRetainsEveryValidWindowAndLatestDepletedReset() {
+        let fiveHourReset = "2026-08-17T14:55:00-04:00"
+        let monthlyReset = "2026-08-23T21:30:00-04:00"
+        let windows = [
+            ProviderWindow(id: "five_hour", percentLeft: 100, resetISO: fiveHourReset, windowHours: 5, paceDelta: nil),
+            ProviderWindow(id: "monthly", percentLeft: 0, resetISO: monthlyReset, windowHours: 720, paceDelta: nil),
+            ProviderWindow(id: "malformed", percentLeft: .nan, resetISO: nil, windowHours: nil, paceDelta: nil)
+        ]
+        let now = Date(timeIntervalSince1970: 1_785_000_000)
+
+        #expect(CrossSurfaceParity.visibleWindows(windows).map(\.id) == ["five_hour", "monthly"])
+        #expect(
+            CrossSurfaceParity.exhaustedResetLabel(windows, now: now)
+                == "resets \(friendlyResetDate(monthlyReset, now: now)!)"
         )
     }
 

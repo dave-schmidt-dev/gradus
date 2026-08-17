@@ -4,7 +4,7 @@ import SnapshotTesting
 import SwiftUI
 import Testing
 
-// P5/T5.3 gate: four-group `SettingsView` layout (Sync & Notifications,
+// P5/T5.3 gate: four-group `SettingsView` layout (Warning alerts,
 // Local Display, Warning Threshold, About), notification-on/off states, light+dark -- following
 // `DashboardSnapshotTests.swift`'s exact `.image(layout: .fixed)` pattern.
 // No live CloudKit: `DashboardViewModel` is built without a

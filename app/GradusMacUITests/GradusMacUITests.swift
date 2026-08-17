@@ -23,7 +23,10 @@ final class GradusMacUITests: XCTestCase {
         let settings = fixture.buttons["Settings…"]
         XCTAssertTrue(settings.exists)
         settings.click()
-        XCTAssertTrue(app.windows["Gradus Settings"].waitForExistence(timeout: 5))
+        let settingsWindow = app.windows["Gradus Settings"]
+        XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
+        XCTAssertFalse(settingsWindow.checkBoxes["Enable iCloud Sync"].exists)
+        XCTAssertFalse(settingsWindow.checkBoxes["iCloud Sync"].exists)
     }
 
     func testMenuFixtureExposesRequiredICloudStatusAndLoginControl() {

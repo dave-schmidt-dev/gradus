@@ -31,7 +31,7 @@ struct MacSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Sync") {
+            Section("Required iCloud") {
                 Text(
                     viewModel.syncEnabled
                         ? (MenuContentView.lastSyncLabel(viewModel.lastSyncedAt) ?? "Not synced yet")
