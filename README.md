@@ -339,7 +339,7 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 
 ## Known Issues
 
-- **Claude usage may be unavailable despite valid Safari and CLI sessions.** Gradus accepts only structured provider data; it does not scrape Claude's terminal UI. Claude Code's status-line fields appear only after a CLI API response, and Gradus rejects samples older than five minutes. The card remains unavailable when neither that sample nor the authenticated structured web endpoint is usable.
+- **Claude usage may be unavailable despite valid Safari and CLI sessions.** Gradus accepts only structured provider data; it does not scrape Claude's terminal UI. Claude Code's status-line fields appear only after a CLI API response, and Gradus rejects samples older than five minutes. An HTTP 403 from the unsupported structured web probe is reported as usage unavailable, not as an authentication failure, and does not offer a misleading re-login action.
 - The Antigravity token is minted under `agy`'s own OAuth client, so this path is coupled to `agy`'s internal API. If a future `agy` release changes the Keychain layout or the `retrieveUserQuotaSummary` contract, the card will show an error until the provider is updated.
 
 ## Companion apps (macOS/iOS)

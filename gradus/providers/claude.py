@@ -270,7 +270,12 @@ class ClaudeHttpProvider:
             )
         except ProbeFailure as exc:
             msg = str(exc)
-            if "HTTP 400" in msg or "HTTP 401" in msg or "HTTP 403" in msg:
+            if "HTTP 403" in msg:
+                raise ProbeFailure(
+                    "Claude usage unavailable — structured request rejected (HTTP 403)",
+                    "",
+                ) from exc
+            if "HTTP 400" in msg or "HTTP 401" in msg:
                 self._session_key = self._cf_clearance = self._org_id = ""
                 self._clear_cache()
                 raise ProbeFailure(

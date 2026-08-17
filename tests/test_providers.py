@@ -1005,8 +1005,8 @@ class ClaudeCookieCacheTests(unittest.TestCase):
         provider._acquire()
         self.assertFalse(self._cache_path.exists())
 
-    def test_403_clears_cache(self) -> None:
-        """cf_clearance can expire fast; a 403 must evict the cache to recover."""
+    def test_403_preserves_cache_and_reports_usage_unavailable(self) -> None:
+        """An unsupported web probe rejection is not proof that login expired."""
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache_path.write_text(
             json.dumps(
@@ -1023,9 +1023,11 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             "gradus.providers._base._http_json",
             side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
         ):
-            with self.assertRaises(ProbeFailure):
+            with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
-        self.assertFalse(self._cache_path.exists())
+        self.assertTrue(self._cache_path.exists())
+        self.assertIn("usage unavailable", str(ctx.exception).lower())
+        self.assertNotIn("session expired", str(ctx.exception).lower())
 
     def test_400_clears_cache(self) -> None:
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2188,6 +2190,14 @@ class ClaudeHttpProviderTests(unittest.TestCase):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertIn("session expired", str(ctx.exception).lower())
+
+    def test_403_is_not_misclassified_as_authentication_failure(self) -> None:
+        provider = self._make_provider()
+        with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 403", "")):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        snapshot = ProviderSnapshot(name="Claude", ok=False, source="api", error=str(ctx.exception))
+        self.assertFalse(_is_auth_error(snapshot))
 
     def test_missing_cookies_raises_probe_failure(self) -> None:
         provider = ClaudeHttpProvider()
