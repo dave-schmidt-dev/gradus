@@ -6,10 +6,8 @@ import SwiftUI
 @main
 struct GradusMacApp: App {
     @State private var isMenuBarInserted: Bool
-    #if DEBUG
-        @NSApplicationDelegateAdaptor(MenuUITestApplicationDelegate.self)
-        private var uiTestApplicationDelegate
-    #endif
+    @NSApplicationDelegateAdaptor(GradusApplicationDelegate.self)
+    private var applicationDelegate
 
     init() {
         _isMenuBarInserted = State(initialValue: !Self.isTestHost() && !Self.uiTestMenuFixtureEnabled)
@@ -118,22 +116,33 @@ struct GradusMacApp: App {
     }
 }
 
-#if DEBUG
-    /// Post-launch seam for the Mac UI test. SwiftUI's `App.init()` is too early
-    /// to order an AppKit window reliably; the delegate callback runs after the
-    /// application has an active run loop while production remains menu-bar-only.
-    private final class MenuUITestApplicationDelegate: NSObject, NSApplicationDelegate {
+/// Owns the Mac remote-notification seam. The same delegate also retains the
+/// DEBUG-only UI-test window behavior; production stays fail-closed whenever
+/// the pipeline is disabled.
+@MainActor
+final class GradusApplicationDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_: Notification) {
+        #if DEBUG
+            if GradusMacApp.uiTestMenuFixtureEnabled {
+                MenuUITestFixtureWindow.show()
+            }
+        #endif
+        guard !GradusMacApp.pipelineDisabled else { return }
+        NSApplication.shared.registerForRemoteNotifications()
+    }
+
+    func application(_: NSApplication, didReceiveRemoteNotification _: [String: Any]) {
+        guard !GradusMacApp.pipelineDisabled else { return }
+        Task { await PublishPipeline.shared.refreshPresence() }
+    }
+
+    #if DEBUG
         func applicationWillFinishLaunching(_: Notification) {
             guard GradusMacApp.uiTestMenuFixtureEnabled else { return }
             NSApplication.shared.setActivationPolicy(.regular)
         }
-
-        func applicationDidFinishLaunching(_: Notification) {
-            guard GradusMacApp.uiTestMenuFixtureEnabled else { return }
-            MenuUITestFixtureWindow.show()
-        }
-    }
-#endif
+    #endif
+}
 
 /// Holds the long-lived publish pipeline (snapshot watcher → CloudKit
 /// publisher) for the app's process lifetime. A `MenuBarExtra` app has no
@@ -153,6 +162,7 @@ final class PublishPipeline {
     private var coordinator: PublishCoordinator?
     private var watcher: SnapshotWatcher?
     private var accountMonitor: AccountStatusMonitor?
+    private var presenceDirectory: DevicePresenceDirectoryStore?
     private var started = false
 
     /// Local display state + required-iCloud status -- the menu content view's
@@ -212,6 +222,7 @@ final class PublishPipeline {
         let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
         let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
         let database = CKDatabaseAdapter(database: container.privateCloudDatabase)
+        let presenceClient = CKDevicePresenceClient(database: container.privateCloudDatabase, zoneID: zoneID)
         guard let producer = Self.producerMetadata() else { return }
         let coordinator = PublishCoordinator(
             database: database,
@@ -223,6 +234,12 @@ final class PublishPipeline {
             producerProjectSha256: producer.projectSha256
         )
         self.coordinator = coordinator
+        let presenceDirectory = DevicePresenceDirectoryStore(client: presenceClient)
+        self.presenceDirectory = presenceDirectory
+        Task { [weak self] in
+            _ = await presenceDirectory.start()
+            await self?.refreshPresence()
+        }
 
         let accountMonitor = makeAccountMonitor()
         self.accountMonitor = accountMonitor
@@ -235,6 +252,13 @@ final class PublishPipeline {
         )
         self.watcher = watcher
         Task { await watcher.start() }
+    }
+
+    func refreshPresence() async {
+        guard let presenceDirectory else { return }
+        _ = await presenceDirectory.refresh()
+        let devices = await presenceDirectory.devices
+        viewModel.updateConnectedDevices(devices)
     }
 
     private static func producerMetadata() -> ProducerMetadata? {

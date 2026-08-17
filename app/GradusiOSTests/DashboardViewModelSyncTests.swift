@@ -162,6 +162,29 @@ private actor DelayedCloudFetcher: CloudFetcher {
 }
 
 @MainActor
+@Test func incrementalSyncReconcilesProvidersFromPresenceOutcome() async {
+    let cache = syncTempCache()
+    try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
+    let fetcher = MockZoneChangesFetcher(outcomes: [
+        .successWithPresence(
+            changed: [makeStatus("cursor")], deletedProviderNames: ["codex"],
+            changedPresence: [
+                DevicePresence(
+                    installationID: UUID().uuidString, displayName: .iPhone,
+                    expiresAt: Date().addingTimeInterval(600)
+                )
+            ], deletedPresenceInstallationIDs: [UUID().uuidString], newToken: Data([8])
+        )
+    ])
+    let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
+
+    await viewModel.handleRemoteNotification()
+
+    #expect(viewModel.providers.map(\.providerName) == ["cursor"])
+    #expect(cache.loadChangeToken() == Data([8]))
+}
+
+@MainActor
 @Test func incrementalSyncAppliesDeletions() async {
     let cache = syncTempCache()
     try? cache.saveCachedStatuses([makeStatus("codex"), makeStatus("cursor")], syncedAt: Date())

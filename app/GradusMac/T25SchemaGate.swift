@@ -3,10 +3,10 @@ import Foundation
 import GradusKit
 
 #if DEBUG
-    // T2.5 (CV-7/PM-11) schema gate: proves every `ProviderStatus` field is
-    // registered with the correct type in whichever CloudKit environment the
-    // running binary is entitled for, and that a real save->fetch round-trip
-    // works there.
+    // T2.5 (CV-7/PM-11) schema gate: proves every `ProviderStatus` and
+    // `DevicePresence` field is registered with the correct type in whichever
+    // CloudKit environment the running binary is entitled for, and that a
+    // real save->fetch round-trip works there.
 //
     // Run twice, by design:
     //   1. Built with the Debug config (Development entitlements) BEFORE the
@@ -37,9 +37,20 @@ import GradusKit
             await verifyFetch(status, recordID: recordID, database: database)
             await cleanUpRecord(recordID, container: container)
 
+            let presence = schemaGatePresence()
+            do {
+                let record = try presence.toCKRecord(zoneID: zoneID)
+                await savePresence(record: record, database: database)
+                await verifyPresence(presence, recordID: record.recordID, database: database)
+                await cleanUpRecord(record.recordID, container: container)
+            } catch {
+                print("FAIL: DevicePresence schema probe record construction failed")
+                exit(1)
+            }
+
             print(
                 "T2.5 SCHEMA GATE: PASS (all ProviderStatus fields registered; "
-                    + "save->fetch round-trips in this environment)"
+                    + "DevicePresence fields registered; save->fetch round-trips in this environment)"
             )
             exit(0)
         }
@@ -82,6 +93,44 @@ import GradusKit
                 windowHours: 5,
                 paceDelta: -0.1
             )
+        }
+
+        private static func schemaGatePresence() -> DevicePresence {
+            DevicePresence(
+                installationID: UUID().uuidString,
+                displayName: .iPhone,
+                expiresAt: Date(timeIntervalSince1970: 1_800_000_000)
+            )
+        }
+
+        private static func savePresence(record: CKRecord, database: CKDatabaseAdapter) async {
+            let outcome = await database.modifyRecords(toSave: [record], savePolicy: .changedKeys)
+            guard case .success = outcome.results[record.recordID] else {
+                print("FAIL: DevicePresence schema probe save failed")
+                exit(1)
+            }
+            print("PASS: saved DevicePresence with both fields populated")
+        }
+
+        private static func verifyPresence(
+            _ expected: DevicePresence,
+            recordID: CKRecord.ID,
+            database: CKDatabaseAdapter
+        ) async {
+            do {
+                let fetched = try await DevicePresence(record: database.fetchRecord(recordID))
+                guard fetched.displayName == expected.displayName,
+                      abs(fetched.expiresAt.timeIntervalSince(expected.expiresAt)) <= 0.01,
+                      fetched.installationID == expected.installationID
+                else {
+                    print("FAIL: DevicePresence schema probe fetched values do not match")
+                    exit(1)
+                }
+                print("PASS: fetched DevicePresence decodes both fields")
+            } catch {
+                print("FAIL: DevicePresence schema probe fetch/decode failed")
+                exit(1)
+            }
         }
 
         private static func saveStatus(

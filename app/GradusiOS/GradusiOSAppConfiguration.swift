@@ -18,9 +18,10 @@ extension GradusiOSApp {
         let subscriptionManager = CKSubscriptionManager(
             database: CKSubscriptionDatabaseAdapter(database: database), zoneID: zoneID
         )
+        let presenceClient = CKDevicePresenceClient(database: database, zoneID: zoneID)
         return CloudKitDependencies(
             fetcher: fetcher, accountSource: accountSource, zoneChangesFetcher: zoneChangesFetcher,
-            subscriptionManager: subscriptionManager
+            subscriptionManager: subscriptionManager, presenceClient: presenceClient
         )
     }
 

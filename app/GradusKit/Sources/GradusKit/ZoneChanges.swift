@@ -18,6 +18,15 @@ public protocol ZoneChangesFetcher: Sendable {
 /// as "recreate the zone."
 public enum ZoneChangesOutcome: Sendable {
     case success(changed: [ProviderStatus], deletedProviderNames: [String], newToken: Data?)
+    /// Typed companion for mixed `GradusZone` changes. Provider deletion names
+    /// and presence installation IDs never share a routing bucket.
+    case successWithPresence(
+        changed: [ProviderStatus],
+        deletedProviderNames: [String],
+        changedPresence: [DevicePresence],
+        deletedPresenceInstallationIDs: [String],
+        newToken: Data?
+    )
     case changeTokenExpired
     case zoneNotFound
     case zoneDeleted

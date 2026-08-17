@@ -12,12 +12,13 @@ import GradusKit
 public struct CKZoneChangesFetcher: ZoneChangesFetcher {
     private let database: CKDatabase
     private let zoneID: CKRecordZone.ID
-
     public init(database: CKDatabase, zoneID: CKRecordZone.ID) {
         self.database = database
         self.zoneID = zoneID
     }
 
+    // The CloudKit operation's callbacks and typed routing must stay together.
+    // swiftlint:disable:next function_body_length cyclomatic_complexity
     public func fetchZoneChanges(sinceToken token: Data?) async -> ZoneChangesOutcome {
         let previousToken = token.flatMap(Self.decodeToken)
         let config = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
@@ -25,6 +26,8 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
 
         var changed: [ProviderStatus] = []
         var deletedProviderNames: [String] = []
+        var changedPresence: [DevicePresence] = []
+        var deletedPresenceInstallationIDs: [String] = []
 
         return await withCheckedContinuation { continuation in
             let operation = CKFetchRecordZoneChangesOperation(
@@ -33,13 +36,26 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
             operation.fetchAllChanges = true
 
             operation.recordWasChangedBlock = { _, result in
-                guard case let .success(record) = result, let status = try? ProviderStatus(record: record) else {
-                    return
+                guard case let .success(record) = result else { return }
+                if record.recordType == CloudKitConstants.recordType {
+                    if let status = try? ProviderStatus(record: record) {
+                        changed.append(status)
+                    }
+                } else if record.recordType == CloudKitConstants.devicePresenceRecordType,
+                          let presence = try? DevicePresence(record: record) {
+                    changedPresence.append(presence)
                 }
-                changed.append(status)
             }
-            operation.recordWithIDWasDeletedBlock = { recordID, _ in
-                deletedProviderNames.append(recordID.recordName)
+            operation.recordWithIDWasDeletedBlock = { recordID, recordType in
+                guard let route = DevicePresenceDeletionRouter.route(
+                    recordName: recordID.recordName, recordType: recordType
+                ) else { return }
+                switch route {
+                case let .presence(installationID):
+                    deletedPresenceInstallationIDs.append(installationID)
+                case let .provider(providerName):
+                    deletedProviderNames.append(providerName)
+                }
             }
 
             var zoneOutcome: ZoneChangesOutcome?
@@ -52,8 +68,11 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
                     // diagnostic engine rather than reporting cleanly;
                     // isolated via a standalone `swiftc -typecheck` probe).
                     let newToken = Self.encodeToken(serverChangeToken)
-                    zoneOutcome = .success(
-                        changed: changed, deletedProviderNames: deletedProviderNames, newToken: newToken
+                    zoneOutcome = .successWithPresence(
+                        changed: changed, deletedProviderNames: deletedProviderNames,
+                        changedPresence: changedPresence,
+                        deletedPresenceInstallationIDs: deletedPresenceInstallationIDs,
+                        newToken: newToken
                     )
                 case let .failure(error):
                     zoneOutcome = Self.classify(error)

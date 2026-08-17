@@ -7,6 +7,188 @@ public enum CloudKitConstants {
     public static let containerIdentifier = "iCloud.com.zerodelta.gradus"
     public static let zoneName = "GradusZone"
     public static let recordType = "ProviderStatus"
+    public static let devicePresenceRecordType = "DevicePresence"
+    public static let devicePresenceSubscriptionID = "gradus-device-presence"
+}
+
+/// The only user-visible values a live mobile installation may publish.
+public enum DevicePresenceName: String, Codable, CaseIterable, Sendable {
+    case iPhone
+    case iPad
+}
+
+/// A short-lived foreground lease for one mobile installation. The installation
+/// identifier is deliberately represented only by the CloudKit record key; it
+/// is never copied into a record field, UI, log, or receipt.
+public struct DevicePresence: Codable, Equatable, Sendable, Identifiable {
+    public let installationID: String
+    public let displayName: DevicePresenceName
+    public let expiresAt: Date
+
+    public var id: String {
+        installationID
+    }
+
+    public init(installationID: String, displayName: DevicePresenceName, expiresAt: Date) {
+        self.installationID = installationID
+        self.displayName = displayName
+        self.expiresAt = expiresAt
+    }
+
+    public var isActive: Bool {
+        isActive(at: Date())
+    }
+
+    public func isActive(at date: Date) -> Bool {
+        expiresAt > date
+    }
+
+    /// The approved ten-minute lease. Callers renew before this deadline.
+    public static let leaseDuration: TimeInterval = 10 * 60
+    public static let renewalInterval: TimeInterval = 5 * 60
+
+    public func toCKRecord(zoneID: CKRecordZone.ID) throws -> CKRecord {
+        guard Self.isOpaqueInstallationID(installationID) else {
+            throw DevicePresenceMappingError.invalidInstallationID
+        }
+        let record = CKRecord(
+            recordType: CloudKitConstants.devicePresenceRecordType,
+            recordID: CKRecord.ID(recordName: installationID, zoneID: zoneID)
+        )
+        record["displayName"] = displayName.rawValue as CKRecordValue
+        record["expiresAt"] = expiresAt as CKRecordValue
+        return record
+    }
+
+    public init(record: CKRecord) throws {
+        guard record.recordType == CloudKitConstants.devicePresenceRecordType else {
+            throw DevicePresenceMappingError.wrongRecordType
+        }
+        let installationID = record.recordID.recordName
+        guard Self.isOpaqueInstallationID(installationID) else {
+            throw DevicePresenceMappingError.invalidInstallationID
+        }
+        guard let rawName = record["displayName"] as? String,
+              let displayName = DevicePresenceName(rawValue: rawName)
+        else {
+            throw DevicePresenceMappingError.missingField("displayName")
+        }
+        guard let expiresAt = record["expiresAt"] as? Date else {
+            throw DevicePresenceMappingError.missingField("expiresAt")
+        }
+        self.init(installationID: installationID, displayName: displayName, expiresAt: expiresAt)
+    }
+
+    private static func isOpaqueInstallationID(_ value: String) -> Bool {
+        UUID(uuidString: value) != nil
+    }
+}
+
+public enum DevicePresenceMappingError: Error, Equatable {
+    case invalidInstallationID
+    case wrongRecordType
+    case missingField(String)
+}
+
+public enum DevicePresenceDeletionRoute: Equatable, Sendable {
+    case provider(String)
+    case presence(String)
+}
+
+/// CloudKit deletion callbacks include the record type. Unknown types are
+/// ignored so a future record family cannot affect provider or presence state.
+public enum DevicePresenceDeletionRouter {
+    public static func route(recordName: String, recordType: String) -> DevicePresenceDeletionRoute? {
+        switch recordType {
+        case CloudKitConstants.devicePresenceRecordType: .presence(recordName)
+        case CloudKitConstants.recordType: .provider(recordName)
+        default: nil
+        }
+    }
+}
+
+/// Deterministic consumer policy. Duplicate generic names are retained: two
+/// phones may be active at once, and collapsing them would hide a real device.
+public enum DevicePresenceDirectory {
+    public static func active(_ records: [DevicePresence], at date: Date) -> [DevicePresence] {
+        records
+            .filter { $0.isActive(at: date) }
+            .sorted {
+                if $0.displayName != $1.displayName {
+                    return $0.displayName.rawValue < $1.displayName.rawValue
+                }
+                if $0.expiresAt != $1.expiresAt {
+                    return $0.expiresAt < $1.expiresAt
+                }
+                return $0.installationID < $1.installationID
+            }
+    }
+
+    public static func expired(_ records: [DevicePresence], at date: Date) -> [DevicePresence] {
+        records.filter { !$0.isActive(at: date) }
+    }
+}
+
+/// App-container persistence for the opaque per-install identifier. This is
+/// UserDefaults-backed by design: it stays in the app container and is not a
+/// Keychain or IDFV identity. A fresh app install gets a new random UUID.
+public struct DevicePresenceInstallationStore {
+    public static let key = "devicePresenceInstallationID"
+    private let defaults: UserDefaults
+    private let makeID: @Sendable () -> String
+
+    public init(defaults: UserDefaults = .standard, makeID: @escaping @Sendable () -> String = { UUID().uuidString }) {
+        self.defaults = defaults
+        self.makeID = makeID
+    }
+
+    public func installationID() -> String {
+        if let existing = defaults.string(forKey: Self.key), UUID(uuidString: existing) != nil {
+            return existing
+        }
+        let fresh = makeID()
+        guard UUID(uuidString: fresh) != nil else {
+            let fallback = UUID().uuidString
+            defaults.set(fallback, forKey: Self.key)
+            return fallback
+        }
+        defaults.set(fresh, forKey: Self.key)
+        return fresh
+    }
+}
+
+/// CloudKit-independent seam used by both mobile writers and the Mac
+/// directory. Implementations must route only `DevicePresence` records.
+public protocol DevicePresenceClient: Sendable {
+    func upsert(_ presence: DevicePresence) async throws
+    func delete(installationID: String) async throws
+    func fetchAll() async throws -> [DevicePresence]
+    func subscribe() async throws
+}
+
+/// Small policy object shared by iPhone and iPad lifecycle code. It never
+/// writes in sample mode, migration recovery, or a denied account state.
+public struct DevicePresenceLease: Sendable {
+    public let installationID: String
+    public let displayName: DevicePresenceName
+    public let duration: TimeInterval
+
+    public init(
+        installationID: String,
+        displayName: DevicePresenceName,
+        duration: TimeInterval = DevicePresence.leaseDuration
+    ) {
+        self.installationID = installationID
+        self.displayName = displayName
+        self.duration = duration
+    }
+
+    public func presence(now: Date) -> DevicePresence {
+        DevicePresence(
+            installationID: installationID, displayName: displayName,
+            expiresAt: now.addingTimeInterval(duration)
+        )
+    }
 }
 
 /// One record per provider (§5.1). Optional source metadata identifies the

@@ -74,6 +74,22 @@ struct MacSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Connected Devices") {
+                if viewModel.connectedDevices.isEmpty {
+                    Text("No active iPhone or iPad sessions")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(viewModel.connectedDevices) { device in
+                        Label(device.displayName.rawValue, systemImage: device.displayName == .iPad
+                            ? "ipad"
+                            : "iphone")
+                    }
+                }
+                Text("Only foreground sessions active within the last ten minutes appear here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("About") {
                 LabeledContent("Version", value: Self.versionLabel)
             }

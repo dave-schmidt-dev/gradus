@@ -75,6 +75,7 @@ public final class PublisherViewModel: ObservableObject {
     /// the next snapshot changed, which is exactly when a user checks.
     @Published public private(set) var lastSyncedAt: Date?
     @Published public private(set) var requiredICloudMode: RequiredICloudMode
+    @Published public private(set) var connectedDevices: [DevicePresence] = []
 
     /// Device-local display preferences, mirroring `DashboardViewModel`'s on
     /// iOS down to the `UserDefaults` key names. They are deliberately *not*
@@ -190,6 +191,10 @@ public final class PublisherViewModel: ObservableObject {
     public func apply(_ payload: SnapshotPayload) {
         providers = payload.providers
         updatedAt = payload.updatedAt
+    }
+
+    public func updateConnectedDevices(_ devices: [DevicePresence]) {
+        connectedDevices = devices
     }
 
     private func advancePresentationRevision() {

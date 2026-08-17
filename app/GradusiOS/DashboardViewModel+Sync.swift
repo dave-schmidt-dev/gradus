@@ -47,6 +47,15 @@ extension DashboardViewModel {
             let syncedAt = Date()
             lastSyncedAt = syncedAt
             try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
+        case let .successWithPresence(changed, deletedProviderNames, _, _, newToken):
+            // Presence is consumed by the Mac directory. Keeping it as a
+            // separately typed outcome here prevents a mobile-device deletion
+            // from ever entering provider reconciliation.
+            reconcile(changed: changed, deletedProviderNames: deletedProviderNames)
+            try? cache.saveChangeToken(newToken)
+            let syncedAt = Date()
+            lastSyncedAt = syncedAt
+            try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
         case .changeTokenExpired:
             // PM-3: drop the stale token and do one full refetch from
             // scratch (nil token). Bounded to one retry -- a fetcher that
@@ -148,11 +157,9 @@ extension DashboardViewModel {
 
         var failed = await !sync()
         if let subscriptionManager {
-            do { try await subscriptionManager.subscribeToZoneChanges() }
-            catch { failed = true }
+            do { try await subscriptionManager.subscribeToZoneChanges() } catch { failed = true }
             if notificationsEnabled {
-                do { try await subscriptionManager.subscribeToWarnings() }
-                catch { failed = true }
+                do { try await subscriptionManager.subscribeToWarnings() } catch { failed = true }
             }
         }
         liveLifecycleNeedsRetry = failed

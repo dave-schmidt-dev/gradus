@@ -13,6 +13,7 @@ struct GradusiOSApp: App {
     private let liveLifecycleGate: LiveLifecycleGate
     private let accountMonitor: AccountStatusMonitor?
     private let subscriptionManager: CKSubscriptionManager?
+    private let presenceLifecycle: DevicePresenceLifecycle
     private let uiTestFixture: GradusUITestFixture?
 
     struct CloudKitDependencies {
@@ -20,12 +21,14 @@ struct GradusiOSApp: App {
         let accountSource: AccountStatusSource?
         let zoneChangesFetcher: ZoneChangesFetcher?
         let subscriptionManager: CKSubscriptionManager?
+        let presenceClient: (any DevicePresenceClient)?
 
         static let offline = CloudKitDependencies(
-            fetcher: nil, accountSource: nil, zoneChangesFetcher: nil, subscriptionManager: nil
+            fetcher: nil, accountSource: nil, zoneChangesFetcher: nil, subscriptionManager: nil, presenceClient: nil
         )
     }
 
+    // swiftlint:disable:next function_body_length
     init() {
         let uiTestFixture = GradusUITestFixture.current
         self.uiTestFixture = uiTestFixture
@@ -83,6 +86,16 @@ struct GradusiOSApp: App {
             launchSampleMode: launchSampleMode, accountSource: dependencies.accountSource, viewModel: viewModel
         )
         subscriptionManager = dependencies.subscriptionManager
+        presenceLifecycle = DevicePresenceLifecycle(
+            client: dependencies.presenceClient,
+            eligibility: { @MainActor [weak viewModel] in
+                guard let viewModel else { return (false, false) }
+                return (
+                    liveMode: viewModel.requiredICloudMode.allowsLiveWork,
+                    accountAvailable: viewModel.accountStatus == .available
+                )
+            }
+        )
 
         Self.configureDelegate(
             appDelegate, viewModel: viewModel, liveActivitySuppressed: launchSampleMode || uiTestFixture != nil
@@ -137,6 +150,10 @@ struct GradusiOSApp: App {
                 // exactly when the cached answer can have gone stale --
                 // and re-reading it on every foreground is what makes the
                 // Settings deep link above self-clearing.
+                if phase == .background {
+                    presenceLifecycle.stop()
+                    return
+                }
                 guard phase == .active,
                       Self.shouldRunLiveLifecycle(
                           isUITesting: Self.isUITesting,
@@ -287,6 +304,11 @@ extension GradusiOSApp {
         guard !sampleModeActive, liveLifecycleGate.isLive else { return }
         guard !sampleModeActive, liveLifecycleGate.isLive else { return }
         await viewModel.reconcileLiveLifecycle()
+        presenceLifecycle.start(
+            liveMode: viewModel.requiredICloudMode.allowsLiveWork,
+            accountAvailable: viewModel.accountStatus == .available,
+            sampleMode: sampleModeActive
+        )
     }
 
     /// The iCloud recovery controls call this rather than mutating the legacy
@@ -307,6 +329,7 @@ extension GradusiOSApp {
         guard !sampleModeActive, !sampleEntryInProgress else { return }
         sampleEntryInProgress = true
         appDelegate.liveActivitySuppressed = true
+        presenceLifecycle.stop()
         Task { @MainActor in
             defer {
                 sampleEntryInProgress = false

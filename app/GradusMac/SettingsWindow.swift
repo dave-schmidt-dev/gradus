@@ -56,6 +56,7 @@ enum SettingsWindow {
         // selector had for a different reason.
         NSApplication.shared.activate(ignoringOtherApps: true)
         let window = makeWindow(viewModel: viewModel)
+        Task { await PublishPipeline.shared.refreshPresence() }
         window.makeKeyAndOrderFront(nil)
         return window
     }
