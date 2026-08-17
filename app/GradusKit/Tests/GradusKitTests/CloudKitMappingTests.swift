@@ -38,6 +38,31 @@ private func sampleStatus(
     #expect(decoded == original)
 }
 
+@Test func roundTripsClaudeRateLimitWithoutPromotingRouterFailure() throws {
+    let windows = [
+        ProviderWindow(id: "five_hour", percentLeft: 42.0, resetISO: nil, windowHours: 5.0, paceDelta: nil),
+        ProviderWindow(id: "weekly", percentLeft: 76.0, resetISO: nil, windowHours: 168.0, paceDelta: nil)
+    ]
+    let original = ProviderStatus(
+        providerName: "Claude",
+        providerDisplayName: "Claude",
+        ok: false,
+        errorMessage: "HTTP 429 Too Many Requests",
+        windows: windows,
+        data: [:],
+        observedAt: "2026-08-17T18:00:00Z",
+        snapshotUpdatedAt: "2026-08-17T18:00:00Z",
+        publishedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        isWarning: false,
+        isDepleted: false
+    )
+
+    let decoded = try ProviderStatus(record: original.toCKRecord(zoneID: zoneID))
+    #expect(decoded.ok == false)
+    #expect(decoded.errorMessage == "HTTP 429 Too Many Requests")
+    #expect(decoded.windows == windows)
+}
+
 @Test func omitsSyncSourceKeysWhenSyncSourceIsNil() throws {
     let record = try sampleStatus(syncSource: nil).toCKRecord(zoneID: zoneID)
 

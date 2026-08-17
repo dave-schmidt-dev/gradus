@@ -40,7 +40,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 ## Features
 
 - Monitors Codex usage via the OpenAI usage API
-- Monitors Claude usage via the Anthropic account API
+- Monitors Claude usage through Claude Code's OAuth token and Anthropic's structured `https://api.anthropic.com/api/oauth/usage` endpoint — no PTY, terminal scraping, Safari cookies, or status-line cache
 - Monitors Antigravity (`agy`) usage via the Cloud Code `retrieveUserQuotaSummary` API — the same grouped quota `agy`'s own Models & Quota panel shows. Authenticates read-only with `agy`'s OAuth token from the macOS Keychain (service `gemini`, account `antigravity`); the monitor never refreshes or rewrites that token, so it can't disturb `agy`'s own auth.
 - Monitors Copilot usage via the GitHub REST API (using `gh` CLI credentials)
 - Monitors Cursor credit usage via the Cursor Dashboard API
@@ -69,8 +69,8 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 
 - Python 3.10+
 - Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow. Codex (Spark) reads from the same authenticated Codex usage response — no separate login or credential is needed.
-- Claude: Safari signed in at `claude.ai`; the credential bridge exports its session to `.cache/claude_cookies.json`
-- Antigravity (`agy`): signed in via `agy` (stores its OAuth token in the macOS Keychain). The monitor reads it read-only; the first read may prompt for Keychain access — choose "Always Allow" so background refreshes stay silent. The token expires ~hourly and only `agy` refreshes it, so when the token lapses the monitor **nudges `agy` to refresh its own token** by running `agy models` (a non-interactive, quota-free authenticated command) and re-reads the Keychain — the card self-heals without manual action. If that nudge can't recover (e.g. `agy` isn't installed on `PATH`, or `agy`'s own refresh token is dead), the card falls back to an auth error; run `agy` to re-authenticate. The nudge runs only in the interactive TUI, never on the read-only `--write-snapshot`/headless path (INV-2).
+- Claude: Claude Code authenticated with `claude auth login`; Gradus reads the OAuth access token read-only from the macOS Keychain (service `Claude Code-credentials`) and sends it only to Anthropic's usage endpoint
+- Antigravity (`agy`): signed in via `agy` (stores its OAuth token in the macOS Keychain). The monitor reads it read-only; the first read may prompt for Keychain access — choose "Always Allow" so background refreshes stay silent. The token expires ~hourly and only `agy` refreshes it, so when the token lapses the monitor **nudges `agy` to refresh its own token** by running `agy models` (a non-interactive, quota-free authenticated command) and re-reads the Keychain — the card self-heals without manual action. If that nudge can't recover (e.g. `agy` isn't installed on `PATH`, or `agy`'s own refresh token is dead), the card falls back to an auth error; run `agy` to re-authenticate. The nudge is available only to the credential-aware producer, never to reader commands (INV-2).
 - Copilot: `gh` CLI authenticated (`gh auth login` or OAuth token present)
 - Cursor: app or browser session authenticated
 - Mistral console session authenticated (the macOS credential bridge reads Safari cookies)
@@ -94,7 +94,6 @@ python3 -m gradus --interval 60
 python3 -m gradus --json
 python3 -m gradus --debug
 python3 -m gradus --providers Claude,Codex,Copilot,Antigravity
-python3 -m gradus --write-snapshot
 python3 -m gradus --refresh-snapshot
 python3 -m gradus --verify-refresh-health --duration 360
 python3 -m gradus --history-at 2026-08-04T12:00:00Z
@@ -102,11 +101,11 @@ python3 -m gradus --history-at 2026-08-04T12:00:00Z --history-provider Antigravi
 ./monitor --once
 ```
 
-When `--debug` is enabled, raw captures are written to `/tmp/gradus_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches) — except under headless (`--json`, `--write-snapshot`), where INV-2 forbids the side effect and no capture file is written.
+When `--debug` is enabled on the credential-aware `--refresh-snapshot` producer, raw captures are written to `/tmp/gradus_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches). Reader commands (`--json`, `--once`, and the TUI) do not probe providers or write debug captures.
 
-The raw payload is **not** written into the router-facing `.state/snapshot.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free). The debug-augmented `debug_detail` goes to **stderr** under `--debug`, never into the JSON document — `--json` on stdout is a machine contract consumed by the review-plugin router, and INV-1 keeps raw HTTP bodies and credential material off it (enforced by `test_render_json_data_is_safe_allowlist`). So `gradus --json --debug > out.json` leaves `out.json` parseable while the detail lands on your terminal.
+The raw payload is **not** written into the router-facing `.state/snapshot-v2.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free). The debug-augmented `debug_detail` goes to **stderr** under `--debug`, never into the JSON document — `--json` on stdout is a machine contract consumed by the review-plugin router, and INV-1 keeps raw HTTP bodies and credential material off it (enforced by `test_render_json_data_is_safe_allowlist`). So `gradus --json --debug > out.json` leaves `out.json` parseable while the detail lands on your terminal.
 
-The stderr channel is wired on all three non-interactive paths — `--json`, `--write-snapshot`, and `--once` — so `2>/dev/null` always gives you the clean surface and `2>&1` always gives you the diagnosis. On `--write-snapshot` the detail is emitted *before* the persist step, so a run that both probes badly and fails to write still reports why. The live TUI is deliberately excluded: Rich holds the alt-screen there and a stderr write would corrupt the frame, so that path reports through `.logs/gradus.log` only.
+The stderr channel is wired on the non-interactive reader paths (`--json` and `--once`) and the producer path (`--refresh-snapshot`). The live TUI reports through `.logs/gradus.log` while Rich owns the alt screen.
 
 Error strings published to the devices are classified by exception **type**, not message content (`providers/_base._safe_probe_error`): a `TimeoutError` becomes `"provider probe timed out"` and a `ConnectionError` becomes `"provider probe network error"`, both of which the transient classifier recognizes so the last-known-good reading is served instead of a failure card. Exception text itself is never published, because a provider exception can embed subprocess output or a signed URL.
 
@@ -188,7 +187,7 @@ Reset displays are normalized before rendering:
 
 ## JSON Output
 
-`--json` prints a read-only snapshot and is **machine-safe** — like `--write-snapshot`, it engages the headless path (no browser launch, token refresh, cache writes, or warning notifications), and a provider without cached credentials reports `auth required` rather than triggering interactive recovery. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`. Antigravity's Claude+GPT fields and windows are deliberately excluded from `--json`; Gemini output remains unchanged.
+`--json` prints the canonical, credential-free snapshot and is **machine-safe**: it performs no provider probes, browser launch, token refresh, cache writes, or warning notifications. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`. Antigravity's Claude+GPT fields and windows are deliberately excluded from `--json`; Gemini output remains unchanged.
 
 Example:
 
@@ -214,17 +213,17 @@ Example:
 }
 ```
 
-## Router-facing snapshot (`--write-snapshot`)
+## Router-facing snapshot
 
-A sibling process or router can read `.state/snapshot.json` (schema v1) or `.state/snapshot-v2.json` (schema v2) instantly — no probing, no browser, no credential I/O. Both files are credential-free and gitignored (deliberately not `.cache/`, which holds auth cookies/tokens that a consuming router must never read).
+A sibling process or router can read `.state/snapshot-v2.json` (schema v2) instantly — no probing, no browser, no credential I/O. The canonical file is credential-free and gitignored (deliberately not `.cache/`, which holds auth cookies/tokens that a consuming router must never read).
 
 Every committed schema-v2 snapshot is also atomically mirrored to `~/Library/Application Support/Gradus/snapshot-v2.json`. This is the credential-free input for the installed GradusMac app, so opening the menu never requires access to this Documents-backed checkout.
 
-The TUI writes the snapshot on every refresh cycle. The one-shot `--write-snapshot` path and the explicit credential-aware `--refresh-snapshot` observer also write it when invoked. All three persistence paths journal the committed schema-v2 result to the local history store.
+The launchd job and explicit credential-aware `--refresh-snapshot` command are the only snapshot producers. The TUI, `--once`, and `--json` read and render the committed snapshot; they never probe providers or write it.
 
-**Read-only guarantee.** The `--write-snapshot` path never opens a browser, spawns a subprocess, refreshes a token, evicts a cookie cache, or sends notifications. Providers with missing or expired credentials surface as `ok: false`. It writes v1 first and v2 second; each file is independently atomic, so a partial failure is logged and exits 1 while the successful sibling remains current. History journaling is a separate best-effort output: it is attempted only after a read-back confirms that schema v2 committed, and a history failure never rolls back a valid snapshot.
+**Read-only guarantee.** Consumer surfaces never open a browser, spawn a subprocess, refresh a token, evict a cookie cache, or send notifications. The producer writes canonical v2 atomically. History journaling is a separate best-effort output: it is attempted only after a read-back confirms that schema v2 committed, and a history failure never rolls back a valid snapshot.
 
-**Headless coverage.** Codex and any provider whose `.cache/` cookie file is still warm run headlessly — reading a cached cookie file is a benign read, allowed. Antigravity's only credential is an OAuth token read via a `security` subprocess, which the read-only path forbids, so a headless probe reports `auth required: no cached credentials`. When a recent healthy interactive snapshot exists, headless writes carry it forward, including the schema-v2 `Antigravity (Claude)` synthetic entry. Snapshot writers use a per-file lock and reject an older payload, so a slower background refresh cannot replace newer TUI data. Run the TUI once after a fresh install or when the prior snapshot has expired to seed the shared Agy buckets.
+**Producer coverage.** The credential-aware producer probes providers and carries recent sanitized observations through transient failures. Claude probes are additionally limited to one attempt per ten minutes, with a one-hour backoff after HTTP 429; a 429 retains bounded windows but remains `ok: false` for fail-closed routing. Snapshot writers use a per-file lock and reject an older payload.
 
 **launchd refresher.** A ~120 s background job keeps the snapshot current without the TUI running.
 
@@ -235,8 +234,9 @@ before relying on unattended refresh.
 
 **Credential bridge (macOS only).** The launchd job never reads Safari directly.
 `GradusCredentialBridge.app` is the single-purpose, Developer-ID-signed app that reads
-Safari's cookie jar and atomically refreshes the four local provider caches; Python only
-consumes those caches. Install it before the launchd job:
+Safari's cookie jar and atomically refreshes the local caches for the remaining
+browser-backed providers; Python only consumes those caches. Claude usage is not part
+of this bridge path. Install it before the launchd job:
 
 ```bash
 ./app/install-credential-bridge.sh
@@ -269,11 +269,11 @@ refresh completed.
   reporting success.
 - Uninstall: `./launchd/install.sh uninstall`.
 
-**Schema** (`schema_version: 1`):
+**Schema** (`schema_version: 2`):
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "updated_at": "<tz-aware ISO 8601>",
   "providers": [
     {
@@ -297,13 +297,11 @@ refresh completed.
 
 All 7 canonical providers are always present (Codex, Claude, Antigravity, Copilot, Cursor, OpenCode Go, Vibe); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
 
-In this v1 router snapshot, Cursor emits at most one `billing_cycle` window, sourced from its numeric `credit_percent_left` remaining percentage. Schema v2 preserves every non-Cursor window and instead publishes Cursor's independent numeric `ac` (Auto + Composer, from `autoPercentUsed`) and `ap` (API pool, from `apiPercentUsed`) windows, omitting either unavailable pool. Consumers may roll back by selecting the v1 path/version; retain v1 until all consumers have migrated.
-
-`.state/snapshot.json` is consumed by hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported schema_version; incompatible changes to top-level payload, provider-entry fields, or windows[] require schema bump and coordinated compatibility updates in both consumer projects. Antigravity's Claude+GPT fields and windows remain excluded from router snapshot v1, while schema v2 includes the synthetic `Antigravity (Claude)` entry so the shared third-party pool is visible to v2 consumers. `--json` remains schema-agnostic local/debug output and does not select or persist either router schema.
+`.state/snapshot-v2.json` is consumed by hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported schema_version. Incompatible changes to top-level payload, provider-entry fields, or windows[] require a schema bump and coordinated compatibility updates in both consumer projects. Schema v2 includes the synthetic `Antigravity (Claude)` entry so the shared third-party pool is visible to consumers. `--json` is a reader presentation of the canonical snapshot and does not select or persist a router schema.
 
 ## Credential-free capacity history
 
-Each successful TUI refresh, `--write-snapshot`, or `--refresh-snapshot` run may append the committed schema-v2 payload to `.state/history/YYYY-MM-DD.jsonl`. The history envelope has its own `history_schema_version`, the unchanged snapshot, safe provider provenance, and separate probe/capacity observation metadata. It never stores credentials, raw upstream bodies, account identifiers, or debug text. The directory is mode `0700`; partitions and the lock file are mode `0600`.
+Each successful `--refresh-snapshot` run may append the committed schema-v2 payload to `.state/history/YYYY-MM-DD.jsonl`. The history envelope has its own `history_schema_version`, the unchanged snapshot, safe provider provenance, and separate probe/capacity observation metadata. It never stores credentials, raw upstream bodies, account identifiers, or debug text. The directory is mode `0700`; partitions and the lock file are mode `0600`.
 
 History is retained for seven days using the observation timestamp, written with a private lock and atomic partition replacement. Appends reject duplicate or backward timestamps; an incomplete final JSONL line is recoverable on the next append. History is best effort and never makes a committed snapshot appear uncommitted. The stored provenance identifies the Antigravity Gemini direct pool, the shared `3p-*` Claude/GPT pool with its `Sonnet target only` downstream policy, and the host-observed OpenCode Go route. These descriptors document capacity origin; they do not prove executor credentials, model liveness, or downstream routing success.
 
@@ -321,15 +319,15 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 ## Notes
 
 - Antigravity probing reads `agy`'s Keychain token and POSTs an empty body to `retrieveUserQuotaSummary` (the endpoint rejects a non-empty body with HTTP 400 and the default `Python-urllib` User-Agent with HTTP 403; the provider sets an explicit User-Agent). On an expired token it first nudges `agy` to refresh its own token via `agy models`, then re-reads the Keychain; only if that fails does it surface the "run `agy`" re-authenticate message. The monitor never handles `agy`'s client secret or refresh token — `agy` refreshes its own token via its own OAuth client — so the read-only-toward-`agy`'s-stored-credentials guarantee holds.
-- Claude first reads a recent credential-free `.state/claude-usage.json` sample written from Claude Code's documented structured status-line input. The sample contains only percentages, reset epochs, schema version, and observation time; it expires after five minutes and never launches Claude. When no recent sample exists, the provider may use the bridge-exported Safari session in `.cache/claude_cookies.json`; the re-auth action opens Safari at `claude.ai` because `claude login` refreshes the CLI session, not the web credentials. The bridge only requires a valid `sessionKey`; when `lastActiveOrg` is absent, the provider resolves the organization through Claude's authenticated `/api/organizations` endpoint and persists only the selected UUID via the private atomic cache writer. Multiple memberships are accepted only when the chat-capability/non-API selection is deterministic; malformed or ambiguous responses fail closed.
-- During each timed refresh, the header switches from `refresh XXs` to a single in-place `updating …` state until all providers complete, then resumes the countdown.
+- Claude's interactive provider reads Claude Code's `claudeAiOauth.accessToken` from the macOS Keychain item `Claude Code-credentials` without persisting or logging it, then calls Anthropic's structured `/api/oauth/usage` endpoint. It maps `five_hour`, `seven_day`, and `seven_day_opus` utilization and reset fields into remaining-capacity windows. The provider never launches Claude, parses a PTY, reads Safari cookies, or consumes a status-line cache. Headless paths report `auth required: no cached credentials`; an expired OAuth session reports `Claude Code session expired: run \`claude auth login\``.
+- The live TUI watches the canonical snapshot during its countdown; it does not probe automatically.
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
 - In live mode, press `q` to quit or `r` to trigger an immediate refresh.
-- The macOS credential bridge reads Safari's binary cookie store for Cursor, Claude, OpenCode Go, and Vibe. Python providers only consume the resulting local caches; there is no Chrome-cookie decryption path. Cookies are cached locally at `.cache/<provider>_cookies.json` (gitignored) to survive Safari disk-sync lag and reduce spurious re-auth prompts; the cache is evicted on API 400/401/403 errors. Claude validates cached organization IDs and resolves a replacement through `/api/organizations` when the bridge has only a session key.
-- **Credential storage.** `GradusCredentialBridge.app` writes the Safari-derived `.cache/` credential files (provider cookies/tokens) at mode `0600` in a `0700` directory via an atomic temporary-file rename; Python providers only read and opportunistically tighten them, except that Claude may add the resolved organization UUID through the same private atomic writer. The Codex `~/.codex/auth.json` continues to use the Python private-write helper. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/gradus/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
+- The macOS credential bridge reads Safari's binary cookie store for Cursor, OpenCode Go, and Vibe. Python providers only consume the resulting local caches; there is no Chrome-cookie decryption path. Cookies are cached locally at `.cache/<provider>_cookies.json` (gitignored) to survive Safari disk-sync lag and reduce spurious re-auth prompts; the cache is evicted on API 400/401/403 errors. Claude usage is not part of this bridge: it uses Claude Code's Keychain OAuth token directly.
+- **Credential storage.** `GradusCredentialBridge.app` writes the Safari-derived `.cache/` credential files (provider cookies/tokens) at mode `0600` in a `0700` directory via an atomic temporary-file rename; Python providers only read and opportunistically tighten them. Claude's OAuth token remains in Claude Code's macOS Keychain and is never persisted by Gradus. The Codex `~/.codex/auth.json` continues to use the Python private-write helper. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/gradus/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
 - A normalized window warns when the usage-signal ramp classifies it **orange or red** — the same rule that colors the row, not a parallel one. In practice that means depleted, or a finite pace delta below `-0.10`, or (for a window whose payload carries no reset timestamp, so no pace can be computed) below 40% remaining. Every window spec defines a pace source, so the third case is a degraded-data path rather than a normal one. `[!]` badges, one-shot macOS notifications, the Mac menu's "N low" count, the iPhone's warning tier and the CloudKit push subscription all read this one predicate, aggregated the same way: a provider warns when **any** of its windows does. iOS warning notifications identify the provider and triggering window, then state the remaining percentage and configured local threshold; the generic provider-warning fallback does not invent a threshold when no valid warning window supplies one. Antigravity's conditional C+G rows (`cg5`, `cg1w`) participate in this membership. Cursor's `ac` and `ap` pools are evaluated independently in-process and in schema v2, while v1 continues to publish only its `billing_cycle` window.
 - Vibe uses Mistral's `usage_percentage` field as percent used directly. If Mistral shows `1.08% used`, Gradus will render about `99%` remaining after rounding.
-- Cursor reads billing-cycle and usage data from the nested `planUsage` payload. `planUsage` carries three numbers but Cursor only has two real usage pools: `autoPercentUsed` (first-party Auto + Composer) and `apiPercentUsed` (API/third-party pool) are both percent-USED for their own pool; `remaining`/`limit` cents are a dollar-denominated spend meter, not a third pool. The card shows Cursor's two real usage pools: `ac` is the Auto + Composer pool, converted from `autoPercentUsed` (percent used) to remaining capacity; `ap` is the API pool, converted from `apiPercentUsed` (percent used) to remaining capacity the same way. The cents-derived dollar meter (`credit_percent_left`) is computed by the provider and retained as internal metadata, but is no longer displayed, alert-evaluated, or persisted/projected — it doesn't belong under "ap" or any capacity window. Neither `--json` nor the v1/v2 router snapshots emit `credit_percent_left` any longer; the v1 `billing_cycle` window remains sourced from it internally (unchanged), but it no longer appears in the projected `data` block.
+- Cursor reads billing-cycle and usage data from the nested `planUsage` payload. `planUsage` carries three numbers but Cursor only has two real usage pools: `autoPercentUsed` (first-party Auto + Composer) and `apiPercentUsed` (API/third-party pool) are both percent-USED for their own pool; `remaining`/`limit` cents are a dollar-denominated spend meter, not a third pool. The card shows Cursor's two real usage pools: `ac` is the Auto + Composer pool, converted from `autoPercentUsed` (percent used) to remaining capacity; `ap` is the API pool, converted from `apiPercentUsed` (percent used) to remaining capacity the same way. The cents-derived dollar meter (`credit_percent_left`) is computed by the provider and retained as internal metadata, but is no longer displayed, alert-evaluated, or persisted/projected — it doesn't belong under "ap" or any capacity window. Neither `--json` nor the canonical v2 router snapshot emits `credit_percent_left` any longer.
 
 ## Limitations
 
@@ -339,7 +337,7 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 
 ## Known Issues
 
-- **Claude usage may be unavailable despite valid Safari and CLI sessions.** Gradus accepts only structured provider data; it does not scrape Claude's terminal UI. Claude Code's status-line fields appear only after a CLI API response, and Gradus rejects samples older than five minutes. An HTTP 403 from the unsupported structured web probe is reported as usage unavailable, not as an authentication failure, and does not offer a misleading re-login action.
+- **Claude usage requires an explicit credential-aware producer probe.** Gradus reads Claude Code's OAuth token from Keychain and calls Anthropic's structured usage endpoint; consumer surfaces do not access Keychain. Probes run at most every 10 minutes and back off for one hour after HTTP 429. During that backoff, the TUI and apps retain bounded windows with a rate-limited/cached label while canonical v2 remains `ok: false`, so routers fail closed. If the token is missing or expired, authenticate with `claude auth login` and run `--refresh-snapshot`.
 - The Antigravity token is minted under `agy`'s own OAuth client, so this path is coupled to `agy`'s internal API. If a future `agy` release changes the Keychain layout or the `retrieveUserQuotaSummary` contract, the card will show an error until the provider is updated.
 
 ## Companion apps (macOS/iOS)

@@ -376,6 +376,18 @@ if [[ -z "$ipad_udid" ]]; then
 fi
 echo "    iPad UDID: $ipad_udid"
 
+is_simulator_booted() {
+  local udid="$1"
+  xcrun simctl list devices "$SIM_OS_VERSION" |
+    grep -F "$udid) (Booted)" >/dev/null
+}
+
+ipad_was_booted=0
+if is_simulator_booted "$ipad_udid"; then
+  ipad_was_booted=1
+fi
+ipad_handoff_shutdown=0
+
 # A crashing test (e.g. a segfault inside a snapshot-diffing dependency)
 # still produces a valid, useful .ips in ~/Library/Logs/DiagnosticReports --
 # only the interactive "GradusiOS quit unexpectedly" dialog is suppressed,
@@ -395,7 +407,16 @@ derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXX
 # Preserve a developer's already-running simulator and its account/share state.
 # A gate-created disposable simulator can still be stopped after the run to
 # avoid leaving a new background workload behind.
+restore_preexisting_ipad_after_handoff() {
+  if [[ "$ipad_handoff_shutdown" == "1" && "$ipad_was_booted" == "1" ]]; then
+    echo "==> Restoring pre-existing iPad simulator after UI-test handoff"
+    xcrun simctl boot "$ipad_udid" >/dev/null 2>&1 || true
+    xcrun simctl bootstatus "$ipad_udid" -b || true
+  fi
+}
+
 trap '
+  restore_preexisting_ipad_after_handoff
   if [[ "${GRADUS_KEEP_SIMULATORS:-0}" == "1" ]]; then
     echo "==> Leaving simulators running (GRADUS_KEEP_SIMULATORS=1)"
   else
@@ -468,6 +489,24 @@ assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI
   -only-testing:GradusiOSUITests \
   "${density_snapshot_only_args[@]}" \
   CODE_SIGNING_ALLOWED=NO
+
+# A completed iPad XCTest runner can leave testmanagerd's Accessibility session
+# attached to the wrong CoreSimulator device. Restart the iPhone target after
+# retiring the iPad runner so the next AX-loaded notification is fresh.
+reset_simulator_ui_session_for_iphone() {
+  echo "==> Resetting simulator UI session before iPhone UI tests"
+  if is_simulator_booted "$ipad_udid"; then
+    ipad_handoff_shutdown=1
+    xcrun simctl shutdown "$ipad_udid"
+  fi
+  if is_simulator_booted "$sim_udid"; then
+    xcrun simctl shutdown "$sim_udid"
+  fi
+  xcrun simctl boot "$sim_udid"
+  xcrun simctl bootstatus "$sim_udid" -b
+}
+
+reset_simulator_ui_session_for_iphone
 
 # Keep both simulator UI legs adjacent. Switching to the macOS UI runner between
 # them can invalidate the simulator accessibility session (kAXErrorAPIDisabled).

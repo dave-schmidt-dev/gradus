@@ -244,8 +244,8 @@ def fetch_provider_snapshot(
         if debug:
             tail = exc.raw_text[-1600:] if exc.raw_text else ""
             # Only name the dump file when one was actually written.
-            # `_write_debug_dump` is a no-op under headless (INV-2: --json and
-            # --write-snapshot must have zero side effects), so the hint used
+            # `_write_debug_dump` is a no-op under headless (INV-2: --json must
+            # have zero side effects), so the hint used
             # to point at a path that does not exist on exactly the paths
             # where a human is most likely to go looking for it.
             dump_hint = "" if _is_headless() else f"raw dump: {_debug_dump_path(name)}"

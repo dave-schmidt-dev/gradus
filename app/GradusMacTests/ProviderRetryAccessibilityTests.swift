@@ -67,4 +67,29 @@ struct ProviderRetryAccessibilityTests {
         #expect(!stale.rankingIsOK)
         #expect(stale.rankingNeedsAttention(localThreshold: 30))
     }
+
+    @Test func claudeRateLimitCarriesOnlyRetainedWindowsAndUsesFixedStaleLabel() {
+        let rateLimited = provider(
+            name: "Claude",
+            error: "HTTP 429 Too Many Requests",
+            windows: [ProviderWindow(
+                id: "weekly", percentLeft: 42, resetISO: nil, windowHours: 168, paceDelta: nil
+            )]
+        )
+        #expect(ProviderRetryAccessibility.isClaudeRateLimited(rateLimited))
+        #expect(ProviderRetryAccessibility.isStale(rateLimited))
+        #expect(ProviderRetryAccessibility.isCarriedFailure(rateLimited))
+        #expect(
+            ProviderRetryAccessibility.displayLabel(for: rateLimited)
+                == ProviderRetryAccessibility.claudeRateLimitedLabel
+        )
+        #expect(rateLimited.rankingIsOK)
+        #expect(!rateLimited.rankingNeedsAttention(localThreshold: 30))
+
+        let noCachedWindows = provider(name: "Claude", error: "rate limited", windows: [])
+        #expect(!ProviderRetryAccessibility.isStale(noCachedWindows))
+        #expect(!ProviderRetryAccessibility.isCarriedFailure(noCachedWindows))
+        #expect(!noCachedWindows.rankingIsOK)
+        #expect(noCachedWindows.rankingNeedsAttention(localThreshold: 30))
+    }
 }

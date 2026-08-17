@@ -197,13 +197,16 @@ private struct ProviderRow: View {
                 }
             }
 
-            if !provider.ok, !ProviderRetryAccessibility.isCarriedFailure(provider) {
+            if !provider.ok,
+               !ProviderRetryAccessibility.isCarriedFailure(provider)
+               || ProviderRetryAccessibility.isClaudeRateLimited(provider) {
                 let label = ProviderRetryAccessibility.displayLabel(for: provider)
                     ?? "Provider probe failed"
                 Text(label)
                     .font(.caption)
                     .foregroundStyle(
                         ProviderRetryAccessibility.isRetrying(provider)
+                            || ProviderRetryAccessibility.isStale(provider)
                             ? .secondary
                             : SignalColor.forLevel(.red)
                     )

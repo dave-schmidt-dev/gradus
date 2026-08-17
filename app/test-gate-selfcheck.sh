@@ -160,6 +160,24 @@ if ! (( ipad_ui_line < iphone_ui_line && iphone_ui_line < mac_ui_line )); then
   fail "simulator UI legs must stay adjacent and precede the macOS UI leg"
 fi
 
+validate_iphone_ui_handoff_contract() {
+  local gate_path="$1" handoff_block handoff_call_line restore_block
+  handoff_block="$(sed -n '/^reset_simulator_ui_session_for_iphone()/,/^}/p' "$gate_path")"
+  [[ "$handoff_block" == *'xcrun simctl shutdown "$ipad_udid"'* ]] || return 1
+  [[ "$handoff_block" == *'xcrun simctl shutdown "$sim_udid"'* ]] || return 1
+  [[ "$handoff_block" == *'xcrun simctl boot "$sim_udid"'* ]] || return 1
+  [[ "$handoff_block" == *'xcrun simctl bootstatus "$sim_udid" -b'* ]] || return 1
+  restore_block="$(sed -n '/^restore_preexisting_ipad_after_handoff()/,/^}/p' "$gate_path")"
+  [[ "$restore_block" == *'xcrun simctl boot "$ipad_udid"'* ]] || return 1
+  [[ "$restore_block" == *'xcrun simctl bootstatus "$ipad_udid" -b'* ]] || return 1
+  handoff_call_line="$(grep -nF 'reset_simulator_ui_session_for_iphone' "$gate_path" | tail -n 1 | cut -d: -f1)"
+  [[ -n "$handoff_call_line" ]] || return 1
+  (( ipad_ui_line < handoff_call_line && handoff_call_line < iphone_ui_line ))
+}
+
+validate_iphone_ui_handoff_contract "$GATE_SCRIPT" ||
+  fail "iPhone UI leg lacks a deterministic post-iPad simulator handoff"
+
 # Prove the contract rejects a destination copy/paste regression, not just
 # that the current source happens to contain the expected strings.
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-gate-contract.XXXXXX")"

@@ -49,11 +49,15 @@ struct ProviderDetailView: View {
                 ForEach(Array(provider.windows.enumerated()), id: \.offset) { _, window in
                     windowCard(window)
                 }
-                if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+                if !provider.ok,
+                   !IOSProviderRetryAccessibility.isCarriedFailure(provider)
+                   || IOSProviderRetryAccessibility.isClaudeRateLimited(provider) {
                     errorText
                 }
             }
-        } else if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+        } else if !provider.ok,
+                  !IOSProviderRetryAccessibility.isCarriedFailure(provider)
+                  || IOSProviderRetryAccessibility.isClaudeRateLimited(provider) {
             errorText
         } else if IOSProviderRetryAccessibility.isCarriedFailure(provider) {
             // A nonempty window list is retained transient data. The real
@@ -72,7 +76,10 @@ struct ProviderDetailView: View {
         return Text(label)
             .font(.subheadline)
             .foregroundStyle(
-                IOSProviderRetryAccessibility.isRetrying(provider) ? Color.secondary : Color.red
+                IOSProviderRetryAccessibility.isRetrying(provider)
+                    || IOSProviderRetryAccessibility.isStale(provider)
+                    ? Color.secondary
+                    : Color.red
             )
             .accessibilityLabel(label)
     }

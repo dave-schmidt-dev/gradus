@@ -953,105 +953,6 @@ class CursorTokenCacheTests(unittest.TestCase):
         self.assertFalse(self._cache_path.exists())
 
 
-class ClaudeCookieCacheTests(unittest.TestCase):
-    """Claude reads bridge-written cache files only."""
-
-    def setUp(self) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self._cache_path = Path(self._tmpdir.name) / "claude_cookies.json"
-        self._status_cache_path = Path(self._tmpdir.name) / "claude-usage.json"
-        self._patchers = [
-            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._cache_path),
-            patch.object(ClaudeHttpProvider, "_STATUS_CACHE_PATH", self._status_cache_path),
-        ]
-        for patcher in self._patchers:
-            patcher.start()
-
-    def tearDown(self) -> None:
-        for patcher in self._patchers:
-            patcher.stop()
-        self._tmpdir.cleanup()
-
-    def test_cache_is_the_only_credential_source(self) -> None:
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(
-            json.dumps(
-                {
-                    "sessionKey": "sk-ant-test",
-                    "cf_clearance": "cf",
-                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
-                }
-            ),
-            encoding="utf-8",
-        )
-        provider = ClaudeHttpProvider()
-        provider._acquire()
-        self.assertEqual(provider._session_key, "sk-ant-test")
-        self.assertEqual(provider._cf_clearance, "cf")
-        self.assertEqual(provider._org_id, "00000000-0000-4000-8000-000000000001")
-
-    def test_malformed_session_key_cache_is_ignored(self) -> None:
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(
-            json.dumps({"sessionKey": "not-a-claude-session", "lastActiveOrg": "not-a-uuid"}),
-            encoding="utf-8",
-        )
-        provider = ClaudeHttpProvider()
-        provider._acquire()
-        self.assertFalse(provider._has_cookies)
-
-    def test_missing_cache_does_not_create_credentials(self) -> None:
-        provider = ClaudeHttpProvider()
-        provider._acquire()
-        self.assertFalse(self._cache_path.exists())
-
-    def test_403_preserves_cache_and_reports_usage_unavailable(self) -> None:
-        """An unsupported web probe rejection is not proof that login expired."""
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(
-            json.dumps(
-                {
-                    "sessionKey": "sk-ant-test",
-                    "cf_clearance": "cf",
-                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
-                }
-            ),
-            encoding="utf-8",
-        )
-        provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
-        ):
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertTrue(self._cache_path.exists())
-        self.assertIn("usage unavailable", str(ctx.exception).lower())
-        self.assertNotIn("session expired", str(ctx.exception).lower())
-
-    def test_400_clears_cache(self) -> None:
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(
-            json.dumps(
-                {
-                    "sessionKey": "sk-ant-test",
-                    "cf_clearance": "cf_test",
-                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
-                }
-            ),
-            encoding="utf-8",
-        )
-        provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            side_effect=ProbeFailure("HTTP 400", ""),
-        ):
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertFalse(self._cache_path.exists())
-        self.assertIn("session expired", str(ctx.exception).lower())
-
-
 class VibeCookieCacheTests(unittest.TestCase):
     """Vibe reads bridge-written cache files only."""
 
@@ -1108,16 +1009,9 @@ class CacheResilienceTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self._cursor_cache = Path(self._tmpdir.name) / "cursor_token.json"
-        self._claude_cache = Path(self._tmpdir.name) / "claude_cookies.json"
         self._vibe_cache = Path(self._tmpdir.name) / "vibe_cookies.json"
         self._patchers = [
             patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
-            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
-            patch.object(
-                ClaudeHttpProvider,
-                "_STATUS_CACHE_PATH",
-                Path(self._tmpdir.name) / "claude-usage.json",
-            ),
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
         ]
         for p in self._patchers:
@@ -1134,13 +1028,6 @@ class CacheResilienceTests(unittest.TestCase):
         provider = CursorProvider()
         provider._acquire()
         self.assertIsNone(provider._access_token)
-
-    def test_claude_corrupted_cache_is_ignored(self) -> None:
-        self._claude_cache.parent.mkdir(parents=True, exist_ok=True)
-        self._claude_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
-        provider = ClaudeHttpProvider()
-        provider._acquire()
-        self.assertFalse(provider._has_cookies)
 
     def test_vibe_corrupted_cache_is_ignored(self) -> None:
         self._vibe_cache.parent.mkdir(parents=True, exist_ok=True)
@@ -1987,17 +1874,16 @@ class CodexHttpProviderTests(unittest.TestCase):
 
 
 class ClaudeHttpProviderTests(unittest.TestCase):
-    # Real API: {five_hour: {utilization, resets_at}, seven_day: {...}, seven_day_opus: {...}}
+    """Claude usage comes from Claude Code's structured OAuth endpoint."""
+
     NORMAL_RESPONSE = {
         "five_hour": {"utilization": 30.0, "resets_at": "2026-04-17T00:00:00Z"},
         "seven_day": {"utilization": 45.0, "resets_at": "2026-04-21T00:00:00Z"},
         "seven_day_opus": {"utilization": 10.0, "resets_at": "2026-04-21T00:00:00Z"},
     }
-    ORGANIZATION_ID = "00000000-0000-4000-8000-000000000001"
-    SECOND_ORGANIZATION_ID = "00000000-0000-4000-8000-000000000002"
 
-    def test_provider_has_no_terminal_or_process_probe(self) -> None:
-        """Claude usage must come from structured data, never terminal scraping."""
+    def test_provider_has_no_terminal_or_pty_probe(self) -> None:
+        """Claude usage must come from structured HTTP data, never PTY scraping."""
         source = Path(claude_provider_module.__file__).read_text(encoding="utf-8")
         tree = ast.parse(source)
         imported_roots = {
@@ -2013,94 +1899,75 @@ class ClaudeHttpProviderTests(unittest.TestCase):
                 )
             )
         }
-        self.assertTrue({"pty", "subprocess", "pexpect"}.isdisjoint(imported_roots))
+        self.assertTrue({"pty", "pexpect"}.isdisjoint(imported_roots))
 
     def setUp(self) -> None:
-        # Isolate bridge-managed cache fixtures from the repository's live cache.
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self._cache_path = Path(self._tmpdir.name) / "claude_cookies.json"
-        self._status_cache_path = Path(self._tmpdir.name) / "claude-usage.json"
-        self._patchers = [
-            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._cache_path),
-            patch.object(ClaudeHttpProvider, "_STATUS_CACHE_PATH", self._status_cache_path),
-        ]
-        for patcher in self._patchers:
-            patcher.start()
-
-    def tearDown(self) -> None:
-        for patcher in self._patchers:
-            patcher.stop()
-        self._tmpdir.cleanup()
+        providers.set_headless(False)
+        self.addCleanup(providers.set_headless, False)
 
     def _make_provider(self) -> ClaudeHttpProvider:
-        self._cache_path.write_text(
-            json.dumps(
-                {
-                    "sessionKey": "sk-ant-test",
-                    "cf_clearance": "cf_test",
-                    "lastActiveOrg": "00000000-0000-4000-8000-000000000001",
-                }
-            ),
-            encoding="utf-8",
-        )
-        return ClaudeHttpProvider()
-
-    def test_recent_structured_status_cache_avoids_network_and_credentials(self) -> None:
-        self._status_cache_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "observed_at": time.time(),
-                    "five_hour": {"used_percentage": 1, "resets_at": 1_800_000_000},
-                    "seven_day": {"used_percentage": 81, "resets_at": 1_900_000_000},
-                }
-            ),
-            encoding="utf-8",
-        )
         provider = ClaudeHttpProvider()
-        with patch("gradus.providers._base._http_json") as http_json:
-            status = provider.fetch()
-        self.assertEqual(status.session_percent_left, 99)
-        self.assertEqual(status.weekly_percent_left, 19)
-        self.assertEqual(status.primary_reset, _format_reset_time(1_800_000_000))
-        self.assertEqual(status.secondary_reset, _format_reset_time(1_900_000_000))
-        http_json.assert_not_called()
-        self.assertFalse(provider._has_cookies)
+        provider._access_token = "test-oauth-token"
+        return provider
 
-    def test_stale_status_cache_is_not_used(self) -> None:
-        self._status_cache_path.write_text(
-            json.dumps(
+    def test_keychain_payload_extracts_only_oauth_access_token(self) -> None:
+        keychain = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
                 {
-                    "schema_version": 1,
-                    "observed_at": time.time() - 301,
-                    "five_hour": {"used_percentage": 1},
+                    "claudeAiOauth": {
+                        "accessToken": "test-oauth-token",
+                        "refreshToken": "must-not-be-used",
+                    },
+                    "sessionKey": "must-not-be-used",
                 }
             ),
-            encoding="utf-8",
         )
-        with self.assertRaises(ProbeFailure):
-            ClaudeHttpProvider().fetch()
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain) as run:
+            token = ClaudeHttpProvider._load_keychain_access_token()
 
-    def test_malformed_status_cache_falls_back_to_structured_web_response(self) -> None:
-        self._status_cache_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "observed_at": time.time(),
-                    "five_hour": {"used_percentage": 101},
-                }
-            ),
-            encoding="utf-8",
-        )
-        provider = self._make_provider()
-        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
-            status = provider.fetch()
-        self.assertEqual(status.session_percent_left, 70)
+        self.assertEqual(token, "test-oauth-token")
+        args = run.call_args.args[0]
+        self.assertEqual(args[:3], ["security", "find-generic-password", "-w"])
+        self.assertIn("Claude Code-credentials", args)
+        self.assertNotIn("test-oauth-token", args)
+
+    def test_invalid_keychain_payload_fails_closed(self) -> None:
+        keychain = MagicMock(returncode=0, stdout=json.dumps({"sessionKey": "legacy"}))
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
+            with self.assertRaises(FileNotFoundError):
+                ClaudeHttpProvider._load_keychain_access_token()
+
+    def test_keychain_failure_does_not_expose_command_output(self) -> None:
+        keychain = MagicMock(returncode=1, stdout="secret-adjacent-output")
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                ClaudeHttpProvider._load_keychain_access_token()
+        self.assertNotIn("secret-adjacent-output", str(ctx.exception))
+
+    def test_headless_acquire_never_reads_keychain(self) -> None:
+        providers.set_headless(True)
+        self.addCleanup(providers.set_headless, False)
+        with patch("gradus.providers.claude.subprocess.run") as run:
+            with self.assertRaises(ProbeFailure) as ctx:
+                ClaudeHttpProvider().fetch()
+        run.assert_not_called()
+        self.assertEqual(str(ctx.exception), "auth required: no cached credentials")
 
     def test_normal_response_field_mapping(self) -> None:
         provider = self._make_provider()
-        with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):
+        with patch(
+            "gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE
+        ) as http_json:
             status = provider.fetch()
+        http_json.assert_called_once_with(
+            ClaudeHttpProvider._OAUTH_USAGE_URL,
+            headers={
+                "Authorization": "Bearer test-oauth-token",
+                "Accept": "application/json",
+                "User-Agent": ClaudeHttpProvider._USER_AGENT,
+            },
+        )
         # 100 - 30 = 70
         self.assertEqual(status.session_percent_left, 70)
         # 100 - 45 = 55
@@ -2119,91 +1986,32 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIsInstance(status.weekly_percent_left, float)
         self.assertIsInstance(status.opus_percent_left, float)
 
-    def test_session_only_cache_resolves_and_persists_organization(self) -> None:
-        self._cache_path.write_text(
-            json.dumps({"sessionKey": "sk-ant-test", "cf_clearance": "cf_test"}),
-            encoding="utf-8",
-        )
-        provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            side_effect=[
-                [{"uuid": self.ORGANIZATION_ID, "capabilities": ["chat"]}],
-                self.NORMAL_RESPONSE,
-            ],
-        ) as http_json:
-            status = provider.fetch()
-
-        self.assertEqual(status.session_percent_left, 70)
-        self.assertEqual(provider._org_id, self.ORGANIZATION_ID)
-        self.assertEqual(
-            json.loads(self._cache_path.read_text(encoding="utf-8"))["lastActiveOrg"],
-            self.ORGANIZATION_ID,
-        )
-        self.assertEqual(http_json.call_args_list[0].args[0], ClaudeHttpProvider._ORGANIZATIONS_URL)
-
-    def test_multiple_organizations_prefer_single_chat_capable_org(self) -> None:
-        self._cache_path.write_text(json.dumps({"sessionKey": "sk-ant-test"}), encoding="utf-8")
-        provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            side_effect=[
-                [
-                    {"uuid": self.ORGANIZATION_ID, "capabilities": ["api"]},
-                    {"uuid": self.SECOND_ORGANIZATION_ID, "capabilities": ["chat"]},
-                ],
-                self.NORMAL_RESPONSE,
-            ],
-        ):
-            provider.fetch()
-        self.assertEqual(provider._org_id, self.SECOND_ORGANIZATION_ID)
-
-    def test_ambiguous_organizations_fail_closed_without_usage_request(self) -> None:
-        self._cache_path.write_text(json.dumps({"sessionKey": "sk-ant-test"}), encoding="utf-8")
-        provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            return_value=[
-                {"uuid": self.ORGANIZATION_ID},
-                {"uuid": self.SECOND_ORGANIZATION_ID},
-            ],
-        ) as http_json:
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertIn("ambiguous", str(ctx.exception))
-        self.assertEqual(http_json.call_count, 1)
-
-    def test_malformed_organizations_fail_closed_without_response_body(self) -> None:
-        self._cache_path.write_text(json.dumps({"sessionKey": "sk-ant-test"}), encoding="utf-8")
-        provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            return_value=[{"uuid": "not-an-organization-id"}],
-        ):
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertEqual(ctx.exception.raw_text, "")
-
-    def test_401_raises_probe_failure(self) -> None:
+    def test_401_clears_token_and_routes_to_login(self) -> None:
         provider = self._make_provider()
         with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertIn("session expired", str(ctx.exception).lower())
+        self.assertEqual(provider._access_token, "")
 
-    def test_403_is_not_misclassified_as_authentication_failure(self) -> None:
+    def test_403_clears_token_and_routes_to_login(self) -> None:
         provider = self._make_provider()
         with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 403", "")):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
-        snapshot = ProviderSnapshot(name="Claude", ok=False, source="api", error=str(ctx.exception))
-        self.assertFalse(_is_auth_error(snapshot))
+        self.assertIn("session expired", str(ctx.exception).lower())
+        self.assertEqual(provider._access_token, "")
 
-    def test_missing_cookies_raises_probe_failure(self) -> None:
+    def test_missing_oauth_credentials_fails_closed(self) -> None:
         provider = ClaudeHttpProvider()
-        with self.assertRaises(ProbeFailure) as ctx:
-            provider.fetch()
-        self.assertIn("claude.ai", str(ctx.exception).lower())
+        with patch.object(
+            ClaudeHttpProvider,
+            "_load_keychain_access_token",
+            side_effect=FileNotFoundError("credential helper unavailable"),
+        ):
+            snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
+        self.assertFalse(snapshot.ok)
+        self.assertIn("claude auth login", snapshot.error or "")
 
 
 class AntigravityProviderTests(unittest.TestCase):
@@ -2811,17 +2619,10 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         self._root = Path(self._tmpdir.name)
         self._vibe_cache = self._root / "vibe_cookies.json"
         self._cursor_cache = self._root / "cursor_token.json"
-        self._claude_cache = self._root / "claude_cookies.json"
         self._codex_auth = self._root / "auth.json"
         self._patchers = [
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
             patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
-            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
-            patch.object(
-                ClaudeHttpProvider,
-                "_STATUS_CACHE_PATH",
-                self._root / "claude-usage.json",
-            ),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2911,7 +2712,6 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         self.assertEqual(self._cursor_cache.read_text(encoding="utf-8"), original_cursor)
         # No provider may create a fresh cache file from a read.
         self.assertFalse(self._vibe_cache.exists())
-        self.assertFalse(self._claude_cache.exists())
 
     def test_acquire_never_launches_browser(self) -> None:
         # A credential-less probe is a pure cache read in either mode.
@@ -2946,17 +2746,10 @@ class LazyAcquireContractTests(unittest.TestCase):
         self._root = Path(self._tmpdir.name)
         self._vibe_cache = self._root / "vibe_cookies.json"
         self._cursor_cache = self._root / "cursor_token.json"
-        self._claude_cache = self._root / "claude_cookies.json"
         self._codex_auth = self._root / "auth.json"
         self._patchers = [
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
             patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
-            patch.object(ClaudeHttpProvider, "_CACHE_PATH", self._claude_cache),
-            patch.object(
-                ClaudeHttpProvider,
-                "_STATUS_CACHE_PATH",
-                self._root / "claude-usage.json",
-            ),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2993,21 +2786,18 @@ class LazyAcquireContractTests(unittest.TestCase):
         mock_popen.assert_not_called()
         mock_write.assert_not_called()
 
-    def test_missing_creds_surface_as_auth_snapshot_via_fetch(self) -> None:
-        """With no credentials available anywhere, fetch_provider_snapshot() must
-        surface a not-ok snapshot whose error is recognized by the real
-        _is_auth_error() routing predicate — not a crash and not a silent success.
-
-        This would fail if construction still swallowed the missing-credential
-        case without ever reaching fetch(), or if the lazy _acquire() failure
-        path stopped producing a message containing an auth keyword.
-        """
+    def test_missing_creds_surface_as_failed_snapshot_via_fetch(self) -> None:
+        """Missing credentials must fail closed without claiming usage."""
         provider = ClaudeHttpProvider()
-        snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
+        with patch.object(
+            ClaudeHttpProvider,
+            "_load_keychain_access_token",
+            side_effect=FileNotFoundError("credential helper unavailable"),
+        ):
+            snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
 
         self.assertFalse(snapshot.ok)
-        self.assertIsNotNone(snapshot.error)
-        self.assertTrue(_is_auth_error(snapshot))
+        self.assertIn("claude auth login", snapshot.error or "")
 
 
 class TestCredentialCachePermissions(unittest.TestCase):

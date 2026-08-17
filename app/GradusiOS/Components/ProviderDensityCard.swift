@@ -87,11 +87,15 @@ struct ProviderDensityCard: View {
                         window: window, now: now, showsReset: showsReset, metrics: metrics
                     )
                 }
-                if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+                if !provider.ok,
+                   !IOSProviderRetryAccessibility.isCarriedFailure(provider)
+                   || IOSProviderRetryAccessibility.isClaudeRateLimited(provider) {
                     errorText
                 }
             }
-        } else if !provider.ok, !IOSProviderRetryAccessibility.isCarriedFailure(provider) {
+        } else if !provider.ok,
+                  !IOSProviderRetryAccessibility.isCarriedFailure(provider)
+                  || IOSProviderRetryAccessibility.isClaudeRateLimited(provider) {
             errorText
                 .frame(height: metrics.rowHeight, alignment: .leading)
         } else {
@@ -107,7 +111,10 @@ struct ProviderDensityCard: View {
         return Text(label)
             .font(metrics.labelFont)
             .foregroundStyle(
-                IOSProviderRetryAccessibility.isRetrying(provider) ? Color.secondary : Color.red
+                IOSProviderRetryAccessibility.isRetrying(provider)
+                    || IOSProviderRetryAccessibility.isStale(provider)
+                    ? Color.secondary
+                    : Color.red
             )
             .lineLimit(2)
             .accessibilityLabel(label)

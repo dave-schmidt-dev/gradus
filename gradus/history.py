@@ -46,7 +46,10 @@ HISTORY_RETENTION_DAYS = 7
 
 _PARTITION_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.jsonl$")
 _ALLOWED_SNAPSHOT_KEYS = frozenset({"schema_version", "updated_at", "providers"})
-_ALLOWED_ENTRY_KEYS = frozenset({"name", "ok", "error", "windows", "data", "observed_at"})
+_ALLOWED_ENTRY_KEYS = frozenset(
+    {"name", "ok", "error", "windows", "data", "observed_at", "probe_attempted_at"}
+)
+_LEGACY_ENTRY_KEYS = _ALLOWED_ENTRY_KEYS - {"probe_attempted_at"}
 _ALLOWED_WINDOW_KEYS = frozenset({"id", "percent_left", "reset_iso", "window_hours", "pace_delta"})
 _PROBE_REASONS = frozenset(
     {
@@ -203,7 +206,10 @@ def _valid_snapshot_payload(payload: object) -> dict[str, Any] | None:
 
     names: set[str] = set()
     for entry in providers:
-        if not isinstance(entry, Mapping) or set(entry) != _ALLOWED_ENTRY_KEYS:
+        if not isinstance(entry, Mapping) or set(entry) not in (
+            _ALLOWED_ENTRY_KEYS,
+            _LEGACY_ENTRY_KEYS,
+        ):
             return None
         name = entry.get("name")
         if not isinstance(name, str) or not name or name in names:
@@ -229,6 +235,9 @@ def _valid_snapshot_payload(payload: object) -> dict[str, Any] | None:
             return None
         observed_at = entry.get("observed_at")
         if observed_at is not None and _parse_aware(observed_at) is None:
+            return None
+        probe_attempted_at = entry.get("probe_attempted_at")
+        if probe_attempted_at is not None and _parse_aware(probe_attempted_at) is None:
             return None
 
     safe = _json_safe_value(payload)

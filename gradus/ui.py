@@ -956,7 +956,13 @@ def build_provider_panel(
             age_str = f"{age_sec // 60}m"
         else:
             age_str = f"{age_sec // 3600}h"
-        title_text += f" [text.yellow](offline {age_str})[/]"
+        error = (snapshot.error or "").lower()
+        if base_name == "Claude" and (
+            "http 429" in error or "rate limited" in error or "rate-limit" in error
+        ):
+            title_text += f" [text.yellow](rate limited; cached {age_str})[/]"
+        else:
+            title_text += f" [text.yellow](offline {age_str})[/]"
 
     if not snapshot.ok:
         if snapshot.error == ANTIGRAVITY_AUTH_RETRY_MESSAGE:

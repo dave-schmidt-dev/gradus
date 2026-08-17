@@ -36,6 +36,7 @@ from .providers import (
 from .providers._base import _PROVIDER_REGISTRY
 from .snapshot import (
     ANTIGRAVITY_AUTH_RETRY_MESSAGE,
+    CANONICAL_PROVIDERS,
     SNAPSHOT_PATH,
     SNAPSHOT_V2_PATH,
     STALE_THRESHOLD_SECONDS,
@@ -59,9 +60,7 @@ from .ui import (
 log = logging.getLogger(__name__)
 
 AUTH_ACTIONS: dict[str, tuple[str, str]] = {
-    # Claude usage reads the bridge-exported Safari cookie cache; `claude login`
-    # authenticates the CLI but cannot refresh the credentials Gradus consumes.
-    "Claude": ("safari", "https://claude.ai"),
+    "Claude": ("cli", "claude auth login"),
     # `codex login` is destructive: it wipes ~/.codex/auth.json at the start of the OAuth flow,
     # so an abandoned login (e.g. user dismisses the browser) leaves them fully logged out — even
     # if the previous token was healthy. Guard the [1] shortcut by surfacing the current auth.json
@@ -90,6 +89,175 @@ _AUTH_KEYWORDS = (
     "sign-in",
     "token expired",
 )
+
+# Claude's usage endpoint is materially more sensitive to polling than the
+# other providers.  The launchd cadence remains 120s, but a Claude probe is
+# allowed at most once per ten minutes.  This is producer policy, not a second
+# cache: the previous attempt/success timestamps come from snapshot-v2.
+CLAUDE_MIN_PROBE_INTERVAL_SECONDS = 600
+# A real 429 means the endpoint's rolling allowance has not recovered yet.
+# Back off for an hour instead of retrying every normal Claude interval.
+CLAUDE_RATE_LIMIT_BACKOFF_SECONDS = 3600
+
+
+class _CanonicalClaudeCooldown:
+    """Return a bounded, fail-closed result without touching Claude."""
+
+    def __init__(self, data: dict[str, object]) -> None:
+        self._data = dict(data)
+
+    def fetch(self) -> ProviderSnapshot:
+        return ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="snapshot",
+            data=self._data,
+        )
+
+
+def _canonical_entry(
+    payload: Mapping[str, object] | None, name: str
+) -> Mapping[str, object] | None:
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != 2:
+        return None
+    entries = payload.get("providers")
+    if not isinstance(entries, list):
+        return None
+    return next(
+        (entry for entry in entries if isinstance(entry, Mapping) and entry.get("name") == name),
+        None,
+    )
+
+
+def _claude_probe_is_due(payload: Mapping[str, object] | None, now: datetime) -> bool:
+    """Return whether the canonical Claude entry is old enough to probe."""
+    entry = _canonical_entry(payload, "Claude")
+    if entry is None:
+        return True
+    # This field is advanced only by a real probe.  A cooldown projection is
+    # carried through the next payload unchanged, so the 120s producer tick
+    # cannot defer Claude forever by moving the top-level snapshot timestamp.
+    timestamp = entry.get("probe_attempted_at") or entry.get("observed_at")
+    if entry.get("ok") is False and entry.get("error") and not timestamp:
+        timestamp = payload.get("updated_at")  # legacy snapshots only
+    parsed = _parse_aware_iso_timestamp(timestamp)
+    if parsed is None:
+        return True
+    current = now if now.tzinfo is not None else now.astimezone()
+    try:
+        age = (current - parsed).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return True
+    error = entry.get("error")
+    lower_error = error.lower() if isinstance(error, str) else ""
+    interval = (
+        CLAUDE_RATE_LIMIT_BACKOFF_SECONDS
+        if "http 429" in lower_error or "rate limited" in lower_error or "rate-limit" in lower_error
+        else CLAUDE_MIN_PROBE_INTERVAL_SECONDS
+    )
+    return age >= interval
+
+
+def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datetime] | None:
+    """Hydrate primary provider views from one validated v2 payload."""
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != 2:
+        return None
+    updated_at = _parse_aware_iso_timestamp(payload.get("updated_at"))
+    entries = payload.get("providers")
+    if updated_at is None or not isinstance(entries, list):
+        return None
+    by_name = {
+        entry.get("name"): entry
+        for entry in entries
+        if isinstance(entry, Mapping) and isinstance(entry.get("name"), str)
+    }
+    snapshots: list[ProviderSnapshot] = []
+
+    def carried_failure(entry: Mapping[str, object], data: Mapping[str, object]) -> bool:
+        error = entry.get("error")
+        observed_at = _parse_aware_iso_timestamp(entry.get("observed_at"))
+        windows = entry.get("windows")
+        if (
+            not isinstance(error, str)
+            or observed_at is None
+            or not isinstance(windows, list)
+            or not windows
+            or any(not isinstance(window, Mapping) for window in windows)
+        ):
+            return False
+        probe = ProviderSnapshot(
+            name=str(entry.get("name", "")),
+            ok=False,
+            source="snapshot",
+            data=dict(data),
+            error=error,
+        )
+        return _is_transient_probe_error(probe)
+
+    for name in CANONICAL_PROVIDERS():
+        entry = by_name.get(name)
+        if not isinstance(entry, Mapping):
+            snapshots.append(
+                ProviderSnapshot(
+                    name=name, ok=False, source="snapshot", error="snapshot unavailable"
+                )
+            )
+            continue
+        data = entry.get("data")
+        safe_data = dict(data) if isinstance(data, Mapping) else None
+        ok = entry.get("ok") is True
+        observed_at = _parse_aware_iso_timestamp(entry.get("observed_at"))
+        if not ok and safe_data and carried_failure(entry, safe_data):
+            # The persisted router entry deliberately remains ok:false.  The
+            # TUI can still show its retained windows, marked offline, by
+            # projecting the same sanitized data into its display model.
+            snapshots.append(
+                ProviderSnapshot(
+                    name=name,
+                    ok=True,
+                    source="snapshot (cached)",
+                    data=safe_data,
+                    error=entry.get("error") if isinstance(entry.get("error"), str) else None,
+                    cached_since=observed_at,
+                )
+            )
+            continue
+        snapshots.append(
+            ProviderSnapshot(
+                name=name,
+                ok=ok,
+                source="snapshot",
+                data=safe_data,
+                error=entry.get("error") if isinstance(entry.get("error"), str) else None,
+            )
+        )
+    return snapshots, updated_at
+
+
+def _read_canonical_snapshots() -> tuple[list[ProviderSnapshot], datetime] | None:
+    return _canonical_snapshots(read_prior_snapshot(SNAPSHOT_V2_PATH))
+
+
+def _snapshot_signature() -> tuple[int, int] | None:
+    """Return a cheap change token for the atomically replaced SOT file."""
+    try:
+        stat_result = SNAPSHOT_V2_PATH.stat()
+    except OSError:
+        return None
+    return stat_result.st_mtime_ns, stat_result.st_size
+
+
+def _canonical_or_refresh(
+    cwd: str,
+    enabled_providers: set[str] | None,
+    debug: bool,
+) -> tuple[list[ProviderSnapshot], datetime] | None:
+    """Read the SOT, making one producer refresh when an interactive surface has none."""
+    current = _read_canonical_snapshots()
+    if current is not None:
+        return current
+    _refresh_snapshot_once(cwd, enabled_providers, debug)
+    return _read_canonical_snapshots()
 
 
 def _is_auth_error(snapshot: ProviderSnapshot) -> bool:
@@ -186,15 +354,6 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of providers to enable (e.g. Claude,Codex,Antigravity).",
     )
     parser.add_argument(
-        "--write-snapshot",
-        action="store_true",
-        dest="write_snapshot",
-        help=(
-            "Write a headless capacity snapshot to .state/snapshot.json and exit "
-            "(no browser, no notifications)."
-        ),
-    )
-    parser.add_argument(
         "--refresh-snapshot",
         action="store_true",
         dest="refresh_snapshot",
@@ -234,17 +393,14 @@ def parse_args() -> argparse.Namespace:
         help="Mark historical evidence unverified when its match is farther away.",
     )
     args = parser.parse_args()
-    if args.refresh_snapshot and (args.once or args.json or args.write_snapshot):
-        parser.error(
-            "argument --refresh-snapshot: not allowed with --once, --json, or --write-snapshot"
-        )
+    if args.refresh_snapshot and (args.once or args.json):
+        parser.error("argument --refresh-snapshot: not allowed with --once or --json")
     if args.verify_refresh_health:
         conflicts = [
             flag
             for flag, enabled in (
                 ("--once", args.once),
                 ("--json", args.json),
-                ("--write-snapshot", args.write_snapshot),
                 ("--refresh-snapshot", args.refresh_snapshot),
             )
             if enabled
@@ -267,7 +423,6 @@ def parse_args() -> argparse.Namespace:
             for flag, enabled in (
                 ("--once", args.once),
                 ("--json", args.json),
-                ("--write-snapshot", args.write_snapshot),
                 ("--refresh-snapshot", args.refresh_snapshot),
                 ("--verify-refresh-health", args.verify_refresh_health),
             )
@@ -353,11 +508,17 @@ def collect_snapshots(
 
     executor = ThreadPoolExecutor(max_workers=max(1, len(workers)))
     try:
+
+        def fetch_one(name: str, provider: object) -> ProviderSnapshot:
+            if isinstance(provider, _CanonicalClaudeCooldown):
+                return provider.fetch()
+            return fetch_provider_snapshot(name, provider, debug)
+
         future_map = {}
         for name, provider in workers:
             if on_start is not None:
                 on_start(name)
-            future_map[executor.submit(fetch_provider_snapshot, name, provider, debug)] = name
+            future_map[executor.submit(fetch_one, name, provider)] = name
 
         def consume(future: object) -> None:
             """Consume one completed future without exposing provider errors."""
@@ -668,7 +829,21 @@ def _refresh_snapshot_once(
         # This explicit mode is the only command path allowed to retain the
         # credential-aware provider/session behavior.
         set_headless(False)
+        prior_payload = read_prior_snapshot(SNAPSHOT_V2_PATH)
         providers, cleanup = initialize_providers(cwd, enabled_providers)
+        # launchd owns the producer cadence.  Claude additionally gets a
+        # provider-specific backoff derived from the canonical snapshot, so a
+        # 120s tick never replays a just-rate-limited OAuth request.  The
+        # synthetic result is still fed through the normal snapshot builder,
+        # which preserves sanitized windows and keeps ok=false for routing.
+        probe_time = datetime.now().astimezone()
+        if not _claude_probe_is_due(prior_payload, probe_time):
+            claude_entry = _canonical_entry(prior_payload, "Claude")
+            claude_data = claude_entry.get("data") if isinstance(claude_entry, Mapping) else {}
+            if not isinstance(claude_data, Mapping):
+                claude_data = {}
+            providers = [(name, provider) for name, provider in providers if name != "Claude"]
+            providers.append(("Claude", _CanonicalClaudeCooldown(dict(claude_data))))
 
         def provider_complete(snapshot: ProviderSnapshot) -> None:
             # Provider names come from the fixed registry. Do not echo arbitrary
@@ -1138,15 +1313,37 @@ def main() -> int:
     cwd = os.getcwd()
     if getattr(args, "refresh_snapshot", False):
         return _refresh_snapshot_once(cwd, enabled_providers, args.debug)
-    if getattr(args, "write_snapshot", False) or getattr(args, "json", False):
-        # Engage strictly read-only mode BEFORE constructing providers, so their
-        # constructors never spawn a browser, refresh a token, or write a cache
-        # (INV-2: the headless path has zero side effects). --json is a machine
-        # surface (cron/scripts), so it earns the same read-only guarantee as
-        # --write-snapshot: an uncached provider reports "auth required" instead
-        # of triggering interactive recovery.
+
+    # Every user-facing surface reads the same launchd-owned v2 snapshot.
+    # Provider initialization is intentionally absent here: only the explicit
+    # single-flight producer above may perform authenticated probes.
+    if getattr(args, "json", False):
         set_headless(True)
-    providers, cleanup = initialize_providers(cwd, enabled_providers)
+        canonical = _read_canonical_snapshots()
+        if canonical is None:
+            sys.stdout.write(render_json([], datetime.now().astimezone()) + "\n")
+        else:
+            snapshots, updated_at = canonical
+            sys.stdout.write(render_json(snapshots, updated_at) + "\n")
+        sys.stdout.flush()
+        return 0
+    if getattr(args, "once", False):
+        canonical = _canonical_or_refresh(cwd, enabled_providers, args.debug)
+        if canonical is None:
+            snapshots, updated_at = [], datetime.now().astimezone()
+        else:
+            snapshots, updated_at = canonical
+        console = Console(theme=THEME)
+        _check_warnings(snapshots, set(), updated_at)
+        console.print(
+            build_dashboard(snapshots, updated_at, 0, fix_actions=_build_fix_actions(snapshots))
+        )
+        return 0
+
+    # Normal interactive mode has no provider objects at all.  Keep these
+    # empty for the defensive cleanup below; only --refresh-snapshot initializes
+    # authenticated providers.
+    cleanup: list[object] = []
     notified_providers: set[str] = set()
     # `_check_warnings` shells out to `osascript` per newly warning provider,
     # each a blocking call with a 5s timeout. On the render thread that is a
@@ -1155,175 +1352,58 @@ def main() -> int:
     # notified once osascript accepted it" retry rule still holds.
     notify_executor = ThreadPoolExecutor(max_workers=1)
 
-    def _persist_snapshot(
-        snaps: list[ProviderSnapshot],
-        when: datetime,
-        *,
-        on_status: Callable[[str], None] | None = None,
-    ) -> None:
-        """Persist a router-facing snapshot without ever crashing the dashboard.
-
-        Args:
-            snaps: The freshly collected provider snapshots.
-            when: The instant the snapshot was captured.
-            on_status: Optional progress channel forwarded to the writers, so a
-                caller holding the screen can repaint between steps instead of
-                leaving a frozen frame up. INV-8 requires the unattended
-                refresh to report progress through persistence waits; the
-                dashboard owes the watching user the same.
-        """
-        v1_ok, v2_ok, history_ok = _write_snapshot_versions(
-            snaps, when, journal_history=True, on_status=on_status
-        )
-        if not (v1_ok and v2_ok and history_ok):
-            log.warning(
-                "snapshot persist partially failed: v1=%s v2=%s history=%s",
-                v1_ok,
-                v2_ok,
-                history_ok,
-            )
-
-    def refresh(previous: list[ProviderSnapshot]) -> list[ProviderSnapshot]:
-        fresh: list[ProviderSnapshot] = []
-        workers = [(name, p) for name, p in providers if hasattr(p, "fetch")]
-        executor = ThreadPoolExecutor(max_workers=len(workers) or 1)
-        try:
-            future_map = {
-                executor.submit(fetch_provider_snapshot, name, provider, args.debug): name
-                for name, provider in workers
-            }
-            for future in future_map:
-                fresh.append(future.result())
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-        static_names = {snap.name for snap in fresh}
-        for snap in previous:
-            if snap.name not in static_names and not snap.ok:
-                fresh.append(snap)
-        refresh_time = datetime.now().astimezone()
-        try:
-            prior_auth_failures = recent_auth_failure_count(
-                "Antigravity",
-                as_of=refresh_time,
-                window_seconds=600,
-                history_dir=Path(SNAPSHOT_V2_PATH).resolve().parent / "history",
-            )
-        except (OSError, TypeError, ValueError):
-            prior_auth_failures = 0
-        return _merge_with_previous(
-            previous,
-            fresh,
-            prior_payload=read_prior_snapshot(SNAPSHOT_V2_PATH),
-            prior_auth_failures=prior_auth_failures,
-            now=refresh_time,
-        )
-
     console = Console(theme=THEME)
 
     try:
-        if getattr(args, "write_snapshot", False):
-            # Headless snapshot: read-only probe, persist, exit. No warning
-            # checks (no notifications). Providers are already headless; the
-            # outer `finally` closes them.
-            snapshots = collect_snapshots(providers, args.debug)
-            # Before the write, so a probe failure is reported even when the
-            # persist step then fails and returns 1. stderr only: stdout must
-            # stay empty on this path, and INV-2 governs *credential* side
-            # effects (subprocess, notification, cred file) -- none of which a
-            # --debug-gated diagnostic write is.
-            _emit_debug_details(snapshots, args.debug)
-            v1_ok, v2_ok, history_ok = _write_snapshot_versions(
-                snapshots, datetime.now(), journal_history=True
-            )
-            if v1_ok and v2_ok and history_ok:
-                log.info("wrote headless snapshots for %d providers", len(snapshots))
-                return 0
-            log.warning(
-                "headless snapshot write partially failed: v1=%s v2=%s history=%s",
-                v1_ok,
-                v2_ok,
-                history_ok,
-            )
-            return 1
-
-        if args.json:
-            # Read-only/machine-safe (headless engaged above): no warning
-            # notifications, matching --write-snapshot.
-            updated_at = datetime.now()
-            snapshots = collect_snapshots(providers, args.debug)
-            sys.stdout.write(render_json(snapshots, updated_at) + "\n")
-            sys.stdout.flush()
-            _emit_debug_details(snapshots, args.debug)
-            return 0
-
-        # --once: block on initial fetch, print dashboard, exit (no alt-screen)
-        if args.once:
-            snapshots = collect_snapshots(providers, args.debug)
-            updated_at = datetime.now()
-            _check_warnings(snapshots, notified_providers, updated_at)
-            fix_actions = _build_fix_actions(snapshots)
-            console.print(build_dashboard(snapshots, updated_at, 0, fix_actions=fix_actions))
-            # After the dashboard, so the detail reads as a footnote to the
-            # cards above it rather than scrolling off ahead of them. Flush
-            # stdout first: without it the two streams interleave by buffer
-            # timing and the debug lines can surface above the table.
-            sys.stdout.flush()
-            _emit_debug_details(snapshots, args.debug)
-            return 0
-
-        # Live interactive mode
+        # Live interactive mode: hydrate and watch the canonical snapshot.
         with _cbreak_mode():
             with Live(
                 console=console,
                 screen=True,
                 auto_refresh=False,
             ) as live:
-                # Loading phase
-                executor = ThreadPoolExecutor(max_workers=1)
+                started = time.monotonic()
+                load_executor = ThreadPoolExecutor(max_workers=1)
+                load_future = load_executor.submit(
+                    _canonical_or_refresh, cwd, enabled_providers, args.debug
+                )
                 try:
-                    future = executor.submit(collect_snapshots, providers, args.debug)
-                    started = time.monotonic()
-                    while not future.done():
+                    while not load_future.done():
                         live.update(
                             build_loading_screen(
-                                "Getting initial usage from Claude, Codex, Antigravity, Copilot, Cursor, Vibe, and OpenCode Go…",
+                                "Waiting for canonical usage snapshot…",
                                 datetime.now(),
                                 time.monotonic() - started,
                             )
                         )
                         live.refresh()
                         time.sleep(0.12)
-                    current = future.result()
-
-                    def loading_status(message: str) -> None:
-                        """Keep the startup timer live while the writers run."""
-                        live.update(
-                            build_loading_screen(
-                                f"Saving snapshot… {message}",
-                                datetime.now(),
-                                time.monotonic() - started,
-                            )
-                        )
-                        live.refresh()
-
-                    notify_executor.submit(
-                        _check_warnings, current, notified_providers, datetime.now()
-                    )
-                    _persist_snapshot(current, datetime.now(), on_status=loading_status)
+                    canonical = load_future.result()
                 finally:
-                    executor.shutdown(wait=False, cancel_futures=True)
+                    load_executor.shutdown(wait=True, cancel_futures=True)
+                if canonical is None:
+                    current, updated_at = [], datetime.now().astimezone()
+                else:
+                    current, updated_at = canonical
+                snapshot_signature = _snapshot_signature()
 
                 # Main refresh loop
                 quit_requested = False
                 while not quit_requested:
-                    updated_at = datetime.now()
-
                     # Countdown phase with deadline-based drift correction
                     deadline = time.monotonic() + args.interval
                     remaining = args.interval
                     refresh_now = False
                     fix_actions = _build_fix_actions(current)
                     while remaining > 0 and not quit_requested:
+                        watched = _read_canonical_snapshots()
+                        new_signature = _snapshot_signature()
+                        if watched is not None and new_signature != snapshot_signature:
+                            current, updated_at = watched
+                            snapshot_signature = new_signature
+                            notify_executor.submit(
+                                _check_warnings, current, notified_providers, datetime.now()
+                            )
                         live.update(
                             build_dashboard(
                                 current,
@@ -1354,14 +1434,21 @@ def main() -> int:
 
                     if quit_requested:
                         break
-                    if not refresh_now and remaining > 0:
+                    # Launchd owns the normal cadence.  The TUI only submits
+                    # the producer for an explicit ``r``; when the countdown
+                    # expires, restart the watch/countdown and wait for the
+                    # canonical file to advance.
+                    if not refresh_now:
                         continue
 
-                    # Refresh phase: show updating spinner while fetching
+                    # Refresh phase: ask the existing single-flight producer;
+                    # this thread never initializes providers or probes APIs.
                     refresh_executor = ThreadPoolExecutor(max_workers=1)
                     try:
                         refresh_started = time.monotonic()
-                        refresh_future = refresh_executor.submit(refresh, current)
+                        refresh_future = refresh_executor.submit(
+                            _refresh_snapshot_once, cwd, enabled_providers, args.debug
+                        )
                         while not refresh_future.done():
                             live.update(
                                 build_dashboard(
@@ -1384,26 +1471,14 @@ def main() -> int:
                             else:
                                 time.sleep(0.12)
                         if not quit_requested:
-                            current = refresh_future.result()
-
-                            def refresh_status(message: str) -> None:
-                                """Hold the updating spinner across the writers."""
-                                live.update(
-                                    build_dashboard(
-                                        current,
-                                        datetime.now(),
-                                        0,
-                                        updating=True,
-                                        update_elapsed=time.monotonic() - refresh_started,
-                                        fix_actions=fix_actions,
-                                    )
+                            refresh_future.result()
+                            watched = _read_canonical_snapshots()
+                            if watched is not None:
+                                current, updated_at = watched
+                                snapshot_signature = _snapshot_signature()
+                                notify_executor.submit(
+                                    _check_warnings, current, notified_providers, datetime.now()
                                 )
-                                live.refresh()
-
-                            notify_executor.submit(
-                                _check_warnings, current, notified_providers, datetime.now()
-                            )
-                            _persist_snapshot(current, updated_at, on_status=refresh_status)
                     finally:
                         refresh_executor.shutdown(wait=False, cancel_futures=True)
 

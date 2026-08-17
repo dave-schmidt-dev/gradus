@@ -47,6 +47,11 @@ MAC_APP_SNAPSHOT_V2_PATH = (
 
 # Stop serving cached data after this many seconds (moved from __main__.py).
 STALE_THRESHOLD_SECONDS = 300  # 5 minutes
+# Rate limits are a provider-side backoff signal rather than evidence that the
+# last known-good windows disappeared.  Keep those bounded retained windows
+# visible long enough for the producer's Claude cooldown to elapse, while the
+# persisted entry remains ``ok: false`` so routers fail closed.
+RATE_LIMIT_RETENTION_SECONDS = 7200
 AUTH_GRACE_WINDOW_SECONDS = STALE_THRESHOLD_SECONDS
 AUTH_ESCALATION_WINDOW_SECONDS = 600
 ANTIGRAVITY_AUTH_RETRY_MESSAGE = "Antigravity refresh retrying; values may be stale"
@@ -274,6 +279,8 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
     message = snapshot.error.lower()
     transient_markers = (
         "rate limited",
+        "rate-limit",
+        "probe cooldown",
         "failed to load usage data",
         "could not load usage data",
         "empty claude output",
@@ -294,8 +301,8 @@ def _is_transient_probe_error(snapshot: ProviderSnapshot) -> bool:
 
 
 # The exact message a provider emits when it DELIBERATELY declines to probe
-# because gradus is running headless (INV-2: the headless --write-snapshot /
-# --json path must have zero side effects, so a Keychain-only provider like
+# because gradus is running headless (INV-2: the headless --json path must
+# have zero side effects, so a Keychain-only provider like
 # Antigravity refuses to read its credential rather than risk a GUI unlock
 # prompt or an `agy` refresh subprocess). Produced ONLY under ``_is_headless()``
 # — see ``providers/_base._auth_required_message`` and
@@ -1071,18 +1078,37 @@ def _sanitize_prior_entry(
     ``updated_at``) so the very first run after deploy doesn't drop
     carry-forward retention outright.
     """
-    required_entry_keys = {"name", "ok", "error", "windows", "data", "observed_at"}
-    legacy_entry_keys = required_entry_keys - {"observed_at"}
+    required_entry_keys = {
+        "name",
+        "ok",
+        "error",
+        "windows",
+        "data",
+        "observed_at",
+        "probe_attempted_at",
+    }
+    legacy_entry_keys = required_entry_keys - {"probe_attempted_at"}
+    older_entry_keys = required_entry_keys - {"observed_at", "probe_attempted_at"}
     if not isinstance(entry, dict):
         return None
     entry_keys = set(entry)
     if entry_keys == required_entry_keys:
         observed_at = entry.get("observed_at")
+        probe_attempted_at = entry.get("probe_attempted_at")
     elif entry_keys == legacy_entry_keys:
+        observed_at = entry.get("observed_at")
+        probe_attempted_at = entry.get("observed_at") or fallback_observed_at
+    elif entry_keys == older_entry_keys:
         observed_at = fallback_observed_at
+        probe_attempted_at = fallback_observed_at
     else:
         return None
-    if not isinstance(observed_at, str) or _parse_aware_iso_timestamp(observed_at) is None:
+    if (
+        not isinstance(observed_at, str)
+        or _parse_aware_iso_timestamp(observed_at) is None
+        or not isinstance(probe_attempted_at, str)
+        or _parse_aware_iso_timestamp(probe_attempted_at) is None
+    ):
         return None
     is_healthy_entry = entry["ok"] is True and entry["error"] is None
     is_carried_failure = (
@@ -1150,6 +1176,7 @@ def _sanitize_prior_entry(
         "windows": sanitized_windows,
         "data": {key: _json_safe_value(value) for key, value in data.items()},
         "observed_at": observed_at,
+        "probe_attempted_at": probe_attempted_at,
     }
 
 
@@ -1164,7 +1191,12 @@ def _parse_aware_iso_timestamp(value: object) -> datetime | None:
         return None
 
 
-def _is_fresh_retained_entry(entry: Mapping[str, object], publish_time: datetime) -> bool:
+def _is_fresh_retained_entry(
+    entry: Mapping[str, object],
+    publish_time: datetime,
+    *,
+    max_age_seconds: float = STALE_THRESHOLD_SECONDS,
+) -> bool:
     """Return whether a retained entry is fresh at the new publish time."""
     observed_at = _parse_aware_iso_timestamp(entry.get("observed_at"))
     if observed_at is None or publish_time.tzinfo is None or publish_time.utcoffset() is None:
@@ -1173,7 +1205,20 @@ def _is_fresh_retained_entry(entry: Mapping[str, object], publish_time: datetime
         age = (publish_time - observed_at).total_seconds()
     except (TypeError, ValueError, OverflowError):
         return False
-    return 0 <= age < STALE_THRESHOLD_SECONDS
+    return 0 <= age < max_age_seconds
+
+
+def _retention_seconds(name: str, error: str | None) -> float:
+    """Return the bounded retention window for a failed provider entry."""
+    lower = error.lower() if isinstance(error, str) else ""
+    if name == "Claude" and (
+        "rate limited" in lower
+        or "rate-limit" in lower
+        or "http 429" in lower
+        or "probe cooldown" in lower
+    ):
+        return RATE_LIMIT_RETENTION_SECONDS
+    return STALE_THRESHOLD_SECONDS
 
 
 def _failure_with_retained_values(retained_entry: Mapping[str, object], error: str | None) -> dict:
@@ -1265,6 +1310,7 @@ def _build_snapshot_payload(
                 "windows": [],
                 "data": {},
                 "observed_at": None,
+                "probe_attempted_at": None,
             }
         if snap.ok:
             return {
@@ -1274,6 +1320,7 @@ def _build_snapshot_payload(
                 "windows": _build_windows(snap, updated_at, window_specs),
                 "data": project_fn(snap),
                 "observed_at": updated_at_iso,
+                "probe_attempted_at": updated_at_iso,
             }
         # ok is False: default to a fresh failure entry, but carry a recent
         # healthy prior entry's values for transient errors (CR-6 anti-flap)
@@ -1286,6 +1333,7 @@ def _build_snapshot_payload(
             "windows": [],
             "data": project_fn(snap),
             "observed_at": None,
+            "probe_attempted_at": updated_at_iso,
         }
         auth_grace = is_antigravity_auth_failure(snap) and prior_auth_failures == 0
         if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap) or auth_grace:
@@ -1300,12 +1348,20 @@ def _build_snapshot_payload(
                 allow_carried_failure=not auth_grace,
             )
             if retained_entry is not None and _is_fresh_retained_entry(
-                retained_entry, updated_at_aware
+                retained_entry,
+                updated_at_aware,
+                max_age_seconds=_retention_seconds(entry_name, entry["error"]),
             ):
                 entry = _failure_with_retained_values(
                     retained_entry,
                     ANTIGRAVITY_AUTH_RETRY_MESSAGE if auth_grace else entry["error"],
                 )
+                # The retained values keep their original observation time,
+                # but this field records the real failed probe that produced
+                # the carried failure.  A subsequent cooldown projection
+                # preserves it unchanged.
+                if getattr(snap, "source", None) != "snapshot":
+                    entry["probe_attempted_at"] = updated_at_iso
             else:
                 auth_grace = False
         if auth_grace and entry["error"] != ANTIGRAVITY_AUTH_RETRY_MESSAGE:
@@ -1313,6 +1369,29 @@ def _build_snapshot_payload(
             # state; only the user-facing wording is neutralized during grace.
             entry["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
         return entry
+
+    def _deferred_entry(name: str, snap: ProviderSnapshot) -> dict | None:
+        """Carry one producer-local canonical observation without re-probing."""
+        if getattr(snap, "source", None) != "snapshot":
+            return None
+        prior_entry = prior_by_name.get(name)
+        retained_entry = _sanitize_prior_entry(
+            name,
+            prior_entry,
+            allowed_window_ids=frozenset(
+                spec.window_id for spec in specs_by_provider.get(name, ())
+            ),
+            fallback_observed_at=fallback_observed_at,
+            allow_carried_failure=True,
+        )
+        if retained_entry is None or not isinstance(prior_entry, Mapping):
+            return None
+        if prior_entry.get("ok") is True and prior_entry.get("error") is None:
+            return retained_entry
+        prior_error = prior_entry.get("error")
+        if prior_entry.get("ok") is False and isinstance(prior_error, str):
+            return _failure_with_retained_values(retained_entry, prior_error)
+        return None
 
     for name in CANONICAL_PROVIDERS():
         snap = by_name.get(name)
@@ -1325,8 +1404,15 @@ def _build_snapshot_payload(
                     "windows": [],
                     "data": {},
                     "observed_at": None,
+                    "probe_attempted_at": None,
                 }
             )
+            if schema_version == SCHEMA_VERSION_V2 and name in _SYNTHETIC_ENTRY_SPECS:
+                providers.append(_synthetic_entry(snap, *_SYNTHETIC_ENTRY_SPECS[name]))
+            continue
+        deferred_entry = _deferred_entry(name, snap)
+        if deferred_entry is not None:
+            providers.append(deferred_entry)
             if schema_version == SCHEMA_VERSION_V2 and name in _SYNTHETIC_ENTRY_SPECS:
                 providers.append(_synthetic_entry(snap, *_SYNTHETIC_ENTRY_SPECS[name]))
             continue
@@ -1339,6 +1425,7 @@ def _build_snapshot_payload(
                     "windows": _build_windows(snap, updated_at, specs_by_provider),
                     "data": project_data(snap),
                     "observed_at": updated_at_iso,
+                    "probe_attempted_at": updated_at_iso,
                 }
             )
             if schema_version == SCHEMA_VERSION_V2 and name in _SYNTHETIC_ENTRY_SPECS:
@@ -1358,6 +1445,7 @@ def _build_snapshot_payload(
             "windows": [],
             "data": project_data(snap),
             "observed_at": None,
+            "probe_attempted_at": updated_at_iso,
         }
         auth_grace = is_antigravity_auth_failure(snap) and prior_auth_failures == 0
         if _is_transient_probe_error(snap) or _is_headless_deferred_probe(snap) or auth_grace:
@@ -1372,12 +1460,16 @@ def _build_snapshot_payload(
                 allow_carried_failure=not auth_grace,
             )
             if retained_entry is not None and _is_fresh_retained_entry(
-                retained_entry, updated_at_aware
+                retained_entry,
+                updated_at_aware,
+                max_age_seconds=_retention_seconds(name, entry["error"]),
             ):
                 entry = _failure_with_retained_values(
                     retained_entry,
                     ANTIGRAVITY_AUTH_RETRY_MESSAGE if auth_grace else entry["error"],
                 )
+                if getattr(snap, "source", None) != "snapshot":
+                    entry["probe_attempted_at"] = updated_at_iso
             else:
                 auth_grace = False
         if auth_grace and entry["error"] != ANTIGRAVITY_AUTH_RETRY_MESSAGE:

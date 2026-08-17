@@ -1770,6 +1770,20 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("offline", output)
         self.assertIn("3m", output)
 
+    def test_rate_limited_claude_shows_cached_values_not_credentials_error(self) -> None:
+        snap = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="snapshot (cached)",
+            data={"session_percent_left": 98.0, "primary_reset": "Resets in 1h"},
+            error="HTTP 429",
+            cached_since=datetime(2026, 3, 14, 8, 8, 0),
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=70)
+        self.assertIn("rate limited; cached 14m", output)
+        self.assertIn("98%", output)
+        self.assertNotIn("auth error", output)
+
     def test_stale_panel_shows_yellow_message(self) -> None:
         snap = ProviderSnapshot(
             name="Claude",
