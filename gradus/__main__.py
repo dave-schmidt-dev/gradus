@@ -61,7 +61,7 @@ log = logging.getLogger(__name__)
 AUTH_ACTIONS: dict[str, tuple[str, str]] = {
     # Claude usage reads the bridge-exported Safari cookie cache; `claude login`
     # authenticates the CLI but cannot refresh the credentials Gradus consumes.
-    "Claude": ("browser", "https://claude.ai"),
+    "Claude": ("safari", "https://claude.ai"),
     # `codex login` is destructive: it wipes ~/.codex/auth.json at the start of the OAuth flow,
     # so an abandoned login (e.g. user dismisses the browser) leaves them fully logged out — even
     # if the previous token was healthy. Guard the [1] shortcut by surfacing the current auth.json
@@ -119,7 +119,7 @@ _FIX_COOLDOWN = 5.0  # seconds
 
 
 def _launch_fix(kind: str, target: str) -> None:
-    """Open an iTerm2 window (CLI) or browser (web) to fix an auth error."""
+    """Open iTerm2, Safari, or the default browser to fix an auth error."""
     now = time.monotonic()
     key = f"{kind}:{target}"
     if now - _last_fix_launch.get(key, 0) < _FIX_COOLDOWN:
@@ -132,6 +132,12 @@ def _launch_fix(kind: str, target: str) -> None:
                 "-e",
                 f'tell application "iTerm2" to create window with default profile command "{target}"',
             ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    elif kind == "safari":
+        subprocess.Popen(
+            ["open", "-a", "Safari", target],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

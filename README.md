@@ -69,7 +69,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 
 - Python 3.10+
 - Codex: `~/.codex/auth.json` present (created by `codex login`). If the Codex card shows a persistent "session expired" error and the `[1]` re-auth shortcut doesn't unstick it, the server-side session has been revoked (the `codex login` refresh path re-mints a token bound to the same revoked session). Run `codex logout && codex login` for a clean OAuth flow. Codex (Spark) reads from the same authenticated Codex usage response — no separate login or credential is needed.
-- Claude: signed in at `claude.ai`; the credential bridge exports Safari's session to `.cache/claude_cookies.json`
+- Claude: Safari signed in at `claude.ai`; the credential bridge exports its session to `.cache/claude_cookies.json`
 - Antigravity (`agy`): signed in via `agy` (stores its OAuth token in the macOS Keychain). The monitor reads it read-only; the first read may prompt for Keychain access — choose "Always Allow" so background refreshes stay silent. The token expires ~hourly and only `agy` refreshes it, so when the token lapses the monitor **nudges `agy` to refresh its own token** by running `agy models` (a non-interactive, quota-free authenticated command) and re-reads the Keychain — the card self-heals without manual action. If that nudge can't recover (e.g. `agy` isn't installed on `PATH`, or `agy`'s own refresh token is dead), the card falls back to an auth error; run `agy` to re-authenticate. The nudge runs only in the interactive TUI, never on the read-only `--write-snapshot`/headless path (INV-2).
 - Copilot: `gh` CLI authenticated (`gh auth login` or OAuth token present)
 - Cursor: app or browser session authenticated
@@ -321,7 +321,7 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 ## Notes
 
 - Antigravity probing reads `agy`'s Keychain token and POSTs an empty body to `retrieveUserQuotaSummary` (the endpoint rejects a non-empty body with HTTP 400 and the default `Python-urllib` User-Agent with HTTP 403; the provider sets an explicit User-Agent). On an expired token it first nudges `agy` to refresh its own token via `agy models`, then re-reads the Keychain; only if that fails does it surface the "run `agy`" re-authenticate message. The monitor never handles `agy`'s client secret or refresh token — `agy` refreshes its own token via its own OAuth client — so the read-only-toward-`agy`'s-stored-credentials guarantee holds.
-- Claude probing reads the bridge-exported Safari session in `.cache/claude_cookies.json`; the re-auth action opens `claude.ai` because `claude login` refreshes the CLI session, not the credentials Gradus consumes.
+- Claude probing reads the bridge-exported Safari session in `.cache/claude_cookies.json`; the re-auth action opens Safari at `claude.ai` because `claude login` refreshes the CLI session, not the credentials Gradus consumes.
 - During each timed refresh, the header switches from `refresh XXs` to a single in-place `updating …` state until all providers complete, then resumes the countdown.
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
 - In live mode, press `q` to quit or `r` to trigger an immediate refresh.

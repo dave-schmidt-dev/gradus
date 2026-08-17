@@ -500,9 +500,9 @@ class IsAuthErrorTests(unittest.TestCase):
         expected = {"Claude", "Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"}
         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
 
-    def test_claude_action_opens_browser_for_bridge_managed_credentials(self) -> None:
+    def test_claude_action_opens_safari_for_bridge_managed_credentials(self) -> None:
         # Claude's provider consumes Safari-exported cookies, not the Claude CLI session.
-        self.assertEqual(AUTH_ACTIONS["Claude"], ("browser", "https://claude.ai"))
+        self.assertEqual(AUTH_ACTIONS["Claude"], ("safari", "https://claude.ai"))
 
     def test_codex_action_guards_against_blind_clobber(self) -> None:
         # Regression: 2026-06-13. The bare `codex login` command wipes ~/.codex/auth.json at the
@@ -605,7 +605,7 @@ class BuildFixActionsTests(unittest.TestCase):
         actions = _build_fix_actions(snaps)
         # Alphabetical: "Antigravity" now sorts ahead of "Claude".
         self.assertEqual(actions["1"], ("Antigravity", "cli", "agy"))
-        self.assertEqual(actions["2"], ("Claude", "browser", "https://claude.ai"))
+        self.assertEqual(actions["2"], ("Claude", "safari", "https://claude.ai"))
         self.assertEqual(len(actions), 2)
 
     def test_no_auth_errors_returns_empty(self) -> None:
@@ -654,6 +654,16 @@ class LaunchFixTests(unittest.TestCase):
         self.assertNotIn("activate", args[2])
         self.assertEqual(args[2].count("create window"), 1)
         # stdout/stderr suppressed
+        kwargs = mock_popen.call_args[1]
+        self.assertEqual(kwargs.get("stdout"), subprocess.DEVNULL)
+        self.assertEqual(kwargs.get("stderr"), subprocess.DEVNULL)
+
+    def test_safari_action_opens_explicit_safari(self) -> None:
+        with patch("gradus.__main__.subprocess.Popen") as mock_popen:
+            _launch_fix("safari", "https://claude.ai")
+        mock_popen.assert_called_once()
+        args = mock_popen.call_args[0][0]
+        self.assertEqual(args, ["open", "-a", "Safari", "https://claude.ai"])
         kwargs = mock_popen.call_args[1]
         self.assertEqual(kwargs.get("stdout"), subprocess.DEVNULL)
         self.assertEqual(kwargs.get("stderr"), subprocess.DEVNULL)
