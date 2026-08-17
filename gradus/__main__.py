@@ -117,7 +117,7 @@ _FIX_COOLDOWN = 5.0  # seconds
 
 
 def _launch_fix(kind: str, target: str) -> None:
-    """Open a Terminal window (CLI) or browser (web) to fix an auth error."""
+    """Open an iTerm2 window (CLI) or browser (web) to fix an auth error."""
     now = time.monotonic()
     key = f"{kind}:{target}"
     if now - _last_fix_launch.get(key, 0) < _FIX_COOLDOWN:
@@ -128,9 +128,7 @@ def _launch_fix(kind: str, target: str) -> None:
             [
                 "osascript",
                 "-e",
-                'tell application "Terminal" to activate',
-                "-e",
-                f'tell application "Terminal" to do script "{target}"',
+                f'tell application "iTerm2" to create window with default profile command "{target}"',
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

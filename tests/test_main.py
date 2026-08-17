@@ -634,15 +634,21 @@ class BuildFixActionsTests(unittest.TestCase):
 
 
 class LaunchFixTests(unittest.TestCase):
-    def test_cli_launches_osascript_with_activate(self) -> None:
+    def test_cli_launches_single_iterm_window(self) -> None:
         with patch("gradus.__main__.subprocess.Popen") as mock_popen:
             _launch_fix("cli", "gh auth login")
         mock_popen.assert_called_once()
         args = mock_popen.call_args[0][0]
         self.assertEqual(args[0], "osascript")
-        # First -e activates Terminal, second -e runs the command
-        self.assertIn("activate", args[2])
-        self.assertIn("gh auth login", args[4])
+        self.assertEqual(args[1], "-e")
+        # One iTerm2 command creates the window and runs the auth command.
+        # A separate activate statement can create a startup window, causing
+        # two windows on a cold launch.
+        self.assertIn('tell application "iTerm2"', args[2])
+        self.assertIn("create window with default profile command", args[2])
+        self.assertIn("gh auth login", args[2])
+        self.assertNotIn("activate", args[2])
+        self.assertEqual(args[2].count("create window"), 1)
         # stdout/stderr suppressed
         kwargs = mock_popen.call_args[1]
         self.assertEqual(kwargs.get("stdout"), subprocess.DEVNULL)
