@@ -2124,9 +2124,34 @@ class ClaudeHttpProviderTests(unittest.TestCase):
 
     def test_missing_cookies_raises_probe_failure(self) -> None:
         provider = ClaudeHttpProvider()
-        with self.assertRaises(ProbeFailure) as ctx:
+        with (
+            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
+            self.assertRaises(ProbeFailure) as ctx,
+        ):
             provider.fetch()
         self.assertIn("claude.ai", str(ctx.exception).lower())
+
+    def test_missing_cookies_use_authenticated_cli_usage(self) -> None:
+        provider = ClaudeHttpProvider()
+        cli_status = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
+        assert cli_status is not None
+        with patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=cli_status):
+            status = provider.fetch()
+        self.assertEqual(status.session_percent_left, 86.0)
+        self.assertEqual(status.weekly_percent_left, 19.0)
+
+    def test_headless_missing_cookies_do_not_spawn_cli(self) -> None:
+        provider = ClaudeHttpProvider()
+        providers.set_headless(True)
+        try:
+            with (
+                patch.object(ClaudeHttpProvider, "_fetch_cli_usage") as cli_usage,
+                self.assertRaises(ProbeFailure),
+            ):
+                provider.fetch()
+            cli_usage.assert_not_called()
+        finally:
+            providers.set_headless(False)
 
     def test_cli_usage_parser_converts_used_to_remaining(self) -> None:
         status = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
@@ -2967,7 +2992,8 @@ class LazyAcquireContractTests(unittest.TestCase):
         path stopped producing a message containing an auth keyword.
         """
         provider = ClaudeHttpProvider()
-        snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
+        with patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None):
+            snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
 
         self.assertFalse(snapshot.ok)
         self.assertIsNotNone(snapshot.error)

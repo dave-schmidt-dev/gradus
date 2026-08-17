@@ -23,6 +23,7 @@ from ._base import (
     _auth_required_message,
     _format_reset_time,
     _harden_existing,
+    _is_headless,
     _remove_private,
     register,
 )
@@ -358,6 +359,17 @@ class ClaudeHttpProvider:
             return
         process.wait(timeout=1.0)
 
+    @classmethod
+    def _fetch_cli_usage_safely(cls) -> ClaudeStatus | None:
+        """Return local CLI usage without exposing fallback diagnostics."""
+        if _is_headless():
+            return None
+        try:
+            return cls._fetch_cli_usage()
+        except (OSError, RuntimeError, ValueError) as exc:
+            cls._log.warning("Claude CLI usage fallback unavailable: %s", type(exc).__name__)
+            return None
+
     @property
     def _has_cookies(self) -> bool:
         return bool(self._session_key)
@@ -365,6 +377,9 @@ class ClaudeHttpProvider:
     def fetch(self) -> ClaudeStatus:
         self._acquire()
         if not self._session_key:
+            cli_status = self._fetch_cli_usage_safely()
+            if cli_status is not None:
+                return cli_status
             raise ProbeFailure(
                 _auth_required_message("Claude session expired: sign in at claude.ai"), ""
             )
@@ -395,13 +410,7 @@ class ClaudeHttpProvider:
         except ProbeFailure as exc:
             msg = str(exc)
             if "HTTP 400" in msg or "HTTP 401" in msg or "HTTP 403" in msg:
-                try:
-                    cli_status = self._fetch_cli_usage()
-                except (OSError, RuntimeError, ValueError) as cli_exc:
-                    self._log.warning(
-                        "Claude CLI usage fallback unavailable: %s", type(cli_exc).__name__
-                    )
-                    cli_status = None
+                cli_status = self._fetch_cli_usage_safely()
                 if cli_status is not None:
                     return cli_status
                 self._session_key = self._cf_clearance = self._org_id = ""
