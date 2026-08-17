@@ -11,6 +11,16 @@ public enum CredentialBridge {
         let host: String
         let name: String
         let value: String
+        let expiresAt: Date?
+        let createdAt: Date?
+
+        init(host: String, name: String, value: String, expiresAt: Date? = nil, createdAt: Date? = nil) {
+            self.host = host
+            self.name = name
+            self.value = value
+            self.expiresAt = expiresAt
+            self.createdAt = createdAt
+        }
     }
 
     public static func refresh(cacheDirectory: URL) throws {
@@ -92,7 +102,7 @@ public enum CredentialBridge {
         var cookies: [Cookie] = []
         for index in 0 ..< cookieCount {
             let cookieOffset = try Int(page.uint32LE(at: 8 + Int(index) * 4))
-            guard cookieOffset + 48 <= page.count else { continue }
+            guard cookieOffset >= 0, cookieOffset < page.count else { continue }
             if let cookie = try readCookie(at: cookieOffset, in: page) {
                 cookies.append(cookie)
             }
@@ -103,15 +113,46 @@ public enum CredentialBridge {
     /// Decodes a single cookie record starting at `cookieOffset` within `page`,
     /// or returns `nil` if any required field is missing, unparseable, or empty.
     private static func readCookie(at cookieOffset: Int, in page: Data) throws -> Cookie? {
-        let cookie = page.subdata(in: cookieOffset ..< page.count)
-        guard let rawDomain = try cookie.cString(at: cookie.uint32LE(at: 16)),
-              let name = try cookie.cString(at: cookie.uint32LE(at: 20)),
-              let value = try cookie.cString(at: cookie.uint32LE(at: 28)),
+        guard cookieOffset + 4 <= page.count else { return nil }
+        let recordSize = try Int(page.uint32LE(at: cookieOffset))
+        guard recordSize >= 56,
+              recordSize <= page.count - cookieOffset
+        else { return nil }
+        let cookie = page.subdata(in: cookieOffset ..< cookieOffset + recordSize)
+        let expiresAt: Date?
+        let createdAt: Date?
+        do {
+            expiresAt = try macAbsoluteDate(in: cookie, at: 40)
+            createdAt = try macAbsoluteDate(in: cookie, at: 48)
+        } catch {
+            return nil
+        }
+        let rawDomain: String?
+        let name: String?
+        let value: String?
+        do {
+            rawDomain = try cookie.cString(at: cookie.uint32LE(at: 16))
+            name = try cookie.cString(at: cookie.uint32LE(at: 20))
+            value = try cookie.cString(at: cookie.uint32LE(at: 28))
+        } catch {
+            return nil
+        }
+        guard let rawDomain,
+              let name,
+              let value,
               let host = normalizedHost(rawDomain),
               !name.isEmpty,
               !value.isEmpty
         else { return nil }
-        return Cookie(host: host, name: name, value: value)
+        return Cookie(host: host, name: name, value: value, expiresAt: expiresAt, createdAt: createdAt)
+    }
+
+    /// Safari stores cookie dates as seconds since the Mac absolute epoch.
+    /// Zero denotes a session cookie; non-finite or negative values are malformed.
+    private static func macAbsoluteDate(in cookie: Data, at offset: Int) throws -> Date? {
+        let seconds = try cookie.doubleLE(at: offset)
+        guard seconds.isFinite, seconds >= 0 else { throw BridgeError.invalidCookieFile }
+        return seconds == 0 ? nil : Date(timeIntervalSinceReferenceDate: seconds)
     }
 
     /// WebKit stores a cookie's domain in the URL field. Current Safari jars
@@ -188,11 +229,35 @@ public enum CredentialBridge {
     }
 
     private static func values(for domain: String, in cookies: [Cookie]) -> [String: String] {
-        var values: [String: String] = [:]
+        let now = Date()
+        var selected: [String: Cookie] = [:]
         for cookie in cookies where cookie.host == domain || cookie.host.hasSuffix("." + domain) {
-            values[cookie.name] = cookie.value
+            if let expiresAt = cookie.expiresAt, expiresAt <= now {
+                continue
+            }
+            guard let existing = selected[cookie.name] else {
+                selected[cookie.name] = cookie
+                continue
+            }
+            if isNewer(cookie, than: existing) {
+                selected[cookie.name] = cookie
+            }
         }
-        return values
+        return selected.mapValues(\.value)
+    }
+
+    private static func isNewer(_ candidate: Cookie, than existing: Cookie) -> Bool {
+        switch (candidate.createdAt, existing.createdAt) {
+        case let (candidate?, existing?) where candidate != existing:
+            candidate > existing
+        case (.some, nil):
+            true
+        case (nil, .some):
+            false
+        default:
+            // Ties must not depend on Safari's record ordering.
+            candidate.value < existing.value
+        }
     }
 
     private static func write(_ payload: [String: String], named filename: String, to directory: URL) throws {
@@ -237,6 +302,14 @@ private extension Data {
     func uint32LE(at offset: Int) throws -> UInt32 {
         guard offset >= 0, offset + 4 <= count else { throw BridgeError.invalidCookieFile }
         return self[offset ..< offset + 4].enumerated().reduce(0) { $0 | (UInt32($1.element) << UInt32($1.offset * 8)) }
+    }
+
+    func doubleLE(at offset: Int) throws -> Double {
+        guard offset >= 0, offset + 8 <= count else { throw BridgeError.invalidCookieFile }
+        let bits = self[offset ..< offset + 8].enumerated().reduce(UInt64(0)) {
+            $0 | (UInt64($1.element) << UInt64($1.offset * 8))
+        }
+        return Double(bitPattern: bits)
     }
 
     func cString(at offset: UInt32) -> String? {

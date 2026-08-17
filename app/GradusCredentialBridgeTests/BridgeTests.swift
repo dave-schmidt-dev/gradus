@@ -100,6 +100,77 @@ final class BridgeTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: cache.appendingPathComponent("claude_cookies.json").path))
     }
 
+    func testRefreshSelectsNewestNonExpiredCookieRegardlessOfRecordOrder() throws {
+        let old = Date(timeIntervalSinceReferenceDate: 100)
+        let newest = Date(timeIntervalSinceReferenceDate: 200)
+        let expires = Date(timeIntervalSinceNow: 3600)
+        for entries in [
+            [
+                CredentialBridge.Cookie(
+                    host: "claude.ai", name: "sessionKey", value: "sk-ant-old", expiresAt: expires, createdAt: old
+                ),
+                CredentialBridge.Cookie(
+                    host: "claude.ai", name: "sessionKey", value: "sk-ant-new", expiresAt: expires, createdAt: newest
+                )
+            ],
+            [
+                CredentialBridge.Cookie(
+                    host: "claude.ai", name: "sessionKey", value: "sk-ant-new", expiresAt: expires, createdAt: newest
+                ),
+                CredentialBridge.Cookie(
+                    host: "claude.ai", name: "sessionKey", value: "sk-ant-old", expiresAt: expires, createdAt: old
+                )
+            ]
+        ] {
+            let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let source = temporary.appendingPathComponent("Cookies.binarycookies")
+            let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+            try binaryCookies(entries).write(to: source)
+
+            try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+
+            let claude = try payload(named: "claude_cookies.json", in: cache)
+            XCTAssertEqual(claude["sessionKey"], "sk-ant-new")
+        }
+    }
+
+    func testRefreshFallsBackWhenNewestCookieIsExpired() throws {
+        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let source = temporary.appendingPathComponent("Cookies.binarycookies")
+        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        try binaryCookies([
+            .init(
+                host: "claude.ai", name: "sessionKey", value: "sk-ant-valid",
+                expiresAt: Date(timeIntervalSinceNow: 3600), createdAt: Date(timeIntervalSinceReferenceDate: 100)
+            ),
+            .init(
+                host: "claude.ai", name: "sessionKey", value: "sk-ant-expired",
+                expiresAt: Date(timeIntervalSinceNow: -1), createdAt: Date(timeIntervalSinceReferenceDate: 200)
+            )
+        ]).write(to: source)
+
+        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+
+        let claude = try payload(named: "claude_cookies.json", in: cache)
+        XCTAssertEqual(claude["sessionKey"], "sk-ant-valid")
+    }
+
+    func testParserSkipsShortRecordsAndMalformedDates() throws {
+        var shortRecord = binaryCookies([.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-short")])
+        shortRecord.replaceSubrange(24 ..< 28, with: littleEndian(UInt32(48)))
+        XCTAssertTrue(try CredentialBridge.parseCookies(shortRecord).isEmpty)
+
+        var malformedDate = binaryCookies([.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-nan")])
+        malformedDate.replaceSubrange(64 ..< 72, with: littleEndian(Double.nan))
+        XCTAssertTrue(try CredentialBridge.parseCookies(malformedDate).isEmpty)
+    }
+
     func testMissingOpenCodeCookieLeavesCacheMissingUntilAUsableCookieReturns() throws {
         let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -130,10 +201,14 @@ final class BridgeTests: XCTestCase {
         for entry in entries {
             let url = encodeFullURL ? "https://" + entry.host + "/" : entry.host
             let strings = [url, entry.name, entry.value].map { Data(($0 + "\0").utf8) }
-            var cookie = Data(repeating: 0, count: 48)
-            cookie.replaceSubrange(16 ..< 20, with: littleEndian(48))
-            cookie.replaceSubrange(20 ..< 24, with: littleEndian(48 + strings[0].count))
-            cookie.replaceSubrange(28 ..< 32, with: littleEndian(48 + strings[0].count + strings[1].count))
+            var cookie = Data(repeating: 0, count: 56)
+            let recordSize = 56 + strings.reduce(0) { $0 + $1.count }
+            cookie.replaceSubrange(0 ..< 4, with: littleEndian(UInt32(recordSize)))
+            cookie.replaceSubrange(16 ..< 20, with: littleEndian(56))
+            cookie.replaceSubrange(20 ..< 24, with: littleEndian(56 + strings[0].count))
+            cookie.replaceSubrange(28 ..< 32, with: littleEndian(56 + strings[0].count + strings[1].count))
+            cookie.replaceSubrange(40 ..< 48, with: littleEndian(entry.expiresAt?.timeIntervalSinceReferenceDate ?? 0))
+            cookie.replaceSubrange(48 ..< 56, with: littleEndian(entry.createdAt?.timeIntervalSinceReferenceDate ?? 0))
             strings.forEach { cookie.append($0) }
             cookies.append(cookie)
         }
@@ -158,6 +233,10 @@ final class BridgeTests: XCTestCase {
 
     private func littleEndian(_ value: UInt32) -> Data {
         withUnsafeBytes(of: value.littleEndian) { Data($0) }
+    }
+
+    private func littleEndian(_ value: Double) -> Data {
+        withUnsafeBytes(of: value.bitPattern.littleEndian) { Data($0) }
     }
 
     private func bigEndian(_ value: Int) -> Data {
