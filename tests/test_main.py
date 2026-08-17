@@ -500,6 +500,10 @@ class IsAuthErrorTests(unittest.TestCase):
         expected = {"Claude", "Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"}
         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
 
+    def test_claude_action_opens_browser_for_bridge_managed_credentials(self) -> None:
+        # Claude's provider consumes Safari-exported cookies, not the Claude CLI session.
+        self.assertEqual(AUTH_ACTIONS["Claude"], ("browser", "https://claude.ai"))
+
     def test_codex_action_guards_against_blind_clobber(self) -> None:
         # Regression: 2026-06-13. The bare `codex login` command wipes ~/.codex/auth.json at the
         # start of its OAuth flow, so an abandoned login leaves the user fully logged out — and a
@@ -518,8 +522,8 @@ class IsAuthErrorTests(unittest.TestCase):
         self.assertNotIn('"', target)
 
     def test_codex_action_target_survives_applescript_embedding(self) -> None:
-        # `_launch_fix` embeds the target via f-string into a double-quoted AppleScript literal:
-        #   'tell application "Terminal" to do script "{target}"'
+        # `_launch_fix` embeds CLI targets via f-string into a double-quoted iTerm2 AppleScript
+        # literal: 'tell application "iTerm2" to create window ... command "{target}"'
         # If `target` contains an unescaped `"` the AppleScript closes early and the rest is
         # parsed as a separate statement (best case: syntax error; worst case: arbitrary
         # AppleScript executes). Pin this invariant for every CLI action.
@@ -601,7 +605,7 @@ class BuildFixActionsTests(unittest.TestCase):
         actions = _build_fix_actions(snaps)
         # Alphabetical: "Antigravity" now sorts ahead of "Claude".
         self.assertEqual(actions["1"], ("Antigravity", "cli", "agy"))
-        self.assertEqual(actions["2"], ("Claude", "cli", "claude login"))
+        self.assertEqual(actions["2"], ("Claude", "browser", "https://claude.ai"))
         self.assertEqual(len(actions), 2)
 
     def test_no_auth_errors_returns_empty(self) -> None:

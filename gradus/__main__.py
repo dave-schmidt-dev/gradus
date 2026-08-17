@@ -59,7 +59,9 @@ from .ui import (
 log = logging.getLogger(__name__)
 
 AUTH_ACTIONS: dict[str, tuple[str, str]] = {
-    "Claude": ("cli", "claude login"),
+    # Claude usage reads the bridge-exported Safari cookie cache; `claude login`
+    # authenticates the CLI but cannot refresh the credentials Gradus consumes.
+    "Claude": ("browser", "https://claude.ai"),
     # `codex login` is destructive: it wipes ~/.codex/auth.json at the start of the OAuth flow,
     # so an abandoned login (e.g. user dismisses the browser) leaves them fully logged out — even
     # if the previous token was healthy. Guard the [1] shortcut by surfacing the current auth.json
