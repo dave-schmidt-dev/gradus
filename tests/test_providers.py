@@ -1011,9 +1011,12 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             encoding="utf-8",
         )
         provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
+        with (
+            patch(
+                "gradus.providers._base._http_json",
+                side_effect=ProbeFailure("Claude API returned HTTP 403", ""),
+            ),
+            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
         ):
             with self.assertRaises(ProbeFailure):
                 provider.fetch()
@@ -1032,9 +1035,12 @@ class ClaudeCookieCacheTests(unittest.TestCase):
             encoding="utf-8",
         )
         provider = ClaudeHttpProvider()
-        with patch(
-            "gradus.providers._base._http_json",
-            side_effect=ProbeFailure("HTTP 400", ""),
+        with (
+            patch(
+                "gradus.providers._base._http_json",
+                side_effect=ProbeFailure("HTTP 400", ""),
+            ),
+            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
         ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -1980,6 +1986,20 @@ class ClaudeHttpProviderTests(unittest.TestCase):
     }
     ORGANIZATION_ID = "00000000-0000-4000-8000-000000000001"
     SECOND_ORGANIZATION_ID = "00000000-0000-4000-8000-000000000002"
+    CLI_USAGE_FIXTURE = (
+        b"\x1b[2J\x1b[H"
+        b"Usage\n"
+        b"Current session\n"
+        b"14% 14% used\n"
+        b"Resets 3 hours (tomorrow / 9:00 AM)\n"
+        b"Current week (all models)\n"
+        b"81% 81% used\n"
+        b"Resets in 18 hours 10 minutes (tomorrow / 9:00 AM)\n"
+        b"+50% weekly extra usage expires soon\n"
+        b"Current week (Fable)\n"
+        b"4% 4% used\n"
+        b"Resets in 18 hours 10 minutes (tomorrow / 9:00 AM)\n"
+    )
 
     def setUp(self) -> None:
         # Isolate bridge-managed cache fixtures from the repository's live cache.
@@ -2094,7 +2114,10 @@ class ClaudeHttpProviderTests(unittest.TestCase):
 
     def test_401_raises_probe_failure(self) -> None:
         provider = self._make_provider()
-        with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")):
+        with (
+            patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")),
+            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=None),
+        ):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertIn("session expired", str(ctx.exception).lower())
@@ -2104,6 +2127,57 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         with self.assertRaises(ProbeFailure) as ctx:
             provider.fetch()
         self.assertIn("claude.ai", str(ctx.exception).lower())
+
+    def test_cli_usage_parser_converts_used_to_remaining(self) -> None:
+        status = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertEqual(status.session_percent_left, 86.0)
+        self.assertEqual(status.weekly_percent_left, 19.0)
+        self.assertIsNone(status.opus_percent_left)
+        self.assertEqual(status.primary_reset, "Resets 3 hours (tomorrow / 9:00 AM)")
+        self.assertNotIn("Current session", status.raw_text)
+        self.assertNotIn("used", status.raw_text)
+
+    def test_cli_usage_parser_rejects_incomplete_panel(self) -> None:
+        self.assertIsNone(ClaudeHttpProvider._parse_cli_usage(b"Current session\n14% used\n"))
+
+    def test_cli_usage_completion_accepts_percentages_without_reset_rows(self) -> None:
+        partial = b"\n".join(
+            line for line in self.CLI_USAGE_FIXTURE.splitlines() if not line.startswith(b"Resets")
+        )
+        status = ClaudeHttpProvider._parse_cli_usage(partial)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertIsNone(status.primary_reset)
+        self.assertTrue(ClaudeHttpProvider._cli_usage_complete(status))
+        complete = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
+        self.assertTrue(ClaudeHttpProvider._cli_usage_complete(complete))
+
+    def test_cli_usage_parser_ignores_other_model_heading(self) -> None:
+        fixture = self.CLI_USAGE_FIXTURE.replace(b"Current week (Fable)", b"Current week (Sonnet)")
+        status = ClaudeHttpProvider._parse_cli_usage(fixture)
+        self.assertIsNotNone(status)
+        assert status is not None
+        self.assertEqual(status.weekly_percent_left, 19.0)
+        self.assertIsNone(status.opus_percent_left)
+
+    def test_cli_process_termination_reaps_pty_child(self) -> None:
+        child = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        ClaudeHttpProvider._terminate_cli_process(child)
+        self.assertIsNotNone(child.poll())
+
+    def test_403_uses_cli_usage_before_evicting_web_cache(self) -> None:
+        provider = self._make_provider()
+        cli_status = ClaudeHttpProvider._parse_cli_usage(self.CLI_USAGE_FIXTURE)
+        assert cli_status is not None
+        with (
+            patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 403", "")),
+            patch.object(ClaudeHttpProvider, "_fetch_cli_usage", return_value=cli_status),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.weekly_percent_left, 19.0)
+        self.assertTrue(self._cache_path.exists())
 
 
 class AntigravityProviderTests(unittest.TestCase):

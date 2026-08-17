@@ -153,6 +153,13 @@ for leg in GradusMac GradusiOS-iPhone; do
     fail "$leg unit leg must not use apple-ui-test-lock"
 done
 
+ipad_ui_line="$(grep -nF 'assert_counting_leg "GradusiOS-iPad"' "$GATE_SCRIPT" | cut -d: -f1)"
+iphone_ui_line="$(grep -nF 'assert_counting_leg "GradusiOSUI"' "$GATE_SCRIPT" | cut -d: -f1)"
+mac_ui_line="$(grep -nF 'assert_counting_leg "GradusMacUI"' "$GATE_SCRIPT" | cut -d: -f1)"
+if ! (( ipad_ui_line < iphone_ui_line && iphone_ui_line < mac_ui_line )); then
+  fail "simulator UI legs must stay adjacent and precede the macOS UI leg"
+fi
+
 # Prove the contract rejects a destination copy/paste regression, not just
 # that the current source happens to contain the expected strings.
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-gate-contract.XXXXXX")"

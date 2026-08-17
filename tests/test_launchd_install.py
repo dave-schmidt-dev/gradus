@@ -227,6 +227,9 @@ exit 64
         self.assertIn("credential bridge status=failed", rendered)
         self.assertNotIn("Cookies.binarycookies", rendered)
         environment = self._environment()
+        isolated_repo = self.root / "repo"
+        isolated_repo.mkdir()
+        environment["GRADUS_REPO_ROOT"] = str(isolated_repo)
         environment["GRADUS_CREDENTIAL_BRIDGE"] = str(self.bin_dir / "credential-bridge")
         result = subprocess.run(
             ["bash", str(wrapper)],
@@ -241,7 +244,7 @@ exit 64
         self.assertIn("credential bridge status=degraded", log.read_text(encoding="utf-8"))
         self.assertEqual(
             self.bridge_log.read_text(encoding="utf-8").strip(),
-            f"--cache-directory {REPO_ROOT / '.cache'}",
+            f"--cache-directory {isolated_repo / '.cache'}",
         )
         self.assertIn("--refresh-snapshot", self.python_log.read_text(encoding="utf-8"))
 

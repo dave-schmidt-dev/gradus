@@ -469,6 +469,17 @@ assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI
   "${density_snapshot_only_args[@]}" \
   CODE_SIGNING_ALLOWED=NO
 
+# Keep both simulator UI legs adjacent. Switching to the macOS UI runner between
+# them can invalidate the simulator accessibility session (kAXErrorAPIDisabled).
+echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITests" -- xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusiOS \
+  -destination "platform=iOS Simulator,id=$sim_udid" \
+  -only-testing:GradusiOSUITests \
+  CODE_SIGNING_ALLOWED=NO
+
 echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
 assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITests" -- env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
@@ -481,15 +492,6 @@ assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITest
   CODE_SIGN_ENTITLEMENTS="" \
   CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   PROVISIONING_PROFILE_SPECIFIER=""
-
-echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITests" -- xcodebuild test \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusiOS \
-  -destination "platform=iOS Simulator,id=$sim_udid" \
-  -only-testing:GradusiOSUITests \
-  CODE_SIGNING_ALLOWED=NO
 
 assert_counting_legs_complete
 

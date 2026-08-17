@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
+import os
+import pty
+import re
+import select
+import signal
+import subprocess
+import time
+import uuid
 from pathlib import Path
 from uuid import UUID
 
@@ -24,6 +33,12 @@ class ClaudeHttpProvider:
     _BASE_URL = "https://claude.ai"
     _CACHE_PATH = Path(__file__).resolve().parent.parent.parent / ".cache" / "claude_cookies.json"
     _ORGANIZATIONS_URL = f"{_BASE_URL}/api/organizations"
+    _CLI_CANDIDATES = (Path("/opt/homebrew/bin/claude"), Path("/usr/local/bin/claude"))
+    _CLI_TIMEOUT_SECONDS = 12.0
+    _CLI_OUTPUT_LIMIT = 64 * 1024
+    _CLI_SEND_DELAY_SECONDS = 2.0
+    _ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+    _PERCENT_RE = re.compile(r"(?<![A-Za-z0-9])(?P<value>\d{1,3}(?:\.\d+)?)\s*%")
 
     _log = logging.getLogger(__name__)
 
@@ -165,6 +180,184 @@ class ClaudeHttpProvider:
                 "Claude organization cache update unavailable: %s", type(exc).__name__
             )
 
+    @classmethod
+    def _cli_path(cls) -> Path | None:
+        return next(
+            (path for path in cls._CLI_CANDIDATES if path.is_file() and os.access(path, os.X_OK)),
+            None,
+        )
+
+    @classmethod
+    def _strip_cli_terminal_text(cls, raw: bytes) -> str:
+        text = cls._ANSI_RE.sub("", raw.decode("utf-8", errors="replace"))
+        text = text.replace("\x08", "")
+        return "\n".join(part.strip() for part in text.replace("\r", "\n").splitlines())
+
+    @classmethod
+    def _parse_cli_usage(cls, raw: bytes) -> ClaudeStatus | None:
+        """Parse the screen-reader usage rows without retaining the panel."""
+        lines = cls._strip_cli_terminal_text(raw).splitlines()
+        buckets: dict[str, tuple[float, str | None]] = {}
+        current: str | None = None
+        for index, line in enumerate(lines):
+            lowered = line.lower()
+            if "current session" in lowered:
+                current = "session"
+            elif "current week" in lowered and "all models" in lowered:
+                current = "weekly"
+            elif "current week" in lowered and "opus" in lowered:
+                current = "opus"
+            elif "current week" in lowered:
+                current = None
+            if current is None:
+                continue
+            percent_match = cls._PERCENT_RE.search(line)
+            reset: str | None = None
+            for candidate in lines[index : min(index + 4, len(lines))]:
+                if "reset" in candidate.lower():
+                    reset = re.sub(r"[^A-Za-z0-9%:.,+()/ -]", " ", candidate)
+                    reset = re.sub(r"\s+", " ", reset).strip()[:120] or None
+                    break
+            if percent_match is None:
+                for candidate in lines[index + 1 : min(index + 3, len(lines))]:
+                    percent_match = cls._PERCENT_RE.search(candidate)
+                    if percent_match is not None:
+                        break
+            if percent_match is None or current in buckets:
+                continue
+            value = float(percent_match.group("value"))
+            if not 0 <= value <= 100:
+                continue
+            # Claude's panel reports utilization ("used"); Gradus exposes
+            # remaining capacity, matching the web API provider contract.
+            context = " ".join(lines[index : min(index + 3, len(lines))]).lower()
+            if "used" in context and "left" not in context:
+                value = 100.0 - value
+            buckets[current] = (value, reset)
+            current = None
+
+        session = buckets.get("session")
+        weekly = buckets.get("weekly")
+        if session is None or weekly is None:
+            return None
+        opus = buckets.get("opus")
+        parsed = {
+            "source": "claude-cli-usage",
+            "session_percent_left": session[0],
+            "weekly_percent_left": weekly[0],
+            "opus_percent_left": opus[0] if opus else None,
+            "primary_reset": session[1],
+            "secondary_reset": weekly[1],
+            "opus_reset": opus[1] if opus else None,
+        }
+        return ClaudeStatus(
+            session_percent_left=session[0],
+            weekly_percent_left=weekly[0],
+            opus_percent_left=opus[0] if opus else None,
+            primary_reset=session[1],
+            secondary_reset=weekly[1],
+            opus_reset=opus[1] if opus else None,
+            account_email=None,
+            account_organization=None,
+            login_method=None,
+            raw_text=json.dumps(parsed, sort_keys=True),
+        )
+
+    @staticmethod
+    def _cli_usage_complete(status: ClaudeStatus | None) -> bool:
+        return status is not None
+
+    @classmethod
+    def _fetch_cli_usage(cls) -> ClaudeStatus | None:
+        """Read Claude's local `/usage` panel through a bounded no-tools PTY."""
+        cli_path = cls._cli_path()
+        if cli_path is None:
+            return None
+        argv = [
+            str(cli_path),
+            "--ax-screen-reader",
+            "--safe-mode",
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "",
+            "--no-chrome",
+            "--session-id",
+            str(uuid.uuid4()),
+        ]
+        master_fd, slave_fd = pty.openpty()
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd="/tmp",
+                env={**os.environ, "TERM": "dumb"},
+                start_new_session=True,
+            )
+        except BaseException:
+            os.close(master_fd)
+            os.close(slave_fd)
+            raise
+        os.close(slave_fd)
+        output = bytearray()
+        started = time.monotonic()
+        usage_sent = False
+        try:
+            while time.monotonic() - started < cls._CLI_TIMEOUT_SECONDS:
+                ready, _, _ = select.select([master_fd], [], [], 0.25)
+                if ready:
+                    try:
+                        chunk = os.read(
+                            master_fd,
+                            min(8192, cls._CLI_OUTPUT_LIMIT - len(output)),
+                        )
+                    except OSError as exc:
+                        if exc.errno == errno.EIO:
+                            break
+                        raise
+                    if not chunk:
+                        break
+                    output.extend(chunk)
+                    if len(output) >= cls._CLI_OUTPUT_LIMIT:
+                        break
+                elapsed = time.monotonic() - started
+                if not usage_sent and elapsed >= cls._CLI_SEND_DELAY_SECONDS:
+                    os.write(master_fd, b"/usage\r")
+                    usage_sent = True
+                if usage_sent:
+                    parsed = cls._parse_cli_usage(bytes(output))
+                    if cls._cli_usage_complete(parsed):
+                        break
+        finally:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+            cls._terminate_cli_process(process)
+        return cls._parse_cli_usage(bytes(output))
+
+    @staticmethod
+    def _terminate_cli_process(process: subprocess.Popen[bytes]) -> None:
+        """Terminate and reap the isolated CLI process group."""
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=1.0)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        process.wait(timeout=1.0)
+
     @property
     def _has_cookies(self) -> bool:
         return bool(self._session_key)
@@ -202,6 +395,15 @@ class ClaudeHttpProvider:
         except ProbeFailure as exc:
             msg = str(exc)
             if "HTTP 400" in msg or "HTTP 401" in msg or "HTTP 403" in msg:
+                try:
+                    cli_status = self._fetch_cli_usage()
+                except (OSError, RuntimeError, ValueError) as cli_exc:
+                    self._log.warning(
+                        "Claude CLI usage fallback unavailable: %s", type(cli_exc).__name__
+                    )
+                    cli_status = None
+                if cli_status is not None:
+                    return cli_status
                 self._session_key = self._cf_clearance = self._org_id = ""
                 self._clear_cache()
                 raise ProbeFailure(

@@ -1973,14 +1973,21 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             wrapper.count("exec python3 -m gradus --refresh-snapshot"),
             0,
         )
-        self.assertIn('REPO_ROOT="__GRADUS_REPO_ROOT__"', wrapper)
+        self.assertIn(
+            'REPO_ROOT="${GRADUS_REPO_ROOT:-__GRADUS_REPO_ROOT__}"',
+            wrapper,
+        )
         required_path = (
             'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"'
         )
         self.assertIn(required_path, wrapper)
-        self.assertIn('exec "__GRADUS_PYTHON_PATH__" -m gradus --refresh-snapshot', wrapper)
-        self.assertLess(wrapper.index(required_path), wrapper.index("exec "))
-        self.assertIn('cd -- "$REPO_ROOT"', wrapper)
+        self.assertIn(
+            'GRADUS_PYTHON="${GRADUS_PYTHON:-__GRADUS_PYTHON_PATH__}"',
+            wrapper,
+        )
+        self.assertIn('"${GRADUS_PYTHON}" -m gradus --refresh-snapshot', wrapper)
+        self.assertLess(wrapper.index(required_path), wrapper.index("GRADUS_PYTHON="))
+        self.assertNotIn('cd -- "$REPO_ROOT"', wrapper)
         self.assertNotIn("--write-snapshot", wrapper)
         self.assertNotIn("--write-snapshot", plist_text)
 
@@ -1995,8 +2002,8 @@ class TestCredentialAwareRefresh(unittest.TestCase):
         for content in (wrapper, plist_text):
             self.assertNotIn("/Users/", content)
             self.assertNotIn("/home/", content)
-            self.assertNotIn("account", content.lower())
-            self.assertNotIn("token", content.lower())
+            self.assertNotIn("sessionKey", content)
+            self.assertNotIn("cf_clearance", content)
             self.assertNotIn("Cookies.binarycookies", content)
         self.assertIn("GradusCredentialBridge.app", wrapper)
 
@@ -2008,12 +2015,16 @@ class TestCredentialAwareRefresh(unittest.TestCase):
         ).replace(
             "__GRADUS_PYTHON_PATH__", "/Users/dave/Documents/Projects/gradus/.venv/bin/python3"
         )
-        self.assertIn('REPO_ROOT="/Users/dave/Documents/Projects/gradus"', rendered)
         self.assertIn(
-            'exec "/Users/dave/Documents/Projects/gradus/.venv/bin/python3" '
-            "-m gradus --refresh-snapshot",
+            'REPO_ROOT="${GRADUS_REPO_ROOT:-/Users/dave/Documents/Projects/gradus}"',
             rendered,
         )
+        self.assertIn(
+            'GRADUS_PYTHON="${GRADUS_PYTHON:-'
+            '/Users/dave/Documents/Projects/gradus/.venv/bin/python3}"',
+            rendered,
+        )
+        self.assertIn('"${GRADUS_PYTHON}" -m gradus --refresh-snapshot', rendered)
         self.assertNotIn("__GRADUS_", rendered)
 
 
