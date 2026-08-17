@@ -93,7 +93,27 @@ fi
             """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$GRADUS_TEST_BRIDGE_LOG"
+if [[ -n "${GRADUS_TEST_BRIDGE_STDOUT:-}" ]]; then
+  printf '%s\\n' "$GRADUS_TEST_BRIDGE_STDOUT"
+fi
+if [[ -n "${GRADUS_TEST_BRIDGE_STDERR:-}" ]]; then
+  printf '%s\\n' "$GRADUS_TEST_BRIDGE_STDERR" >&2
+fi
 exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
+""",
+        )
+        self._write_executable(
+            "deadline-runner",
+            """#!/usr/bin/env bash
+set -euo pipefail
+while (($#)); do
+  if [[ "$1" == "--" ]]; then
+    shift
+    exec "$@"
+  fi
+  shift
+done
+exit 64
 """,
         )
 
@@ -115,6 +135,7 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
         environment = os.environ.copy()
         environment.update(
             {
+                "HOME": str(self.home),
                 "GRADUS_HOME": str(self.home),
                 "GRADUS_REPO_ROOT": str(REPO_ROOT),
                 "GRADUS_PYTHON_PATH": str(self.bin_dir / "python3"),
@@ -125,6 +146,7 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
                 "GRADUS_TEST_BOOTOUT_MARKER": str(self.root / "bootout-marker"),
                 "GRADUS_TEST_PYTHON_LOG": str(self.python_log),
                 "GRADUS_TEST_BRIDGE_LOG": str(self.bridge_log),
+                "GRADUS_DEADLINE_RUNNER": str(self.bin_dir / "deadline-runner"),
                 "GRADUS_TEST_RUN_AT_LOAD_COUNTER": str(self.run_at_load_counter),
                 "GRADUS_TEST_RUN_AT_LOAD_WRITES": "yes",
                 "GRADUS_TEST_SNAPSHOT_PATH": str(self.snapshot_path),
@@ -167,11 +189,14 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
         first = self._run()
         self.assertEqual(first.returncode, 0, first.stderr)
         wrapper = self.home / ".launchd/scripts/gradus_snapshot.sh"
+        helper_dir = self.home / ".launchd/scripts/lib"
         plist = self.home / "Library/LaunchAgents/local.gradus-snapshot.plist"
         first_wrapper = wrapper.read_bytes()
         first_plist = plist.read_bytes()
         self.assertTrue(self.state.exists())
         self.assertTrue(wrapper.stat().st_mode & stat.S_IXUSR)
+        self.assertEqual((helper_dir / "deadline_runner.py").stat().st_mode & 0o777, 0o755)
+        self.assertEqual((helper_dir / "notify.sh").stat().st_mode & 0o777, 0o644)
         self.assertNotIn(b"__GRADUS_", first_wrapper + first_plist)
 
         second = self._run()
@@ -199,7 +224,7 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
         wrapper = self.home / ".launchd/scripts/gradus_snapshot.sh"
         rendered = wrapper.read_text(encoding="utf-8")
         self.assertIn("GRADUS_CREDENTIAL_BRIDGE", rendered)
-        self.assertIn("credential_bridge status=failed", rendered)
+        self.assertIn("credential bridge status=failed", rendered)
         self.assertNotIn("Cookies.binarycookies", rendered)
         environment = self._environment()
         environment["GRADUS_CREDENTIAL_BRIDGE"] = str(self.bin_dir / "credential-bridge")
@@ -212,6 +237,8 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.home / "Library/Logs/homelab/gradus-snapshot/gradus-snapshot.log"
+        self.assertIn("credential bridge status=degraded", log.read_text(encoding="utf-8"))
         self.assertEqual(
             self.bridge_log.read_text(encoding="utf-8").strip(),
             f"--cache-directory {REPO_ROOT / '.cache'}",
@@ -233,10 +260,11 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stderr.strip(), "gradus_snapshot credential_bridge status=failed")
+        log = self.home / "Library/Logs/homelab/gradus-snapshot/gradus-snapshot.log"
+        self.assertIn("credential bridge status=failed", log.read_text(encoding="utf-8"))
         self.assertIn("--refresh-snapshot", self.python_log.read_text(encoding="utf-8"))
 
-    def test_wrapper_reports_missing_cache_without_reading_safari(self) -> None:
+    def test_wrapper_reports_missing_browser_caches_without_reading_safari(self) -> None:
         environment = self._environment()
         isolated_repo = self.root / "repo"
         isolated_repo.mkdir()
@@ -262,11 +290,51 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(
-            result.stderr.strip(),
-            "gradus_snapshot credential_bridge cache=missing provider=OpenCode Go",
+        log = self.home / "Library/Logs/homelab/gradus-snapshot/gradus-snapshot.log"
+        self.assertIn(
+            "credential bridge status=degraded; missing cache providers=Claude OpenCode Go.",
+            log.read_text(encoding="utf-8"),
         )
         self.assertNotIn("Cookies.binarycookies", wrapper.read_text(encoding="utf-8"))
+
+    def test_wrapper_discards_bridge_payload_and_reports_present_caches_healthy(self) -> None:
+        environment = self._environment()
+        isolated_repo = self.root / "repo"
+        cache = isolated_repo / ".cache"
+        cache.mkdir(parents=True)
+        (cache / "claude_cookies.json").touch()
+        (cache / "opencode_go_cookies.json").touch()
+        environment["GRADUS_REPO_ROOT"] = str(isolated_repo)
+        environment["GRADUS_CREDENTIAL_BRIDGE"] = str(self.bin_dir / "credential-bridge")
+        environment["GRADUS_TEST_BRIDGE_STDOUT"] = "credential-payload-must-not-escape"
+        environment["GRADUS_TEST_BRIDGE_STDERR"] = "bridge-diagnostic-must-not-escape"
+
+        installed = subprocess.run(
+            ["bash", str(INSTALLER), "install"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        wrapper = self.home / ".launchd/scripts/gradus_snapshot.sh"
+        result = subprocess.run(
+            ["bash", str(wrapper)],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = result.stdout + result.stderr
+        log = (self.home / "Library/Logs/homelab/gradus-snapshot/gradus-snapshot.log").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("credential-payload-must-not-escape", output + log)
+        self.assertNotIn("bridge-diagnostic-must-not-escape", output + log)
+        self.assertIn("credential bridge status=ok", log)
 
     def test_fresh_install_waits_for_run_at_load_before_verifying(self) -> None:
         result = self._run()
@@ -320,6 +388,8 @@ exit "${GRADUS_TEST_BRIDGE_EXIT:-0}"
         self.assertFalse(self.state.exists())
         self.assertFalse((self.home / ".launchd/scripts/gradus_snapshot.sh").exists())
         self.assertFalse((self.home / "Library/LaunchAgents/local.gradus-snapshot.plist").exists())
+        self.assertTrue((self.home / ".launchd/scripts/lib/deadline_runner.py").exists())
+        self.assertTrue((self.home / ".launchd/scripts/lib/notify.sh").exists())
 
 
 if __name__ == "__main__":

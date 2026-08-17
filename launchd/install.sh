@@ -17,6 +17,7 @@ readonly LAUNCHCTL="${GRADUS_LAUNCHCTL:-launchctl}"
 readonly DOMAIN="gui/$(id -u)"
 readonly JOB="$DOMAIN/$LABEL"
 readonly WRAPPER="$INSTALL_HOME/.launchd/scripts/gradus_snapshot.sh"
+readonly HELPER_DIR="$INSTALL_HOME/.launchd/scripts/lib"
 readonly PLIST="$INSTALL_HOME/Library/LaunchAgents/$LABEL.plist"
 readonly LOG_DIR="$INSTALL_HOME/Library/Logs/homelab/gradus-snapshot"
 readonly SNAPSHOT_V2_PATH="${GRADUS_SNAPSHOT_V2_PATH:-$REPO_ROOT/.state/snapshot-v2.json}"
@@ -28,6 +29,11 @@ readonly RUN_AT_LOAD_TIMEOUT="${GRADUS_RUN_AT_LOAD_TIMEOUT:-$VERIFY_INTERVAL}"
 # This preserves the verifier's fixed duration and cadence while keeping its
 # 120-second reads out of phase with launchd's 120-second StartInterval edge.
 readonly VERIFY_PHASE_OFFSET="${GRADUS_VERIFY_PHASE_OFFSET:-$PROGRESS_INTERVAL}"
+
+readonly DEADLINE_RUNNER_SOURCE="$SCRIPT_DIR/lib/deadline_runner.py"
+readonly NOTIFY_SOURCE="$SCRIPT_DIR/lib/notify.sh"
+readonly DEADLINE_RUNNER_TARGET="$HELPER_DIR/deadline_runner.py"
+readonly NOTIFY_TARGET="$HELPER_DIR/notify.sh"
 
 usage() {
   cat <<'EOF'
@@ -78,6 +84,36 @@ require_tools() {
     printf 'FAIL: launchctl command is unavailable: %s\n' "$LAUNCHCTL" >&2
     return 69
   }
+}
+
+install_if_changed() {
+  local source="$1"
+  local target="$2"
+  local mode="$3"
+  local temporary
+
+  [[ -f "$source" ]] || {
+    printf 'FAIL: Gradus launchd helper source is missing: %s\n' "$source" >&2
+    return 66
+  }
+
+  if cmp -s "$source" "$target" 2>/dev/null; then
+    chmod "$mode" "$target"
+    return 0
+  fi
+
+  temporary="$(mktemp "${target}.XXXXXX")"
+  if ! install -m "$mode" "$source" "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  mv -f "$temporary" "$target"
+}
+
+install_helpers() {
+  mkdir -p "$HELPER_DIR"
+  install_if_changed "$DEADLINE_RUNNER_SOURCE" "$DEADLINE_RUNNER_TARGET" 755
+  install_if_changed "$NOTIFY_SOURCE" "$NOTIFY_TARGET" 644
 }
 
 job_state() {
@@ -190,6 +226,7 @@ install_agent() {
   local state before_bootstrap
   require_tools
   mkdir -p "$(dirname "$WRAPPER")" "$(dirname "$PLIST")" "$LOG_DIR"
+  install_helpers
   render_if_changed "$SCRIPT_DIR/gradus_snapshot.sh.in" "$WRAPPER" 755
   render_if_changed "$SCRIPT_DIR/local.gradus-snapshot.plist.in" "$PLIST" 644
   plutil -lint "$PLIST" >/dev/null

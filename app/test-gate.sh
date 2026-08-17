@@ -280,6 +280,7 @@ echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
 assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
+APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"
 # Plain "iPhone 16" collides with whatever other iPhone 16 simulators exist
 # on this machine (Xcode's own default, other projects' gate devices); a
 # dedicated name is the only way `simctl list | grep` can resolve to exactly
@@ -459,7 +460,7 @@ assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
 # would just stop covering the multi-column geometry. Kept as a named,
 # separate gate line so that loss is visible if anyone deletes it.
 echo "==> xcodebuild test — GradusiOS UI tests ($IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOS-iPad" xcodebuild test \
+assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI tests ($IPAD_DEVICE_NAME)" -- xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
@@ -469,7 +470,7 @@ assert_counting_leg "GradusiOS-iPad" xcodebuild test \
   CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
-assert_counting_leg "GradusMacUI" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
+assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITests" -- env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
@@ -482,7 +483,7 @@ assert_counting_leg "GradusMacUI" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test 
   PROVISIONING_PROFILE_SPECIFIER=""
 
 echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOSUI" xcodebuild test \
+assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITests" -- xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \

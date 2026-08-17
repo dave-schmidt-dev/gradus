@@ -1,26 +1,202 @@
-#!/bin/bash
-set -eu
+#!/usr/bin/env bash
+# gradus_snapshot — refresh the gradus quota snapshot every 120s, bounded.
+#
+# The refresh talks to every provider over the network, so the failure mode this
+# script exists to prevent is a *stall*: a provider that accepts the connection
+# and never answers would otherwise wedge the job until launchd's next tick
+# collides with it. There is deliberately no DNS/egress preflight — the bounded
+# outer command IS the stall control, and a preflight would only add a second
+# thing to hang on. (Contrast `llm_window_start.sh`, which gates on egress
+# because its payload is expensive and retry-budgeted; this one is cheap and
+# runs 720x/day.)
+#
+# `set -uo pipefail` without `-e`: the refresh exit code is captured explicitly
+# and propagated to launchd, so a failed refresh always surfaces as
+# "failed with exit code N" and never as "completed".
+#
+# History (2026-08-13): this file was replaced on 2026-08-08 by a 19-line variant
+# that added the credential bridge but dropped the bounded deadline, the
+# aggregate log, and the notify trap — leaving a 120s network job with no stall
+# control and no failure surface, and leaving its regression test failing 16/17.
+# This restores the hardened wrapper and keeps the bridge. Do not re-simplify.
+#
+# WORKING DIRECTORY: this script never changes its own, and gradus does not need
+# it to. Audited 2026-08-13 — every gradus path is module-derived and absolute
+# (`Path(__file__).resolve().parent.parent`): snapshot-v2.json, snapshot.json,
+# .state/history, and the Vibe cookie cache. `VibeProvider` is the only provider
+# taking `project_root` and it ignores the value. The one genuinely relative read
+# is `_load_config()` looking for `.gradus.json` / `.ai_monitor.json` in the
+# process working directory, and neither file exists in the repo. If one is ever
+# added there, this script will stop seeing it — pass the settings explicitly
+# rather than reintroducing a directory change.
 
-REPO_ROOT="__GRADUS_REPO_ROOT__"
+set -uo pipefail
+
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-cd -- "$REPO_ROOT"
+REPO_ROOT="${GRADUS_REPO_ROOT:-__GRADUS_REPO_ROOT__}"
 
-BRIDGE="${GRADUS_CREDENTIAL_BRIDGE:-$HOME/Applications/GradusCredentialBridge.app/Contents/MacOS/GradusCredentialBridge}"
-if [[ -x "$BRIDGE" ]]; then
-    if "$BRIDGE" --cache-directory "$REPO_ROOT/.cache"; then
-        # The signed bridge can succeed without producing a provider cache when
-        # Safari has no usable session cookie. Keep that outcome visible; the
-        # Python side remains cache-only and must report the provider as auth
-        # required rather than reading Safari itself.
-        if [[ ! -f "$REPO_ROOT/.cache/opencode_go_cookies.json" ]]; then
-            printf '%s\n' 'gradus_snapshot credential_bridge cache=missing provider=OpenCode Go' >&2
-        fi
-    else
-        printf '%s\n' 'gradus_snapshot credential_bridge status=failed' >&2
-    fi
+# Resolved from this file's own location, not hardcoded: the regression test
+# copies the script plus lib/ into a sandbox and runs it from there.
+SCRIPT_DIR="$(dirname -- "${BASH_SOURCE[0]}")"
+
+log_dir="${HOME}/Library/Logs/homelab/gradus-snapshot"
+mkdir -p "${log_dir}"
+log_file="${log_dir}/gradus-snapshot.log"
+
+# Failure notification + ldstatus parity (shared lib; degrade to no-ops if absent).
+NOTIFY_LIB="${SCRIPT_DIR}/lib/notify.sh"
+if [[ -f "${NOTIFY_LIB}" ]]; then
+  # shellcheck disable=SC1090
+  source "${NOTIFY_LIB}"
 else
-    printf '%s\n' 'gradus_snapshot credential_bridge status=missing' >&2
+  notify_failure() { :; }; notify_mark_logged_failure() { :; }; install_failure_trap() { :; }
+fi
+install_failure_trap "GRADUS" "${log_file}"
+
+# Direct append — never `log ... | tee` (a subshell would lose the dedupe mark;
+# see the shared convention note in uv_cache_prune.sh / brew_autoupdate.sh).
+log() {
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  printf '[%s] %s\n' "${ts}" "$*" >> "${log_file}"
+}
+
+DEADLINE_RUNNER="${GRADUS_DEADLINE_RUNNER:-${SCRIPT_DIR}/lib/deadline_runner.py}"
+
+# The interpreter for the REFRESH, not for the runner. The runner is executed via
+# its own shebang precisely so this override cannot replace it — a test that
+# shims the refresh interpreter must still get a real deadline, or the bound it
+# is asserting would never run.
+GRADUS_PYTHON="${GRADUS_PYTHON:-__GRADUS_PYTHON_PATH__}"
+
+# 110s against a 120s cadence: a stalled refresh is reaped before the next tick.
+DEADLINE="${GRADUS_DEADLINE_SECONDS:-110}"
+GRACE="${GRADUS_DEADLINE_GRACE_SECONDS:-5}"
+CLEANUP="${GRADUS_DEADLINE_CLEANUP_SECONDS:-3}"
+
+# --- credential bridge -------------------------------------------------------
+# Refreshes provider cookies into the repo cache. Best-effort and non-fatal by
+# design: a stale-credential provider reports "auth required" and the snapshot
+# still refreshes for everyone else. Bounded on its own account — it is a second
+# network caller, and a hung bridge would wedge the job just as surely as a hung
+# refresh. Only fixed status tokens are logged; the bridge's stdout and stderr
+# are discarded because either stream could contain credential material.
+BRIDGE="${GRADUS_CREDENTIAL_BRIDGE:-${HOME}/Applications/GradusCredentialBridge.app/Contents/MacOS/GradusCredentialBridge}"
+BRIDGE_DEADLINE="${GRADUS_BRIDGE_DEADLINE_SECONDS:-30}"
+
+#
+# Logged on TRANSITION ONLY, never per-run. The bridge is currently broken under
+# launchd (fails every tick while succeeding when run by hand — 2026-08-13), so
+# a per-run line would be 720 entries/day drowning the status lines this log
+# exists for. A durable marker holds the last outcome; only a change speaks.
+bridge_state_file="${log_dir}/.bridge-state"
+bridge_prev="$(cat "${bridge_state_file}" 2>/dev/null || printf 'unknown')"
+
+if [[ -x "${BRIDGE}" ]]; then
+  # NOT run through deadline_runner — deliberate, and measured. Under launchd the
+  # bridge exits 1 every time it is spawned by the runner and 0 every time it is
+  # spawned directly; four consecutive alternating calls in one tick gave
+  # runner=1, direct=0, runner=1. Bisecting the runner's spawn flags did not
+  # reproduce it: new-session, stdin=DEVNULL, stderr=PIPE and close_fds each
+  # return 0 on their own, so it is the combination, and the precise trigger is
+  # NOT pinned down. What is established is which invocation works. (The rest of
+  # this script still uses the runner — the refresh is unaffected.)
+  #
+  # Bounded anyway, since a hung bridge would wedge a 120s job: python enforces
+  # the timeout and kills the child. Deliberately no new session, so the spawn
+  # stays in the shape that works.
+  /usr/bin/python3 -c 'import subprocess,sys
+try:
+    sys.exit(subprocess.call([sys.argv[1], "--cache-directory", sys.argv[2]],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             timeout=float(sys.argv[3])))
+except subprocess.TimeoutExpired:
+    sys.exit(124)' \
+    "${BRIDGE}" "${REPO_ROOT}/.cache" "${BRIDGE_DEADLINE}"
+  bridge_rc=$?
+  if (( bridge_rc == 0 )); then
+    missing_cache_providers=()
+    [[ -f "${REPO_ROOT}/.cache/claude_cookies.json" ]] || missing_cache_providers+=("Claude")
+    [[ -f "${REPO_ROOT}/.cache/opencode_go_cookies.json" ]] || missing_cache_providers+=("OpenCode Go")
+    if ((${#missing_cache_providers[@]})); then
+      bridge_now="degraded"
+      bridge_detail="${missing_cache_providers[*]}"
+    else
+      bridge_now="ok"
+      bridge_detail=""
+    fi
+  else
+    bridge_now="failed"
+    bridge_detail=""
+  fi
+else
+  bridge_rc=0
+  bridge_now="missing"
+  bridge_detail=""
 fi
 
-exec "__GRADUS_PYTHON_PATH__" -m gradus --refresh-snapshot
+# Include provider names in the durable state so a changed cache set remains
+# observable without logging every 120-second run.
+bridge_state="${bridge_now}"
+if [[ "${bridge_now}" == degraded ]]; then
+  bridge_state="${bridge_now}:${bridge_detail}"
+fi
+
+if [[ "${bridge_state}" != "${bridge_prev}" ]]; then
+  printf '%s' "${bridge_state}" > "${bridge_state_file}"
+  case "${bridge_now}" in
+    # Never the string "failed with exit code": the refresh below is the job's
+    # verdict, and a degraded bridge must not read as "the run failed" to
+    # ldstatus or trip the EXIT trap's dedupe.
+    failed)  log "gradus: credential bridge status=failed (exit ${bridge_rc}); continuing on cached credentials until it recovers." ;;
+    missing) log "gradus: credential bridge status=missing; continuing on cached credentials." ;;
+    degraded) log "gradus: credential bridge status=degraded; missing cache providers=${bridge_detail}." ;;
+    ok)      log "gradus: credential bridge status=ok (recovered from ${bridge_prev})." ;;
+  esac
+fi
+
+# --- refresh -----------------------------------------------------------------
+start="${SECONDS}"
+log "gradus: refresh starting"
+
+# Child stdout/stderr deliberately inherit to the plist's stderr.log: gradus
+# emits per-provider progress there, and folding it into the aggregate log would
+# both swamp the status lines and copy provider payload into a parsed log.
+"${DEADLINE_RUNNER}" \
+  --deadline "${DEADLINE}" \
+  --grace "${GRACE}" \
+  --cleanup "${CLEANUP}" \
+  --category gradus-refresh -- \
+  "${GRADUS_PYTHON}" -m gradus --refresh-snapshot
+rc=$?
+
+elapsed=$(( SECONDS - start ))
+
+# Every failure is LOGGED (ldstatus and the record need all of them), but only
+# the first in a run of failures is BANNERED. At 720 ticks/day an outage would
+# otherwise mean a notification every two minutes — during the 2026-08-13 VPN
+# black-hole that would have been ~150 banners, which is how a useful alert
+# becomes something you learn to swipe away. Same discipline as vpn_health.sh:
+# alert on the transition, not the state.
+refresh_state_file="${log_dir}/.refresh-state"
+refresh_prev="$(cat "${refresh_state_file}" 2>/dev/null || printf 'unknown')"
+
+if (( rc == 0 )); then
+  log "gradus: refresh completed in ${elapsed}s."
+  [[ "${refresh_prev}" == "failed" ]] && log "gradus: refresh recovered."
+  printf 'ok' > "${refresh_state_file}"
+  exit 0
+fi
+
+# Mark before returning: the EXIT trap's canonical line contains this same
+# substring, so an unmarked failure would double-count in ldstatus AND fire a
+# second banner past the gate below.
+log "gradus: refresh failed with exit code ${rc} after ${elapsed}s."
+notify_mark_logged_failure
+if [[ "${refresh_prev}" != "failed" ]]; then
+  notify_failure "GRADUS" "snapshot refresh failed with exit code ${rc}"
+fi
+printf 'failed' > "${refresh_state_file}"
+exit "${rc}"

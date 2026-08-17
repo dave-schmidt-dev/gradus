@@ -138,6 +138,21 @@ validate_derived_data_contract() {
 validate_derived_data_contract "$GATE_SCRIPT" ||
   fail "Xcode test legs are not isolated in fresh run-scoped DerivedData"
 
+grep -Fq 'APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"' "$GATE_SCRIPT" ||
+  fail "canonical Apple UI-test lock path is missing"
+for leg in GradusiOS-iPad GradusMacUI GradusiOSUI; do
+  ui_block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$GATE_SCRIPT")"
+  [[ "$leg" == "GradusMacUI" ]] &&
+    ui_block="$(sed -n "/assert_counting_leg \"$leg\"/,/PROVISIONING_PROFILE_SPECIFIER=/p" "$GATE_SCRIPT")"
+  [[ "$ui_block" == *'"$APPLE_UI_TEST_LOCK" --label'* ]] ||
+    fail "$leg is not serialized by apple-ui-test-lock"
+done
+for leg in GradusMac GradusiOS-iPhone; do
+  unit_block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$GATE_SCRIPT")"
+  [[ "$unit_block" != *'"$APPLE_UI_TEST_LOCK"'* ]] ||
+    fail "$leg unit leg must not use apple-ui-test-lock"
+done
+
 # Prove the contract rejects a destination copy/paste regression, not just
 # that the current source happens to contain the expected strings.
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-gate-contract.XXXXXX")"

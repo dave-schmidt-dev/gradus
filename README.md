@@ -254,6 +254,13 @@ the final bundle once, rather than reinstalling it during intermediate validatio
 `./app/install-credential-bridge.sh --dry-run` builds, Developer-ID signs, and verifies
 the bridge without changing `~/Applications`.
 
+The bridge may exit successfully after reading Safari without finding a recognized session;
+the launchd wrapper therefore reports `credential_bridge cache=missing provider=...` for a
+missing browser cache instead of treating that exit as proof of authentication. After changing
+bridge code, rerun the installer and re-enable Full Disk Access for the replaced app if Safari
+reads are denied; a healthy `local.gradus-snapshot` exit alone proves only that the snapshot
+refresh completed.
+
 - Wrapper: `~/.launchd/scripts/gradus_snapshot.sh`
 - Plist: `~/Library/LaunchAgents/local.gradus-snapshot.plist` (StartInterval 120, RunAtLoad, Background)
 - Logs: `~/Library/Logs/homelab/gradus-snapshot/`
