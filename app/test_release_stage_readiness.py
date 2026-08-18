@@ -6,7 +6,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from release_stage_readiness import build_proof
+from release_stage_readiness import build_proof, write_proof
 
 
 def test_build_proof_binds_candidate_source_and_manifest_bytes() -> None:
@@ -46,3 +46,15 @@ def test_build_proof_rejects_missing_source_binding() -> None:
             assert str(exc) == "readiness-source-invalid"
         else:
             raise AssertionError("missing source binding was accepted")
+
+
+def test_write_proof_atomically_creates_runner_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        destination = Path(temporary) / "evidence" / "1.8.0-20" / "readiness.json"
+        proof = {"result": "passed", "candidateId": "1.8.0-20"}
+
+        write_proof(destination, proof)
+
+        assert json.loads(destination.read_text(encoding="utf-8")) == proof
+        assert destination.stat().st_mode & 0o777 == 0o600
+        assert not destination.with_name(".readiness.json.tmp").exists()

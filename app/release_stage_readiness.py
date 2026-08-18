@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import re
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -43,8 +42,31 @@ def build_proof(manifest_path: Path, *, now: datetime | None = None) -> dict[str
     }
 
 
+def write_proof(destination: Path, proof: dict[str, Any]) -> None:
+    """Atomically persist one runner-consumable readiness proof."""
+
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    encoded = json.dumps(proof, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def main() -> int:
-    """Read only the declared candidate manifest and emit one JSON proof."""
+    """Read the declared manifest and persist its candidate-bound proof."""
 
     value = os.environ.get("READINESS_MANIFEST")
     if not value or "\x00" in value:
@@ -55,9 +77,11 @@ def main() -> int:
     try:
         manifest_path.relative_to(expected_root)
         proof = build_proof(manifest_path)
+        candidate_id = proof["candidateId"]
+        destination = root / ".release-state" / "evidence" / candidate_id / "readiness.json"
+        write_proof(destination, proof)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return 4
-    sys.stdout.write(json.dumps(proof, sort_keys=True, separators=(",", ":")) + "\n")
     return 0
 
 
