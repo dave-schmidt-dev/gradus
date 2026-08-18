@@ -222,6 +222,60 @@ assert_counting_legs_complete() {
   fi
 }
 
+# xcodebuild can leave an orphaned test runner behind while its parent remains
+# alive indefinitely. Keep the deadline local to the one leg that has shown
+# this failure mode; ordinary command exits retain their exact status, while a
+# deadline produces the conventional 124 timeout status and visible evidence.
+run_with_deadline() {
+  local deadline_seconds="$1" label="$2"
+  shift 2
+  if ! [[ "$deadline_seconds" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAIL: invalid deadline for $label: '$deadline_seconds'" >&2
+    return 2
+  fi
+  if [[ "$#" -eq 0 ]]; then
+    echo "FAIL: no command supplied for $label" >&2
+    return 2
+  fi
+
+  local marker child_pid watchdog_pid command_status
+  marker="$(mktemp "${TMPDIR:-/tmp}/gradus-test-deadline.XXXXXX")" || return 1
+  rm -f "$marker"
+  echo "==> $label (deadline ${deadline_seconds}s)"
+  "$@" &
+  child_pid=$!
+  (
+    sleep "$deadline_seconds"
+    if kill -0 "$child_pid" >/dev/null 2>&1; then
+      printf '%s\n' timed_out > "$marker"
+      echo "FAIL: $label exceeded ${deadline_seconds}s; terminating" >&2
+      kill -TERM "$child_pid" >/dev/null 2>&1 || true
+      for _ in {1..20}; do
+        kill -0 "$child_pid" >/dev/null 2>&1 || exit 0
+        sleep 0.25
+      done
+      if kill -0 "$child_pid" >/dev/null 2>&1; then
+        echo "FAIL: $label did not exit after TERM; killing" >&2
+        kill -KILL "$child_pid" >/dev/null 2>&1 || true
+      fi
+    fi
+  ) &
+  watchdog_pid=$!
+
+  if wait "$child_pid"; then
+    command_status=0
+  else
+    command_status="$?"
+  fi
+  kill "$watchdog_pid" >/dev/null 2>&1 || true
+  wait "$watchdog_pid" >/dev/null 2>&1 || true
+  if [[ -s "$marker" ]]; then
+    command_status=124
+  fi
+  rm -f "$marker"
+  return "$command_status"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 set -euo pipefail
 
@@ -281,6 +335,11 @@ assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
 APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"
+GRADUS_MAC_TEST_TIMEOUT_SECONDS="${GRADUS_MAC_TEST_TIMEOUT_SECONDS:-600}"
+if ! [[ "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "FAIL: GRADUS_MAC_TEST_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 2
+fi
 # Plain "iPhone 16" collides with whatever other iPhone 16 simulators exist
 # on this machine (Xcode's own default, other projects' gate devices); a
 # dedicated name is the only way `simctl list | grep` can resolve to exactly
@@ -479,7 +538,7 @@ echo "==> xcodebuild test — GradusMac (platform=macOS)"
 # Tests execute local Debug products and do not produce a distributable artifact.
 # Keeping signing disabled here avoids provisioning/account state becoming a false test gate;
 # archive, export, and notarization scripts retain their normal signing paths.
-assert_counting_leg "GradusMac" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
+assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \

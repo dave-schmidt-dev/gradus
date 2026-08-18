@@ -138,6 +138,62 @@ validate_derived_data_contract() {
 validate_derived_data_contract "$GATE_SCRIPT" ||
   fail "Xcode test legs are not isolated in fresh run-scoped DerivedData"
 
+validate_gradus_mac_deadline_contract() {
+  local gate_path="$1" helper_block mac_leg_block
+  helper_block="$(sed -n '/^run_with_deadline()/,/^}/p' "$gate_path")"
+  mac_leg_block="$(sed -n '/assert_counting_leg "GradusMac"/,/assert_counting_leg "GradusiOS-iPhone"/p' "$gate_path")"
+  [[ "$helper_block" == *'run_with_deadline()'* ]] || return 1
+  [[ "$helper_block" == *'exceeded ${deadline_seconds}s; terminating'* ]] || return 1
+  [[ "$helper_block" == *'kill -TERM "$child_pid"'* ]] || return 1
+  [[ "$helper_block" == *'kill -KILL "$child_pid"'* ]] || return 1
+  [[ "$helper_block" == *'command_status=124'* ]] || return 1
+  [[ "$helper_block" == *'rm -f "$marker"'* ]] || return 1
+  [[ "$mac_leg_block" == *'run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests"'* ]] || return 1
+  [[ "$mac_leg_block" != *'assert_counting_leg "GradusiOS-iPhone" run_with_deadline'* ]] || return 1
+  grep -Fq 'GRADUS_MAC_TEST_TIMEOUT_SECONDS="${GRADUS_MAC_TEST_TIMEOUT_SECONDS:-600}"' "$gate_path" || return 1
+}
+
+validate_gradus_mac_deadline_contract "$GATE_SCRIPT" ||
+  fail "GradusMac unit-test deadline contract is incomplete"
+
+# Run the real helper with hermetic commands. A normal failure keeps its exact
+# status, a hung command is terminated with status 124, progress is visible,
+# and the watchdog marker is removed in both paths.
+deadline_test_root="$(mktemp -d "${TMPDIR:-/tmp}/gradus-deadline-selfcheck.XXXXXX")"
+run_deadline_fixture() {
+  local name="$1" expected_status="$2"
+  shift 2
+  local output="$deadline_test_root/$name.out" actual_status
+  if TMPDIR="$deadline_test_root" run_with_deadline 1 "$name" "$@" >"$output" 2>&1; then
+    actual_status=0
+  else
+    actual_status=$?
+  fi
+  [[ "$actual_status" -eq "$expected_status" ]] ||
+    fail "deadline fixture '$name' returned $actual_status, expected $expected_status"
+  grep -Fq "==> $name (deadline 1s)" "$output" ||
+    fail "deadline fixture '$name' did not report its deadline"
+}
+
+run_deadline_fixture exact-status 37 bash -c 'printf "%s\\n" complete; exit 37'
+run_deadline_fixture bounded-timeout 124 bash -c 'while :; do :; done'
+grep -Fq 'FAIL: bounded-timeout exceeded 1s; terminating' \
+  "$deadline_test_root/bounded-timeout.out" ||
+  fail "deadline timeout did not emit visible termination evidence"
+[[ -z "$(find "$deadline_test_root" -maxdepth 1 -type f -name 'gradus-test-deadline.*' -print -quit)" ]] ||
+  fail "deadline watchdog marker was not cleaned up"
+rm -rf "$deadline_test_root"
+
+# A mutation that removes the deadline wrapper from the GradusMac leg must be
+# rejected, so the bounded boundary cannot silently disappear.
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-mac-deadline-contract.XXXXXX")"
+sed 's/run_with_deadline "\$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests" //' \
+  "$GATE_SCRIPT" > "$mutated_gate"
+if validate_gradus_mac_deadline_contract "$mutated_gate"; then
+  fail "GradusMac deadline contract accepted a removed wrapper"
+fi
+rm -f "$mutated_gate"
+
 validate_mac_app_lifecycle_contract() {
   local gate_path="$1" stop_block restore_block trap_block
   stop_block="$(sed -n '/^stop_installed_gradus_mac_for_ui_tests()/,/^}/p' "$gate_path")"
