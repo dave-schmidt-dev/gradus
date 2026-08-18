@@ -37,3 +37,8 @@ app/design-system/mocks/
 # Runtime logs (AGENTS.md: gitignored .logs/<project>.log, never scattered
 # outside the project and never committed).
 .logs/
+
+# The operator's recorded TestFlight group confirmation. Deliberately local:
+# committing it would hand every clone a standing authority to distribute
+# builds, which is the one decision this repo requires a human to make.
+.release/tester-group.json
