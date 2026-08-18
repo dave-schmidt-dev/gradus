@@ -49,7 +49,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position. The Codex 5-hour limit row is hidden entirely when the upstream API omits it (as OpenAI has done since 2026-07) and reappears automatically once the API reports it again.
 - Shows Codex (Spark) — a separate weekly-quota bucket on the same OpenAI account, disambiguated from the primary Codex weekly window (`sp1w` in the TUI) — with its own remaining percentage, reset time, and pace indicator
-- Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus conditional Claude+GPT (`cg5`, `cg1w`) group activation when at least one valid C+G remaining percentage is below 100%. Rows render independently: each valid C+G row below 100% appears; exact-100%, missing, or malformed sibling rows are omitted.
+- Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus Claude+GPT (`cg5`, `cg1w`) rows whenever the canonical v2 snapshot contains valid tracked values. Rows render independently, including at exactly 100%; missing or malformed sibling rows are omitted. The TUI hydrates these rows from the internal `Antigravity (Claude)` synthetic entry at read time.
 - Shows Copilot monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
 - Shows Vibe monthly remaining (`mo`), reset, and billing-cycle pace
@@ -171,7 +171,7 @@ Antigravity card shows (Gemini model group — the pool `agy` consumes):
 - `5h`: remaining quota for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining quota for the current 1-week window, weekly reset time, pace indicator
 
-When the Claude+GPT group has at least one valid remaining percentage below 100%, the group activates. Rows render independently: each valid C+G percentage below 100% produces its `cg5` (5-hour) or `cg1w` (1-week) row; exact-100%, missing, or malformed sibling rows are omitted. If both valid C+G percentages are exactly 100%, that idle group is omitted. C+G rows participate in the same `[!]` badge and one-shot notification warning membership as other rendered windows.
+The TUI hydrates the C+G rows from the canonical schema-v2 `Antigravity (Claude)` synthetic entry at read time; it does not add that internal entry as a second card. Each valid tracked percentage produces its `cg5` (5-hour) or `cg1w` (1-week) row, including an exact 100% value. Missing or malformed sibling rows are omitted. C+G rows participate in the same `[!]` badge and one-shot notification warning membership as other rendered windows. Codex (Spark) is hydrated similarly from the canonical `Codex (Spark)` synthetic entry into the primary Codex card.
 
 Copilot / Cursor / Vibe cards show:
 
@@ -187,7 +187,7 @@ Reset displays are normalized before rendering:
 
 ## JSON Output
 
-`--json` prints the canonical, credential-free snapshot and is **machine-safe**: it performs no provider probes, browser launch, token refresh, cache writes, or warning notifications. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`. Antigravity's Claude+GPT fields and windows are deliberately excluded from `--json`; Gemini output remains unchanged.
+`--json` prints the canonical, credential-free snapshot and is **machine-safe**: it performs no provider probes, browser launch, token refresh, cache writes, or warning notifications. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`. Antigravity's Claude+GPT fields and windows, and the TUI-only reconstructed Spark/C+G keys, are deliberately excluded from `--json`; Gemini output remains unchanged. Router-facing `--json` therefore exposes only the canonical safe provider entries, while the TUI may reconstruct internal display fields from those synthetic entries without changing the persisted or router schema.
 
 Example:
 

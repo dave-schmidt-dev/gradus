@@ -5,6 +5,35 @@ enum IOSProviderRetryAccessibility {
     static let retryingLabel = "Antigravity refresh retrying; values may be stale"
     static let reauthenticationLabel = "Antigravity authentication required; run agy to re-authenticate"
     static let claudeRateLimitedLabel = "Claude rate limited; cached values may be stale"
+    static let failedRequestLabel = "Unable to refresh provider data"
+
+    private static let httpStatusPatterns = [
+        #"(?i)\bHTTP(?:/\d(?:\.\d)?)?\s+[45]\d{2}\b"#,
+        #"(?i)\bstatus\s+code\s*[:=]?\s*[45]\d{2}\b"#,
+        #"(?i)\bresponse[- ]code\s*[:=]?\s*[45]\d{2}\b"#,
+        #"(?i)\b[45]\d{2}\s+(?:HTTP\s+)?(?:status|response)(?:\s+status)?\s+code\b"#,
+        #"(?i)\b(?:failed|failure|rejected|denied|forbidden|unauthorized)\b[^\n]{0,40}\b[45]\d{2}\b"#
+    ].compactMap { try? NSRegularExpression(pattern: $0) }
+
+    private static let bareHTTPStatusPattern = try? NSRegularExpression(
+        pattern: #"^\(?[45]\d{2}\)?$"#
+    )
+
+    /// Raw provider diagnostics remain in `ProviderStatus.errorMessage` for
+    /// logs and classification, but status codes are not suitable iOS copy.
+    private static func userFacingError(_ error: String) -> String {
+        let range = NSRange(error.startIndex..., in: error)
+        let trimmed = error.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isBareHTTPStatus = bareHTTPStatusPattern?.firstMatch(
+            in: trimmed,
+            range: NSRange(trimmed.startIndex..., in: trimmed)
+        ) != nil
+        if isBareHTTPStatus
+            || httpStatusPatterns.contains(where: { $0.firstMatch(in: error, range: range) != nil }) {
+            return failedRequestLabel
+        }
+        return error
+    }
 
     static func label(for provider: ProviderStatus) -> String? {
         if isClaudeRateLimited(provider) {
@@ -52,7 +81,11 @@ enum IOSProviderRetryAccessibility {
             return claudeRateLimitedLabel
         }
         guard !isCarriedFailure(provider) else { return nil }
-        return label(for: provider) ?? provider.errorMessage ?? "error"
+        if let actionableLabel = label(for: provider) {
+            return actionableLabel
+        }
+        guard let error = provider.errorMessage else { return "error" }
+        return userFacingError(error)
     }
 }
 

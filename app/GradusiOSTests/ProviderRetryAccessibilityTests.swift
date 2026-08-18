@@ -57,6 +57,33 @@ struct ProviderRetryAccessibilityTests {
         #expect(!IOSProviderRetryAccessibility.isRetrying(provider))
     }
 
+    @Test(arguments: [
+        "HTTP 403 Forbidden",
+        "request failed with status code: 500",
+        "upstream response-code 502",
+        "503 response status code",
+        "403",
+        "upstream rejected (401)"
+    ])
+    func rawHTTPStatusCodesAreNotShownInUserFacingCopy(_ error: String) {
+        let provider = provider(error: error, windows: [])
+        #expect(
+            IOSProviderRetryAccessibility.displayLabel(for: provider)
+                == IOSProviderRetryAccessibility.failedRequestLabel
+        )
+        #expect(provider.errorMessage == error)
+    }
+
+    @Test(arguments: [
+        "offline for 500 minutes",
+        "service on port 500 failed"
+    ])
+    func unrelatedNumbersRemainSafeDiagnosticCopy(_ error: String) {
+        let provider = provider(error: error, windows: [])
+        #expect(IOSProviderRetryAccessibility.displayLabel(for: provider) == error)
+        #expect(provider.errorMessage == error)
+    }
+
     @Test func onlyProvenAntigravityRetrySuppressesRetainedFailure() {
         let retrying = provider(error: IOSProviderRetryAccessibility.retryingLabel)
         #expect(IOSProviderRetryAccessibility.isCarriedFailure(retrying))

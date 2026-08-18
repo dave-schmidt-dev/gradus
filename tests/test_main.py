@@ -26,6 +26,7 @@ from gradus.__main__ import (
     STALE_THRESHOLD_SECONDS,
     _acquire_refresh_snapshot_lock,
     _build_fix_actions,
+    _canonical_snapshots,
     _check_warnings,
     _emit_debug_details,
     _health_sample_reason,
@@ -46,9 +47,208 @@ from gradus.__main__ import (
 )
 from gradus.providers import ProviderSnapshot, set_headless
 from gradus.snapshot import ANTIGRAVITY_AUTH_RETRY_MESSAGE, SnapshotWrite
-from gradus.ui import THEME, build_dashboard
+from gradus.ui import THEME, build_dashboard, render_json
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
+
+
+class CanonicalSyntheticHydrationTests(unittest.TestCase):
+    """Schema-v2 synthetic pools remain on their primary TUI cards."""
+
+    @staticmethod
+    def _payload(*synthetic_entries: dict[str, object]) -> dict[str, object]:
+        return {
+            "schema_version": 2,
+            "updated_at": NOW.replace(tzinfo=timezone.utc).isoformat(),
+            "providers": [
+                {
+                    "name": "Antigravity",
+                    "ok": True,
+                    "error": None,
+                    "windows": [],
+                    "data": {},
+                    "observed_at": NOW.replace(tzinfo=timezone.utc).isoformat(),
+                },
+                {
+                    "name": "Codex",
+                    "ok": True,
+                    "error": None,
+                    "windows": [],
+                    "data": {},
+                    "observed_at": NOW.replace(tzinfo=timezone.utc).isoformat(),
+                },
+                *synthetic_entries,
+            ],
+        }
+
+    def _primary(self, snapshots: list[ProviderSnapshot], name: str) -> ProviderSnapshot:
+        return next(snapshot for snapshot in snapshots if snapshot.name == name)
+
+    def test_100_percent_synthetic_pools_survive_hydration(self) -> None:
+        snapshots, _ = _canonical_snapshots(
+            self._payload(
+                {
+                    "name": "Antigravity (Claude)",
+                    "ok": True,
+                    "data": {
+                        "five_hour_percent_left": 100,
+                        "weekly_percent_left": 100,
+                        "five_hour_reset": "in 5h",
+                        "weekly_reset": "in 7d",
+                    },
+                },
+                {
+                    "name": "Codex (Spark)",
+                    "ok": True,
+                    "data": {"weekly_percent_left": 100, "weekly_reset": "in 7d"},
+                },
+            )
+        )
+        assert snapshots is not None
+        self.assertEqual(
+            self._primary(snapshots, "Antigravity").data,
+            {
+                "third_party_five_hour_percent_left": 100,
+                "third_party_weekly_percent_left": 100,
+                "third_party_five_hour_reset": "in 5h",
+                "third_party_weekly_reset": "in 7d",
+            },
+        )
+        self.assertEqual(
+            self._primary(snapshots, "Codex").data,
+            {"spark_weekly_percent_left": 100, "spark_weekly_reset": "in 7d"},
+        )
+        self.assertNotIn("Antigravity (Claude)", {snapshot.name for snapshot in snapshots})
+        self.assertNotIn("Codex (Spark)", {snapshot.name for snapshot in snapshots})
+
+    def test_missing_or_malformed_synthetic_pools_are_omitted(self) -> None:
+        cases = (
+            ((), False, False, False),
+            (
+                (
+                    {
+                        "name": "Antigravity (Claude)",
+                        "ok": True,
+                        "data": {"five_hour_percent_left": "100", "weekly_percent_left": 100},
+                    },
+                ),
+                False,
+                True,
+                False,
+            ),
+            (
+                (
+                    {
+                        "name": "Codex (Spark)",
+                        "ok": True,
+                        "data": {"weekly_percent_left": None},
+                    },
+                ),
+                False,
+                False,
+                False,
+            ),
+        )
+        for entries, has_cg5, has_cg1w, has_sp1w in cases:
+            with self.subTest(entries=entries):
+                snapshots, _ = _canonical_snapshots(self._payload(*entries))
+                assert snapshots is not None
+                antigravity_data = self._primary(snapshots, "Antigravity").data
+                codex_data = self._primary(snapshots, "Codex").data
+                self.assertEqual("third_party_five_hour_percent_left" in antigravity_data, has_cg5)
+                self.assertEqual("third_party_weekly_percent_left" in antigravity_data, has_cg1w)
+                self.assertEqual("spark_weekly_percent_left" in codex_data, has_sp1w)
+
+    def test_each_valid_pool_is_hydrated_independently(self) -> None:
+        cases = (
+            {
+                "five_hour_percent_left": 100,
+                "five_hour_reset": "in 5h",
+            },
+            {
+                "weekly_percent_left": 100,
+                "weekly_reset": "in 7d",
+            },
+            {
+                "five_hour_percent_left": "malformed",
+                "weekly_percent_left": 100,
+                "weekly_reset": "in 7d",
+            },
+        )
+        for data in cases:
+            with self.subTest(data=data):
+                snapshots, _ = _canonical_snapshots(
+                    self._payload(
+                        {"name": "Antigravity (Claude)", "ok": True, "data": data},
+                    )
+                )
+                assert snapshots is not None
+                antigravity = self._primary(snapshots, "Antigravity")
+                has_five_hour = (
+                    "five_hour_percent_left" in data and data["five_hour_percent_left"] == 100
+                )
+                has_weekly = data.get("weekly_percent_left") == 100
+                self.assertEqual(
+                    "third_party_five_hour_percent_left" in antigravity.data, has_five_hour
+                )
+                self.assertEqual("third_party_weekly_percent_left" in antigravity.data, has_weekly)
+                if not has_five_hour:
+                    self.assertNotIn("third_party_five_hour_reset", antigravity.data)
+
+    def test_hydrated_pool_labels_reach_dashboard(self) -> None:
+        snapshots, updated_at = _canonical_snapshots(
+            self._payload(
+                {
+                    "name": "Antigravity (Claude)",
+                    "ok": True,
+                    "data": {
+                        "five_hour_percent_left": 100,
+                        "weekly_percent_left": 100,
+                    },
+                },
+                {
+                    "name": "Codex (Spark)",
+                    "ok": True,
+                    "data": {"weekly_percent_left": 100},
+                },
+            )
+        )
+        assert snapshots is not None
+        antigravity = self._primary(snapshots, "Antigravity")
+        antigravity.data.update({"five_hour_percent_left": 80, "weekly_percent_left": 80})
+        codex = self._primary(snapshots, "Codex")
+        codex.data.update({"five_hour_percent_left": 80, "weekly_percent_left": 80})
+        console = Console(file=StringIO(), width=72, no_color=True)
+        console.print(build_dashboard([antigravity, codex], updated_at, 30))
+        output = console.file.getvalue()
+        self.assertIn("cg5", output)
+        self.assertIn("cg1w", output)
+        self.assertIn("sp1w", output)
+
+    def test_hydrated_pool_keys_stay_out_of_router_json(self) -> None:
+        snapshots, updated_at = _canonical_snapshots(
+            self._payload(
+                {
+                    "name": "Antigravity (Claude)",
+                    "ok": True,
+                    "data": {"five_hour_percent_left": 100, "weekly_percent_left": 100},
+                },
+                {
+                    "name": "Codex (Spark)",
+                    "ok": True,
+                    "data": {"weekly_percent_left": 100},
+                },
+            )
+        )
+        assert snapshots is not None
+        rendered = json.loads(render_json(snapshots, updated_at))
+        names = {provider["name"] for provider in rendered["providers"]}
+        self.assertNotIn("Antigravity (Claude)", names)
+        self.assertNotIn("Codex (Spark)", names)
+        for provider in rendered["providers"]:
+            data_keys = provider["data"]
+            self.assertFalse(any(key.startswith("third_party_") for key in data_keys))
+            self.assertFalse(any(key.startswith("spark_") for key in data_keys))
 
 
 class CursorWarningTests(unittest.TestCase):

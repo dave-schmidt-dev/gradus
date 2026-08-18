@@ -46,6 +46,7 @@ from .snapshot import (
     build_snapshot_payload,
     build_snapshot_v2_payload,
     is_antigravity_auth_failure,
+    percent_is_valid,
     read_prior_snapshot,
     warning_membership,
     write_snapshot,
@@ -173,6 +174,64 @@ def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datet
     }
     snapshots: list[ProviderSnapshot] = []
 
+    # Schema-v2 keeps synthetic pools as independent router entries.  The TUI
+    # still renders one card per primary provider, so project those entries
+    # back into the established display keys at read time only.  Keeping this
+    # mapping here (rather than changing CANONICAL_PROVIDERS or the persisted
+    # payload) preserves the router's fail-closed provider set.
+    synthetic_projections: dict[str, tuple[str, tuple[tuple[str, str, str, str], ...]]] = {
+        "Antigravity": (
+            "Antigravity (Claude)",
+            (
+                (
+                    "five_hour_percent_left",
+                    "third_party_five_hour_percent_left",
+                    "five_hour_reset",
+                    "third_party_five_hour_reset",
+                ),
+                (
+                    "weekly_percent_left",
+                    "third_party_weekly_percent_left",
+                    "weekly_reset",
+                    "third_party_weekly_reset",
+                ),
+            ),
+        ),
+        "Codex": (
+            "Codex (Spark)",
+            (
+                (
+                    "weekly_percent_left",
+                    "spark_weekly_percent_left",
+                    "weekly_reset",
+                    "spark_weekly_reset",
+                ),
+            ),
+        ),
+    }
+
+    def project_synthetic_data(name: str, data: dict[str, object]) -> None:
+        spec = synthetic_projections.get(name)
+        if spec is None:
+            return
+        synthetic_name, fields = spec
+        synthetic = by_name.get(synthetic_name)
+        if not isinstance(synthetic, Mapping) or synthetic.get("ok") is not True:
+            return
+        synthetic_data = synthetic.get("data")
+        if not isinstance(synthetic_data, Mapping):
+            return
+        projected: dict[str, object] = {}
+        for percent_source, percent_target, reset_source, reset_target in fields:
+            percent = synthetic_data.get(percent_source)
+            if not percent_is_valid(percent):
+                continue
+            projected[percent_target] = percent
+            reset = synthetic_data.get(reset_source)
+            if isinstance(reset, str):
+                projected[reset_target] = reset
+        data.update(projected)
+
     def carried_failure(entry: Mapping[str, object], data: Mapping[str, object]) -> bool:
         error = entry.get("error")
         observed_at = _parse_aware_iso_timestamp(entry.get("observed_at"))
@@ -205,6 +264,8 @@ def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datet
             continue
         data = entry.get("data")
         safe_data = dict(data) if isinstance(data, Mapping) else None
+        if name in synthetic_projections and safe_data is not None:
+            project_synthetic_data(name, safe_data)
         ok = entry.get("ok") is True
         observed_at = _parse_aware_iso_timestamp(entry.get("observed_at"))
         if not ok and safe_data and carried_failure(entry, safe_data):
