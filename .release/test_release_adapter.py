@@ -147,6 +147,15 @@ class GradusAdapterTests(unittest.TestCase):
             expected,
         )
 
+    def test_local_gate_declares_only_required_safe_runtime_inputs(self) -> None:
+        document = json.loads(ADAPTER.read_text(encoding="utf-8"))
+        operations = {entry["class"]: entry for entry in document["operations"]}
+
+        self.assertEqual(
+            operations["localGate"]["environment"]["inputs"],
+            ["READINESS_MANIFEST", "HOME", "PATH"],
+        )
+
     def test_typed_proof_fixture_has_every_workflow_field_and_binding(self) -> None:
         document = json.loads(ADAPTER.read_text(encoding="utf-8"))
         schemas = load_workflow_spec()["core"]["proofSchemas"]

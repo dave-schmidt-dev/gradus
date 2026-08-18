@@ -20,6 +20,16 @@
       "name": "READINESS_MANIFEST",
       "required": true,
       "source": "caller"
+    },
+    {
+      "name": "HOME",
+      "required": true,
+      "source": "caller"
+    },
+    {
+      "name": "PATH",
+      "required": true,
+      "source": "caller"
     }
   ],
   "registeredConsumers": [
@@ -74,7 +84,7 @@
       "workingDirectory": ".",
       "environment": {
         "inherit": false,
-        "inputs": ["READINESS_MANIFEST"],
+        "inputs": ["READINESS_MANIFEST", "HOME", "PATH"],
         "literals": {"RELEASE_CONFIGURATION": "Production"}
       },
       "proofSchema": "release.proof.local-gate.v1",
