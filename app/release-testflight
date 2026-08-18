@@ -23,8 +23,19 @@ fi
 case "${1:-}" in
   --prepare-only)
     [[ $# -eq 1 ]] || { echo "release-testflight: --prepare-only takes no extra arguments" >&2; exit 64; }
-    exec env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
-      --adapter "$ADAPTER" --repository "$ROOT"
+    prepared="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
+      --adapter "$ADAPTER" --repository "$ROOT")" || {
+      status=$?
+      printf '%s\n' "$prepared"
+      exit "$status"
+    }
+    candidate="$($PYTHON_BIN -c 'import json,sys; print(json.loads(sys.argv[1])["candidateId"])' \
+      "$prepared")" || {
+      echo "release-testflight: prepared candidate identity is unavailable" >&2
+      exit 4
+    }
+    exec env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools stage \
+      --adapter "$ADAPTER" --repository "$ROOT" --candidate "$candidate"
     ;;
   --upload)
     [[ $# -eq 1 ]] || { echo "release-testflight: --upload takes no extra arguments" >&2; exit 64; }

@@ -440,8 +440,9 @@ gate-green release candidate or a release-blocking correction; small
 non-blocking tweaks are batched into the next patch release. The two public
 entry points are:
 
-- `app/release-testflight` — prepare or upload the immutable candidate using
-  the registered Gradus consumer.
+- `app/release-testflight` — `--prepare-only` freezes the identity/source, then
+  runs the explicit pre-upload stage through signed-artifact verification;
+  `--upload` is the separate reviewed publication boundary.
 - `app/release-status` — read the current local candidate status.
 
 Profile 2.0 is adopted for the verified Gradus candidate

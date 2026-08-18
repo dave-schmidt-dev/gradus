@@ -21,6 +21,14 @@ SPEC.loader.exec_module(BRIDGE)
 
 
 class BridgeTests(unittest.TestCase):
+    def test_prepare_only_freezes_then_stages_without_upload(self) -> None:
+        wrapper = (ROOT / "app" / "release-testflight").read_text(encoding="utf-8")
+        prepare_branch = wrapper.split("--prepare-only)", 1)[1].split("--upload)", 1)[0]
+        self.assertIn("-m release_tools testflight", prepare_branch)
+        self.assertIn("-m release_tools stage", prepare_branch)
+        self.assertIn('--candidate "$candidate"', prepare_branch)
+        self.assertNotIn("--upload", prepare_branch)
+
     def test_parser_is_closed_and_rejects_shell_candidate(self) -> None:
         with self.assertRaises(ValueError):
             BRIDGE.dispatch("upload", product="gradus-ios", candidate="x;touch /tmp/no")
