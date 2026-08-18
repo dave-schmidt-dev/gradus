@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -910,6 +911,130 @@ class BridgeTests(unittest.TestCase):
                     (root / "evidence" / "gradus-ios-19" / "compliance.json").read_text()
                 )
                 self.assertEqual(proof["complianceStateReported"], reported)
+
+    @staticmethod
+    def _tester_group_proof(root: Path, group_id: str, *, result: str = "passed") -> None:
+        """Write the tester-group proof assignment refuses to proceed without."""
+
+        proof = root / "evidence" / "gradus-ios-19" / "tester-group.json"
+        proof.parent.mkdir(parents=True, exist_ok=True)
+        proof.write_text(
+            json.dumps(
+                {
+                    "result": result,
+                    "candidateId": "gradus-ios-19",
+                    "groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _dispatch_assignment(self, root: Path, runner):
+        with (
+            patch.object(BRIDGE, "ROOT", root),
+            patch.object(BRIDGE, "ASSIGN", root / "assign.py"),
+            patch.object(BRIDGE, "LEGACY_LEDGER", root / ".release-state" / "candidate.json"),
+            patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+        ):
+            return BRIDGE.dispatch(
+                "assignment", product="gradus-ios", candidate="gradus-ios-19", runner=runner
+            )
+
+    def test_assignment_never_distributes_without_a_matching_confirmation(self) -> None:
+        """The recorded choice and its proof must still agree at assignment time.
+
+        Assignment is the first operation that changes anything at Apple, so a
+        confirmation edited after the lookup, or a proof that never passed, must
+        stop it.  The runner is a trap: reaching it means a build was about to
+        be distributed on an authority nobody granted.
+        """
+
+        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        cases = {
+            "no-confirmation": (None, group, "passed"),
+            "no-proof": ((group, "Internal Testers"), None, "passed"),
+            "proof-blocked": ((group, "Internal Testers"), group, "blocked"),
+            "confirmation-changed-after-lookup": (
+                ("another-group-id", "Internal Testers"),
+                group,
+                "passed",
+            ),
+        }
+        for name, (confirmation, proof_group, result) in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._legacy_candidate(root)
+                if confirmation is not None:
+                    self._confirm(root, confirmation[0], confirmation[1])
+                if proof_group is not None:
+                    self._tester_group_proof(root, proof_group, result=result)
+
+                def runner(argv, **kwargs):
+                    raise AssertionError("distributed a build without a confirmed group")
+
+                self.assertEqual(self._dispatch_assignment(root, runner), 3)
+                proof = json.loads(
+                    (root / "evidence" / "gradus-ios-19" / "assignment.json").read_text()
+                )
+                self.assertEqual(proof["reason"], "tester-group-confirmation-required")
+
+    def test_assignment_delegates_to_the_attended_wrapper(self) -> None:
+        """The mutation belongs to testflight-assign.py, not to the bridge.
+
+        That wrapper already owns reconciliation, the ledger transition, and the
+        receipt journal.  Re-implementing any of it here would give one act two
+        records that could disagree, so the bridge only invokes it and attests
+        the outcome.
+        """
+
+        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            self._confirm(root, group, "Internal Testers")
+            self._tester_group_proof(root, group)
+            calls = []
+
+            def runner(argv, **kwargs):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, 0, "{}", "")
+
+            self.assertEqual(self._dispatch_assignment(root, runner), 0)
+            self.assertEqual(len(calls), 1)
+            argv = calls[0]
+            self.assertEqual(argv[1:4], [str(root / "assign.py"), "gradus-ios-19", "19"])
+            self.assertIn("--group-id", argv)
+            self.assertEqual(argv[argv.index("--group-id") + 1], group)
+            self.assertEqual(argv[argv.index("--group-name") + 1], "Internal Testers")
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "assignment.json").read_text()
+            )
+            self.assertEqual(proof["result"], "passed")
+            self.assertEqual(proof["lane"], "standard")
+            self.assertEqual(
+                proof["groupIdentifierHash"], hashlib.sha256(group.encode()).hexdigest()
+            )
+            self.assertNotIn(group, json.dumps(proof), "the proof republished the group identifier")
+
+    def test_assignment_blocks_when_the_wrapper_refuses(self) -> None:
+        """A refused assignment must leave a blocked proof, never a passing one."""
+
+        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            self._confirm(root, group, "Internal Testers")
+            self._tester_group_proof(root, group)
+
+            def runner(argv, **kwargs):
+                return subprocess.CompletedProcess(argv, 1, "", "FAIL: assignment_invalid")
+
+            self.assertEqual(self._dispatch_assignment(root, runner), 3)
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "assignment.json").read_text()
+            )
+            self.assertEqual(proof["result"], "blocked")
+            self.assertEqual(proof["reason"], "assignment-not-confirmed")
 
 
 if __name__ == "__main__":

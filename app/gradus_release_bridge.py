@@ -27,6 +27,8 @@ EVIDENCE_ROOT = ROOT / ".release-state" / "evidence"
 IDENTITY_PROOF = EVIDENCE_ROOT / "allocate-identity.json"
 ALLOCATOR = ROOT / "app" / "allocate_identity.py"
 ARCHIVE = ROOT / "app" / "archive-upload-ios.sh"
+ASSIGN = ROOT / "app" / "testflight-assign.py"
+LEGACY_LEDGER = ROOT / ".release-state" / "candidate.json"
 OPERATIONS = (
     "identity-allocation",
     "upload",
@@ -758,6 +760,108 @@ def _tester_group(candidate: str, *, client_factory: Callable[[], Any]) -> int:
     )
 
 
+def _candidate_lane(candidate: str) -> str:
+    """Read the lane this candidate was allocated into.
+
+    The central workflow compares a proof's lane against the manifest's, so it
+    is read rather than assumed.  A legacy-only candidate has no manifest and
+    keeps the documented default.
+    """
+
+    central = _central_candidate_record(candidate)
+    if central is None:
+        return "standard"
+    manifest, _attestation = central
+    lane = manifest.get("lane")
+    return lane if isinstance(lane, str) and lane.strip() else "standard"
+
+
+def _confirmed_tester_group(candidate: str) -> tuple[str, str] | None:
+    """Require a passing tester-group proof that still matches the confirmation.
+
+    Assignment is the first operation that changes anything at Apple, so it
+    re-establishes the authority rather than trusting that an earlier step ran.
+    A confirmation edited after the lookup no longer matches its own proof, and
+    a build must not be distributed on the strength of a choice nobody made.
+    """
+
+    confirmation = _tester_group_confirmation()
+    if confirmation is None:
+        return None
+    proof = _read_json(_proof_path("tester-group", candidate))
+    if proof is None or proof.get("result") != "passed":
+        return None
+    if proof.get("candidateId") != candidate:
+        return None
+    if proof.get("groupIdentifierHash") != hashlib.sha256(confirmation[0].encode()).hexdigest():
+        return None
+    return confirmation
+
+
+def _assignment(candidate: str, *, runner: Callable[..., subprocess.CompletedProcess[str]]) -> int:
+    """Distribute a processed build to the confirmed internal group.
+
+    Every local precondition is re-checked here because this is the first
+    operation that changes state at Apple.  The mutation itself is delegated to
+    testflight-assign.py, which already owns reconciliation, the ledger
+    transition, and the receipt journal -- duplicating any of that here would
+    give the same candidate two disagreeing records of the same act.
+    """
+
+    binding = _candidate_bindings(candidate)
+    if binding is None:
+        return _blocked("assignment", candidate, "candidate-ledger-mismatch")
+    legacy_candidate, record, _marketing_version, build, _artifact = binding
+    uploaded = _uploaded_identifier_from_proof(candidate)
+    if uploaded is None:
+        return _blocked("assignment", candidate, "uploaded-build-identifier-unavailable")
+    confirmation = _confirmed_tester_group(candidate)
+    if confirmation is None:
+        return _blocked("assignment", candidate, "tester-group-confirmation-required")
+    group_id, group_name = confirmation
+    workspace = _delivery_receipt_path(legacy_candidate, record).parent
+    argv = [
+        sys.executable,
+        str(ASSIGN),
+        legacy_candidate,
+        str(build),
+        "--group-id",
+        group_id,
+        "--group-name",
+        group_name,
+        "--ledger",
+        str(LEGACY_LEDGER),
+        "--evidence",
+        str(workspace / "candidate-evidence.json"),
+        "--receipt-journal",
+        str(workspace / "receipt-journal.json"),
+    ]
+    result = runner(
+        argv,
+        cwd=ROOT,
+        env=dict(os.environ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        shell=False,
+    )
+    if result.returncode != 0:
+        _persist_operation_diagnostics("assignment", candidate, argv, result)
+        return _blocked("assignment", candidate, "assignment-not-confirmed")
+    return _observation_passed(
+        "assignment",
+        candidate,
+        uploaded_build_identifier=uploaded,
+        # The group is bound by hash, not republished: a proof records which
+        # choice was honored, and is not a directory of who receives builds.
+        observed={
+            "groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest(),
+            "lane": _candidate_lane(candidate),
+        },
+    )
+
+
 def _observation_context(operation: str, candidate: str) -> tuple[int, str] | int:
     """Resolve the build number and upload confirmation both observers need."""
 
@@ -987,6 +1091,8 @@ def dispatch(
             marketing_version=marketing_version,
             build=build,
         )
+    if operation == "assignment":
+        return _assignment(candidate, runner=runner)
     if operation in ("processing", "compliance", "tester-group"):
         # Resolved lazily inside the observers so a candidate that fails the
         # local ledger or upload-proof checks never causes a credential to be
