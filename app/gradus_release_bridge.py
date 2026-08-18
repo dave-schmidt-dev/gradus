@@ -235,6 +235,14 @@ def _central_candidate_record(candidate: str) -> tuple[Mapping[str, Any], Mappin
     return manifest, attestation
 
 
+# A legacy ledger keeps describing the same artifact after the transfer starts.
+# Binding only to "prepared" made every post-upload operation unresolvable the
+# moment upload began, so a candidate Apple had already accepted could never be
+# observed.  Recovery and replacement states stay out: they no longer describe a
+# candidate anyone should attest.
+_BINDABLE_STATES = frozenset({"prepared", "uploading", "uploaded_unassigned", "assigned"})
+
+
 def _candidate_bindings(candidate: str) -> tuple[str, Mapping[str, Any], str, int, str] | None:
     """Resolve a central candidate to exactly one prepared legacy ledger.
 
@@ -291,7 +299,7 @@ def _candidate_bindings(candidate: str) -> tuple[str, Mapping[str, Any], str, in
         record = _read_json(path)
         if (
             record is not None
-            and record.get("state") == "prepared"
+            and record.get("state") in _BINDABLE_STATES
             and record.get("marketingVersion") == version
             and record.get("build") == build
             and record.get("artifactSha256") == artifact
@@ -360,6 +368,51 @@ def _upload_passed(
         )
     )
     return 0
+
+
+def _delivery_receipt_path(legacy_candidate: str, record: Mapping[str, Any]) -> Path:
+    """Locate the workspace holding this candidate's delivery receipt.
+
+    The prepared ledger records its own workspace, so that is authoritative when
+    present, with the conventional layout as the fallback.  Guessing wrong can
+    only cause the receipt to be missed, which falls through to the transport
+    and blocks -- it can never produce a false adoption.
+    """
+
+    metadata = record.get("metadata")
+    if isinstance(metadata, Mapping):
+        workspace = metadata.get("candidateWorkspace")
+        if isinstance(workspace, str) and workspace.strip():
+            return Path(workspace) / "upload-delivery.json"
+    return ROOT / ".release-state" / "candidates" / legacy_candidate / "upload-delivery.json"
+
+
+def _adopted_delivery(
+    legacy_candidate: str, record: Mapping[str, Any], *, build: int, artifact: str
+) -> bool:
+    """Report whether Apple already accepted exactly these bytes.
+
+    Mirrors ``delivery_receipt_matches`` in archive-upload-ios.sh field for
+    field.  A receipt carrying a different digest is a different build rather
+    than a weaker match, so every field must agree before a transfer is skipped.
+    """
+
+    receipt = _read_json(_delivery_receipt_path(legacy_candidate, record))
+    if receipt is None:
+        return False
+    raw_build = receipt.get("build")
+    if isinstance(raw_build, bool) or not isinstance(raw_build, (str, int)):
+        return False
+    try:
+        build_matches = int(raw_build) == int(build)
+    except (TypeError, ValueError):
+        return False
+    return (
+        build_matches
+        and receipt.get("candidateId") == legacy_candidate
+        and receipt.get("artifactSha256") == artifact
+        and receipt.get("result") == "delivered"
+    )
 
 
 def _current_marketing_version() -> str:
@@ -852,7 +905,21 @@ def dispatch(
         binding = _candidate_bindings(candidate)
         if binding is None:
             return _blocked(operation, candidate, "candidate-ledger-mismatch")
-        legacy_candidate, _record, marketing_version, build, artifact = binding
+        legacy_candidate, record, marketing_version, build, artifact = binding
+        # Apple rejects a duplicate build number, so re-sending a candidate it
+        # already accepted cannot succeed -- it can only fail and strand the
+        # candidate again.  The transport writes a receipt for exactly this
+        # reason; honor it here rather than repeating a transfer that is
+        # guaranteed to be refused.
+        if _adopted_delivery(legacy_candidate, record, build=build, artifact=artifact):
+            return _upload_passed(
+                candidate,
+                artifact=artifact,
+                uploaded_build_identifier=f"{marketing_version} ({build})",
+                legacy_candidate=legacy_candidate,
+                marketing_version=marketing_version,
+                build=build,
+            )
         result = runner(
             [str(ARCHIVE), "--upload-only", "--candidate", legacy_candidate],
             cwd=ROOT,

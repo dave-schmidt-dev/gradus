@@ -687,6 +687,168 @@ class BridgeTests(unittest.TestCase):
             )
             self.assertEqual([g["groupId"] for g in choices["internalGroups"]], ["group-1"])
 
+    @staticmethod
+    def _central_candidate(root: Path, *, state: str, receipt: dict | None = None) -> str:
+        """Write a central manifest plus the legacy ledger it must bind to.
+
+        Returns the artifact digest so a caller can build a receipt that either
+        matches those exact bytes or deliberately does not.
+        """
+
+        artifact = "a" * 64
+        central = root / ".git" / "release-state" / "gradus-ios" / "candidates" / "1.8.0-20"
+        central.mkdir(parents=True)
+        (central / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "candidateId": "1.8.0-20",
+                    "release": {"marketingVersion": "1.8.0", "buildNumber": "20"},
+                    "artifactAttestation": {"path": "artifact-attestation.json"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (central / "artifact-attestation.json").write_text(
+            json.dumps({"candidateId": "1.8.0-20", "artifactSha256": artifact}),
+            encoding="utf-8",
+        )
+        workspace = root / ".release-state" / "candidates" / "gradus-ios-20"
+        legacy = root / ".release-state" / "candidate.json"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text(
+            json.dumps(
+                {
+                    "candidateId": "gradus-ios-20",
+                    "state": state,
+                    "marketingVersion": "1.8.0",
+                    "build": 20,
+                    "artifactSha256": artifact,
+                    "metadata": {"candidateWorkspace": str(workspace)},
+                }
+            ),
+            encoding="utf-8",
+        )
+        if receipt is not None:
+            workspace.mkdir(parents=True, exist_ok=True)
+            (workspace / "upload-delivery.json").write_text(json.dumps(receipt), encoding="utf-8")
+        return artifact
+
+    def test_binding_survives_every_state_that_follows_delivery(self) -> None:
+        """A candidate keeps resolving once its transfer has begun.
+
+        Binding only to ``prepared`` stranded a delivered candidate: the ledger
+        advances the moment the transfer starts, so every operation that runs
+        after upload lost the very binding it needed to observe the build.
+        """
+
+        for state in ("prepared", "uploading", "uploaded_unassigned", "assigned"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                artifact = self._central_candidate(root, state=state)
+                with patch.object(BRIDGE, "ROOT", root):
+                    binding = BRIDGE._candidate_bindings("1.8.0-20")
+                self.assertIsNotNone(binding, f"{state} lost its legacy binding")
+                self.assertEqual(
+                    (binding[0], binding[2], binding[3], binding[4]),
+                    ("gradus-ios-20", "1.8.0", 20, artifact),
+                )
+
+    def test_binding_refuses_a_candidate_that_is_no_longer_current(self) -> None:
+        """Recovery and replacement states must not resolve.
+
+        These records still carry a matching digest, so digest equality alone
+        would happily bind them.  They describe a candidate nobody should
+        attest, which is a decision about state and not about bytes.
+        """
+
+        for state in ("draft", "validated", "failed", "abandoned", "superseded"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._central_candidate(root, state=state)
+                with patch.object(BRIDGE, "ROOT", root):
+                    self.assertIsNone(BRIDGE._candidate_bindings("1.8.0-20"))
+
+    def test_upload_adopts_a_delivery_apple_already_accepted(self) -> None:
+        """A receipt for these exact bytes passes without re-running transport.
+
+        Apple refuses a duplicate build number, so a second transfer of a
+        delivered candidate cannot succeed.  The runner is a trap here: reaching
+        it at all would mean the bridge chose a transfer that is certain to fail.
+        """
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifact = self._central_candidate(
+                root,
+                state="uploading",
+                receipt={
+                    "candidateId": "gradus-ios-20",
+                    "build": 20,
+                    "artifactSha256": "a" * 64,
+                    "result": "delivered",
+                },
+            )
+
+            def runner(argv, **kwargs):
+                raise AssertionError("re-sent a build Apple had already accepted")
+
+            with (
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "ARCHIVE", root / "archive.sh"),
+                patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+            ):
+                status = BRIDGE.dispatch(
+                    "upload", product="gradus-ios", candidate="1.8.0-20", runner=runner
+                )
+            self.assertEqual(status, 0)
+            proof = json.loads((root / "evidence" / "1.8.0-20" / "upload.json").read_text())
+            self.assertEqual(proof["result"], "passed")
+            self.assertEqual(proof["uploadedBuildIdentifier"], "1.8.0 (20)")
+            self.assertEqual(proof["signedArtifactSha256"], artifact)
+
+    def test_upload_never_adopts_a_receipt_describing_other_bytes(self) -> None:
+        """Adoption requires every field to agree, not merely to look close.
+
+        Each variant below is a receipt that is wrong in exactly one way.  A
+        near-match is not a weaker match: adopting one would attest a build that
+        was never sent, so the bridge must fall through to the transport.
+        """
+
+        variants = {
+            "different-digest": {"artifactSha256": "b" * 64},
+            "different-build": {"build": 21},
+            "different-candidate": {"candidateId": "gradus-ios-19"},
+            "not-delivered": {"result": "failed"},
+            "build-as-bool": {"build": True},
+        }
+        for name, override in variants.items():
+            with self.subTest(variant=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                receipt = {
+                    "candidateId": "gradus-ios-20",
+                    "build": 20,
+                    "artifactSha256": "a" * 64,
+                    "result": "delivered",
+                }
+                receipt.update(override)
+                self._central_candidate(root, state="uploading", receipt=receipt)
+                calls = []
+
+                def runner(argv, **kwargs):
+                    calls.append(argv)
+                    return subprocess.CompletedProcess(argv, 1, "", "refused")
+
+                with (
+                    patch.object(BRIDGE, "ROOT", root),
+                    patch.object(BRIDGE, "ARCHIVE", root / "archive.sh"),
+                    patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+                ):
+                    status = BRIDGE.dispatch(
+                        "upload", product="gradus-ios", candidate="1.8.0-20", runner=runner
+                    )
+                self.assertEqual(status, 3, f"{name} was adopted")
+                self.assertEqual(len(calls), 1, f"{name} skipped the transport")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
