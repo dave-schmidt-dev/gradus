@@ -39,6 +39,11 @@ OPERATIONS = (
 _CANDIDATE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+_UPLOAD_LINE = re.compile(
+    r"(?m)^.*Candidate\s+(?P<candidate>[A-Za-z0-9._-]+)\s+build\s+"
+    r"(?P<build>[0-9]+)\s+uploaded\b.*$"
+)
+_UPLOAD_MARKER = re.compile(r"(?im)\buploadedBuildIdentifier\s*[:=]\s*([A-Za-z0-9._() -]+)")
 
 
 def _now() -> str:
@@ -129,6 +134,153 @@ def _candidate_record(candidate: str) -> Mapping[str, Any] | None:
     if record is None or record.get("candidateId") != candidate:
         return None
     return record
+
+
+def _central_candidate_record(candidate: str) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
+    """Load the central manifest and its immutable artifact attestation."""
+
+    candidate_root = ROOT / ".git" / "release-state" / PRODUCT / "candidates" / candidate
+    manifest = _read_json(candidate_root / "manifest.json")
+    if manifest is None or manifest.get("candidateId") != candidate:
+        return None
+    release = manifest.get("release")
+    attestation_name = manifest.get("artifactAttestation", {}).get("path")
+    if not isinstance(release, Mapping) or not isinstance(attestation_name, str):
+        return None
+    attestation_path = Path(attestation_name)
+    if attestation_path.is_absolute() or ".." in attestation_path.parts:
+        return None
+    attestation = _read_json(candidate_root / attestation_path)
+    if attestation is None or attestation.get("candidateId") != candidate:
+        return None
+    return manifest, attestation
+
+
+def _candidate_bindings(candidate: str) -> tuple[str, Mapping[str, Any], str, int, str] | None:
+    """Resolve a central candidate to exactly one prepared legacy ledger.
+
+    The old upload script owns the prepared artifact, while the central state
+    owns the workflow candidate.  They may use different IDs, but version,
+    build, and artifact digest must agree exactly.  Ambiguous or incomplete
+    state returns ``None`` so upload remains fail-closed.
+    """
+
+    central = _central_candidate_record(candidate)
+    if central is None:
+        record = _candidate_record(candidate)
+        if record is None:
+            return None
+        version = record.get("marketingVersion")
+        build = record.get("build")
+        artifact = record.get("artifactSha256")
+        if (
+            not isinstance(version, str)
+            or not _SEMVER.fullmatch(version)
+            or isinstance(build, bool)
+            or not isinstance(build, int)
+            or build < 1
+            or not isinstance(artifact, str)
+            or not _HEX64.fullmatch(artifact)
+        ):
+            return None
+        return candidate, record, version, build, artifact
+
+    manifest, attestation = central
+    release = manifest.get("release")
+    version = release.get("marketingVersion") if isinstance(release, Mapping) else None
+    raw_build = release.get("buildNumber") if isinstance(release, Mapping) else None
+    artifact = attestation.get("artifactSha256")
+    try:
+        build = int(raw_build)
+    except (TypeError, ValueError):
+        build = 0
+    if (
+        not isinstance(version, str)
+        or not _SEMVER.fullmatch(version)
+        or build < 1
+        or not isinstance(raw_build, (str, int))
+        or isinstance(raw_build, bool)
+        or not isinstance(artifact, str)
+        or not _HEX64.fullmatch(artifact)
+    ):
+        return None
+
+    candidates: list[tuple[str, Mapping[str, Any]]] = []
+    ledger_paths = [ROOT / ".release-state" / "candidate.json"]
+    ledger_paths.extend((ROOT / ".release-state" / "candidates").glob("*/candidate.json"))
+    for path in ledger_paths:
+        record = _read_json(path)
+        if (
+            record is not None
+            and record.get("state") == "prepared"
+            and record.get("marketingVersion") == version
+            and record.get("build") == build
+            and record.get("artifactSha256") == artifact
+        ):
+            candidates.append((str(record.get("candidateId", "")), record))
+    if len(candidates) != 1 or not candidates[0][0]:
+        return None
+    legacy_id, record = candidates[0]
+    return legacy_id, record, version, build, artifact
+
+
+def _uploaded_build_identifier(
+    stdout: str | None, *, legacy_candidate: str, marketing_version: str, build: int
+) -> str | None:
+    """Extract a transport confirmation and normalize it to ``version (build)``."""
+
+    output = stdout or ""
+    markers = _UPLOAD_MARKER.findall(output)
+    if markers:
+        if len(set(markers)) != 1:
+            return None
+        return markers[0].strip() or None
+    matches = list(_UPLOAD_LINE.finditer(output))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    if match.group("candidate") != legacy_candidate or int(match.group("build")) != build:
+        return None
+    return f"{marketing_version} ({build})"
+
+
+def _upload_passed(
+    candidate: str,
+    *,
+    artifact: str,
+    uploaded_build_identifier: str,
+    legacy_candidate: str,
+    marketing_version: str,
+    build: int,
+) -> int:
+    payload: dict[str, Any] = {
+        "proofVersion": "1.0.0",
+        "operationClass": "upload",
+        "candidateId": candidate,
+        "signedArtifactSha256": artifact,
+        "result": "passed",
+        "uploadedBuildIdentifier": uploaded_build_identifier,
+        "responseSha256": _digest(
+            {
+                "operation": "upload",
+                "candidateId": candidate,
+                "legacyCandidateId": legacy_candidate,
+                "marketingVersion": marketing_version,
+                "buildNumber": build,
+                "signedArtifactSha256": artifact,
+                "uploadedBuildIdentifier": uploaded_build_identifier,
+            }
+        ),
+    }
+    path = _proof_path("upload", candidate)
+    _write_json(path, payload)
+    print(
+        json.dumps(
+            {"operation": "upload", "result": "passed", "proofPath": str(path.relative_to(ROOT))},
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 def _current_marketing_version() -> str:
@@ -266,11 +418,12 @@ def dispatch(
     if candidate is None:
         raise ValueError("candidate is required")
     if operation == "upload":
-        record = _candidate_record(candidate)
-        if record is None:
+        binding = _candidate_bindings(candidate)
+        if binding is None:
             return _blocked(operation, candidate, "candidate-ledger-mismatch")
+        legacy_candidate, _record, marketing_version, build, artifact = binding
         result = runner(
-            [str(ARCHIVE), "--upload-only", "--candidate", candidate],
+            [str(ARCHIVE), "--upload-only", "--candidate", legacy_candidate],
             cwd=ROOT,
             env=dict(os.environ),
             text=True,
@@ -281,7 +434,22 @@ def dispatch(
         )
         if result.returncode != 0:
             return _blocked(operation, candidate, "upload-not-confirmed")
-        return _blocked(operation, candidate, "uploaded-build-identifier-unavailable")
+        uploaded = _uploaded_build_identifier(
+            result.stdout,
+            legacy_candidate=legacy_candidate,
+            marketing_version=marketing_version,
+            build=build,
+        )
+        if uploaded is None:
+            return _blocked(operation, candidate, "uploaded-build-identifier-unavailable")
+        return _upload_passed(
+            candidate,
+            artifact=artifact,
+            uploaded_build_identifier=uploaded,
+            legacy_candidate=legacy_candidate,
+            marketing_version=marketing_version,
+            build=build,
+        )
     return _blocked(operation, candidate, "operation-interface-not-yet-authorized")
 
 

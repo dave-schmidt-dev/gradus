@@ -130,7 +130,15 @@ class BridgeTests(unittest.TestCase):
             record_path = root / ".release-state" / "candidate.json"
             record_path.parent.mkdir(parents=True)
             record_path.write_text(
-                json.dumps({"candidateId": "gradus-ios-19", "build": 19}), encoding="utf-8"
+                json.dumps(
+                    {
+                        "candidateId": "gradus-ios-19",
+                        "marketingVersion": "1.7.0",
+                        "build": 19,
+                        "artifactSha256": "a" * 64,
+                    }
+                ),
+                encoding="utf-8",
             )
             calls = []
 
@@ -151,6 +159,122 @@ class BridgeTests(unittest.TestCase):
                 )
             self.assertEqual(calls[0][0][1:], ["--upload-only", "--candidate", "gradus-ios-19"])
             self.assertFalse(calls[0][1]["shell"])
+
+    def test_upload_resolves_central_candidate_to_exact_legacy_tuple(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            central = root / ".git" / "release-state" / "gradus-ios" / "candidates" / "1.8.0-20"
+            central.mkdir(parents=True)
+            artifact = "a" * 64
+            (central / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "candidateId": "1.8.0-20",
+                        "release": {"marketingVersion": "1.8.0", "buildNumber": "20"},
+                        "artifactAttestation": {"path": "artifact-attestation.json"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (central / "artifact-attestation.json").write_text(
+                json.dumps({"candidateId": "1.8.0-20", "artifactSha256": artifact}),
+                encoding="utf-8",
+            )
+            legacy = root / ".release-state" / "candidate.json"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text(
+                json.dumps(
+                    {
+                        "candidateId": "gradus-ios-20",
+                        "state": "prepared",
+                        "marketingVersion": "1.8.0",
+                        "build": 20,
+                        "artifactSha256": artifact,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def runner(argv, **kwargs):
+                calls.append(argv)
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    "==> Done. Candidate gradus-ios-20 build 20 uploaded -- Apple will take a few minutes to process it.\n",
+                    "",
+                )
+
+            with (
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "ARCHIVE", root / "archive.sh"),
+                patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+            ):
+                self.assertEqual(
+                    BRIDGE.dispatch(
+                        "upload", product="gradus-ios", candidate="1.8.0-20", runner=runner
+                    ),
+                    0,
+                )
+            self.assertEqual(
+                calls, [[str(root / "archive.sh"), "--upload-only", "--candidate", "gradus-ios-20"]]
+            )
+            proof = json.loads((root / "evidence" / "1.8.0-20" / "upload.json").read_text())
+            self.assertEqual(proof["result"], "passed")
+            self.assertEqual(proof["candidateId"], "1.8.0-20")
+            self.assertEqual(proof["signedArtifactSha256"], artifact)
+            self.assertEqual(proof["uploadedBuildIdentifier"], "1.8.0 (20)")
+
+    def test_upload_rejects_ambiguous_legacy_binding_without_invoking_uploader(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            central = root / ".git" / "release-state" / "gradus-ios" / "candidates" / "1.8.0-20"
+            central.mkdir(parents=True)
+            artifact = "b" * 64
+            (central / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "candidateId": "1.8.0-20",
+                        "release": {"marketingVersion": "1.8.0", "buildNumber": "20"},
+                        "artifactAttestation": {"path": "artifact-attestation.json"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (central / "artifact-attestation.json").write_text(
+                json.dumps({"candidateId": "1.8.0-20", "artifactSha256": artifact}),
+                encoding="utf-8",
+            )
+            ledgers = root / ".release-state" / "candidates"
+            for legacy_id in ("gradus-ios-20-a", "gradus-ios-20-b"):
+                path = ledgers / legacy_id / "candidate.json"
+                path.parent.mkdir(parents=True)
+                path.write_text(
+                    json.dumps(
+                        {
+                            "candidateId": legacy_id,
+                            "state": "prepared",
+                            "marketingVersion": "1.8.0",
+                            "build": 20,
+                            "artifactSha256": artifact,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            def runner(*args, **kwargs):
+                raise AssertionError("uploader invoked")
+
+            with (
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+            ):
+                self.assertEqual(
+                    BRIDGE.dispatch(
+                        "upload", product="gradus-ios", candidate="1.8.0-20", runner=runner
+                    ),
+                    3,
+                )
 
 
 if __name__ == "__main__":
