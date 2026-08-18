@@ -1103,6 +1103,126 @@ set -e
   exit 1
 }
 
+# A delivered upload must survive every failure that follows it. Build 20 of
+# 1.8.0 reached Apple and then lost that fact to a detach failure, so each
+# retry re-sent a build Apple already held. These cover the receipt that makes
+# the transfer adoptable instead of repeatable.
+delivery_root="$TEST_ROOT/delivery"
+mkdir -p "$delivery_root"
+delivery_receipt="$delivery_root/upload-delivery.json"
+persist_delivery_receipt "$delivery_receipt" \
+  gradus-ios-20 1.8.0 20 \
+  4e5feb927071139485ae567871a5c2a32bf56f8af5b9046d1a5e701ecc598c08 347635 \
+  7cedd283-fae4-432b-bfcc-b83b4f8ac719
+
+[[ -f "$delivery_receipt" ]] || {
+  echo "FAIL: delivery receipt was not written" >&2
+  exit 1
+}
+delivery_mode="$(/usr/bin/stat -f %Lp "$delivery_receipt")"
+[[ "$delivery_mode" == "600" ]] || {
+  echo "FAIL: delivery receipt mode is $delivery_mode, expected 600" >&2
+  exit 1
+}
+/usr/bin/python3 - "$delivery_receipt" <<'PY' || exit 1
+import json
+import sys
+
+receipt = json.load(open(sys.argv[1], encoding="utf-8"))
+expected = {
+    "schemaVersion": "1.0.0",
+    "operationClass": "upload",
+    "candidateId": "gradus-ios-20",
+    "marketingVersion": "1.8.0",
+    "build": 20,
+    "artifactSha256": "4e5feb927071139485ae567871a5c2a32bf56f8af5b9046d1a5e701ecc598c08",
+    "artifactBytes": 347635,
+    "result": "delivered",
+    "deliveryUuid": "7cedd283-fae4-432b-bfcc-b83b4f8ac719",
+}
+for name, value in expected.items():
+    if receipt.get(name) != value:
+        print(f"FAIL: delivery receipt {name} is {receipt.get(name)!r}", file=sys.stderr)
+        raise SystemExit(1)
+if not str(receipt.get("deliveredAt", "")).endswith("Z"):
+    print("FAIL: delivery receipt deliveredAt is not a UTC instant", file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+delivery_receipt_matches "$delivery_receipt" gradus-ios-20 20 \
+  4e5feb927071139485ae567871a5c2a32bf56f8af5b9046d1a5e701ecc598c08 || {
+  echo "FAIL: delivery receipt did not match its own candidate tuple" >&2
+  exit 1
+}
+
+# Each rejection is the case where adopting would attest something that was
+# never delivered, so none of them may be treated as a near-enough match.
+while read -r reject_label reject_candidate reject_build reject_digest; do
+  set +e
+  delivery_receipt_matches "$delivery_receipt" "$reject_candidate" "$reject_build" "$reject_digest"
+  reject_status=$?
+  set -e
+  [[ "$reject_status" -ne 0 ]] || {
+    echo "FAIL: delivery receipt adopted a $reject_label mismatch" >&2
+    exit 1
+  }
+done <<'REJECTS'
+digest gradus-ios-20 20 0000000000000000000000000000000000000000000000000000000000000000
+build gradus-ios-20 21 4e5feb927071139485ae567871a5c2a32bf56f8af5b9046d1a5e701ecc598c08
+candidate gradus-ios-19 20 4e5feb927071139485ae567871a5c2a32bf56f8af5b9046d1a5e701ecc598c08
+REJECTS
+
+set +e
+delivery_receipt_matches "$delivery_root/absent.json" gradus-ios-20 20 \
+  4e5feb927071139485ae567871a5c2a32bf56f8af5b9046d1a5e701ecc598c08
+absent_status=$?
+set -e
+[[ "$absent_status" -ne 0 ]] || {
+  echo "FAIL: a missing delivery receipt was treated as a delivery" >&2
+  exit 1
+}
+
+# An ambiguous transport result is exactly the state that must NOT auto-adopt.
+undelivered_receipt="$delivery_root/undelivered.json"
+/usr/bin/python3 - "$delivery_receipt" "$undelivered_receipt" <<'PY'
+import json
+import sys
+
+receipt = json.load(open(sys.argv[1], encoding="utf-8"))
+receipt["result"] = "reconciliation-required"
+with open(sys.argv[2], "w", encoding="utf-8") as stream:
+    json.dump(receipt, stream, sort_keys=True)
+PY
+set +e
+delivery_receipt_matches "$undelivered_receipt" gradus-ios-20 20 \
+  4e5feb927071139485ae567871a5c2a32bf56f8af5b9046d1a5e701ecc598c08
+undelivered_status=$?
+set -e
+[[ "$undelivered_status" -ne 0 ]] || {
+  echo "FAIL: a receipt that never confirmed delivery was adopted" >&2
+  exit 1
+}
+
+# Ordering is the security property: adoption runs before any credential is
+# provisioned, so the App Store Connect key never reaches a volume on a run
+# that transfers nothing.
+adopt_line="$(awk '/delivery_receipt_matches "\$\{candidate_workspace\}\/upload-delivery.json"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+key_volume_line="$(awk '/^  create_ram_key_volume$/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+[[ -n "$adopt_line" && -n "$key_volume_line" && "$adopt_line" -lt "$key_volume_line" ]] || {
+  echo "FAIL: delivery adoption does not precede RAM key-volume creation" >&2
+  exit 1
+}
+
+# Ordering is also the durability property: the receipt must be on disk before
+# the teardown steps that have already been observed to fail on a delivered
+# build.
+persist_line="$(awk '/^  persist_delivery_receipt "\$GRADUS_UPLOAD_DELIVERY_RECEIPT_PATH"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+detach_line="$(awk '/^  detach_ram_key_volume$/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+[[ -n "$persist_line" && -n "$detach_line" && "$persist_line" -lt "$detach_line" ]] || {
+  echo "FAIL: delivery receipt is not persisted before key-volume teardown" >&2
+  exit 1
+}
+
 # Keep the upload regression runner coupled to the canonical gate manifest:
 # this script is the first hermetic leg, so it must fail loudly if candidate
 # suites are added without counted invocations in test-gate.sh.

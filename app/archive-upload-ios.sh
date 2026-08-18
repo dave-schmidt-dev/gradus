@@ -461,6 +461,101 @@ except Exception:
 PY
 }
 
+persist_delivery_receipt() {
+  # Durable proof that Apple accepted these exact bytes, written the moment the
+  # transfer returns and before any cleanup can fail. The 1.8.0 build 20 upload
+  # succeeded at Apple and then lost its own outcome to a detach failure, which
+  # left the candidate stuck and sent every retry back at a build Apple already
+  # had. A receipt on disk is what makes the upload resumable instead: the next
+  # run reads it and adopts the delivery rather than re-transferring.
+  #
+  # It records the artifact digest, not just the build number, so adoption is a
+  # statement about bytes. "Some build 20 exists" is a different and much weaker
+  # claim than "the artifact I hold was the one delivered".
+  local path="$1" candidate_id="$2" marketing_version="$3" build="$4"
+  local artifact_digest="$5" artifact_bytes="$6" delivery_uuid="$7"
+  /usr/bin/python3 - "$path" "$candidate_id" "$marketing_version" "$build" \
+    "$artifact_digest" "$artifact_bytes" "$delivery_uuid" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = {
+    "schemaVersion": "1.0.0",
+    "operationClass": "upload",
+    "candidateId": sys.argv[2],
+    "marketingVersion": sys.argv[3],
+    "build": int(sys.argv[4]),
+    "artifactSha256": sys.argv[5],
+    "artifactBytes": int(sys.argv[6]),
+    "result": "delivered",
+    "deliveredAt": datetime.now(timezone.utc)
+    .replace(microsecond=0)
+    .isoformat()
+    .replace("+00:00", "Z"),
+}
+# Apple does not always print a delivery UUID; its absence must not discard an
+# otherwise-complete receipt, so it is recorded only when actually observed.
+delivery_uuid = sys.argv[7].strip()
+if delivery_uuid:
+    payload["deliveryUuid"] = delivery_uuid
+path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+except Exception:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
+delivery_receipt_matches() {
+  # Succeeds only when the receipt describes this exact candidate, build, and
+  # artifact. A receipt for a different digest is not a weaker match, it is a
+  # different build, and adopting it would attest bytes that were never sent.
+  local path="$1" candidate_id="$2" build="$3" artifact_digest="$4"
+  [[ -f "$path" ]] || return 1
+  /usr/bin/python3 - "$path" "$candidate_id" "$build" "$artifact_digest" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        receipt = json.load(stream)
+except (OSError, ValueError):
+    raise SystemExit(1)
+if not isinstance(receipt, dict):
+    raise SystemExit(1)
+try:
+    build_matches = int(receipt.get("build")) == int(sys.argv[3])
+except (TypeError, ValueError):
+    build_matches = False
+raise SystemExit(
+    0
+    if (
+        build_matches
+        and receipt.get("candidateId") == sys.argv[2]
+        and receipt.get("artifactSha256") == sys.argv[4]
+        and receipt.get("result") == "delivered"
+    )
+    else 1
+)
+PY
+}
+
 create_ram_key_volume() {
   local mountpoint device mount_record mount_type
   if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
@@ -1460,6 +1555,22 @@ PY
     echo "==> Prepared candidate $candidate_id build $NEXT_BUILD; upload deferred"
     return 0
   fi
+
+  # Adopt a delivery Apple already accepted instead of re-sending it. Apple
+  # rejects a duplicate build number, so a second transfer of a delivered
+  # candidate cannot succeed -- it can only fail and strand the candidate
+  # again. The receipt is matched on the artifact digest, so this adopts the
+  # exact delivered bytes and never a merely same-numbered build.
+  #
+  # Deliberately ahead of create_ram_key_volume: adopting needs no credential,
+  # so the App Store Connect key is never written to a volume on this path.
+  if delivery_receipt_matches "${candidate_workspace}/upload-delivery.json" \
+      "$candidate_id" "$NEXT_BUILD" "$artifact_digest"; then
+    echo "==> Candidate $candidate_id build $NEXT_BUILD was already delivered to App Store Connect; adopting the existing receipt"
+    echo "==> Done. Candidate $candidate_id build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."
+    return 0
+  fi
+
 # altool's --api-key auth looks for AuthKey_<key-id>.p8 in a fixed set of
 # directories (or $API_PRIVATE_KEYS_DIR). Keep that regular file only on a
 # verified RAM-backed volume; a disk-backed temporary directory is forbidden.
@@ -1472,6 +1583,7 @@ PY
   trap 'shred_ram_key_material; exit 129' HUP
   export GRADUS_RAM_VOLUME_ATTESTATION_PATH="${candidate_workspace}/ram-volume-attestation.json"
   export GRADUS_UPLOAD_RECONCILIATION_PATH="${candidate_workspace}/upload-reconciliation.json"
+  export GRADUS_UPLOAD_DELIVERY_RECEIPT_PATH="${candidate_workspace}/upload-delivery.json"
   export GRADUS_RAM_VOLUME_CANDIDATE_ID="$candidate_id"
   export GRADUS_RAM_VOLUME_ARTIFACT_SHA256="$artifact_digest"
   export GRADUS_UPLOAD_ATTEMPTED=0 GRADUS_UPLOAD_SUCCEEDED=0
@@ -1489,20 +1601,38 @@ PY
 
   echo "==> Uploading to App Store Connect"
   export GRADUS_UPLOAD_ATTEMPTED=1
+  local delivery_log delivery_uuid artifact_bytes upload_status
+  # altool reports the delivery outcome, including the UUID Apple assigns, on
+  # stderr. Tee the merged stream so the receipt below can quote Apple's own
+  # confirmation while the operator still sees transfer progress live -- a
+  # plain redirect would buffer a multi-minute upload into silence.
+  delivery_log="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/gradus-delivery.XXXXXX")"
   if xcrun altool --upload-package "$IPA_PATH" \
       -t ios \
       --api-key "$APP_STORE_CONNECT_KEY_ID" \
-      --api-issuer "$APP_STORE_CONNECT_ISSUER_ID"; then
+      --api-issuer "$APP_STORE_CONNECT_ISSUER_ID" 2>&1 | tee "$delivery_log"; then
     export GRADUS_UPLOAD_SUCCEEDED=1
   else
     # The transport may have accepted the package before returning a failure.
     # Preserve the candidate and require reconciliation instead of re-uploading.
-    local upload_status=$?
+    upload_status=$?
     export GRADUS_UPLOAD_FAILURE_STATUS="$upload_status"
+    rm -f "$delivery_log"
     cleanup_ram_key_volume
     trap - EXIT INT TERM HUP
     return "$upload_status"
   fi
+  # Persist the receipt before anything else can fail. Every step after this
+  # point -- detach, attestation, the exit trap -- has already been observed to
+  # fail on a delivered build, and each one of those failures used to erase the
+  # only record that the delivery happened.
+  delivery_uuid="$(/usr/bin/sed -n \
+    's/.*Delivery UUID: *\([0-9a-fA-F][0-9a-fA-F-]*\).*/\1/p' "$delivery_log" | /usr/bin/head -n 1)"
+  artifact_bytes="$(/usr/bin/stat -f %z "$IPA_PATH" 2>/dev/null || printf '0')"
+  rm -f "$delivery_log"
+  persist_delivery_receipt "$GRADUS_UPLOAD_DELIVERY_RECEIPT_PATH" \
+    "$candidate_id" "$marketing_version" "$NEXT_BUILD" \
+    "$artifact_digest" "$artifact_bytes" "$delivery_uuid"
   detach_ram_key_volume
   persist_ram_volume_attestation "$GRADUS_RAM_VOLUME_ATTESTATION_PATH" \
     "$candidate_id" "$RAM_VOLUME_MOUNT_DIGEST" "$RAM_VOLUME_DETACH_DIGEST" "$RAM_VOLUME_DEVICE" "$RAM_VOLUME_FILESYSTEM"
