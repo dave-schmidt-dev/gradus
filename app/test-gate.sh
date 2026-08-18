@@ -403,6 +403,29 @@ defaults write com.apple.CrashReporter DialogType none
 # source change. Sharing the directory within this gate keeps package/build
 # reuse while making the entire test run disposable.
 derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"
+installed_gradus_mac_was_running=0
+
+restore_installed_gradus_mac() {
+  if [[ "$installed_gradus_mac_was_running" == "1" && -d "/Applications/GradusMac.app" ]]; then
+    echo "==> Relaunching the pre-existing GradusMac app"
+    /usr/bin/open -g "/Applications/GradusMac.app" >/dev/null 2>&1 || true
+  fi
+}
+
+stop_installed_gradus_mac_for_ui_tests() {
+  if ! /usr/bin/pgrep -x GradusMac >/dev/null 2>&1; then
+    return
+  fi
+  installed_gradus_mac_was_running=1
+  echo "==> Temporarily stopping the installed GradusMac app for UI tests"
+  /usr/bin/pkill -TERM -x GradusMac >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return
+    sleep 0.25
+  done
+  echo "FAIL: installed GradusMac did not stop before UI tests" >&2
+  exit 1
+}
 
 # Preserve a developer's already-running simulator and its account/share state.
 # A gate-created disposable simulator can still be stopped after the run to
@@ -416,6 +439,7 @@ restore_preexisting_ipad_after_handoff() {
 }
 
 trap '
+  restore_installed_gradus_mac
   restore_preexisting_ipad_after_handoff
   if [[ "${GRADUS_KEEP_SIMULATORS:-0}" == "1" ]]; then
     echo "==> Leaving simulators running (GRADUS_KEEP_SIMULATORS=1)"
@@ -520,6 +544,7 @@ assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITest
   CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
+stop_installed_gradus_mac_for_ui_tests
 assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITests" -- env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \

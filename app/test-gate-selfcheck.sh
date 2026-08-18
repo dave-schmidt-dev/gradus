@@ -138,6 +138,19 @@ validate_derived_data_contract() {
 validate_derived_data_contract "$GATE_SCRIPT" ||
   fail "Xcode test legs are not isolated in fresh run-scoped DerivedData"
 
+mac_app_stop_block="$(sed -n '/^stop_installed_gradus_mac_for_ui_tests()/,/^}/p' "$GATE_SCRIPT")"
+[[ "$mac_app_stop_block" == *'/usr/bin/pgrep -x GradusMac'* ]] ||
+  fail "Mac UI gate does not detect the installed GradusMac process"
+[[ "$mac_app_stop_block" == *'/usr/bin/pkill -TERM -x GradusMac'* ]] ||
+  fail "Mac UI gate does not stop the conflicting installed GradusMac process"
+grep -Fq 'stop_installed_gradus_mac_for_ui_tests' "$GATE_SCRIPT" ||
+  fail "Mac UI gate never invokes the installed-app stop boundary"
+restore_mac_app_block="$(sed -n '/^restore_installed_gradus_mac()/,/^}/p' "$GATE_SCRIPT")"
+[[ "$restore_mac_app_block" == *'/usr/bin/open -g "/Applications/GradusMac.app"'* ]] ||
+  fail "Mac UI gate does not restore a pre-existing installed GradusMac app"
+grep -Fq 'restore_installed_gradus_mac' "$GATE_SCRIPT" ||
+  fail "Mac UI gate exit cleanup omits installed-app restoration"
+
 grep -Fq 'APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"' "$GATE_SCRIPT" ||
   fail "canonical Apple UI-test lock path is missing"
 for leg in GradusiOS-iPad GradusMacUI GradusiOSUI; do
