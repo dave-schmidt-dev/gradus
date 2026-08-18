@@ -141,8 +141,12 @@ validate_derived_data_contract "$GATE_SCRIPT" ||
 mac_app_stop_block="$(sed -n '/^stop_installed_gradus_mac_for_ui_tests()/,/^}/p' "$GATE_SCRIPT")"
 [[ "$mac_app_stop_block" == *'/usr/bin/pgrep -x GradusMac'* ]] ||
   fail "Mac UI gate does not detect the installed GradusMac process"
+[[ "$mac_app_stop_block" == *'/usr/bin/osascript'* ]] ||
+  fail "Mac UI gate does not request an app-aware GradusMac quit"
+[[ "$mac_app_stop_block" == *'application id "com.zerodelta.gradus.mac"'* ]] ||
+  fail "Mac UI gate does not target the installed GradusMac bundle identifier"
 [[ "$mac_app_stop_block" == *'/usr/bin/pkill -TERM -x GradusMac'* ]] ||
-  fail "Mac UI gate does not stop the conflicting installed GradusMac process"
+  fail "Mac UI gate does not retain a bounded TERM fallback"
 grep -Fq 'stop_installed_gradus_mac_for_ui_tests' "$GATE_SCRIPT" ||
   fail "Mac UI gate never invokes the installed-app stop boundary"
 restore_mac_app_block="$(sed -n '/^restore_installed_gradus_mac()/,/^}/p' "$GATE_SCRIPT")"

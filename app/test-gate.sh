@@ -418,6 +418,13 @@ stop_installed_gradus_mac_for_ui_tests() {
   fi
   installed_gradus_mac_was_running=1
   echo "==> Temporarily stopping the installed GradusMac app for UI tests"
+  /usr/bin/osascript \
+    -e 'tell application id "com.zerodelta.gradus.mac" to quit' \
+    >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return
+    sleep 0.25
+  done
   /usr/bin/pkill -TERM -x GradusMac >/dev/null 2>&1 || true
   for _ in {1..20}; do
     /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return
