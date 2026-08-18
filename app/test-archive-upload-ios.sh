@@ -892,8 +892,12 @@ set -e
   echo "FAIL: detach_ram_key_volume marked an unresolved failure as detached" >&2
   exit 1
 }
-[[ "$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")" -eq 4 ]] || {
-  echo "FAIL: detach_ram_key_volume did not exhaust exactly 4 attempts before failing" >&2
+[[ "$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")" -eq 6 ]] || {
+  echo "FAIL: detach_ram_key_volume did not exhaust 4 attempts plus 2 forced detaches" >&2
+  exit 1
+}
+grep -Fq 'detach -force /dev/disk99' "$GRADUS_TEST_HDIUTIL_LOG" || {
+  echo "FAIL: detach_ram_key_volume did not escalate to a forced detach" >&2
   exit 1
 }
 
@@ -949,8 +953,11 @@ GRADUS_UPLOAD_ATTEMPTED=1
 GRADUS_UPLOAD_SUCCEEDED=1
 # shellcheck disable=SC2034
 RAM_VOLUME_DEVICE=/dev/disk99
-# shellcheck disable=SC2034
-RAM_VOLUME_MOUNTPOINT=/tmp/fixture-ram-volume-mountpoint
+RAM_VOLUME_MOUNTPOINT="$leak_root/mount"
+mkdir -p "$RAM_VOLUME_MOUNTPOINT"
+leak_key="$RAM_VOLUME_MOUNTPOINT/AuthKey_FIXTURE123.p8"
+printf 'not-a-real-key-but-the-right-shape' >"$leak_key"
+chmod 600 "$leak_key"
 RAM_VOLUME_DETACHED=0
 # shellcheck disable=SC2034
 GRADUS_RAM_VOLUME_CANDIDATE_ID="gradus-ios-fixture"
@@ -974,8 +981,16 @@ set -e
   echo "FAIL: unresolved key-volume leak was not surfaced on stderr" >&2
   exit 1
 }
+[[ -e "$leak_key" ]] && {
+  echo "FAIL: key material survived a teardown whose detach never succeeded" >&2
+  exit 1
+}
 [[ -f "$leak_root/ram-volume-leak.json" ]] || {
   echo "FAIL: unresolved key-volume leak left no durable evidence" >&2
+  exit 1
+}
+grep -Fq '"keyMaterialDestroyed": true' "$leak_root/ram-volume-leak.json" || {
+  echo "FAIL: leak evidence did not record that key material was destroyed" >&2
   exit 1
 }
 grep -Fq '"result": "key-volume-not-detached"' "$leak_root/ram-volume-leak.json" || {

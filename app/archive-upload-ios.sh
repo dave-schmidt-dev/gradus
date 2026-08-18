@@ -378,7 +378,8 @@ persist_cleanup_leak_evidence() {
   [[ -n "$workspace" && -d "$workspace" ]] || return 0
   path="${workspace}/ram-volume-leak.json"
   /usr/bin/python3 - "$path" "${GRADUS_RAM_VOLUME_CANDIDATE_ID:-}" \
-    "${RAM_VOLUME_DEVICE:-}" "${RAM_VOLUME_MOUNTPOINT:-}" "$status" <<'PY' || return 0
+    "${RAM_VOLUME_DEVICE:-}" "${RAM_VOLUME_MOUNTPOINT:-}" "$status" \
+    "${RAM_VOLUME_KEY_DESTROYED:-0}" <<'PY' || return 0
 import json
 import os
 import sys
@@ -394,6 +395,9 @@ payload = {
     "device": sys.argv[3],
     "mountpoint": sys.argv[4],
     "cleanupExitCode": int(sys.argv[5]),
+    # The field that says whether a stranded volume is an actual credential
+    # exposure or merely 2 MB of empty RAM awaiting the next reboot.
+    "keyMaterialDestroyed": sys.argv[6] == "1",
     "result": "key-volume-not-detached",
     "reason": "upload-succeeded-cleanup-failed",
     "remediation": "detach the RAM-backed key volume; it clears on reboot",
@@ -520,7 +524,46 @@ create_ram_key_volume() {
   export RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DEVICE RAM_VOLUME_FILESYSTEM RAM_VOLUME_MOUNT_DIGEST RAM_VOLUME_DETACHED
 }
 
+shred_ram_key_material() {
+  # The credential's exposure window is the mount, not the process: a detach
+  # that fails leaves the App Store Connect key readable for as long as the
+  # volume stays up (four hours, on the 1.8.0 build 20 upload). Destroying the
+  # key first means the worst case degrades from an exposed secret to 2 MB of
+  # stranded empty RAM.
+  #
+  # Idempotent by construction -- shredding an absent key is a no-op -- so it
+  # is safe to call from every teardown path, and calling it too few times is
+  # the only real failure. It runs inside an EXIT trap under "set -e", so it
+  # must never propagate a non-zero status and abort the rest of cleanup.
+  local key size
+  if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
+    return 0
+  fi
+  [[ -n "${RAM_VOLUME_MOUNTPOINT:-}" && -d "${RAM_VOLUME_MOUNTPOINT}" ]] || return 0
+  for key in "$RAM_VOLUME_MOUNTPOINT"/AuthKey_*.p8; do
+    [[ -f "$key" ]] || continue
+    # Overwrite the exact length in place before unlinking; a short write
+    # would leave the tail of the original key in the same blocks.
+    size="$(/usr/bin/stat -f %z "$key" 2>/dev/null || printf '0')"
+    if [[ "$size" =~ ^[0-9]+$ ]] && (( size > 0 )); then
+      /bin/dd if=/dev/urandom of="$key" bs=1 count="$size" conv=notrunc >/dev/null 2>&1 || true
+    fi
+    rm -f "$key" || true
+  done
+  if compgen -G "$RAM_VOLUME_MOUNTPOINT/AuthKey_*.p8" >/dev/null 2>&1; then
+    RAM_VOLUME_KEY_DESTROYED=0
+  else
+    RAM_VOLUME_KEY_DESTROYED=1
+  fi
+  export RAM_VOLUME_KEY_DESTROYED
+  return 0
+}
+
 detach_ram_key_volume() {
+  # Ahead of the already-detached short circuit: the success path calls this
+  # directly before the EXIT trap fires, so a shred behind that return would
+  # be skipped on exactly the run that completed.
+  shred_ram_key_material
   [[ "${RAM_VOLUME_DETACHED:-0}" -eq 1 ]] && return 0
   local detach_record
   if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
@@ -535,6 +578,12 @@ detach_ram_key_volume() {
     for attempt in 1 2 3 4; do
       hdiutil detach "$RAM_VOLUME_DEVICE" >/dev/null && break
       if (( attempt == 4 )); then
+        # Escalate rather than strand the volume. Nothing here prompts: this
+        # runs inside the BWS broker subprocess with no TTY, so a privileged
+        # "umount -f" could only hang, and is deliberately not attempted.
+        hdiutil detach -force "$RAM_VOLUME_DEVICE" >/dev/null 2>&1 && break
+        /usr/sbin/diskutil unmount force "$RAM_VOLUME_MOUNTPOINT" >/dev/null 2>&1 || true
+        hdiutil detach -force "$RAM_VOLUME_DEVICE" >/dev/null 2>&1 && break
         echo "FAIL: hdiutil detach $RAM_VOLUME_DEVICE did not succeed after $attempt attempts" >&2
         return 1
       fi
@@ -552,6 +601,7 @@ detach_ram_key_volume() {
 cleanup_ram_key_volume() {
   local exit_status="${GRADUS_UPLOAD_FAILURE_STATUS:-$?}"
   local cleanup_status=0
+  shred_ram_key_material
   if [[ -n "${RAM_VOLUME_MOUNTPOINT:-}" && "${RAM_VOLUME_DETACHED:-0}" -eq 0 ]]; then
     if ! detach_ram_key_volume; then
       echo "FAIL: RAM-backed key volume could not be detached" >&2
@@ -1415,6 +1465,11 @@ PY
 # verified RAM-backed volume; a disk-backed temporary directory is forbidden.
   create_ram_key_volume
   trap 'cleanup_ram_key_volume' EXIT
+  # An interrupt would otherwise bypass the EXIT trap entirely and leave the
+  # key mounted. Destroy it in the handler, then exit so cleanup still runs.
+  trap 'shred_ram_key_material; exit 130' INT
+  trap 'shred_ram_key_material; exit 143' TERM
+  trap 'shred_ram_key_material; exit 129' HUP
   export GRADUS_RAM_VOLUME_ATTESTATION_PATH="${candidate_workspace}/ram-volume-attestation.json"
   export GRADUS_UPLOAD_RECONCILIATION_PATH="${candidate_workspace}/upload-reconciliation.json"
   export GRADUS_RAM_VOLUME_CANDIDATE_ID="$candidate_id"
@@ -1445,7 +1500,7 @@ PY
     local upload_status=$?
     export GRADUS_UPLOAD_FAILURE_STATUS="$upload_status"
     cleanup_ram_key_volume
-    trap - EXIT
+    trap - EXIT INT TERM HUP
     return "$upload_status"
   fi
   detach_ram_key_volume
