@@ -414,20 +414,22 @@ restore_installed_gradus_mac() {
 
 stop_installed_gradus_mac_for_ui_tests() {
   if ! /usr/bin/pgrep -x GradusMac >/dev/null 2>&1; then
-    return
+    return 0
   fi
   installed_gradus_mac_was_running=1
   echo "==> Temporarily stopping the installed GradusMac app for UI tests"
   /usr/bin/osascript \
+    -e 'with timeout of 5 seconds' \
     -e 'tell application id "com.zerodelta.gradus.mac" to quit' \
+    -e 'end timeout' \
     >/dev/null 2>&1 || true
   for _ in {1..20}; do
-    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return
+    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return 0
     sleep 0.25
   done
   /usr/bin/pkill -TERM -x GradusMac >/dev/null 2>&1 || true
   for _ in {1..20}; do
-    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return
+    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return 0
     sleep 0.25
   done
   echo "FAIL: installed GradusMac did not stop before UI tests" >&2

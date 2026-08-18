@@ -138,22 +138,154 @@ validate_derived_data_contract() {
 validate_derived_data_contract "$GATE_SCRIPT" ||
   fail "Xcode test legs are not isolated in fresh run-scoped DerivedData"
 
+validate_mac_app_lifecycle_contract() {
+  local gate_path="$1" stop_block restore_block trap_block
+  stop_block="$(sed -n '/^stop_installed_gradus_mac_for_ui_tests()/,/^}/p' "$gate_path")"
+  restore_block="$(sed -n '/^restore_installed_gradus_mac()/,/^}/p' "$gate_path")"
+  trap_block="$(sed -n "/^trap '/,/^' EXIT/p" "$gate_path")"
+  [[ "$stop_block" == *'/usr/bin/pgrep -x GradusMac'* ]] || return 1
+  [[ "$stop_block" == *'/usr/bin/osascript'* ]] || return 1
+  [[ "$stop_block" == *'application id "com.zerodelta.gradus.mac"'* ]] || return 1
+  [[ "$stop_block" == *'with timeout of 5 seconds'* ]] || return 1
+  [[ "$stop_block" == *'/usr/bin/pkill -TERM -x GradusMac'* ]] || return 1
+  [[ "$stop_block" == *'installed_gradus_mac_was_running=1'* ]] || return 1
+  [[ "$stop_block" == *'FAIL: installed GradusMac did not stop before UI tests'* ]] || return 1
+  [[ "$stop_block" == *'exit 1'* ]] || return 1
+  [[ "$(printf '%s\n' "$stop_block" | grep -Fc '/usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return 0' || true)" -eq 2 ]] || return 1
+  [[ "$restore_block" == *'installed_gradus_mac_was_running" == "1"'* ]] || return 1
+  [[ "$restore_block" == *'/usr/bin/open -g "/Applications/GradusMac.app"'* ]] || return 1
+  [[ "$trap_block" == *'restore_installed_gradus_mac'* ]] || return 1
+  grep -Fq 'stop_installed_gradus_mac_for_ui_tests' "$gate_path" || return 1
+}
+
+validate_mac_app_lifecycle_contract "$GATE_SCRIPT" ||
+  fail "Mac UI gate installed-app stop/restore contract is incomplete"
+
 mac_app_stop_block="$(sed -n '/^stop_installed_gradus_mac_for_ui_tests()/,/^}/p' "$GATE_SCRIPT")"
-[[ "$mac_app_stop_block" == *'/usr/bin/pgrep -x GradusMac'* ]] ||
-  fail "Mac UI gate does not detect the installed GradusMac process"
-[[ "$mac_app_stop_block" == *'/usr/bin/osascript'* ]] ||
-  fail "Mac UI gate does not request an app-aware GradusMac quit"
-[[ "$mac_app_stop_block" == *'application id "com.zerodelta.gradus.mac"'* ]] ||
-  fail "Mac UI gate does not target the installed GradusMac bundle identifier"
-[[ "$mac_app_stop_block" == *'/usr/bin/pkill -TERM -x GradusMac'* ]] ||
-  fail "Mac UI gate does not retain a bounded TERM fallback"
-grep -Fq 'stop_installed_gradus_mac_for_ui_tests' "$GATE_SCRIPT" ||
-  fail "Mac UI gate never invokes the installed-app stop boundary"
 restore_mac_app_block="$(sed -n '/^restore_installed_gradus_mac()/,/^}/p' "$GATE_SCRIPT")"
-[[ "$restore_mac_app_block" == *'/usr/bin/open -g "/Applications/GradusMac.app"'* ]] ||
-  fail "Mac UI gate does not restore a pre-existing installed GradusMac app"
-grep -Fq 'restore_installed_gradus_mac' "$GATE_SCRIPT" ||
-  fail "Mac UI gate exit cleanup omits installed-app restoration"
+
+# Exercise the stop boundary with fake process commands. This keeps the
+# scenarios hermetic while proving the live function's return and flag
+# semantics: absent apps are harmless, a successful quit continues, and an
+# app that survives both quit attempts aborts the gate.
+mac_app_test_root="$(mktemp -d "${TMPDIR:-/tmp}/gradus-mac-app-gate.XXXXXX")"
+mac_app_test_bin="$mac_app_test_root/bin"
+mkdir -p "$mac_app_test_bin"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [[ "$(cat "$MAC_APP_STATE_FILE")" == running ]]; then exit 0; fi' \
+  'exit 1' > "$mac_app_test_bin/pgrep"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\\n" osascript >> "$MAC_APP_TRACE_FILE"' \
+  'if [[ "${MAC_APP_BEHAVIOR:-}" == quit ]]; then printf stopped > "$MAC_APP_STATE_FILE"; fi' \
+  'exit 0' > "$mac_app_test_bin/osascript"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\\n" pkill >> "$MAC_APP_TRACE_FILE"' \
+  'if [[ "${MAC_APP_BEHAVIOR:-}" == term ]]; then printf stopped > "$MAC_APP_STATE_FILE"; fi' \
+  'exit 0' > "$mac_app_test_bin/pkill"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$mac_app_test_bin/sleep"
+chmod +x "$mac_app_test_bin"/*
+
+run_mac_app_stop_scenario() {
+  local scenario="$1" behavior="$2" expected_status="$3" expected_flag="$4"
+  local state_file trace_file fixture output status
+  state_file="$mac_app_test_root/$scenario.state"
+  trace_file="$mac_app_test_root/$scenario.trace"
+  fixture="$mac_app_test_root/$scenario.sh"
+  output="$mac_app_test_root/$scenario.out"
+  if [[ "$scenario" == "absent" ]]; then
+    printf '%s' stopped > "$state_file"
+  else
+    printf '%s' running > "$state_file"
+  fi
+  : > "$trace_file"
+  {
+    printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'installed_gradus_mac_was_running=0'
+    printf '%s\n' "$mac_app_stop_block" | sed \
+      -e "s|/usr/bin/pgrep|$mac_app_test_bin/pgrep|g" \
+      -e "s|/usr/bin/osascript|$mac_app_test_bin/osascript|g" \
+      -e "s|/usr/bin/pkill|$mac_app_test_bin/pkill|g" \
+      -e 's/for _ in {1..20}/for _ in {1..2}/g' \
+      -e 's/sleep 0.25/:/g'
+    printf '%s\n' 'stop_installed_gradus_mac_for_ui_tests' \
+      'printf "flag=%s\\n" "$installed_gradus_mac_was_running"'
+  } > "$fixture"
+  chmod +x "$fixture"
+  if MAC_APP_BEHAVIOR="$behavior" MAC_APP_STATE_FILE="$state_file" \
+    MAC_APP_TRACE_FILE="$trace_file" bash "$fixture" >"$output" 2>&1; then
+    status=0
+  else
+    status=$?
+  fi
+  [[ "$status" -eq "$expected_status" ]] || {
+    fail "Mac UI stop scenario '$scenario' returned $status, expected $expected_status"
+    return
+  }
+  if [[ "$expected_status" -eq 0 ]]; then
+    grep -Fq "flag=$expected_flag" "$output" ||
+      fail "Mac UI stop scenario '$scenario' did not preserve flag=$expected_flag"
+  fi
+  if [[ "$scenario" == "absent" ]]; then
+    [[ ! -s "$trace_file" ]] || fail "absent Mac UI stop scenario invoked a process command"
+  elif [[ "$scenario" == "quits" ]]; then
+    grep -Fqx osascript "$trace_file" || fail "successful Mac UI quit did not invoke osascript"
+    ! grep -Fqx pkill "$trace_file" || fail "successful Mac UI quit needed TERM fallback"
+  else
+    grep -Fqx pkill "$trace_file" || fail "stuck Mac UI app did not reach TERM fallback"
+  fi
+}
+
+run_mac_app_stop_scenario absent none 0 0
+run_mac_app_stop_scenario quits quit 0 1
+run_mac_app_stop_scenario term term 0 1
+run_mac_app_stop_scenario stuck none 1 0
+
+# Exercise restoration itself with an injected app path/open command, and
+# prove a deleted restoration flag assignment is caught by the contract test.
+mac_app_fixture_dir="$mac_app_test_root/GradusMac.app"
+mkdir -p "$mac_app_fixture_dir"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'printf "%s\\n" open >> "$MAC_APP_TRACE_FILE"' \
+  'exit 0' > "$mac_app_test_bin/open"
+chmod +x "$mac_app_test_bin/open"
+restore_fixture="$mac_app_test_root/restore.sh"
+{
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u'
+  printf '%s\n' "$restore_mac_app_block" | sed \
+    -e "s|/usr/bin/open|$mac_app_test_bin/open|g" \
+    -e "s|/Applications/GradusMac.app|$mac_app_fixture_dir|g"
+  printf '%s\n' 'installed_gradus_mac_was_running=1' \
+    'restore_installed_gradus_mac' \
+    'installed_gradus_mac_was_running=0' \
+    'restore_installed_gradus_mac'
+} > "$restore_fixture"
+: > "$mac_app_test_root/restore.trace"
+MAC_APP_TRACE_FILE="$mac_app_test_root/restore.trace" bash "$restore_fixture" >/dev/null
+[[ "$(wc -l < "$mac_app_test_root/restore.trace" | tr -d ' ')" -eq 1 ]] ||
+  fail "restoration flag scenario did not relaunch exactly once"
+
+# Structural mutation tests make these fail-closed boundaries bite: deleting
+# either the restoration flag assignment or the stuck-app exit must fail the
+# self-check rather than silently weakening the gate.
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-mac-flag-contract.XXXXXX")"
+sed '/installed_gradus_mac_was_running=1/d' "$GATE_SCRIPT" > "$mutated_gate"
+if validate_mac_app_lifecycle_contract "$mutated_gate"; then
+  fail "Mac UI lifecycle contract accepted a deleted restoration flag assignment"
+fi
+rm -f "$mutated_gate"
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-mac-fail-closed-contract.XXXXXX")"
+sed '/echo "FAIL: installed GradusMac did not stop before UI tests"/,+1d' \
+  "$GATE_SCRIPT" > "$mutated_gate"
+if validate_mac_app_lifecycle_contract "$mutated_gate"; then
+  fail "Mac UI lifecycle contract accepted a deleted stuck-app failure"
+fi
+rm -f "$mutated_gate"
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-mac-restore-trap-contract.XXXXXX")"
+sed '/^  restore_installed_gradus_mac$/d' "$GATE_SCRIPT" > "$mutated_gate"
+if validate_mac_app_lifecycle_contract "$mutated_gate"; then
+  fail "Mac UI lifecycle contract accepted a deleted restoration trap call"
+fi
+rm -f "$mutated_gate"
+rm -rf "$mac_app_test_root"
 
 grep -Fq 'APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"' "$GATE_SCRIPT" ||
   fail "canonical Apple UI-test lock path is missing"
