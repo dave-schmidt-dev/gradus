@@ -933,6 +933,65 @@ set -e
 unset GRADUS_UPLOAD_ATTEMPTED GRADUS_UPLOAD_SUCCEEDED GRADUS_UPLOAD_FAILURE_STATUS
 unset RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DETACHED GRADUS_RAM_VOLUME_ATTESTATION_PATH GRADUS_UPLOAD_RECONCILIATION_PATH
 
+# Regression: a delivered upload whose key volume could NOT be detached must
+# still report the upload's outcome. Returning the cleanup status here reported
+# an accepted build as a failed release, which drove repeated retries of a
+# transfer Apple had already accepted (and would reject as a duplicate build).
+# The unresolved secret-hygiene condition must survive as durable evidence
+# rather than as a conflated exit code, so both are asserted together.
+leak_root="$TEST_ROOT/cleanup-leak"
+mkdir -p "$leak_root"
+export PATH="$detach_retry_bin:$detach_retry_path"
+unset GRADUS_RAM_VOLUME_MOUNT_PATH GRADUS_TEST_KEY_LOG
+# shellcheck disable=SC2034 # read by cleanup_ram_key_volume via "${VAR:-default}"
+GRADUS_UPLOAD_ATTEMPTED=1
+# shellcheck disable=SC2034
+GRADUS_UPLOAD_SUCCEEDED=1
+# shellcheck disable=SC2034
+RAM_VOLUME_DEVICE=/dev/disk99
+# shellcheck disable=SC2034
+RAM_VOLUME_MOUNTPOINT=/tmp/fixture-ram-volume-mountpoint
+RAM_VOLUME_DETACHED=0
+# shellcheck disable=SC2034
+GRADUS_RAM_VOLUME_CANDIDATE_ID="gradus-ios-fixture"
+export GRADUS_RAM_VOLUME_ATTESTATION_PATH="$leak_root/ram-volume-attestation.json"
+# shellcheck disable=SC2034
+GRADUS_UPLOAD_RECONCILIATION_PATH=""
+export GRADUS_TEST_HDIUTIL_COUNT_FILE="$leak_root/leak.count"
+export GRADUS_TEST_HDIUTIL_LOG="$leak_root/leak.log"
+export GRADUS_TEST_SLEEP_LOG="$leak_root/leak.sleep.log"
+export GRADUS_TEST_HDIUTIL_FAIL_UNTIL=99
+set +e
+leak_output="$(cleanup_ram_key_volume 2>&1)"
+leak_exit=$?
+set -e
+[[ "$leak_exit" -eq 0 ]] || {
+  echo "FAIL: a delivered upload was reported as failed because local cleanup failed" >&2
+  echo "$leak_output" >&2
+  exit 1
+}
+[[ "$leak_output" == *"ACTION REQUIRED"* ]] || {
+  echo "FAIL: unresolved key-volume leak was not surfaced on stderr" >&2
+  exit 1
+}
+[[ -f "$leak_root/ram-volume-leak.json" ]] || {
+  echo "FAIL: unresolved key-volume leak left no durable evidence" >&2
+  exit 1
+}
+grep -Fq '"result": "key-volume-not-detached"' "$leak_root/ram-volume-leak.json" || {
+  echo "FAIL: key-volume leak evidence did not record the unresolved condition" >&2
+  exit 1
+}
+[[ "$(/usr/bin/stat -f '%Lp' "$leak_root/ram-volume-leak.json")" == "600" ]] || {
+  echo "FAIL: key-volume leak evidence was not written 0600" >&2
+  exit 1
+}
+export PATH="$detach_retry_path"
+unset GRADUS_UPLOAD_ATTEMPTED GRADUS_UPLOAD_SUCCEEDED RAM_VOLUME_DEVICE RAM_VOLUME_MOUNTPOINT
+unset RAM_VOLUME_DETACHED GRADUS_RAM_VOLUME_CANDIDATE_ID GRADUS_RAM_VOLUME_ATTESTATION_PATH
+unset GRADUS_UPLOAD_RECONCILIATION_PATH GRADUS_TEST_HDIUTIL_COUNT_FILE GRADUS_TEST_HDIUTIL_LOG
+unset GRADUS_TEST_SLEEP_LOG GRADUS_TEST_HDIUTIL_FAIL_UNTIL
+
 # A post-prepare interruption must leave one resumable tuple; a retry may not
 # allocate a new build or rebind the IPA digest.
 retry_root="$TEST_ROOT/retry-candidate"

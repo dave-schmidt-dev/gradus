@@ -93,6 +93,69 @@ def _read_json(path: Path) -> Mapping[str, Any] | None:
     return value if isinstance(value, Mapping) else None
 
 
+_SECRET_ENVIRONMENT_NAMES = (
+    "APP_STORE_CONNECT_API_KEY",
+    "APP_STORE_CONNECT_KEY_ID",
+    "APP_STORE_CONNECT_ISSUER_ID",
+)
+_DIAGNOSTIC_TAIL_BYTES = 16384
+
+
+def _redact_secrets(text: str) -> str:
+    """Replace broker-injected credential values that appear in child output."""
+    for name in _SECRET_ENVIRONMENT_NAMES:
+        value = (os.environ.get(name) or "").strip()
+        # Short values are not distinctive enough to substitute without
+        # corrupting unrelated output.
+        if len(value) >= 8:
+            text = text.replace(value, f"<redacted:{name}>")
+    return text
+
+
+def _diagnostic_tail(text: str | None) -> str:
+    if not text:
+        return "(empty)"
+    if len(text) <= _DIAGNOSTIC_TAIL_BYTES:
+        return text
+    return "...<truncated>...\n" + text[-_DIAGNOSTIC_TAIL_BYTES:]
+
+
+def _persist_operation_diagnostics(
+    operation: str,
+    candidate: str | None,
+    argv: Sequence[str],
+    result: subprocess.CompletedProcess[str],
+) -> Path | None:
+    """Retain a failed child's output so a blocked proof stays diagnosable.
+
+    The release runner sends every operation's stdout and stderr to DEVNULL, so
+    a durable file beside the proof is the only channel that survives a failed
+    attempt.  This process holds the broker credential environment, so captured
+    text is redacted before it is written, is stored 0600, and never reaches
+    stdout, which carries the operation's JSON contract.
+    """
+    if candidate is None:
+        return None
+    path = EVIDENCE_ROOT / candidate / f"{operation}-failure.log"
+    body = (
+        f"operation: {operation}\n"
+        f"candidate: {candidate}\n"
+        f"observedAt: {_now()}\n"
+        f"argv: {' '.join(argv)}\n"
+        f"exitStatus: {result.returncode}\n"
+        f"--- stderr ---\n{_diagnostic_tail(result.stderr)}\n"
+        f"--- stdout ---\n{_diagnostic_tail(result.stdout)}\n"
+    )
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(_redact_secrets(body))
+    except OSError:
+        return None
+    return path
+
+
 def _blocked(operation: str, candidate: str | None, reason: str) -> int:
     payload: dict[str, Any] = {
         "proofVersion": "1.0.0",
@@ -433,6 +496,12 @@ def dispatch(
             shell=False,
         )
         if result.returncode != 0:
+            _persist_operation_diagnostics(
+                operation,
+                candidate,
+                [str(ARCHIVE), "--upload-only", "--candidate", legacy_candidate],
+                result,
+            )
             return _blocked(operation, candidate, "upload-not-confirmed")
         uploaded = _uploaded_build_identifier(
             result.stdout,
@@ -441,6 +510,12 @@ def dispatch(
             build=build,
         )
         if uploaded is None:
+            _persist_operation_diagnostics(
+                operation,
+                candidate,
+                [str(ARCHIVE), "--upload-only", "--candidate", legacy_candidate],
+                result,
+            )
             return _blocked(operation, candidate, "uploaded-build-identifier-unavailable")
         return _upload_passed(
             candidate,

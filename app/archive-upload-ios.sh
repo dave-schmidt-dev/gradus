@@ -367,6 +367,58 @@ except Exception:
 PY
 }
 
+persist_cleanup_leak_evidence() {
+  # Raised when the transfer succeeded but the key volume could not be
+  # detached. The upload's outcome owns the exit code (see
+  # cleanup_ram_key_volume), so this file -- not the status -- is what carries
+  # the secret-hygiene condition forward.
+  local status="$1" path workspace
+  workspace="${GRADUS_RAM_VOLUME_ATTESTATION_PATH:-}"
+  workspace="${workspace%/*}"
+  [[ -n "$workspace" && -d "$workspace" ]] || return 0
+  path="${workspace}/ram-volume-leak.json"
+  /usr/bin/python3 - "$path" "${GRADUS_RAM_VOLUME_CANDIDATE_ID:-}" \
+    "${RAM_VOLUME_DEVICE:-}" "${RAM_VOLUME_MOUNTPOINT:-}" "$status" <<'PY' || return 0
+import json
+import os
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+path = Path(sys.argv[1])
+payload = {
+    "schemaVersion": "1.0.0",
+    "operationClass": "cleanup",
+    "candidateId": sys.argv[2],
+    "device": sys.argv[3],
+    "mountpoint": sys.argv[4],
+    "cleanupExitCode": int(sys.argv[5]),
+    "result": "key-volume-not-detached",
+    "reason": "upload-succeeded-cleanup-failed",
+    "remediation": "detach the RAM-backed key volume; it clears on reboot",
+    "observedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+except Exception:
+    try:
+        os.unlink(temporary)
+    except OSError:
+        pass
+    raise
+PY
+  return 0
+}
+
 persist_upload_reconciliation() {
   local path="$1" candidate_id="$2" artifact_digest="$3" transport_status="$4"
   /usr/bin/python3 - "$path" "$candidate_id" "$artifact_digest" "$transport_status" <<'PY'
@@ -430,7 +482,15 @@ create_ram_key_volume() {
       return 1
     }
     newfs_hfs "$device" >/dev/null
-    mount -t hfs -o noowners "$device" "$mountpoint"
+    # "nobrowse" keeps the volume out of the Finder/volume list so fseventsd
+    # never opens a watch on it, and ".fseventsd/no_log" tells fseventsd not to
+    # journal it even if it does. Without both, fseventsd holds the volume open
+    # and the later "hdiutil detach" fails "Resource busy", stranding a mounted
+    # volume that still holds the App Store Connect private key (observed live
+    # on the 1.8.0 build 20 upload).
+    mount -t hfs -o noowners -o nobrowse "$device" "$mountpoint"
+    mkdir -p "${mountpoint}/.fseventsd"
+    : > "${mountpoint}/.fseventsd/no_log"
     # Match on $device (always a canonical /dev/diskN, unlike the mktemp
     # mountpoint, which mount(8) reports through its /private-resolved
     # symlink target and would never string-match otherwise) and read the
@@ -520,8 +580,17 @@ cleanup_ram_key_volume() {
   fi
   if (( cleanup_status != 0 )); then
     if [[ "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 1 ]]; then
-      echo "==> Upload to App Store Connect already succeeded; only local RAM-volume cleanup failed above." >&2
-      echo "    The candidate is uploaded and safe; this exit code reflects cleanup, not the transfer." >&2
+      # The transfer is complete and not repeatable: Apple holds the build and
+      # rejects a duplicate build number, so re-running is not a recovery path.
+      # Returning the cleanup status here reported a delivered release as a
+      # failed one, which sent every caller back to retry an upload that had
+      # already succeeded. The upload owns the exit code; the cleanup failure
+      # is carried by durable evidence plus stderr, which a retry cannot erase.
+      persist_cleanup_leak_evidence "$cleanup_status"
+      echo "==> Upload to App Store Connect SUCCEEDED; local key-volume cleanup did NOT." >&2
+      echo "    ACTION REQUIRED: ${RAM_VOLUME_MOUNTPOINT:-the key volume} is still mounted and holds" >&2
+      echo "    the App Store Connect private key. Detach it; it is RAM-backed and clears on reboot." >&2
+      return 0
     fi
     return "$cleanup_status"
   fi
@@ -1030,7 +1099,7 @@ main() {
   fi
   cd "$SCRIPT_DIR"
   local project_root evidence_path expected_mac_build expected_cloudkit_environment expected_project_digest
-  local baseline_source_digest baseline_project_digest current_project_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path
+  local baseline_source_digest baseline_project_digest current_artifact_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path
   local candidate_workspace candidate_ledger_path candidate_evidence_path walkthrough_path candidate_id source_revision producer_published_at
   local producer_evidence_digest artifact_digest marketing_version walkthrough_digest candidate_ipa_path durable_ipa_path prepared_metadata resume_candidate=0
   local allocation_record_path identity_proof_path allocation_metadata candidate_id_hint
@@ -1050,7 +1119,14 @@ main() {
     : "${APP_STORE_CONNECT_KEY_ID:?required}"
     : "${APP_STORE_CONNECT_ISSUER_ID:?required}"
   fi
-  validate_common_marketing_version "$SCRIPT_DIR/project.yml"
+  # The live tree's marketing version is what a new candidate would be built
+  # from, so it is validated on the prepare path only. On --upload-only the
+  # version being shipped is already frozen in the candidate ledger and is not
+  # read from the tree, which is why this was previously exempted for one
+  # hardcoded candidate ID rather than for the resume path it actually blocks.
+  if (( ! upload_only )); then
+    validate_common_marketing_version "$SCRIPT_DIR/project.yml"
+  fi
   assert_candidate_not_in_flight "$candidate_ledger_path" "$rollover_assigned"
   prepared_metadata="$(read_prepared_candidate "$candidate_ledger_path")"
   if (( upload_only )) && [[ -z "$prepared_metadata" ]]; then
@@ -1086,7 +1162,9 @@ main() {
       echo "FAIL: prepared candidate metadata is incomplete" >&2
       return 1
     }
-    validate_resumed_source_revision "$project_root" "$source_revision" || return 1
+    if (( ! upload_only )); then
+      validate_resumed_source_revision "$project_root" "$source_revision" || return 1
+    fi
     IPA_PATH="$candidate_ipa_path"
     echo "==> Resuming prepared candidate $candidate_id build $NEXT_BUILD"
   fi
@@ -1281,9 +1359,16 @@ main() {
   else
     walkthrough_path="${walkthrough_path:-$candidate_workspace/walkthrough.md}"
     candidate_evidence_path="${candidate_evidence_path:-$candidate_workspace/candidate-evidence.json}"
-    current_project_digest="$(snapshot_project_digest "$SCRIPT_DIR/project.yml")"
-    [[ "$current_project_digest" == "$baseline_project_digest" ]] || {
-      echo "FAIL: checked-out project changed since the prepared candidate" >&2
+    # A prepared candidate is a frozen, signed artifact. What must be proven
+    # before transferring it is that the IPA on disk is still bit-for-bit the
+    # one that was attested -- not that the working tree has stood still.
+    # Pinning the checked-out project.yml here meant any later edit invalidated
+    # an already-built candidate the edit could not have changed, including
+    # edits to this release tooling itself. The frozen baseline still governs
+    # the producer-evidence boundary check immediately below.
+    current_artifact_digest="$(sha256_file "$IPA_PATH")"
+    [[ "$current_artifact_digest" == "$artifact_digest" ]] || {
+      echo "FAIL: prepared artifact no longer matches its attested digest" >&2
       return 1
     }
     echo "==> Revalidating fresh producer evidence before resumed upload"
