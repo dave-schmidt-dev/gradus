@@ -54,7 +54,7 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 5 5 4 25 2 9)
+COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 5 5 4 26 2 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"

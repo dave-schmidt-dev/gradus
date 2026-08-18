@@ -849,6 +849,41 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual(status, 3, f"{name} was adopted")
                 self.assertEqual(len(calls), 1, f"{name} skipped the transport")
 
+    def test_observation_blocks_rather_than_crashing_on_a_missing_dependency(self) -> None:
+        """A dependency that is absent must still produce a proof.
+
+        PyJWT is imported only when a token is first signed, so the failure lands
+        mid-request rather than at construction.  An escaping traceback would
+        leave no evidence at all for the operation and would put interpreter
+        detail somewhere nobody reviews, so it is classified locally instead.
+        """
+
+        class _MissingDependencyClient:
+            def request(self, *_args, **_kwargs):
+                raise ImportError("No module named 'jwt'")
+
+        for operation in ("processing", "compliance", "tester-group"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._legacy_candidate(root)
+                with (
+                    patch.object(BRIDGE, "ROOT", root),
+                    patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+                ):
+                    status = BRIDGE.dispatch(
+                        operation,
+                        product="gradus-ios",
+                        candidate="gradus-ios-19",
+                        client=_MissingDependencyClient(),
+                        sleep=lambda _seconds: None,
+                    )
+                self.assertEqual(status, 3)
+                proof = json.loads(
+                    (root / "evidence" / "gradus-ios-19" / f"{operation}.json").read_text()
+                )
+                self.assertEqual(proof["result"], "blocked")
+                self.assertEqual(proof["reason"], "asc-client-unavailable")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

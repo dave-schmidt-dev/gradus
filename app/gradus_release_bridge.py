@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S /Users/dave/.local/bin/uv run --with pyjwt --with cryptography python
 """Fixed Gradus App Store Connect broker dispatcher.
 
 The broker owns the credential environment; this process owns only the closed
@@ -513,11 +513,22 @@ def _default_client() -> Any:
     The import is deferred rather than top-level so an injected client keeps the
     bridge usable -- and importable -- in environments where the broker has not
     supplied a credential environment at all.
+
+    A missing dependency or an incomplete credential environment is a local
+    configuration fault rather than an Apple response, so it is classified here
+    and surfaced as a typed blocked proof.  Letting either escape as a traceback
+    would lose the proof entirely and put process detail somewhere nobody
+    reviews.
     """
 
-    from _asc_api import ASCClient, make_token_provider  # noqa: PLC0415
-
-    return ASCClient(make_token_provider())
+    try:
+        from _asc_api import ASCClient, make_token_provider  # noqa: PLC0415
+    except ImportError as error:
+        raise _ObservationError("asc-client-unavailable") from error
+    try:
+        return ASCClient(make_token_provider())
+    except KeyError as error:
+        raise _ObservationError("credential-environment-incomplete") from error
 
 
 def _transport_error_types() -> tuple[type[BaseException], ...]:
@@ -721,6 +732,8 @@ def _tester_group(candidate: str, *, client_factory: Callable[[], Any]) -> int:
         groups = _internal_groups(client, _resolve_app_id(client))
     except _ObservationError as error:
         return _blocked("tester-group", candidate, str(error))
+    except ImportError:
+        return _blocked("tester-group", candidate, "asc-client-unavailable")
     except _transport_error_types():
         return _blocked("tester-group", candidate, "app-store-connect-request-failed")
     _persist_group_choices(candidate, groups)
@@ -803,6 +816,8 @@ def _processing(
             sleep(interval)
     except _ObservationError as error:
         return _blocked("processing", candidate, str(error))
+    except ImportError:
+        return _blocked("processing", candidate, "asc-client-unavailable")
     except _transport_error_types():
         return _blocked("processing", candidate, "app-store-connect-request-failed")
 
@@ -825,6 +840,8 @@ def _compliance(candidate: str, *, client_factory: Callable[[], Any]) -> int:
         item = _exact_build(client, _resolve_app_id(client), build)
     except _ObservationError as error:
         return _blocked("compliance", candidate, str(error))
+    except ImportError:
+        return _blocked("compliance", candidate, "asc-client-unavailable")
     except _transport_error_types():
         return _blocked("compliance", candidate, "app-store-connect-request-failed")
     if item is None:
