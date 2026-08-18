@@ -34,7 +34,9 @@ case "${1:-}" in
       echo "release-testflight: prepared candidate identity is unavailable" >&2
       exit 4
     }
-    exec env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools stage \
+    readiness_manifest="$ROOT/.git/release-state/gradus-ios/candidates/$candidate/manifest.json"
+    exec env PYTHONPATH="$CENTRAL_ROOT" READINESS_MANIFEST="$readiness_manifest" \
+      "$PYTHON_BIN" -m release_tools stage \
       --adapter "$ADAPTER" --repository "$ROOT" --candidate "$candidate"
     ;;
   --upload)

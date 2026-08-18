@@ -26,6 +26,7 @@ class BridgeTests(unittest.TestCase):
         prepare_branch = wrapper.split("--prepare-only)", 1)[1].split("--upload)", 1)[0]
         self.assertIn("-m release_tools testflight", prepare_branch)
         self.assertIn("-m release_tools stage", prepare_branch)
+        self.assertIn('READINESS_MANIFEST="$readiness_manifest"', prepare_branch)
         self.assertIn('--candidate "$candidate"', prepare_branch)
         self.assertNotIn("--upload", prepare_branch)
 

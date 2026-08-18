@@ -92,7 +92,7 @@
       "id": "readiness",
       "class": "readiness",
       "mode": "nonCredential",
-      "argv": ["python3", "-m", "release_tools", "readiness"],
+      "argv": ["python3", "app/release_stage_readiness.py"],
       "workingDirectory": ".",
       "environment": {"inherit": false, "inputs": ["READINESS_MANIFEST"], "literals": {}},
       "proofSchema": "release.proof.readiness.v1",
