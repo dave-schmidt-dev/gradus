@@ -153,7 +153,7 @@ class GradusAdapterTests(unittest.TestCase):
 
         self.assertEqual(
             operations["localGate"]["environment"]["inputs"],
-            ["READINESS_MANIFEST", "HOME", "PATH"],
+            ["READINESS_MANIFEST", "HOME", "PATH", "USER", "LOGNAME"],
         )
 
     def test_typed_proof_fixture_has_every_workflow_field_and_binding(self) -> None:

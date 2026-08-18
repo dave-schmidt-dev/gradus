@@ -30,6 +30,16 @@
       "name": "PATH",
       "required": true,
       "source": "caller"
+    },
+    {
+      "name": "USER",
+      "required": true,
+      "source": "caller"
+    },
+    {
+      "name": "LOGNAME",
+      "required": true,
+      "source": "caller"
     }
   ],
   "registeredConsumers": [
@@ -84,7 +94,7 @@
       "workingDirectory": ".",
       "environment": {
         "inherit": false,
-        "inputs": ["READINESS_MANIFEST", "HOME", "PATH"],
+        "inputs": ["READINESS_MANIFEST", "HOME", "PATH", "USER", "LOGNAME"],
         "literals": {"RELEASE_CONFIGURATION": "Production"}
       },
       "proofSchema": "release.proof.local-gate.v1",
