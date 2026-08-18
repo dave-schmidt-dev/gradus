@@ -858,7 +858,17 @@ def _compliance(candidate: str, *, client_factory: Callable[[], Any]) -> int:
         "compliance",
         candidate,
         uploaded_build_identifier=uploaded,
-        observed={"processingState": processing_state, "complianceState": compliance_state},
+        observed={
+            "processingState": processing_state,
+            "complianceState": compliance_state,
+            # Apple names a compliance state only while it is withholding the
+            # build; silence is the ordinary answer for an app that declares
+            # export compliance in its Info.plist.  Passing on that silence is
+            # correct, but recording it as an observed value is not -- without
+            # this flag the proof reads as though Apple affirmatively reported
+            # something, when the field was simply absent.
+            "complianceStateReported": bool(compliance_state),
+        },
     )
 
 

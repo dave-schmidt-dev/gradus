@@ -884,6 +884,33 @@ class BridgeTests(unittest.TestCase):
                 self.assertEqual(proof["result"], "blocked")
                 self.assertEqual(proof["reason"], "asc-client-unavailable")
 
+    def test_compliance_records_whether_apple_reported_anything_at_all(self) -> None:
+        """Silence and an affirmative answer must not look identical in evidence.
+
+        Apple names a compliance state only while it is withholding a build, so
+        an app that declares export compliance in its Info.plist gets no field
+        back.  Passing on that absence is right; recording it as an observed
+        value would misrepresent silence as an answer.
+        """
+
+        for compliance, reported in (("", False), (None, False), ("COMPLIANT", True)):
+            with self.subTest(compliance=compliance), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._legacy_candidate(root)
+                status, _client = self._dispatch_observed(
+                    "compliance",
+                    root,
+                    [
+                        {"data": [{"id": "app-1"}]},
+                        self._builds(19, "VALID", compliance),
+                    ],
+                )
+                self.assertEqual(status, 0)
+                proof = json.loads(
+                    (root / "evidence" / "gradus-ios-19" / "compliance.json").read_text()
+                )
+                self.assertEqual(proof["complianceStateReported"], reported)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
