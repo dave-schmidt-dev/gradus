@@ -276,6 +276,52 @@ class BridgeTests(unittest.TestCase):
                     3,
                 )
 
+    def test_adopted_delivery_stdout_yields_exactly_one_upload_identifier(self):
+        """The adopt path's own stdout must parse to exactly one identifier.
+
+        The shell announces an adopted delivery with two lines that name the same
+        candidate and build, and only the second one says "uploaded".
+        ``_uploaded_build_identifier`` returns None unless it finds exactly one
+        match, so rewording the first line into something that also matched would
+        silently downgrade an adopted delivery to a blocked operation -- the exact
+        stuck state the receipt exists to prevent. The lines are lifted out of the
+        script instead of retyped so this checks what actually ships.
+        """
+
+        lines = (
+            (Path(__file__).resolve().parent / "archive-upload-ios.sh")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        anchors = [
+            index
+            for index, line in enumerate(lines)
+            if "already delivered to App Store Connect; adopting" in line
+        ]
+        self.assertEqual(len(anchors), 1, "adopt path announcement is no longer unique")
+        echoes = lines[anchors[0] : anchors[0] + 2]
+
+        stdout = []
+        for line in echoes:
+            body = line.strip()
+            self.assertTrue(body.startswith('echo "') and body.endswith('"'), body)
+            stdout.append(
+                body[len('echo "') : -1]
+                .replace("$candidate_id", "gradus-ios-20")
+                .replace("$NEXT_BUILD", "20")
+            )
+        self.assertIn("uploaded", stdout[1])
+
+        self.assertEqual(
+            BRIDGE._uploaded_build_identifier(
+                "\n".join(stdout),
+                legacy_candidate="gradus-ios-20",
+                marketing_version="1.8.0",
+                build=20,
+            ),
+            "1.8.0 (20)",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
