@@ -104,15 +104,18 @@ CLAUDE_RATE_LIMIT_BACKOFF_SECONDS = 3600
 class _CanonicalClaudeCooldown:
     """Return a bounded, fail-closed result without touching Claude."""
 
-    def __init__(self, data: dict[str, object]) -> None:
-        self._data = dict(data)
+    def __init__(self, entry: Mapping[str, object]) -> None:
+        self._entry = dict(entry)
 
     def fetch(self) -> ProviderSnapshot:
+        data = self._entry.get("data")
+        error = self._entry.get("error")
         return ProviderSnapshot(
             name="Claude",
-            ok=True,
+            ok=self._entry.get("ok") is True,
             source="snapshot",
-            data=self._data,
+            data=dict(data) if isinstance(data, Mapping) else {},
+            error=error if isinstance(error, str) else None,
         )
 
 
@@ -904,11 +907,15 @@ def _refresh_snapshot_once(
         probe_time = datetime.now().astimezone()
         if not _claude_probe_is_due(prior_payload, probe_time):
             claude_entry = _canonical_entry(prior_payload, "Claude")
-            claude_data = claude_entry.get("data") if isinstance(claude_entry, Mapping) else {}
-            if not isinstance(claude_data, Mapping):
-                claude_data = {}
             providers = [(name, provider) for name, provider in providers if name != "Claude"]
-            providers.append(("Claude", _CanonicalClaudeCooldown(dict(claude_data))))
+            providers.append(
+                (
+                    "Claude",
+                    _CanonicalClaudeCooldown(
+                        claude_entry if isinstance(claude_entry, Mapping) else {}
+                    ),
+                )
+            )
 
         def provider_complete(snapshot: ProviderSnapshot) -> None:
             # Provider names come from the fixed registry. Do not echo arbitrary

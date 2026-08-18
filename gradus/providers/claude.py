@@ -133,6 +133,12 @@ class ClaudeHttpProvider:
         opus_percent_left = _util("seven_day_opus")
         opus_reset = _reset("seven_day_opus")
 
+        if all(
+            value is None
+            for value in (session_percent_left, weekly_percent_left, opus_percent_left)
+        ):
+            raise ProbeFailure("Claude usage data not available yet", raw_text)
+
         return ClaudeStatus(
             session_percent_left=session_percent_left,
             weekly_percent_left=weekly_percent_left,

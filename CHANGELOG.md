@@ -9,9 +9,12 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
-## Unreleased
+## 1.8.0 — 2026-08-17
 
 ### Added
+
+- Mac Settings now shows recently active iPhone and iPad consumers, using
+  short-lived private presence records so stale devices disappear automatically.
 
 - A new "Codex (Spark)" card tracks a separate weekly quota bucket on your
   Codex account, alongside the existing Codex card. It shows its own
@@ -28,6 +31,12 @@ history from the overnight release train. New releases use
   without changing their layout.
 
 ### Fixed
+
+- Provider refresh failures on iPhone and iPad now use actionable language
+  instead of exposing raw HTTP status codes.
+
+- The terminal dashboard again restores the separate Antigravity Claude and
+  Codex Spark quota buckets from the canonical snapshot without extra provider calls.
 
 - If you declined notification permission — or turned Gradus' notifications off
   in iOS Settings later — the app's own Notifications toggle still showed "on"

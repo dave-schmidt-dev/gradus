@@ -225,6 +225,10 @@ The launchd job and explicit credential-aware `--refresh-snapshot` command are t
 
 **Producer coverage.** The credential-aware producer probes providers and carries recent sanitized observations through transient failures. Claude probes are additionally limited to one attempt per ten minutes, with a one-hour backoff after HTTP 429; a 429 retains bounded windows but remains `ok: false` for fail-closed routing. Snapshot writers use a per-file lock and reject an older payload.
 
+Claude cooldown cycles preserve the prior observation and its original probe
+timestamp exactly. A response containing no usable usage buckets is transient,
+not a successful empty reading, so it cannot erase valid displayed windows.
+
 **launchd refresher.** A ~120 s background job keeps the snapshot current without the TUI running.
 
 The repository-owned templates in `launchd/` invoke the explicit credential-aware

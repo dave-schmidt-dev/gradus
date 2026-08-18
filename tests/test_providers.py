@@ -1986,6 +1986,14 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIsInstance(status.weekly_percent_left, float)
         self.assertIsInstance(status.opus_percent_left, float)
 
+    def test_bucketless_success_is_transient_instead_of_erasing_usage(self) -> None:
+        provider = self._make_provider()
+        with patch("gradus.providers._base._http_json", return_value={}):
+            snapshot = fetch_provider_snapshot("Claude", provider, debug=False)
+        self.assertFalse(snapshot.ok)
+        self.assertEqual(snapshot.error, "Claude usage data not available yet")
+        self.assertTrue(_is_transient_probe_error(snapshot))
+
     def test_401_clears_token_and_routes_to_login(self) -> None:
         provider = self._make_provider()
         with patch("gradus.providers._base._http_json", side_effect=ProbeFailure("HTTP 401", "")):

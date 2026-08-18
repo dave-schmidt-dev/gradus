@@ -52,6 +52,10 @@ STALE_THRESHOLD_SECONDS = 300  # 5 minutes
 # visible long enough for the producer's Claude cooldown to elapse, while the
 # persisted entry remains ``ok: false`` so routers fail closed.
 RATE_LIMIT_RETENTION_SECONDS = 7200
+# Claude probes are intentionally at least ten minutes apart.  A successful
+# but bucketless response is transient and must retain the last observation
+# through the next eligible probe instead of creating a five-minute blank gap.
+CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS = 1200
 AUTH_GRACE_WINDOW_SECONDS = STALE_THRESHOLD_SECONDS
 AUTH_ESCALATION_WINDOW_SECONDS = 600
 ANTIGRAVITY_AUTH_RETRY_MESSAGE = "Antigravity refresh retrying; values may be stale"
@@ -1218,6 +1222,8 @@ def _retention_seconds(name: str, error: str | None) -> float:
         or "probe cooldown" in lower
     ):
         return RATE_LIMIT_RETENTION_SECONDS
+    if name == "Claude" and "data not available yet" in lower:
+        return CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS
     return STALE_THRESHOLD_SECONDS
 
 
@@ -1375,6 +1381,26 @@ def _build_snapshot_payload(
         if getattr(snap, "source", None) != "snapshot":
             return None
         prior_entry = prior_by_name.get(name)
+        if isinstance(prior_entry, Mapping):
+            prior_error = prior_entry.get("error")
+            attempted_at = prior_entry.get("probe_attempted_at")
+            if (
+                prior_entry.get("ok") is False
+                and isinstance(prior_error, str)
+                and prior_entry.get("windows") == []
+                and isinstance(prior_entry.get("data"), Mapping)
+                and prior_entry.get("observed_at") is None
+                and _parse_aware_iso_timestamp(attempted_at) is not None
+            ):
+                return {
+                    "name": name,
+                    "ok": False,
+                    "error": prior_error[:200],
+                    "windows": [],
+                    "data": project_data(snap),
+                    "observed_at": None,
+                    "probe_attempted_at": attempted_at,
+                }
         retained_entry = _sanitize_prior_entry(
             name,
             prior_entry,

@@ -131,7 +131,24 @@ def _candidate_record(candidate: str) -> Mapping[str, Any] | None:
     return record
 
 
-def _identity_proof_valid() -> bool:
+def _current_marketing_version() -> str:
+    """Read the GradusiOS marketing version from the fixed project manifest."""
+
+    text = (ROOT / "app" / "project.yml").read_text(encoding="utf-8")
+    target = re.search(r"(?m)^  GradusiOS:\s*$", text)
+    if target is None:
+        raise ValueError("GradusiOS marketing version is unavailable")
+    section = text[target.end() :]
+    next_target = re.search(r"(?m)^  [A-Za-z0-9_]+:\s*$", section)
+    if next_target is not None:
+        section = section[: next_target.start()]
+    matches = re.findall(r'(?m)^        MARKETING_VERSION: "([^"]+)"\s*$', section)
+    if len(matches) != 1 or _SEMVER.fullmatch(matches[0]) is None:
+        raise ValueError("GradusiOS marketing version is unavailable")
+    return matches[0]
+
+
+def _identity_proof_valid(*, marketing_version: str) -> bool:
     proof = _read_json(IDENTITY_PROOF)
     if proof is None:
         return False
@@ -155,6 +172,7 @@ def _identity_proof_valid() -> bool:
         and proof.get("operationClass") == "identityAllocation"
         and proof.get("result") == "passed"
         and proof.get("productKey") == PRODUCT
+        and proof.get("marketingVersion") == marketing_version
         and isinstance(proof.get("buildNumber"), int)
         and proof["buildNumber"] > 0
         and isinstance(proof.get("marketingVersion"), str)
@@ -172,6 +190,30 @@ def _identity_proof_valid() -> bool:
     )
 
 
+def _archive_identity_proof() -> None:
+    """Move one consumed or stale operation proof into a content-addressed archive."""
+
+    if not IDENTITY_PROOF.exists():
+        return
+    if IDENTITY_PROOF.is_symlink() or not IDENTITY_PROOF.is_file():
+        raise ValueError("identity proof is not a regular file")
+    encoded = IDENTITY_PROOF.read_bytes()
+    digest = hashlib.sha256(encoded).hexdigest()
+    archive = EVIDENCE_ROOT / "archive" / f"allocate-identity-{digest}.json"
+    archive.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        if archive.read_bytes() != encoded:
+            raise ValueError("identity proof archive mismatch")
+    else:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    IDENTITY_PROOF.unlink()
+
+
 def dispatch(
     operation: str,
     *,
@@ -185,7 +227,8 @@ def dispatch(
     if operation == "identity-allocation":
         if candidate is not None:
             raise ValueError("identity allocation does not accept a candidate")
-        if _identity_proof_valid():
+        marketing_version = _current_marketing_version()
+        if _identity_proof_valid(marketing_version=marketing_version):
             print(
                 json.dumps(
                     {
@@ -197,6 +240,7 @@ def dispatch(
                 )
             )
             return 0
+        _archive_identity_proof()
         result = runner(
             [str(ALLOCATOR), "--product", PRODUCT],
             cwd=ROOT,
@@ -206,7 +250,7 @@ def dispatch(
             stderr=subprocess.PIPE,
             check=False,
         )
-        if result.returncode != 0 or not _identity_proof_valid():
+        if result.returncode != 0 or not _identity_proof_valid(marketing_version=marketing_version):
             return _blocked(operation, None, "identity-proof-unavailable")
         print(
             json.dumps(

@@ -42,6 +42,7 @@ class BridgeTests(unittest.TestCase):
             with (
                 patch.object(BRIDGE, "IDENTITY_PROOF", Path(temporary) / "allocate.json"),
                 patch.object(BRIDGE, "ROOT", Path(temporary)),
+                patch.object(BRIDGE, "_current_marketing_version", return_value="1.6.7"),
             ):
                 BRIDGE.IDENTITY_PROOF.write_text(json.dumps(proof), encoding="utf-8")
 
@@ -54,6 +55,49 @@ class BridgeTests(unittest.TestCase):
                     ),
                     0,
                 )
+
+    def test_identity_archives_prior_train_before_allocating_current_train(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            proof_path = root / "evidence" / "allocate.json"
+            prior = {
+                "proofVersion": "1.0.0",
+                "operationClass": "identityAllocation",
+                "result": "passed",
+                "productKey": "gradus-ios",
+                "marketingVersion": "1.7.0",
+                "buildNumber": 19,
+                "responseSha256": "a" * 64,
+                "remoteHighestMarketingVersion": "1.7.0",
+                "remoteHighestBuildNumber": 18,
+                "observedAt": "2026-08-13T00:00:00Z",
+            }
+            current = dict(prior, marketingVersion="1.8.0", buildNumber=20)
+            current["remoteHighestBuildNumber"] = 19
+            proof_path.parent.mkdir(parents=True)
+            proof_path.write_text(json.dumps(prior), encoding="utf-8")
+
+            def runner(*args, **kwargs):
+                proof_path.write_text(json.dumps(current), encoding="utf-8")
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_current_marketing_version", return_value="1.8.0"),
+            ):
+                self.assertEqual(
+                    BRIDGE.dispatch(
+                        "identity-allocation", product="gradus-ios", candidate=None, runner=runner
+                    ),
+                    0,
+                )
+
+            archived = list((root / "evidence" / "archive").glob("*.json"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(json.loads(archived[0].read_text()), prior)
+            self.assertEqual(json.loads(proof_path.read_text()), current)
 
     def test_unsupported_operation_writes_blocked_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

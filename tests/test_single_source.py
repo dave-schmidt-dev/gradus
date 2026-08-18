@@ -19,7 +19,11 @@ from gradus.__main__ import (
     main,
 )
 from gradus.providers import ProviderSnapshot
-from gradus.snapshot import RATE_LIMIT_RETENTION_SECONDS, build_snapshot_v2_payload
+from gradus.snapshot import (
+    CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS,
+    RATE_LIMIT_RETENTION_SECONDS,
+    build_snapshot_v2_payload,
+)
 from gradus.ui import _sort_provider_partition
 
 
@@ -93,18 +97,52 @@ def test_tui_hydrates_carried_transient_windows_as_cached_only() -> None:
     assert claude.data and claude.data["session_percent_left"] == 80
 
 
+def test_bucketless_claude_response_retains_values_through_next_probe() -> None:
+    now = datetime(2026, 8, 17, 18, 0, tzinfo=timezone.utc)
+    healthy = build_snapshot_v2_payload([_claude(True)], now)
+    unavailable = build_snapshot_v2_payload(
+        [_claude(False, error="Claude usage data not available yet")],
+        now + timedelta(seconds=CLAUDE_MIN_PROBE_INTERVAL_SECONDS),
+        prior=healthy,
+    )
+    entry = next(item for item in unavailable["providers"] if item["name"] == "Claude")
+    assert entry["ok"] is False
+    assert entry["windows"]
+    assert entry["observed_at"] == now.isoformat()
+    assert CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS > CLAUDE_MIN_PROBE_INTERVAL_SECONDS
+
+
 def test_healthy_claude_cooldown_carries_success_unchanged() -> None:
     now = datetime(2026, 8, 17, 18, 0, tzinfo=timezone.utc)
     healthy = build_snapshot_v2_payload([_claude(True)], now)
     prior = next(item for item in healthy["providers"] if item["name"] == "Claude")
     deferred = build_snapshot_v2_payload(
-        [_CanonicalClaudeCooldown(dict(prior["data"])).fetch()],
+        [_CanonicalClaudeCooldown(prior).fetch()],
         now + timedelta(seconds=120),
         prior=healthy,
     )
     current = next(item for item in deferred["providers"] if item["name"] == "Claude")
     assert current["ok"] is True
     assert current["observed_at"] == prior["observed_at"]
+    assert current["probe_attempted_at"] == prior["probe_attempted_at"]
+
+
+def test_claude_cooldown_preserves_auth_failure_instead_of_empty_success() -> None:
+    now = datetime(2026, 8, 17, 18, 0, tzinfo=timezone.utc)
+    failed = build_snapshot_v2_payload(
+        [_claude(False, error="Claude Code session expired: run `claude auth login`")],
+        now,
+    )
+    prior = next(item for item in failed["providers"] if item["name"] == "Claude")
+    deferred = build_snapshot_v2_payload(
+        [_CanonicalClaudeCooldown(prior).fetch()],
+        now + timedelta(seconds=120),
+        prior=failed,
+    )
+    current = next(item for item in deferred["providers"] if item["name"] == "Claude")
+    assert current["ok"] is False
+    assert current["error"] == prior["error"]
+    assert current["observed_at"] is None
     assert current["probe_attempted_at"] == prior["probe_attempted_at"]
 
 
