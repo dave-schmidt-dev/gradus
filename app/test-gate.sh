@@ -8,7 +8,7 @@
 # `assert_counting_leg`.  The Python paths are intentionally listed here so
 # the self-check can detect a new hermetic suite that is not wired into the
 # canonical gate.
-EXPECTED_COUNTING_LEG_COUNT=13
+EXPECTED_COUNTING_LEG_COUNT=14
 COUNTING_LEG_NAMES=(
   "swift-testing"
   "pytest"
@@ -21,6 +21,7 @@ COUNTING_LEG_NAMES=(
   "release-reconcile"
   "testflight-assignment"
   "candidate-walkthrough"
+  "release-bridge"
   "GradusMacUI"
   "GradusiOSUI"
 )
@@ -30,6 +31,7 @@ COUNTING_LEG_REPORTERS=(
   "xctest"
   "aggregate-xctest-swift"
   "aggregate-xctest-swift"
+  "pytest"
   "pytest"
   "pytest"
   "pytest"
@@ -52,7 +54,7 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 5 5 4 2 9)
+COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 5 5 4 16 2 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -65,6 +67,7 @@ COUNTING_LEG_SOURCES=(
   "test_release_reconcile.py"
   "testflight-setup-tests.py"
   "test_walkthrough.py"
+  "test_gradus_release_bridge.py"
   "GradusMacUITests"
   "GradusiOSUITests"
 )
@@ -316,6 +319,9 @@ assert_counting_leg "testflight-assignment" uv run pytest -q testflight-setup-te
 
 echo "==> Hermetic candidate walkthrough tests"
 assert_counting_leg "candidate-walkthrough" uv run pytest -q test_walkthrough.py
+
+echo "==> Hermetic release bridge dispatch tests"
+assert_counting_leg "release-bridge" uv run pytest -q test_gradus_release_bridge.py
 
 # INV-11 declares `area:` over app/GradusKit/**, gradus/**, and tests/** with
 # this script as its gate_test -- but the three `xcodebuild test` invocations

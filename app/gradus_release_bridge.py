@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,17 @@ _UPLOAD_LINE = re.compile(
     r"(?P<build>[0-9]+)\s+uploaded\b.*$"
 )
 _UPLOAD_MARKER = re.compile(r"(?im)\buploadedBuildIdentifier\s*[:=]\s*([A-Za-z0-9._() -]+)")
+
+BUNDLE_ID = "com.zerodelta.gradus.ios"
+PROCESSING_POLL_INTERVAL_SECONDS = 30
+PROCESSING_TIMEOUT_SECONDS = 30 * 60
+# Apple reports a build that still needs an export-compliance answer through
+# either field depending on the endpoint, so both are read.  The bridge only
+# ever *observes* this state; declaring export compliance is a legal statement
+# about the product and stays an attended human action, exactly as
+# testflight-assign.py already requires.
+_MISSING_COMPLIANCE = frozenset({"MISSING_COMPLIANCE", "MISSINGCOMPLIANCE"})
+_FAILED_PROCESSING = frozenset({"FAILED", "INVALID"})
 
 
 def _now() -> str:
@@ -429,12 +441,252 @@ def _archive_identity_proof() -> None:
     IDENTITY_PROOF.unlink()
 
 
+class _ObservationError(RuntimeError):
+    """A fixed local classification of an unusable App Store Connect response.
+
+    Every message is chosen in this module and never carries an Apple response
+    body, because the string becomes the ``reason`` field of a blocked proof.
+    Evidence must not become a place where remote text lands unreviewed.
+    """
+
+
+def _default_client() -> Any:
+    """Build the real ASC client, importing lazily so tests need no credentials.
+
+    The import is deferred rather than top-level so an injected client keeps the
+    bridge usable -- and importable -- in environments where the broker has not
+    supplied a credential environment at all.
+    """
+
+    from _asc_api import ASCClient, make_token_provider  # noqa: PLC0415
+
+    return ASCClient(make_token_provider())
+
+
+def _transport_error_types() -> tuple[type[BaseException], ...]:
+    try:
+        from _asc_api import ASCError  # noqa: PLC0415
+    except ImportError:
+        return ()
+    return (ASCError,)
+
+
+def _build_attribute(item: Mapping[str, Any], key: str) -> Any:
+    attributes = item.get("attributes")
+    return attributes.get(key) if isinstance(attributes, Mapping) else None
+
+
+def _build_state(item: Mapping[str, Any], key: str) -> str:
+    """Normalize one Apple state field to a comparable upper-case token."""
+
+    return str(_build_attribute(item, key) or "").upper().replace(" ", "_")
+
+
+def _uploaded_identifier_from_proof(candidate: str) -> str | None:
+    """Read this candidate's own upload proof for the transport confirmation.
+
+    Downstream operations must describe the build Apple actually accepted, so
+    the identifier comes from the recorded upload proof rather than being
+    recomputed from the ledger.  A proof belonging to another candidate, or one
+    that did not pass, yields nothing instead of a plausible guess.
+    """
+
+    proof = _read_json(_proof_path("upload", candidate))
+    if proof is None or proof.get("result") != "passed":
+        return None
+    if proof.get("candidateId") != candidate:
+        return None
+    identifier = proof.get("uploadedBuildIdentifier")
+    if not isinstance(identifier, str) or not identifier.strip():
+        return None
+    return identifier.strip()
+
+
+def _resolve_app_id(client: Any) -> str:
+    response = client.request("GET", f"/apps?filter[bundleId]={BUNDLE_ID}") or {}
+    data = response.get("data") if isinstance(response, Mapping) else None
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], Mapping):
+        raise _ObservationError("bundle-id-did-not-resolve-to-one-app")
+    app_id = data[0].get("id")
+    if not isinstance(app_id, str) or not app_id:
+        raise _ObservationError("app-identity-missing")
+    return app_id
+
+
+def _exact_build(client: Any, app_id: str, build: int) -> Mapping[str, Any] | None:
+    """Return the single build whose version equals ``build`` exactly.
+
+    Apple's version filter is not an equality guarantee, so the response is
+    re-filtered locally.  More than one exact match is ambiguous rather than
+    merely surprising: observing the wrong build would attest processing for
+    bytes nobody chose, so it fails instead of picking one.
+    """
+
+    response = (
+        client.request("GET", f"/builds?filter[app]={app_id}&filter[version]={build}&limit=50")
+        or {}
+    )
+    data = response.get("data") if isinstance(response, Mapping) else None
+    if not isinstance(data, list):
+        raise _ObservationError("malformed-build-response")
+    exact = [
+        item
+        for item in data
+        if isinstance(item, Mapping) and str(_build_attribute(item, "version")) == str(build)
+    ]
+    if len(exact) > 1:
+        raise _ObservationError("multiple-builds-matched-candidate")
+    return exact[0] if exact else None
+
+
+def _observation_passed(
+    operation: str,
+    candidate: str,
+    *,
+    uploaded_build_identifier: str,
+    processing_state: str,
+    compliance_state: str,
+) -> int:
+    payload: dict[str, Any] = {
+        "proofVersion": "1.0.0",
+        "operationClass": operation,
+        "candidateId": candidate,
+        "uploadedBuildIdentifier": uploaded_build_identifier,
+        "result": "passed",
+        "observedAt": _now(),
+        "processingState": processing_state,
+        "complianceState": compliance_state,
+        "responseSha256": _digest(
+            {
+                "operation": operation,
+                "candidateId": candidate,
+                "uploadedBuildIdentifier": uploaded_build_identifier,
+                "processingState": processing_state,
+                "complianceState": compliance_state,
+            }
+        ),
+    }
+    path = _proof_path(operation, candidate)
+    _write_json(path, payload)
+    print(
+        json.dumps(
+            {"operation": operation, "result": "passed", "proofPath": str(path.relative_to(ROOT))},
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _observation_context(operation: str, candidate: str) -> tuple[int, str] | int:
+    """Resolve the build number and upload confirmation both observers need."""
+
+    binding = _candidate_bindings(candidate)
+    if binding is None:
+        return _blocked(operation, candidate, "candidate-ledger-mismatch")
+    _legacy, _record, _marketing_version, build, _artifact = binding
+    uploaded = _uploaded_identifier_from_proof(candidate)
+    if uploaded is None:
+        return _blocked(operation, candidate, "uploaded-build-identifier-unavailable")
+    return build, uploaded
+
+
+def _processing(
+    candidate: str,
+    *,
+    client_factory: Callable[[], Any],
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+    timeout: float,
+    interval: float,
+) -> int:
+    """Wait for Apple to finish processing the uploaded build, then attest it.
+
+    This only ever reads.  A build that Apple has not yet indexed is not a
+    failure, so the loop keeps waiting; a build Apple has rejected is terminal
+    and blocks immediately rather than burning the full timeout.
+    """
+
+    context = _observation_context("processing", candidate)
+    if isinstance(context, int):
+        return context
+    build, uploaded = context
+    try:
+        client = client_factory()
+        app_id = _resolve_app_id(client)
+        deadline = clock() + timeout
+        while True:
+            item = _exact_build(client, app_id, build)
+            if item is not None:
+                state = _build_state(item, "processingState")
+                if state in _FAILED_PROCESSING:
+                    return _blocked("processing", candidate, f"build-processing-{state.lower()}")
+                if state == "VALID":
+                    return _observation_passed(
+                        "processing",
+                        candidate,
+                        uploaded_build_identifier=uploaded,
+                        processing_state=state,
+                        compliance_state=_build_state(item, "complianceState"),
+                    )
+            if clock() >= deadline:
+                return _blocked("processing", candidate, "processing-not-confirmed-before-timeout")
+            sleep(interval)
+    except _ObservationError as error:
+        return _blocked("processing", candidate, str(error))
+    except _transport_error_types():
+        return _blocked("processing", candidate, "app-store-connect-request-failed")
+
+
+def _compliance(candidate: str, *, client_factory: Callable[[], Any]) -> int:
+    """Attest that Apple is not withholding the build for export compliance.
+
+    Observational by construction: when Apple wants an export-compliance answer
+    the operation blocks and names the attended action.  Answering on Apple's
+    export-compliance form is a legal declaration about the product and is not
+    a decision this bridge is authorized to make on anyone's behalf.
+    """
+
+    context = _observation_context("compliance", candidate)
+    if isinstance(context, int):
+        return context
+    build, uploaded = context
+    try:
+        client = client_factory()
+        item = _exact_build(client, _resolve_app_id(client), build)
+    except _ObservationError as error:
+        return _blocked("compliance", candidate, str(error))
+    except _transport_error_types():
+        return _blocked("compliance", candidate, "app-store-connect-request-failed")
+    if item is None:
+        return _blocked("compliance", candidate, "build-not-indexed")
+    processing_state = _build_state(item, "processingState")
+    compliance_state = _build_state(item, "complianceState")
+    if processing_state in _MISSING_COMPLIANCE or compliance_state in _MISSING_COMPLIANCE:
+        return _blocked("compliance", candidate, "export-compliance-attention-required")
+    if processing_state in _FAILED_PROCESSING:
+        return _blocked("compliance", candidate, f"build-processing-{processing_state.lower()}")
+    if processing_state != "VALID":
+        return _blocked("compliance", candidate, "processing-not-confirmed")
+    return _observation_passed(
+        "compliance",
+        candidate,
+        uploaded_build_identifier=uploaded,
+        processing_state=processing_state,
+        compliance_state=compliance_state,
+    )
+
+
 def dispatch(
     operation: str,
     *,
     product: str,
     candidate: str | None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    client: Any | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    timeout: float = PROCESSING_TIMEOUT_SECONDS,
+    interval: float = PROCESSING_POLL_INTERVAL_SECONDS,
 ) -> int:
     if product != PRODUCT:
         raise ValueError("product is unsupported")
@@ -525,6 +777,22 @@ def dispatch(
             marketing_version=marketing_version,
             build=build,
         )
+    if operation in ("processing", "compliance"):
+        # Resolved lazily inside the observers so a candidate that fails the
+        # local ledger or upload-proof checks never causes a credential to be
+        # requested at all.  Blocking is a local decision; it should not need
+        # Apple, and it should not need a key.
+        factory = (lambda: client) if client is not None else _default_client
+        if operation == "processing":
+            return _processing(
+                candidate,
+                client_factory=factory,
+                clock=clock,
+                sleep=sleep,
+                timeout=timeout,
+                interval=interval,
+            )
+        return _compliance(candidate, client_factory=factory)
     return _blocked(operation, candidate, "operation-interface-not-yet-authorized")
 
 

@@ -20,6 +20,24 @@ BRIDGE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BRIDGE)
 
 
+class _RecordingClient:
+    """Injectable stand-in that replays fixed responses and records every call.
+
+    Recording the HTTP method is the point: it is what lets a test assert that
+    an observation stayed an observation and never mutated anything at Apple.
+    """
+
+    def __init__(self, responses: list) -> None:
+        self._responses = list(responses)
+        self.requests: list[tuple] = []
+
+    def request(self, method: str, path: str, body: dict | None = None, **_kwargs) -> dict | None:
+        self.requests.append((method, path, body))
+        if not self._responses:
+            raise AssertionError("unexpected additional App Store Connect request")
+        return self._responses.pop(0)
+
+
 class BridgeTests(unittest.TestCase):
     def test_prepare_only_freezes_then_stages_without_upload(self) -> None:
         wrapper = (ROOT / "app" / "release-testflight").read_text(encoding="utf-8")
@@ -116,11 +134,11 @@ class BridgeTests(unittest.TestCase):
                 patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
             ):
                 status = BRIDGE.dispatch(
-                    "processing", product="gradus-ios", candidate="gradus-ios-19"
+                    "notification", product="gradus-ios", candidate="gradus-ios-19"
                 )
                 self.assertEqual(status, 3)
                 proof = json.loads(
-                    (root / "evidence" / "gradus-ios-19" / "processing.json").read_text()
+                    (root / "evidence" / "gradus-ios-19" / "notification.json").read_text()
                 )
                 self.assertEqual(proof["result"], "blocked")
 
@@ -321,6 +339,221 @@ class BridgeTests(unittest.TestCase):
             ),
             "1.8.0 (20)",
         )
+
+    # -- processing and compliance observation --------------------------------
+
+    @staticmethod
+    def _legacy_candidate(root: Path, *, uploaded: bool = True) -> None:
+        """Write the minimum ledger and upload proof the observers require."""
+
+        record = root / ".release-state" / "candidate.json"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(
+            json.dumps(
+                {
+                    "candidateId": "gradus-ios-19",
+                    "marketingVersion": "1.7.0",
+                    "build": 19,
+                    "artifactSha256": "a" * 64,
+                }
+            ),
+            encoding="utf-8",
+        )
+        if uploaded:
+            proof = root / "evidence" / "gradus-ios-19" / "upload.json"
+            proof.parent.mkdir(parents=True, exist_ok=True)
+            proof.write_text(
+                json.dumps(
+                    {
+                        "result": "passed",
+                        "candidateId": "gradus-ios-19",
+                        "uploadedBuildIdentifier": "1.7.0 (19)",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _builds(build: int, processing: str, compliance: str | None = None) -> dict:
+        attributes = {"version": str(build), "processingState": processing}
+        if compliance is not None:
+            attributes["complianceState"] = compliance
+        return {"data": [{"id": "build-1", "attributes": attributes}]}
+
+    def _dispatch_observed(self, operation: str, root: Path, responses: list, **kwargs) -> tuple:
+        client = _RecordingClient(responses)
+        with (
+            patch.object(BRIDGE, "ROOT", root),
+            patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+        ):
+            status = BRIDGE.dispatch(
+                operation,
+                product="gradus-ios",
+                candidate="gradus-ios-19",
+                client=client,
+                sleep=lambda _seconds: None,
+                **kwargs,
+            )
+        return status, client
+
+    def test_processing_attests_only_after_apple_reports_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            status, client = self._dispatch_observed(
+                "processing",
+                root,
+                [
+                    {"data": [{"id": "app-1"}]},
+                    self._builds(19, "PROCESSING"),
+                    self._builds(19, "VALID", "COMPLIANT"),
+                ],
+            )
+            self.assertEqual(status, 0)
+            # Three calls means the observer really waited instead of attesting
+            # the first state it saw.
+            self.assertEqual(len(client.requests), 3)
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "processing.json").read_text()
+            )
+            self.assertEqual(proof["result"], "passed")
+            self.assertEqual(proof["operationClass"], "processing")
+            self.assertEqual(proof["uploadedBuildIdentifier"], "1.7.0 (19)")
+            self.assertEqual(proof["processingState"], "VALID")
+            self.assertRegex(proof["responseSha256"], r"^[0-9a-f]{64}$")
+
+    def test_processing_blocks_immediately_on_terminal_apple_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            status, client = self._dispatch_observed(
+                "processing",
+                root,
+                [{"data": [{"id": "app-1"}]}, self._builds(19, "INVALID")],
+            )
+            self.assertEqual(status, 3)
+            # A rejected build must not burn the full polling timeout.
+            self.assertEqual(len(client.requests), 2)
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "processing.json").read_text()
+            )
+            self.assertEqual(proof["reason"], "build-processing-invalid")
+
+    def test_observation_blocks_without_requesting_a_credential(self) -> None:
+        """A locally-decidable block must not reach for the App Store Connect key.
+
+        Blocking because this candidate has no upload proof is a decision made
+        entirely from local state.  If the client were constructed first, that
+        purely local answer would still demand a credential, which is the same
+        mistake the upload adopt path exists to avoid.
+        """
+
+        for operation in ("processing", "compliance"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._legacy_candidate(root, uploaded=False)
+
+                def explode() -> object:
+                    raise AssertionError("credential requested for a local block")
+
+                with (
+                    patch.object(BRIDGE, "ROOT", root),
+                    patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+                    patch.object(BRIDGE, "_default_client", explode),
+                ):
+                    self.assertEqual(
+                        BRIDGE.dispatch(operation, product="gradus-ios", candidate="gradus-ios-19"),
+                        3,
+                    )
+                proof = json.loads(
+                    (root / "evidence" / "gradus-ios-19" / f"{operation}.json").read_text()
+                )
+                self.assertEqual(proof["reason"], "uploaded-build-identifier-unavailable")
+
+    def test_compliance_blocks_on_missing_compliance_and_never_declares(self) -> None:
+        """Export compliance is a legal declaration, so the bridge only reads it."""
+
+        for field, state in (
+            ("processingState", "MISSING_COMPLIANCE"),
+            ("complianceState", "MISSING_COMPLIANCE"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._legacy_candidate(root)
+                attributes = {"version": "19", "processingState": "VALID"}
+                attributes[field] = state
+                status, client = self._dispatch_observed(
+                    "compliance",
+                    root,
+                    [
+                        {"data": [{"id": "app-1"}]},
+                        {"data": [{"id": "build-1", "attributes": attributes}]},
+                    ],
+                )
+                self.assertEqual(status, 3)
+                proof = json.loads(
+                    (root / "evidence" / "gradus-ios-19" / "compliance.json").read_text()
+                )
+                self.assertEqual(proof["reason"], "export-compliance-attention-required")
+                self.assertEqual(
+                    [method for method, _path, _body in client.requests], ["GET", "GET"]
+                )
+
+    def test_compliance_attests_when_apple_is_not_withholding_the_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            status, client = self._dispatch_observed(
+                "compliance",
+                root,
+                [{"data": [{"id": "app-1"}]}, self._builds(19, "VALID", "COMPLIANT")],
+            )
+            self.assertEqual(status, 0)
+            self.assertTrue(all(method == "GET" for method, _path, _body in client.requests))
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "compliance.json").read_text()
+            )
+            self.assertEqual(proof["result"], "passed")
+            self.assertEqual(proof["operationClass"], "compliance")
+            self.assertEqual(proof["complianceState"], "COMPLIANT")
+
+    def test_observation_refuses_an_ambiguous_build_match(self) -> None:
+        """Two builds claiming the same version must not be silently narrowed."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            duplicated = {
+                "data": [
+                    {"id": "build-1", "attributes": {"version": "19", "processingState": "VALID"}},
+                    {"id": "build-2", "attributes": {"version": "19", "processingState": "VALID"}},
+                ]
+            }
+            status, _client = self._dispatch_observed(
+                "compliance", root, [{"data": [{"id": "app-1"}]}, duplicated]
+            )
+            self.assertEqual(status, 3)
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "compliance.json").read_text()
+            )
+            self.assertEqual(proof["reason"], "multiple-builds-matched-candidate")
+
+    def test_processing_blocks_when_apple_never_indexes_the_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            status, _client = self._dispatch_observed(
+                "processing",
+                root,
+                [{"data": [{"id": "app-1"}]}, {"data": []}],
+                clock=iter([0.0, 10.0]).__next__,
+                timeout=1.0,
+            )
+            self.assertEqual(status, 3)
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "processing.json").read_text()
+            )
+            self.assertEqual(proof["reason"], "processing-not-confirmed-before-timeout")
 
 
 if __name__ == "__main__":
