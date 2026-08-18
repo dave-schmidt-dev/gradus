@@ -555,6 +555,138 @@ class BridgeTests(unittest.TestCase):
             )
             self.assertEqual(proof["reason"], "processing-not-confirmed-before-timeout")
 
+    # -- tester group confirmation --------------------------------------------
+
+    @staticmethod
+    def _groups(*entries: tuple[str, str, bool]) -> dict:
+        return {
+            "data": [
+                {
+                    "id": group_id,
+                    "attributes": {
+                        "name": name,
+                        "isInternalGroup": internal,
+                        "hasAccessToAllBuilds": True,
+                    },
+                }
+                for group_id, name, internal in entries
+            ]
+        }
+
+    @staticmethod
+    def _confirm(root: Path, group_id: str, group_name: str) -> None:
+        record = root / ".release" / "tester-group.json"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(
+            json.dumps({"groupId": group_id, "groupName": group_name}), encoding="utf-8"
+        )
+
+    def test_tester_group_blocks_until_a_group_is_confirmed(self) -> None:
+        """Reading the list of groups is not the same act as choosing one."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            status, client = self._dispatch_observed(
+                "tester-group",
+                root,
+                [{"data": [{"id": "app-1"}]}, self._groups(("group-1", "Internal Testers", True))],
+            )
+            self.assertEqual(status, 3)
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "tester-group.json").read_text()
+            )
+            self.assertEqual(proof["reason"], "tester-group-confirmation-required")
+            self.assertEqual(proof["operationClass"], "testerGroup")
+            self.assertTrue(all(method == "GET" for method, _path, _body in client.requests))
+
+    def test_tester_group_records_only_confirmation_facts_never_tester_data(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            groups = self._groups(("group-1", "Internal Testers", True))
+            # Apple returns far more than the operator needs; none of it may land.
+            groups["data"][0]["attributes"]["betaTesters"] = ["tester@example.com"]
+            groups["data"][0]["relationships"] = {"betaTesters": {"data": [{"id": "tester-1"}]}}
+            self._dispatch_observed("tester-group", root, [{"data": [{"id": "app-1"}]}, groups])
+            choices = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "tester-group-choices.json").read_text()
+            )
+            self.assertEqual(len(choices["internalGroups"]), 1)
+            self.assertEqual(
+                set(choices["internalGroups"][0]),
+                {"groupId", "groupName", "hasAccessToAllBuilds"},
+            )
+            self.assertNotIn("tester@example.com", json.dumps(choices))
+
+    def test_tester_group_passes_only_on_an_exact_confirmed_match(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            self._confirm(root, "group-1", "Internal Testers")
+            status, client = self._dispatch_observed(
+                "tester-group",
+                root,
+                [{"data": [{"id": "app-1"}]}, self._groups(("group-1", "Internal Testers", True))],
+            )
+            self.assertEqual(status, 0)
+            self.assertTrue(all(method == "GET" for method, _path, _body in client.requests))
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "tester-group.json").read_text()
+            )
+            self.assertEqual(proof["result"], "passed")
+            self.assertEqual(proof["operationClass"], "testerGroup")
+            self.assertRegex(proof["groupIdentifierHash"], r"^[0-9a-f]{64}$")
+            # The proof binds the choice; it does not republish the identifier.
+            self.assertNotIn("group-1", json.dumps(proof))
+
+    def test_tester_group_blocks_when_the_confirmed_group_no_longer_matches(self) -> None:
+        """A renamed or newly added group invalidates the recorded confirmation."""
+
+        cases = {
+            "renamed": (self._groups(("group-1", "Renamed Testers", True)),),
+            "second-internal-group": (
+                self._groups(("group-1", "Internal Testers", True), ("group-2", "Others", True)),
+            ),
+            "different-identifier": (self._groups(("group-9", "Internal Testers", True)),),
+        }
+        for label, (groups,) in cases.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._legacy_candidate(root)
+                self._confirm(root, "group-1", "Internal Testers")
+                status, _client = self._dispatch_observed(
+                    "tester-group", root, [{"data": [{"id": "app-1"}]}, groups]
+                )
+                self.assertEqual(status, 3)
+                proof = json.loads(
+                    (root / "evidence" / "gradus-ios-19" / "tester-group.json").read_text()
+                )
+                self.assertEqual(proof["reason"], "confirmed-tester-group-is-not-the-only-one")
+
+    def test_tester_group_ignores_external_groups(self) -> None:
+        """An external group must never satisfy an internal-group confirmation."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            self._confirm(root, "group-2", "Public Beta")
+            status, _client = self._dispatch_observed(
+                "tester-group",
+                root,
+                [
+                    {"data": [{"id": "app-1"}]},
+                    self._groups(
+                        ("group-1", "Internal Testers", True), ("group-2", "Public Beta", False)
+                    ),
+                ],
+            )
+            self.assertEqual(status, 3)
+            choices = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "tester-group-choices.json").read_text()
+            )
+            self.assertEqual([g["groupId"] for g in choices["internalGroups"]], ["group-1"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

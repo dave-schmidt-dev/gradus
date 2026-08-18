@@ -56,6 +56,14 @@ PROCESSING_TIMEOUT_SECONDS = 30 * 60
 # testflight-assign.py already requires.
 _MISSING_COMPLIANCE = frozenset({"MISSING_COMPLIANCE", "MISSINGCOMPLIANCE"})
 _FAILED_PROCESSING = frozenset({"FAILED", "INVALID"})
+# Hyphenated operation names, camel-cased proof classes.  One mapping so a
+# blocked and a passing proof for the same operation can never disagree about
+# what class they belong to.
+_PROOF_CLASSES = {
+    "identity-allocation": "identityAllocation",
+    "tester-group": "testerGroup",
+    "device-health": "deviceHealth",
+}
 
 
 def _now() -> str:
@@ -171,11 +179,7 @@ def _persist_operation_diagnostics(
 def _blocked(operation: str, candidate: str | None, reason: str) -> int:
     payload: dict[str, Any] = {
         "proofVersion": "1.0.0",
-        "operationClass": {
-            "identity-allocation": "identityAllocation",
-            "tester-group": "testerGroup",
-            "device-health": "deviceHealth",
-        }.get(operation, operation),
+        "operationClass": _PROOF_CLASSES.get(operation, operation),
         "result": "blocked",
         "observedAt": _now(),
         "reason": reason,
@@ -544,25 +548,29 @@ def _observation_passed(
     candidate: str,
     *,
     uploaded_build_identifier: str,
-    processing_state: str,
-    compliance_state: str,
+    observed: Mapping[str, Any],
 ) -> int:
+    """Write a typed passing proof for one read-only observation.
+
+    ``observed`` carries the operation-specific facts.  They are both recorded
+    and folded into the digest, so the proof cannot later be reinterpreted as
+    describing a different observation than the one that produced its hash.
+    """
+
     payload: dict[str, Any] = {
         "proofVersion": "1.0.0",
-        "operationClass": operation,
+        "operationClass": _PROOF_CLASSES.get(operation, operation),
         "candidateId": candidate,
         "uploadedBuildIdentifier": uploaded_build_identifier,
         "result": "passed",
         "observedAt": _now(),
-        "processingState": processing_state,
-        "complianceState": compliance_state,
+        **dict(observed),
         "responseSha256": _digest(
             {
                 "operation": operation,
                 "candidateId": candidate,
                 "uploadedBuildIdentifier": uploaded_build_identifier,
-                "processingState": processing_state,
-                "complianceState": compliance_state,
+                **dict(observed),
             }
         ),
     }
@@ -575,6 +583,113 @@ def _observation_passed(
         )
     )
     return 0
+
+
+def _tester_group_confirmation() -> tuple[str, str] | None:
+    """Read the operator's recorded choice of internal TestFlight group.
+
+    Absent or malformed confirmation is not an error, it is simply an absence
+    of authority, so it yields ``None`` and the caller blocks.  The group is
+    never inferred from the App Store Connect response: reading a list is not
+    the same act as choosing from it.
+    """
+
+    record = _read_json(ROOT / ".release" / "tester-group.json")
+    if record is None:
+        return None
+    group_id = record.get("groupId")
+    group_name = record.get("groupName")
+    if not isinstance(group_id, str) or not group_id.strip():
+        return None
+    if not isinstance(group_name, str) or not group_name.strip():
+        return None
+    return group_id.strip(), group_name.strip()
+
+
+def _internal_groups(client: Any, app_id: str) -> list[Mapping[str, Any]]:
+    response = client.request("GET", f"/apps/{app_id}/betaGroups?limit=200") or {}
+    data = response.get("data") if isinstance(response, Mapping) else None
+    if not isinstance(data, list):
+        raise _ObservationError("malformed-tester-group-response")
+    groups: list[Mapping[str, Any]] = []
+    for group in data:
+        if not isinstance(group, Mapping) or not isinstance(group.get("id"), str):
+            raise _ObservationError("malformed-tester-group-response")
+        if _build_attribute(group, "isInternalGroup"):
+            groups.append(group)
+    return groups
+
+
+def _persist_group_choices(candidate: str, groups: Sequence[Mapping[str, Any]]) -> None:
+    """Record exactly what an operator needs to confirm one group, and no more.
+
+    Identifiers, display names, and one boolean.  Never members, emails, or any
+    other tester data.  It is written to disk rather than only printed so the
+    confirmation is made against durable evidence instead of console output
+    that has already scrolled away.
+    """
+
+    path = _proof_path("tester-group", candidate).with_name("tester-group-choices.json")
+    _write_json(
+        path,
+        {
+            "schemaVersion": "1.0.0",
+            "candidateId": candidate,
+            "observedAt": _now(),
+            "internalGroups": [
+                {
+                    "groupId": group["id"],
+                    "groupName": str(_build_attribute(group, "name") or ""),
+                    "hasAccessToAllBuilds": bool(_build_attribute(group, "hasAccessToAllBuilds")),
+                }
+                for group in groups
+            ],
+        },
+    )
+
+
+def _tester_group(candidate: str, *, client_factory: Callable[[], Any]) -> int:
+    """Confirm one internal group; never create, modify, or assign to one.
+
+    Distributing a build is an authority decision, so this operation stops at
+    confirmation and leaves the choices behind for whoever makes it.  Matching
+    mirrors testflight-assign.py exactly: the app must expose a single internal
+    group and the recorded confirmation must match both its identifier and its
+    display name, so a renamed or newly added group blocks instead of being
+    quietly accepted.
+    """
+
+    context = _observation_context("tester-group", candidate)
+    if isinstance(context, int):
+        return context
+    _build, uploaded = context
+    try:
+        client = client_factory()
+        groups = _internal_groups(client, _resolve_app_id(client))
+    except _ObservationError as error:
+        return _blocked("tester-group", candidate, str(error))
+    except _transport_error_types():
+        return _blocked("tester-group", candidate, "app-store-connect-request-failed")
+    _persist_group_choices(candidate, groups)
+    confirmation = _tester_group_confirmation()
+    if confirmation is None:
+        return _blocked("tester-group", candidate, "tester-group-confirmation-required")
+    group_id, group_name = confirmation
+    matches = [
+        group
+        for group in groups
+        if group["id"] == group_id and _build_attribute(group, "name") == group_name
+    ]
+    if len(groups) != 1 or len(matches) != 1:
+        return _blocked("tester-group", candidate, "confirmed-tester-group-is-not-the-only-one")
+    return _observation_passed(
+        "tester-group",
+        candidate,
+        uploaded_build_identifier=uploaded,
+        # The identifier is hashed rather than recorded, because a proof needs
+        # to bind the choice, not republish it.
+        observed={"groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest()},
+    )
 
 
 def _observation_context(operation: str, candidate: str) -> tuple[int, str] | int:
@@ -625,8 +740,10 @@ def _processing(
                         "processing",
                         candidate,
                         uploaded_build_identifier=uploaded,
-                        processing_state=state,
-                        compliance_state=_build_state(item, "complianceState"),
+                        observed={
+                            "processingState": state,
+                            "complianceState": _build_state(item, "complianceState"),
+                        },
                     )
             if clock() >= deadline:
                 return _blocked("processing", candidate, "processing-not-confirmed-before-timeout")
@@ -671,8 +788,7 @@ def _compliance(candidate: str, *, client_factory: Callable[[], Any]) -> int:
         "compliance",
         candidate,
         uploaded_build_identifier=uploaded,
-        processing_state=processing_state,
-        compliance_state=compliance_state,
+        observed={"processingState": processing_state, "complianceState": compliance_state},
     )
 
 
@@ -777,7 +893,7 @@ def dispatch(
             marketing_version=marketing_version,
             build=build,
         )
-    if operation in ("processing", "compliance"):
+    if operation in ("processing", "compliance", "tester-group"):
         # Resolved lazily inside the observers so a candidate that fails the
         # local ledger or upload-proof checks never causes a credential to be
         # requested at all.  Blocking is a local decision; it should not need
@@ -792,7 +908,9 @@ def dispatch(
                 timeout=timeout,
                 interval=interval,
             )
-        return _compliance(candidate, client_factory=factory)
+        if operation == "compliance":
+            return _compliance(candidate, client_factory=factory)
+        return _tester_group(candidate, client_factory=factory)
     return _blocked(operation, candidate, "operation-interface-not-yet-authorized")
 
 
