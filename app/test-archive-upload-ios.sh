@@ -1007,6 +1007,50 @@ unset RAM_VOLUME_DETACHED GRADUS_RAM_VOLUME_CANDIDATE_ID GRADUS_RAM_VOLUME_ATTES
 unset GRADUS_UPLOAD_RECONCILIATION_PATH GRADUS_TEST_HDIUTIL_COUNT_FILE GRADUS_TEST_HDIUTIL_LOG
 unset GRADUS_TEST_SLEEP_LOG GRADUS_TEST_HDIUTIL_FAIL_UNTIL
 
+# An interrupted release must not outlive its key. SIGINT/SIGTERM/SIGHUP
+# bypass the EXIT trap, so they are handled explicitly; this asserts the
+# handler both destroys the key and still lets EXIT-based cleanup run.
+signal_root="$TEST_ROOT/signal-teardown"
+mkdir -p "$signal_root/mount"
+cat >"$signal_root/probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$3"
+unset GRADUS_RAM_VOLUME_MOUNT_PATH GRADUS_TEST_KEY_LOG
+export RAM_VOLUME_MOUNTPOINT="$1"
+printf 'fake-key-material-of-some-length' >"$RAM_VOLUME_MOUNTPOINT/AuthKey_SIGTEST.p8"
+chmod 600 "$RAM_VOLUME_MOUNTPOINT/AuthKey_SIGTEST.p8"
+trap 'echo exit-trap-ran >>"$2"' EXIT
+trap 'shred_ram_key_material; exit 143' TERM
+kill -TERM $$
+sleep 10
+PROBE
+set +e
+bash "$signal_root/probe.sh" "$signal_root/mount" "$signal_root/log" "$UPLOAD_SCRIPT" >/dev/null 2>&1
+signal_exit=$?
+set -e
+[[ "$signal_exit" -eq 143 ]] || {
+  echo "FAIL: SIGTERM teardown did not exit through its handler (got $signal_exit)" >&2
+  exit 1
+}
+[[ -e "$signal_root/mount/AuthKey_SIGTEST.p8" ]] && {
+  echo "FAIL: key material survived an interrupted release" >&2
+  exit 1
+}
+grep -Fq exit-trap-ran "$signal_root/log" || {
+  echo "FAIL: signal handler suppressed the EXIT-based cleanup" >&2
+  exit 1
+}
+
+# The probe above mirrors the handler, so assert the real script installs it:
+# otherwise a deleted trap line would leave this suite green.
+for signal_name in INT TERM HUP; do
+  grep -Eq "trap 'shred_ram_key_material; exit [0-9]+' $signal_name\b" "$UPLOAD_SCRIPT" || {
+    echo "FAIL: archive-upload-ios.sh does not shred key material on $signal_name" >&2
+    exit 1
+  }
+done
+
 # A post-prepare interruption must leave one resumable tuple; a retry may not
 # allocate a new build or rebind the IPA digest.
 retry_root="$TEST_ROOT/retry-candidate"
