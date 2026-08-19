@@ -53,14 +53,12 @@ targets:
         # publisher stuck at 0.1.0 while the consumer reads 1.6.0 makes the
         # pair impossible to talk about. CURRENT_PROJECT_VERSION stays
         # independent: it is a per-platform upload counter, not a version.
-        MARKETING_VERSION: "1.8.0"
-        # 1.6.7 (17) makes Name A-Z and Reset soonest true full-active-list
-        # sorts and prevents a pipeline-disabled test host from creating a
-        # persistent empty status menu that can displace the installed app.
-        # Mac
+        MARKETING_VERSION: "1.8.1"
+        # 1.8.1 (18) carries the iPad Auto-density fix (richest-rung picking)
+        # from the coupled 1.8.1 train. Mac
         # builds carry a semantic marketing version like iOS; the build number
         # distinguishes successive local installs of that patch release.
-        CURRENT_PROJECT_VERSION: "17"
+        CURRENT_PROJECT_VERSION: "18"
         # The explicit plist below is generated from this properties block;
         # XcodeGen overwrites the physical file on every `generate`.
         # Without this the target compiles no app icon at all -- and does so
@@ -173,7 +171,7 @@ targets:
         # archive-upload-ios.sh allocates the build number from App Store
         # Connect, so the value checked in here is history, not the next
         # upload's identifier.
-        MARKETING_VERSION: "1.8.0"
+        MARKETING_VERSION: "1.8.1"
         CURRENT_PROJECT_VERSION: "12"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

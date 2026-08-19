@@ -9,6 +9,29 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## 1.8.1 — 2026-08-19
+
+### Added
+
+- iPhone and iPad dashboard and provider-detail cards now show a quantitative
+  pace figure (for example "12% ahead") below each window's bar, matching the
+  Mac menu bar and terminal dashboard.
+
+### Fixed
+
+- On iPad, Automatic density picked the richest layout that fit compact
+  width first, then never widened further in landscape — leaving roughly
+  half the screen unused. It now picks the richest rung the available width
+  supports and that rung's own maximum column count.
+
+### TestFlight focus
+
+- On iPad, rotate to landscape with Automatic density selected and confirm
+  cards use the full width instead of stopping at a narrow column count.
+- On the dashboard and provider detail screens, confirm each window shows a
+  pace percentage under its bar, and that it matches the Mac menu bar for the
+  same account.
+
 ## 1.8.0 — 2026-08-17
 
 ### Added

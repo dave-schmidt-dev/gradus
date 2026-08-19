@@ -44,7 +44,14 @@ the producer/consumer release under `RELEASE_CHECKLIST.md`.
    release-blocking correction or a failed/superseded candidate. It remains
    the same release train and is labeled by build number only.
 5. Small non-blocking changes wait for the next patch release instead of
-   creating another overnight TestFlight build.
+   creating another overnight TestFlight build. "Small non-blocking" means
+   cosmetic/non-functional -- it does not mean iOS-visible changes go
+   unshipped. A change that alters what the iOS app shows or does (a bug fix,
+   a UI correction, a new feature) is not done until it has a semantic
+   version bump (patch at minimum, per the rules above) and a new TestFlight
+   build. This rule governs batching *trivial* tweaks into that release; it
+   is not a default to skip releasing shipped code altogether. If the change
+   is coupled (see "Coupled platform releases" below), bump both targets.
 6. A release candidate is not prepared or uploaded until its code, documentation,
    review, and required producer/consumer verification are complete.
 7. The candidate ledger binds one source/project/artifact/version/build tuple;
