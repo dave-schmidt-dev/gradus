@@ -599,6 +599,16 @@ class PaceLabelTests(unittest.TestCase):
         output = _capture(PaceLabel("totally bogus"), width=60)
         self.assertIn("totally bogus", output)
 
+    def test_style_colors_ahead_green_and_behind_red(self) -> None:
+        # Regression: _pace_style used to match the pre-consolidation "under
+        # +"/"over -" wording. _format_pace_delta now emits "N% ahead"/"N%
+        # behind", so a substring check on "under"/"over" never matches and
+        # every real pace silently fell back to text.muted.
+        self.assertEqual(PaceLabel("5% ahead").style, "text.green")
+        self.assertEqual(PaceLabel("3% behind").style, "text.red")
+        self.assertEqual(PaceLabel("on pace").style, "text.yellow")
+        self.assertEqual(PaceLabel("n/a").style, "text.muted")
+
 
 class PercentStrTests(unittest.TestCase):
     """Direct unit tests for the percent formatting helpers."""

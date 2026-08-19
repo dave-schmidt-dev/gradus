@@ -1045,11 +1045,11 @@ def build_provider_panel(
 
 
 def _pace_style(pace: str) -> str:
-    if "under" in pace:
+    if pace.endswith(" ahead"):
         return "text.green"
-    if "over" in pace:
+    if pace.endswith(" behind"):
         return "text.red"
-    if "on pace" in pace:
+    if pace == "on pace":
         return "text.yellow"
     return "text.muted"
 

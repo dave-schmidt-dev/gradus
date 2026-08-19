@@ -74,7 +74,8 @@ private func erroredProvider() -> ProviderStatus {
     let view = ProviderDetailView(provider: multiWindowProvider(), now: fixedNow)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .light))
+        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .light)),
+        record: providerDetailSnapshotRecording
     )
 }
 
@@ -83,7 +84,8 @@ private func erroredProvider() -> ProviderStatus {
     let view = ProviderDetailView(provider: multiWindowProvider(), now: fixedNow)
     assertSnapshot(
         of: view,
-        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .dark))
+        as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .dark)),
+        record: providerDetailSnapshotRecording
     )
 }
 
