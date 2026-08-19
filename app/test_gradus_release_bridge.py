@@ -995,9 +995,20 @@ class BridgeTests(unittest.TestCase):
             self._tester_group_proof(root, group)
             calls = []
 
+            receipt = json.dumps(
+                {
+                    "candidate_id": "gradus-ios-19",
+                    "build": 19,
+                    "group_id": group,
+                    "group_name": "Internal Testers",
+                    "assigned": True,
+                    "state": "assigned",
+                }
+            )
+
             def runner(argv, **kwargs):
                 calls.append(argv)
-                return subprocess.CompletedProcess(argv, 0, "{}", "")
+                return subprocess.CompletedProcess(argv, 0, receipt, "")
 
             self.assertEqual(self._dispatch_assignment(root, runner), 0)
             self.assertEqual(len(calls), 1)
@@ -1015,6 +1026,42 @@ class BridgeTests(unittest.TestCase):
                 proof["groupIdentifierHash"], hashlib.sha256(group.encode()).hexdigest()
             )
             self.assertNotIn(group, json.dumps(proof), "the proof republished the group identifier")
+
+    def test_assignment_refuses_a_receipt_that_never_reached_apple(self) -> None:
+        """A zero exit is not a distribution.
+
+        Reconciliation succeeds for a candidate that stayed unassigned -- Apple
+        simply never took the build -- so the wrapper exits zero while its own
+        receipt reports ``assigned: false``.  Attesting on the exit code would
+        record a release nobody received, and every later operation would run
+        against a build that reached no tester.
+        """
+
+        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        unconfirmed = (
+            {"candidate_id": "gradus-ios-19", "build": 19, "group_id": group, "assigned": False},
+            {"candidate_id": "gradus-ios-19", "build": 19, "group_id": group},
+            {"candidate_id": "gradus-ios-18", "build": 19, "group_id": group, "assigned": True},
+            {"candidate_id": "gradus-ios-19", "build": 18, "group_id": group, "assigned": True},
+            {"candidate_id": "gradus-ios-19", "build": 19, "group_id": "other", "assigned": True},
+        )
+        for receipt in unconfirmed:
+            with self.subTest(receipt=receipt):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    self._legacy_candidate(root)
+                    self._confirm(root, group, "Internal Testers")
+                    self._tester_group_proof(root, group)
+
+                    def runner(argv, **kwargs):
+                        return subprocess.CompletedProcess(argv, 0, json.dumps(receipt), "")
+
+                    self.assertEqual(self._dispatch_assignment(root, runner), 3)
+                    proof = json.loads(
+                        (root / "evidence" / "gradus-ios-19" / "assignment.json").read_text()
+                    )
+                    self.assertEqual(proof["result"], "blocked")
+                    self.assertEqual(proof["reason"], "assignment-not-confirmed")
 
     def test_assignment_blocks_when_the_wrapper_refuses(self) -> None:
         """A refused assignment must leave a blocked proof, never a passing one."""

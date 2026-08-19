@@ -798,6 +798,45 @@ def _confirmed_tester_group(candidate: str) -> tuple[str, str] | None:
     return confirmation
 
 
+def _confirmed_assignment(stdout: str, *, legacy_candidate: str, build: int, group_id: str) -> bool:
+    """Report whether the wrapper's own receipt says Apple took the build.
+
+    The wrapper exits zero when reconciliation completes, and reconciliation
+    completes for a candidate that stayed unassigned -- an unassigned build at
+    ``uploaded_unassigned`` is a consistent state, not an error.  Attesting on
+    the exit code alone therefore records a distribution that never happened.
+    The receipt printed on stdout is the only signal that distinguishes the
+    two, so it, not the exit status, decides whether this proof passes.
+    """
+
+    for line in reversed(stdout.splitlines()):
+        candidate_line = line.strip()
+        if not candidate_line.startswith("{"):
+            continue
+        try:
+            receipt = json.loads(candidate_line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(receipt, Mapping):
+            continue
+        raw_build = receipt.get("build")
+        if isinstance(raw_build, bool) or not isinstance(raw_build, (str, int)):
+            return False
+        try:
+            build_matches = int(raw_build) == int(build)
+        except (TypeError, ValueError):
+            return False
+        # A receipt describing some other candidate, build, or group answers a
+        # question nobody asked here; only an exact match is a confirmation.
+        return (
+            receipt.get("assigned") is True
+            and build_matches
+            and receipt.get("candidate_id") == legacy_candidate
+            and receipt.get("group_id") == group_id
+        )
+    return False
+
+
 def _assignment(candidate: str, *, runner: Callable[..., subprocess.CompletedProcess[str]]) -> int:
     """Distribute a processed build to the confirmed internal group.
 
@@ -846,7 +885,9 @@ def _assignment(candidate: str, *, runner: Callable[..., subprocess.CompletedPro
         check=False,
         shell=False,
     )
-    if result.returncode != 0:
+    if result.returncode != 0 or not _confirmed_assignment(
+        result.stdout, legacy_candidate=legacy_candidate, build=build, group_id=group_id
+    ):
         _persist_operation_diagnostics("assignment", candidate, argv, result)
         return _blocked("assignment", candidate, "assignment-not-confirmed")
     return _observation_passed(

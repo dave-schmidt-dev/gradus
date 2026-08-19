@@ -42,3 +42,9 @@ app/design-system/mocks/
 # committing it would hand every clone a standing authority to distribute
 # builds, which is the one decision this repo requires a human to make.
 .release/tester-group.json
+
+# uv writes this when the release bridge's `uv run` shebang resolves an
+# interpreter. It pins one exact version, while pyproject.toml only requires
+# >=3.10; committing it would force every clone onto a version the project
+# does not ask for.
+.python-version
