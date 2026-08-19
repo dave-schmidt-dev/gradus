@@ -340,5 +340,10 @@
     {"name": "notification-proof", "path": ".release-state/evidence/{candidateId}/notification.json", "contentType": "application/json"},
     {"name": "receipt-proof", "path": ".release-state/evidence/{candidateId}/receipt.json", "contentType": "application/json"}
   ],
+  "sourceExclusions": [
+    "HISTORY.md",
+    "TASKS.md",
+    "app/design-system/mocks"
+  ],
   "localSmoke": false
 }
