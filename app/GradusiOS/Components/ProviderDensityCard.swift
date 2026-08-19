@@ -27,7 +27,7 @@ enum ProviderDensityCardStructuralToken {
 /// future caller.
 ///
 /// Tapping still pushes Provider Detail: this card shows the same windows, but
-/// detail adds pace, per-window provenance, and the observed-at footer.
+/// detail adds per-window provenance and the observed-at footer.
 struct ProviderDensityCard: View {
     let provider: ProviderStatus
     let now: Date

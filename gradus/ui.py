@@ -359,21 +359,34 @@ def _pace_value(
     return pace_delta(percent_left, target, window_hours * 3600.0, now)
 
 
+def _format_pace_delta(delta: float | None) -> str:
+    """Format a pace delta as "N% ahead" / "N% behind" / "on pace" / "n/a".
+
+    Shared by `_pace_label` and `_billing_cycle_pace_label`, whose only
+    difference is the units their raw delta arrives in. The wording itself
+    is held in step with `GradusKit`'s `paceLabel(paceDelta:)` (Mac and iOS)
+    by `Tests/GradusKitTests/Fixtures/pace-labels.json`, which both language's
+    test suites read — see that file's header.
+
+    Rounds half away from zero rather than the `round()` builtin's
+    round-half-to-even, so a boundary value renders the same digit as the
+    Swift implementation.
+    """
+    if delta is None:
+        return "n/a"
+    diff_points = int(abs(delta) * 100 + 0.5)
+    if abs(delta) <= 0.05:
+        return "on pace"
+    return f"{diff_points}% {'ahead' if delta > 0 else 'behind'}"
+
+
 def _pace_label(
     percent_left: float | None,
     reset_text: str | None,
     now: datetime,
     window_hours: float | None,
 ) -> str:
-    delta = _pace_value(percent_left, reset_text, now, window_hours)
-    if delta is None:
-        return "n/a"
-    diff_points = round(abs(delta) * 100)
-    if abs(delta) <= 0.05:
-        return "on pace"
-    if delta > 0:
-        return f"under +{diff_points}pt"
-    return f"over -{diff_points}pt"
+    return _format_pace_delta(_pace_value(percent_left, reset_text, now, window_hours))
 
 
 def _expected_remaining(percent_left: float | None, delta: float | None) -> float | None:
@@ -612,16 +625,7 @@ def _billing_cycle_pace_label(
     now: datetime,
 ) -> str:
     """Compute pace label for any billing cycle with known start and end dates."""
-    delta = _billing_cycle_pace_value(percent_left, start_iso, end_iso, now)
-    if delta is None:
-        return "n/a"
-    delta_points = delta * 100.0
-    diff_points = round(abs(delta_points))
-    if abs(delta_points) <= 5.0:
-        return "on pace"
-    if delta_points > 0:
-        return f"under +{diff_points}pt"
-    return f"over -{diff_points}pt"
+    return _format_pace_delta(_billing_cycle_pace_value(percent_left, start_iso, end_iso, now))
 
 
 def _provider_display_fields(snapshot: ProviderSnapshot, now: datetime) -> dict[str, str]:
@@ -766,10 +770,10 @@ def _compact_pace(pace: str) -> str:
         return "—"
     if pace == "on pace":
         return "="
-    if pace.startswith("under +"):
-        return "↑" + pace[len("under +") :]
-    if pace.startswith("over -"):
-        return "↓" + pace[len("over -") :]
+    if pace.endswith(" ahead"):
+        return "↑" + pace[: -len(" ahead")]
+    if pace.endswith(" behind"):
+        return "↓" + pace[: -len(" behind")]
     return pace
 
 
@@ -1829,7 +1833,7 @@ def _build_compact_lines(snapshots: list[ProviderSnapshot], now: datetime) -> li
 def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tuple[str, str]]:
     """Return [(window_text, style), ...] for each window of a provider.
 
-    Window text is e.g. ``5h:68%↑41pt``.  Style is a theme style name based
+    Window text is e.g. ``5h:68%↑41%``.  Style is a theme style name based
     on the pace direction (text.green / text.red / text.yellow / text.muted).
     """
     name = snapshot.name.removesuffix(" [HTTP]")

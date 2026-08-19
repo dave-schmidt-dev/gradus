@@ -33,6 +33,7 @@ from gradus.ui import (
     _compact_window_parts,
     _expected_remaining,
     _extract_depleted_reset_str,
+    _format_pace_delta,
     _format_percent_value,
     _format_reset_display,
     _percent_str,
@@ -312,6 +313,36 @@ class SignalLevelTruthTableTests(unittest.TestCase):
                 self.assertIn(style, THEME.styles)
 
 
+class PaceLabelTruthTableTests(unittest.TestCase):
+    """Assert `_format_pace_delta` against the shared cross-language truth table.
+
+    The Swift half (``PaceLabelTests.swift``) reads the same file, so a
+    wording edit applied to only one surface fails on both. The fixture
+    lives inside the SwiftPM test target because SwiftPM resources cannot
+    reference files outside the target directory; see its header comment.
+    """
+
+    TRUTH_TABLE = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "app/GradusKit/Tests/GradusKitTests/Fixtures/pace-labels.json"
+    )
+
+    def _cases(self) -> list[dict[str, object]]:
+        self.assertTrue(
+            self.TRUTH_TABLE.is_file(),
+            f"shared truth table missing at {self.TRUTH_TABLE}",
+        )
+        cases = json.loads(self.TRUTH_TABLE.read_text())["cases"]
+        self.assertGreaterEqual(len(cases), 6, "truth table shrank — boundary coverage was removed")
+        return cases
+
+    def test_matches_shared_truth_table(self) -> None:
+        for case in self._cases():
+            delta = case["pace_delta"]
+            with self.subTest(delta=delta, why=case["why"]):
+                self.assertEqual(_format_pace_delta(delta), case["label"])
+
+
 class PercentageBarTests(unittest.TestCase):
     def test_filled_bar_contains_block_chars(self) -> None:
         output = _capture(PercentageBar(68.0, "bar.green"), width=40)
@@ -528,19 +559,19 @@ class UsageRowMarkerTests(unittest.TestCase):
 
 class PaceLabelTests(unittest.TestCase):
     def test_wide_console_renders_full_text(self) -> None:
-        output = _capture(PaceLabel("under +5pt"), width=120)
-        self.assertIn("under +5pt", output)
+        output = _capture(PaceLabel("5% ahead"), width=120)
+        self.assertIn("5% ahead", output)
         self.assertNotIn("↑", output)
 
-    def test_narrow_console_renders_up_arrow_for_under(self) -> None:
-        output = _capture(PaceLabel("under +5pt"), width=60)
-        self.assertIn("↑5pt", output)
-        self.assertNotIn("under", output)
+    def test_narrow_console_renders_up_arrow_for_ahead(self) -> None:
+        output = _capture(PaceLabel("5% ahead"), width=60)
+        self.assertIn("↑5%", output)
+        self.assertNotIn("ahead", output)
 
-    def test_narrow_console_renders_down_arrow_for_over(self) -> None:
-        output = _capture(PaceLabel("over -3pt"), width=60)
-        self.assertIn("↓3pt", output)
-        self.assertNotIn("over", output)
+    def test_narrow_console_renders_down_arrow_for_behind(self) -> None:
+        output = _capture(PaceLabel("3% behind"), width=60)
+        self.assertIn("↓3%", output)
+        self.assertNotIn("behind", output)
 
     def test_narrow_console_collapses_on_pace_to_equals(self) -> None:
         output = _capture(PaceLabel("on pace"), width=60)
@@ -553,11 +584,11 @@ class PaceLabelTests(unittest.TestCase):
 
     def test_wide_console_at_boundary_minus_one_still_compacts(self) -> None:
         # _NARROW_CONSOLE_WIDTH = 93 → width 92 must compact, width 93 must not.
-        narrow = _capture(PaceLabel("under +5pt"), width=92)
-        self.assertIn("↑5pt", narrow)
-        self.assertNotIn("under", narrow)
-        wide = _capture(PaceLabel("under +5pt"), width=93)
-        self.assertIn("under +5pt", wide)
+        narrow = _capture(PaceLabel("5% ahead"), width=92)
+        self.assertIn("↑5%", narrow)
+        self.assertNotIn("ahead", narrow)
+        wide = _capture(PaceLabel("5% ahead"), width=93)
+        self.assertIn("5% ahead", wide)
         self.assertNotIn("↑", wide)
 
     def test_unknown_pace_text_passes_through_compact(self) -> None:
@@ -1968,9 +1999,9 @@ class DashboardTests(unittest.TestCase):
                 # cards keep their full reset time and pace figure.
                 self.assertNotIn("…", output)
                 self.assertIn("Mar 17 21:00", output)  # Codex weekly reset
-                self.assertIn("↑41pt", output)  # Codex weekly pace
+                self.assertIn("↑41%", output)  # Codex weekly pace
                 self.assertIn("Mar 17 20:00", output)  # Claude weekly reset
-                self.assertIn("↓25pt", output)  # Claude 5h pace
+                self.assertIn("↓25%", output)  # Claude 5h pace
 
     def test_dashboard_two_column_keeps_bars_above_collapse_band(self) -> None:
         # Bracket the other side of the transition: at a comfortably wide
@@ -2763,14 +2794,14 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
         self.assertEqual(result, "on pace")
 
     def test_pace_label_under_when_more_budget_than_time(self) -> None:
-        # 60% left, 50% of window remaining → delta=+0.10 → under +10pt
+        # 60% left, 50% of window remaining → delta=+0.10 → 10% ahead
         result = _pace_label(60, "Resets in 2h 30m", self.now, 5.0)
-        self.assertEqual(result, "under +10pt")
+        self.assertEqual(result, "10% ahead")
 
     def test_pace_label_over_when_less_budget_than_time(self) -> None:
-        # 40% left, 50% of window remaining → delta=-0.10 → over -10pt
+        # 40% left, 50% of window remaining → delta=-0.10 → 10% behind
         result = _pace_label(40, "Resets in 2h 30m", self.now, 5.0)
-        self.assertEqual(result, "over -10pt")
+        self.assertEqual(result, "10% behind")
 
     # ------------------------------------------------------------------
     # _billing_cycle_pace_label — tz-aware UTC billing cycle
@@ -2793,7 +2824,7 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
             "2026-04-01T00:00:00+00:00",
             self.now,
         )
-        self.assertEqual(result, "under +13pt")
+        self.assertEqual(result, "13% ahead")
 
     def test_billing_cycle_pace_label_over_tzaware(self) -> None:
         result = _billing_cycle_pace_label(
@@ -2802,7 +2833,7 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
             "2026-04-01T00:00:00+00:00",
             self.now,
         )
-        self.assertEqual(result, "over -7pt")
+        self.assertEqual(result, "7% behind")
 
     def test_dashboard_sorts_exhausted_providers_to_bottom(self) -> None:
         """Exhausted providers are sorted after active providers in the dashboard list."""
@@ -2958,11 +2989,11 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
 
     def test_billing_cycle_pace_label_under_naive(self) -> None:
         result = _billing_cycle_pace_label(35, "2026-03-01", "2026-03-20", self.now)
-        self.assertEqual(result, "under +5pt")
+        self.assertEqual(result, "5% ahead")
 
     def test_billing_cycle_pace_label_over_naive(self) -> None:
         result = _billing_cycle_pace_label(20, "2026-03-01", "2026-03-20", self.now)
-        self.assertEqual(result, "over -10pt")
+        self.assertEqual(result, "10% behind")
 
 
 class ExtractDepletedResetStrTests(unittest.TestCase):

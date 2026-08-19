@@ -58,3 +58,43 @@ func feasibleColumnStops(
     guard oneColumnBarWidth >= minimumBarWidth else { return [] }
     return Array(1 ... largestColumnCount)
 }
+
+/// One candidate rung's column-packing demand, richest first.
+struct RungCandidate<Rung> {
+    let rung: Rung
+    let scaledFixedColumnWidth: CGFloat
+    let cardPadding: CGFloat
+    let cardGap: CGFloat
+}
+
+/// Auto's algorithm: the richest candidate that seats at least one column at
+/// `minimumBarWidth`, paired with the most columns *that same candidate* can
+/// seat.
+///
+/// The naive alternative -- fix the column count at what the leanest
+/// candidate's demand allows, then ask each candidate in turn whether it fits
+/// at that fixed count -- starves every richer candidate of the width it
+/// would otherwise use, so it always falls through to the leanest one. That
+/// also wastes vertical space: the leanest candidate has the shortest rows,
+/// so packing the most columns of it leaves the fewest rows and the most
+/// blank space below them. Asking each candidate for its own maximum column
+/// count, richest first, is what actually uses the screen.
+func richestFittingResolution<Rung>(
+    containerWidth: CGFloat,
+    candidates: [RungCandidate<Rung>],
+    minimumBarWidth: CGFloat
+) -> (rung: Rung, columns: Int)? {
+    for candidate in candidates {
+        let stops = feasibleColumnStops(
+            containerWidth: containerWidth,
+            scaledFixedColumnWidth: candidate.scaledFixedColumnWidth,
+            cardPadding: candidate.cardPadding,
+            cardGap: candidate.cardGap,
+            minimumBarWidth: minimumBarWidth
+        )
+        if let columns = stops.last {
+            return (candidate.rung, columns)
+        }
+    }
+    return nil
+}

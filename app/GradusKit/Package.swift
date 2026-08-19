@@ -22,7 +22,8 @@ let package = Package(
             resources: [
                 .copy("Fixtures/golden-v2-snapshot.json"),
                 .copy("Fixtures/signal-levels.json"),
-                .copy("Fixtures/percent-format.json")
+                .copy("Fixtures/percent-format.json"),
+                .copy("Fixtures/pace-labels.json")
             ]
         )
     ]

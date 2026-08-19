@@ -213,9 +213,9 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
         id: "weekly", percentLeft: 60, resetISO: nil, windowHours: 168, paceDelta: nil
     )
     #expect(MenuWindowMetadata.resetLabel(for: dated, now: menuDensityNow).hasPrefix("resets "))
-    #expect(MenuWindowMetadata.paceLabel(for: dated) == "on pace")
+    #expect(paceLabel(for: dated) == "on pace")
     #expect(MenuWindowMetadata.resetLabel(for: unknown, now: menuDensityNow) == "reset unavailable")
-    #expect(MenuWindowMetadata.paceLabel(for: unknown) == "pace unavailable")
+    #expect(paceLabel(for: unknown) == "pace unavailable")
 }
 
 private func menuVisibleFixture() -> [ProviderEntry] {

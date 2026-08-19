@@ -86,12 +86,29 @@ targets:
           # the DEBUG-only fixture window. Release remains a menu-bar agent.
           INFOPLIST_KEY_LSUIElement: NO
           INFOPLIST_FILE: GradusMac/Info-Debug.plist
+          # A separate bundle id gives the local Development-signed build its
+          # own kTCCServiceSystemPolicyDocumentsFolder row, so it stops
+          # fighting the installed Developer ID app for the one grant TCC
+          # keeps per (service, bundle id) -- see the TASKS.md row this
+          # closes. No entitlements below reference the bundle id (the
+          # CloudKit container is pinned to an explicit
+          # `iCloud.com.zerodelta.gradus` identifier), so this cannot change
+          # what the dev build syncs against.
+          PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac.dev
           # Local Mac UI/unit tests must not depend on a stale Mac provisioning
           # profile. Keep the debug host development-signed with no CloudKit
           # entitlements; Release retains the production signing contract.
           CODE_SIGN_IDENTITY: "Apple Development"
           CODE_SIGN_ENTITLEMENTS: ""
-          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+          # YES (Xcode's Debug default) so Xcode still stamps get-task-allow
+          # and the library-validation exception onto this manually-signed,
+          # entitlement-less binary. NO here silently blocked XCTest from
+          # injecting into the launched app at all -- the process would
+          # launch and sit idle with no .xctest ever loaded (confirmed via
+          # `lsof` on the running host during the hang: no xctest/PlugIns
+          # handle), which is what "hung before establishing connection"
+          # actually was. Unrelated to the TCC fix this config exists for.
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES
           PROVISIONING_PROFILE_SPECIFIER: ""
           # Keep the local UI-test host on an ordinary Apple Development
           # signature; Release retains its Developer ID archive settings.

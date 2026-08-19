@@ -216,16 +216,16 @@ private func rowContentContainsLabel(id: String, label: String) -> Bool {
 }
 
 @Test func windowRowSpeaksAsOneElement() {
-    // Bar + percentage + reset are three views but one fact; VoiceOver should
-    // stop once, not three times.
+    // Bar + percentage + reset + pace are four views but one fact; VoiceOver
+    // should stop once, not four times.
     let row = WindowRow(window: window("weekly", 47, pace: -0.08), now: fixedNow)
     // Composed from the shared reset formatter rather than a second one, so
     // the row and Provider Detail cannot word the same reset differently.
     let expectedReset = friendlyResetDate("2026-07-26T09:00:00-04:00", now: fixedNow)
     #expect(expectedReset != nil)
     #expect(row.resetText == expectedReset)
-    #expect(row.spokenLabel == "Weekly, 47 percent remaining, resets \(expectedReset!)")
+    #expect(row.spokenLabel == "Weekly, 47 percent remaining, resets \(expectedReset!), 8% behind")
 
     let noReset = WindowRow(window: window("weekly", 47, reset: nil), now: fixedNow)
-    #expect(noReset.spokenLabel == "Weekly, 47 percent remaining")
+    #expect(noReset.spokenLabel == "Weekly, 47 percent remaining, pace unavailable")
 }

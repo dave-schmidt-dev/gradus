@@ -84,13 +84,18 @@ extension DashboardContent {
         )
         let maximum = stops.last ?? 1
         let sizeStops = DashboardViewModel.cardSizeStopCount(for: maximum)
+        let preferred = DashboardViewModel.resolvedCardDensity(
+            preference: viewModel.cardColumnPreference,
+            sizeStops: sizeStops
+        )
+
+        guard let preferred else {
+            return autoResolution(in: contentWidth, maximum: maximum)
+        }
+
         let selectedColumns = DashboardViewModel.resolvedCardColumnCount(
             preference: viewModel.cardColumnPreference,
             maximum: maximum,
-            sizeStops: sizeStops
-        )
-        let preferred = DashboardViewModel.resolvedCardDensity(
-            preference: viewModel.cardColumnPreference,
             sizeStops: sizeStops
         )
         let resolution = DashboardDensity.resolveRung(preferred: preferred) { rung in
@@ -109,6 +114,40 @@ extension DashboardContent {
             columns: selectedColumns,
             maximumColumns: maximum,
             didFitDensity: resolution.didFit
+        )
+    }
+
+    /// Auto (no explicit slider stop) picks the richest rung the width can
+    /// support at all, then the most columns *that rung* can seat -- rather
+    /// than fixing the column count at `.compact`'s maximum first and asking
+    /// richer rungs to fit inside it, which they almost never can. Fixing the
+    /// count at the leanest rung's maximum is also why Auto used to leave so
+    /// much *vertical* space empty: compact rows are the shortest rows this
+    /// ladder has, so packing the most columns of them produces the fewest
+    /// rows.
+    private func autoResolution(in contentWidth: CGFloat, maximum: Int) -> GridResolution {
+        let candidates = DashboardDensity.allCases.reversed().map { rung in
+            RungCandidate(
+                rung: rung,
+                scaledFixedColumnWidth: scaledFixedColumnWidth(for: rung, showsReset: false),
+                cardPadding: rung.metrics.cardPadding,
+                cardGap: rung.metrics.cardGap
+            )
+        }
+        guard let resolved = richestFittingResolution(
+            containerWidth: contentWidth,
+            candidates: candidates,
+            minimumBarWidth: DensityMetrics.minimumBarWidth
+        ) else {
+            return GridResolution(
+                metrics: .compact, columns: 1, maximumColumns: maximum, didFitDensity: false
+            )
+        }
+        return GridResolution(
+            metrics: resolved.rung.metrics,
+            columns: resolved.columns,
+            maximumColumns: maximum,
+            didFitDensity: true
         )
     }
 
@@ -270,103 +309,5 @@ extension DashboardContent {
     /// order within each half — it does not re-derive either.
     private var activeProviders: [ProviderStatus] {
         viewModel.providers.filter { !$0.isDepleted }
-    }
-
-    private var exhaustedProviders: [ProviderStatus] {
-        viewModel.providers.filter(\.isDepleted)
-    }
-
-    /// Sizes cells from the actual reset-label demand at the active Dynamic
-    /// Type size. The timestamp is the exhausted cell's purpose, so an explicit
-    /// solver count must never create a cell that truncates it mid-string.
-    private func exhaustedColumns(metrics: DensityMetrics, contentWidth: CGFloat) -> [GridItem] {
-        let columns = maxColumns(
-            containerWidth: contentWidth,
-            scaledFixedColumnWidth: exhaustedResetLabelWidth(for: metrics.rung),
-            cardPadding: metrics.cardPadding,
-            cardGap: metrics.exhaustedGap,
-            minimumBarWidth: 0
-        )
-        return Array(
-            repeating: GridItem(.flexible(), spacing: metrics.exhaustedGap, alignment: .top),
-            count: columns
-        )
-    }
-
-    private func exhaustedSection(metrics: DensityMetrics, contentWidth: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: metrics.exhaustedGap) {
-            Text("Exhausted")
-                .font(metrics.exhaustedHeaderFont)
-                .foregroundStyle(.tertiary)
-                .accessibilityIdentifier("exhausted-section-header")
-            LazyVGrid(
-                columns: exhaustedColumns(metrics: metrics, contentWidth: contentWidth),
-                alignment: .leading,
-                spacing: metrics.exhaustedGap
-            ) {
-                ForEach(exhaustedProviders, id: \.providerName) { provider in
-                    exhaustedCell(provider, metrics: metrics)
-                }
-            }
-        }
-    }
-
-    private func exhaustedResetLabelWidth(for density: DashboardDensity) -> CGFloat {
-        let style: UIFont.TextStyle = switch density {
-        case .compact: .caption1
-        case .standard: .footnote
-        case .large: .subheadline
-        }
-        let font = UIFont.preferredFont(forTextStyle: style, compatibleWith: dynamicTypeTraits)
-        return ("resets Aug 12, 7:46 PM" as NSString).size(withAttributes: [.font: font]).width
-    }
-
-    private var dynamicTypeTraits: UITraitCollection {
-        let category: UIContentSizeCategory = switch dynamicTypeSize {
-        case .xSmall: .extraSmall
-        case .small: .small
-        case .medium: .medium
-        case .large: .large
-        case .xLarge: .extraLarge
-        case .xxLarge: .extraExtraLarge
-        case .xxxLarge: .extraExtraExtraLarge
-        case .accessibility1: .accessibilityMedium
-        case .accessibility2: .accessibilityLarge
-        case .accessibility3: .accessibilityExtraLarge
-        case .accessibility4: .accessibilityExtraExtraLarge
-        case .accessibility5: .accessibilityExtraExtraExtraLarge
-        @unknown default: .large
-        }
-        return UITraitCollection(preferredContentSizeCategory: category)
-    }
-
-    /// Still tappable through to the detail view: compact is about how much
-    /// the row costs on screen, not about withholding the full breakdown from
-    /// anyone who wants it.
-    private func exhaustedCell(_ provider: ProviderStatus, metrics: DensityMetrics) -> some View {
-        VStack(alignment: .leading, spacing: metrics.exhaustedLineGap) {
-            Text(provider.providerDisplayName)
-                .font(metrics.exhaustedTitleFont)
-                // At accessibility sizes, a one-column iPhone can no longer
-                // fit a full provider name on one line. Let the cell grow
-                // rather than replace part of the name with an ellipsis.
-                .fixedSize(horizontal: false, vertical: true)
-            Text(CrossSurfaceParity.exhaustedResetLabel(provider.windows, now: now) ?? "reset unknown")
-                .font(metrics.exhaustedResetFont)
-                .foregroundStyle(.secondary)
-                // The solver prevents a second cramped column. A full reset
-                // timestamp can still exceed a narrow phone at AX4/AX5, so it
-                // wraps instead of truncating mid-timestamp.
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, minHeight: metrics.exhaustedRowHeight, alignment: .leading)
-        .padding(.horizontal, metrics.cardPadding)
-        .padding(.vertical, metrics.exhaustedGap)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: metrics.exhaustedCornerRadius))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            selectedProviderName = provider.providerName
-        }
-        .accessibilityIdentifier("exhausted-provider-\(provider.providerName)")
     }
 }

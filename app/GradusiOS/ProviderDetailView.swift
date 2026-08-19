@@ -103,9 +103,7 @@ struct ProviderDetailView: View {
                 if let resetISO = window.resetISO {
                     Text("reset \(friendlyResetDate(resetISO, now: now) ?? resetISO)")
                 }
-                if let pace = window.paceDelta {
-                    Text(String(format: "pace %+.0f%%", pace * 100))
-                }
+                Text(paceLabel(for: window))
             }
             .font(.caption)
             .foregroundStyle(.secondary)

@@ -1,0 +1,70 @@
+{
+  "_comment": [
+    "Canonical pace_delta -> label truth table.",
+    "",
+    "Read by BOTH halves of the codebase so the Swift and Python wordings",
+    "cannot drift silently:",
+    "  - app/GradusKit/Tests/GradusKitTests/PaceLabelTests.swift (Swift)",
+    "  - tests/test_ui.py::PaceLabelTruthTableTests              (Python)",
+    "",
+    "It lives inside the SwiftPM test target for the same reason as",
+    "signal-levels.json in this directory -- see that file's header.",
+    "",
+    "Deliberately does not cover the missing-value case: the TUI renders",
+    "that as \"n/a\" and Mac/iOS render it as \"pace unavailable\", a",
+    "pre-existing difference this fixture does not attempt to unify. It also",
+    "keeps every case strictly outside both surfaces' 'on pace' band --",
+    "the TUI's is +/-5 points and Mac/iOS's is +/-1 point, deliberately",
+    "different -- except pace_delta 0.0, which is on-pace under either rule.",
+    "Only the wording once a surface decides to show a number is shared.",
+    "",
+    "The 0.125 / -0.125 rows exist specifically to catch a rounding-mode",
+    "mismatch: Python's `round()` builtin ties to even (round(12.5) == 12),",
+    "while Swift's `Double.rounded()` ties away from zero (12.5 rounds to",
+    "13). Both language implementations round half away from zero -- Python",
+    "spells it out explicitly since its builtin does not -- so these rows",
+    "must both come out as 13 points, not 12."
+  ],
+  "cases": [
+    {
+      "pace_delta": 0.0,
+      "label": "on pace",
+      "why": "Exactly on schedule -- on-pace under either surface's band."
+    },
+    {
+      "pace_delta": -0.06,
+      "label": "6% behind",
+      "why": "Just past the TUI's on-pace band edge (+/-5 points); both surfaces show a number here."
+    },
+    {
+      "pace_delta": 0.1,
+      "label": "10% ahead",
+      "why": "Ordinary ahead-of-schedule value."
+    },
+    {
+      "pace_delta": -0.08,
+      "label": "8% behind",
+      "why": "Ordinary behind-schedule value."
+    },
+    {
+      "pace_delta": 0.125,
+      "label": "13% ahead",
+      "why": "Rounding-mode boundary: 12.5 points rounds away from zero to 13, not to even (12)."
+    },
+    {
+      "pace_delta": -0.125,
+      "label": "13% behind",
+      "why": "Same rounding boundary, behind direction."
+    },
+    {
+      "pace_delta": 1.5,
+      "label": "150% ahead",
+      "why": "pace_delta is not clamped (INV-4); an extreme value must still format, not crash or truncate."
+    },
+    {
+      "pace_delta": -1.0,
+      "label": "100% behind",
+      "why": "Large behind-schedule value at a round number."
+    }
+  ]
+}

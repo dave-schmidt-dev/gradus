@@ -153,26 +153,45 @@ struct WindowRow: View {
 
                     UsageBar(window: window, color: color, height: metrics.barHeight)
                         .frame(maxWidth: .infinity)
+
+                    paceText
                 }
             } else {
-                HStack(spacing: metrics.columnGap) {
-                    labelText
-                    UsageBar(window: window, color: color, height: metrics.barHeight)
-                    percentText(color: color)
+                VStack(alignment: .leading, spacing: metrics.rowGap) {
+                    HStack(spacing: metrics.columnGap) {
+                        labelText
+                        UsageBar(window: window, color: color, height: metrics.barHeight)
+                        percentText(color: color)
 
-                    if showsReset {
-                        Text(resetText)
-                            .font(metrics.resetFont)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .frame(width: scaledResetWidth, alignment: .trailing)
+                        if showsReset {
+                            Text(resetText)
+                                .font(metrics.resetFont)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .frame(width: scaledResetWidth, alignment: .trailing)
+                        }
                     }
+
+                    paceText
                 }
             }
         }
         .frame(minHeight: metrics.rowHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenLabel)
+    }
+
+    /// Below the bar rather than a fifth fixed column, matching Mac's
+    /// `MenuWindowMetadata`: a quantitative pace figure is the ask (parity
+    /// with the TUI and Mac), but the row's four columns are already sized to
+    /// the width they have -- reset included, which stays exactly where it
+    /// was. A full-width line only needs the text to fit, not another column
+    /// budget.
+    private var paceText: some View {
+        Text(paceLabel(for: window))
+            .font(metrics.resetFont)
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
     }
 
     private var labelText: some View {
@@ -231,12 +250,14 @@ struct WindowRow: View {
         return friendlyResetDate(resetISO, now: now) ?? resetISO
     }
 
-    /// One spoken string for the whole row. The bar, percentage and reset are
-    /// three views but one fact, so VoiceOver should not stop three times.
+    /// One spoken string for the whole row. The bar, percentage, reset and
+    /// pace are four views but one fact, so VoiceOver should not stop four
+    /// times.
     var spokenLabel: String {
         let label = ProviderWindowLabel.label(for: window.id)
         let percent = percentDisplay(window.percentLeft, suffix: " percent remaining")
-        guard !resetText.isEmpty else { return "\(label), \(percent)" }
-        return "\(label), \(percent), resets \(resetText)"
+        let pace = paceLabel(for: window)
+        guard !resetText.isEmpty else { return "\(label), \(percent), \(pace)" }
+        return "\(label), \(percent), resets \(resetText), \(pace)"
     }
 }

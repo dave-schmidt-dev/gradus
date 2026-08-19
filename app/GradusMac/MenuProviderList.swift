@@ -272,7 +272,7 @@ struct MenuWindowMetadata: View {
         HStack(spacing: 8) {
             Text(Self.resetLabel(for: window, now: now))
             Spacer(minLength: 4)
-            Text(Self.paceLabel(for: window))
+            Text(paceLabel(for: window))
         }
         .font(density.metadataFont)
         .foregroundStyle(.secondary)
@@ -282,14 +282,5 @@ struct MenuWindowMetadata: View {
     static func resetLabel(for window: ProviderWindow, now: Date) -> String {
         guard let resetISO = window.resetISO else { return "reset unavailable" }
         return "resets \(friendlyResetDate(resetISO, now: now) ?? resetISO)"
-    }
-
-    static func paceLabel(for window: ProviderWindow) -> String {
-        guard let paceDelta = window.paceDelta, paceDelta.isFinite else { return "pace unavailable" }
-        let points = abs(paceDelta * 100).rounded()
-        if points < 1 {
-            return "on pace"
-        }
-        return "\(Int(points))% \(paceDelta < 0 ? "behind" : "ahead")"
     }
 }
