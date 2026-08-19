@@ -949,7 +949,7 @@ class BridgeTests(unittest.TestCase):
         be distributed on an authority nobody granted.
         """
 
-        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        group = "00000000-0000-4000-8000-000000000001"
         cases = {
             "no-confirmation": (None, group, "passed"),
             "no-proof": ((group, "Internal Testers"), None, "passed"),
@@ -987,7 +987,7 @@ class BridgeTests(unittest.TestCase):
         the outcome.
         """
 
-        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        group = "00000000-0000-4000-8000-000000000001"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self._legacy_candidate(root)
@@ -1037,7 +1037,7 @@ class BridgeTests(unittest.TestCase):
         against a build that reached no tester.
         """
 
-        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        group = "00000000-0000-4000-8000-000000000001"
         unconfirmed = (
             {"candidate_id": "gradus-ios-19", "build": 19, "group_id": group, "assigned": False},
             {"candidate_id": "gradus-ios-19", "build": 19, "group_id": group},
@@ -1066,7 +1066,7 @@ class BridgeTests(unittest.TestCase):
     def test_assignment_blocks_when_the_wrapper_refuses(self) -> None:
         """A refused assignment must leave a blocked proof, never a passing one."""
 
-        group = "d550d192-058e-4048-aebf-f93d78db20fb"
+        group = "00000000-0000-4000-8000-000000000001"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self._legacy_candidate(root)
