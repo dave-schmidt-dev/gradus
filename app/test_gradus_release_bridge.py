@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -40,6 +41,64 @@ class _RecordingClient:
 
 
 class BridgeTests(unittest.TestCase):
+    def _release_wrapper_fixture(self, temporary: str) -> tuple[Path, Path, Path]:
+        """Create an isolated checkout with a separately located Git common dir."""
+        base = Path(temporary).resolve()
+        checkout = base / "gradus"
+        common_dir = base / "git-common"
+        bin_dir = base / "bin"
+        wrapper = checkout / "app" / "release-testflight"
+        wrapper.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / "app" / "release-testflight", wrapper)
+        wrapper.chmod(0o755)
+        common_dir.mkdir()
+        (checkout / ".release").mkdir(parents=True)
+        (checkout / ".release" / "release-adapter.json").write_text("{}", encoding="utf-8")
+
+        release_tools = base / "apple_developer" / "release_tools"
+        release_tools.mkdir(parents=True)
+        (release_tools / "__init__.py").write_text("", encoding="utf-8")
+        (release_tools / "__main__.py").write_text(
+            "import json\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "Path(__file__).with_name('invoked.json').write_text(\n"
+            "    json.dumps(sys.argv), encoding='utf-8'\n"
+            ")\n",
+            encoding="utf-8",
+        )
+
+        bin_dir.mkdir()
+        git = bin_dir / "git"
+        git.write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            "  *--show-toplevel*) printf '%s\n' \"$WRAPPER_ROOT\" ;;\n"
+            "  *--git-common-dir*) printf '%s\n' \"$WRAPPER_COMMON_DIR\" ;;\n"
+            "  *) exit 1 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        git.chmod(0o755)
+        return checkout, common_dir, bin_dir
+
+    @staticmethod
+    def _run_release_upload(
+        checkout: Path, common_dir: Path, bin_dir: Path
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(checkout / "app" / "release-testflight"), "--upload"],
+            cwd=checkout,
+            env={
+                "PATH": f"{bin_dir}:/bin:/usr/bin",
+                "WRAPPER_ROOT": str(checkout),
+                "WRAPPER_COMMON_DIR": str(common_dir),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_prepare_only_freezes_then_stages_without_upload(self) -> None:
         wrapper = (ROOT / "app" / "release-testflight").read_text(encoding="utf-8")
         prepare_branch = wrapper.split("--prepare-only)", 1)[1].split("--upload)", 1)[0]
@@ -48,6 +107,41 @@ class BridgeTests(unittest.TestCase):
         self.assertIn('READINESS_MANIFEST="$readiness_manifest"', prepare_branch)
         self.assertIn('--candidate "$candidate"', prepare_branch)
         self.assertNotIn("--upload", prepare_branch)
+
+    def test_upload_uses_git_common_candidate_pointer_not_project_local_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            stale_pointer = checkout / ".release-state" / "gradus-ios" / "active-candidate.json"
+            stale_pointer.parent.mkdir(parents=True)
+            stale_pointer.write_text('{"candidateId": "1.8.0-20"}', encoding="utf-8")
+            canonical_pointer = (
+                common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+            )
+            canonical_pointer.parent.mkdir(parents=True)
+            canonical_pointer.write_text('{"candidateId": "1.8.1-21"}', encoding="utf-8")
+
+            result = self._run_release_upload(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            invoked = json.loads(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").read_text()
+            )
+            self.assertEqual(invoked[invoked.index("--candidate") + 1], "1.8.1-21")
+
+    def test_upload_missing_git_common_pointer_stops_before_release_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            stale_pointer = checkout / ".release-state" / "gradus-ios" / "active-candidate.json"
+            stale_pointer.parent.mkdir(parents=True)
+            stale_pointer.write_text('{"candidateId": "1.8.0-20"}', encoding="utf-8")
+
+            result = self._run_release_upload(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 3)
+            self.assertIn("no prepared central candidate", result.stderr)
+            self.assertFalse(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
+            )
 
     def test_parser_is_closed_and_rejects_shell_candidate(self) -> None:
         with self.assertRaises(ValueError):

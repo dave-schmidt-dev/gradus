@@ -41,8 +41,16 @@ case "${1:-}" in
     ;;
   --upload)
     [[ $# -eq 1 ]] || { echo "release-testflight: --upload takes no extra arguments" >&2; exit 64; }
+    git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
+      echo "release-testflight: Git common directory is unavailable" >&2
+      exit 4
+    }
+    [[ -d "$git_common_dir" ]] || {
+      echo "release-testflight: Git common directory is unavailable" >&2
+      exit 4
+    }
     candidate="$($PYTHON_BIN -c 'import json,sys; print(json.loads(open(sys.argv[1], encoding="utf-8").read())["candidateId"])' \
-      "$ROOT/.release-state/gradus-ios/active-candidate.json" 2>/dev/null)" || {
+      "$git_common_dir/release-state/gradus-ios/active-candidate.json" 2>/dev/null)" || {
       echo "release-testflight: no prepared central candidate" >&2
       exit 3
     }
