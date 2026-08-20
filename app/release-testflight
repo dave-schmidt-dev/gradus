@@ -54,7 +54,13 @@ case "${1:-}" in
       echo "release-testflight: no prepared central candidate" >&2
       exit 3
     }
-    exec env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
+    readiness_manifest="$git_common_dir/release-state/gradus-ios/candidates/$candidate/manifest.json"
+    [[ -f "$readiness_manifest" && ! -L "$readiness_manifest" ]] || {
+      echo "release-testflight: prepared candidate manifest is unavailable" >&2
+      exit 3
+    }
+    exec env PYTHONPATH="$CENTRAL_ROOT" READINESS_MANIFEST="$readiness_manifest" \
+      "$PYTHON_BIN" -m release_tools testflight \
       --adapter "$ADAPTER" --repository "$ROOT" --upload --candidate "$candidate"
     ;;
   *)

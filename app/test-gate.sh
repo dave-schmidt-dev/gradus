@@ -633,5 +633,11 @@ assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITest
 
 assert_counting_legs_complete
 
+# The release runner supplies READINESS_MANIFEST only for a candidate-bound
+# gate. Ordinary developer and pre-push runs retain their prior behavior.
+if [[ -n "${READINESS_MANIFEST:-}" ]]; then
+  /usr/bin/python3 release_stage_readiness.py --local-gate
+fi
+
 echo "==> test-gate.sh: all destinations green"
 fi

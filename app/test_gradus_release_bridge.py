@@ -60,10 +60,14 @@ class BridgeTests(unittest.TestCase):
         (release_tools / "__init__.py").write_text("", encoding="utf-8")
         (release_tools / "__main__.py").write_text(
             "import json\n"
+            "import os\n"
             "import sys\n"
             "from pathlib import Path\n"
             "Path(__file__).with_name('invoked.json').write_text(\n"
             "    json.dumps(sys.argv), encoding='utf-8'\n"
+            ")\n"
+            "Path(__file__).with_name('readiness-manifest.txt').write_text(\n"
+            "    os.environ.get('READINESS_MANIFEST', ''), encoding='utf-8'\n"
             ")\n",
             encoding="utf-8",
         )
@@ -119,6 +123,16 @@ class BridgeTests(unittest.TestCase):
             )
             canonical_pointer.parent.mkdir(parents=True)
             canonical_pointer.write_text('{"candidateId": "1.8.1-21"}', encoding="utf-8")
+            canonical_manifest = (
+                common_dir
+                / "release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.8.1-21"
+                / "manifest.json"
+            )
+            canonical_manifest.parent.mkdir(parents=True)
+            canonical_manifest.write_text("{}", encoding="utf-8")
 
             result = self._run_release_upload(checkout, common_dir, bin_dir)
 
@@ -127,6 +141,27 @@ class BridgeTests(unittest.TestCase):
                 (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").read_text()
             )
             self.assertEqual(invoked[invoked.index("--candidate") + 1], "1.8.1-21")
+            supplied_manifest = (
+                checkout.parent / "apple_developer" / "release_tools" / "readiness-manifest.txt"
+            ).read_text()
+            self.assertEqual(supplied_manifest, str(canonical_manifest))
+
+    def test_upload_missing_git_common_manifest_stops_before_release_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            canonical_pointer = (
+                common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+            )
+            canonical_pointer.parent.mkdir(parents=True)
+            canonical_pointer.write_text('{"candidateId": "1.8.1-21"}', encoding="utf-8")
+
+            result = self._run_release_upload(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 3)
+            self.assertIn("prepared candidate manifest is unavailable", result.stderr)
+            self.assertFalse(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
+            )
 
     def test_upload_missing_git_common_pointer_stops_before_release_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
