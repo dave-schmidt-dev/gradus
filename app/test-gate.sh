@@ -4,6 +4,12 @@
 # failure (preflight mismatch, build failure, or test failure) so it's safe
 # to wire into CI/pre-push as a hard gate.
 
+# Resolve the repository before the executable path can change the working
+# directory.  Functions may run after the main body has cd'd into app/, so a
+# relative BASH_SOURCE path is no longer rooted at the caller's checkout.
+GATE_SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE_REPO_ROOT="$(cd -P "$GATE_SCRIPT_DIR/.." && pwd)"
+
 # Keep this manifest aligned with every test command wrapped by
 # `assert_counting_leg`.  The Python paths are intentionally listed here so
 # the self-check can detect a new hermetic suite that is not wired into the
@@ -123,6 +129,26 @@ validate_density_image_snapshot_selectors() {
   done
 }
 
+persist_test_gate_diagnostic() {
+  # Every command captured by this gate is credential-free. Preserve failed
+  # transcripts beside the existing local release evidence so release_tools
+  # can discard its child streams without making the failing leg unknowable.
+  local leg_name="$1" output_file="$2" diagnostic_root diagnostic_name diagnostic_path
+  diagnostic_root="${GRADUS_TEST_GATE_DIAGNOSTIC_ROOT:-$GATE_REPO_ROOT/.release-state/evidence/test-gate}"
+  diagnostic_name="${leg_name//[^A-Za-z0-9._-]/_}"
+  diagnostic_path="$diagnostic_root/${diagnostic_name}-$(date -u '+%Y%m%dT%H%M%SZ')-${BASHPID:-$$}-${RANDOM:-0}.log"
+  if mkdir -p "$diagnostic_root" \
+      && chmod 700 "$diagnostic_root" \
+      && /bin/cp "$output_file" "$diagnostic_path" \
+      && chmod 600 "$diagnostic_path"; then
+    echo "    Diagnostic output preserved at $diagnostic_path" >&2
+    rm -f "$output_file"
+    return 0
+  fi
+  echo "FAIL: could not preserve diagnostic output for counting leg '$leg_name'" >&2
+  return 1
+}
+
 assert_counting_leg() {
   local leg_name="$1"
   shift
@@ -149,7 +175,7 @@ assert_counting_leg() {
   fi
   if [[ "$command_status" -ne 0 ]]; then
     echo "FAIL: counting leg '$leg_name' exited with status $command_status" >&2
-    rm -f "$output_file"
+    persist_test_gate_diagnostic "$leg_name" "$output_file" || true
     return "$command_status"
   fi
 
@@ -203,16 +229,17 @@ assert_counting_leg() {
     END { if (found) print maximum }
     ' "$output_file")"
   fi
-  rm -f "$output_file"
-
   if [[ -z "$reported_count" ]]; then
     echo "FAIL: counting leg '$leg_name' reported no recognized test count" >&2
+    persist_test_gate_diagnostic "$leg_name" "$output_file" || true
     return 1
   fi
   if [[ "$reported_count" -lt "${COUNTING_LEG_MINIMUMS[leg_index]}" ]]; then
     echo "FAIL: counting leg '$leg_name' reported $reported_count tests; minimum is ${COUNTING_LEG_MINIMUMS[leg_index]}" >&2
+    persist_test_gate_diagnostic "$leg_name" "$output_file" || true
     return 1
   fi
+  rm -f "$output_file"
 
   COUNTING_LEG_RUN_COUNT=$((COUNTING_LEG_RUN_COUNT + 1))
   echo "    $leg_name: $reported_count tests reported (minimum ${COUNTING_LEG_MINIMUMS[leg_index]}). OK."
@@ -251,7 +278,6 @@ run_with_deadline() {
     sleep "$deadline_seconds"
     if kill -0 "$child_pid" >/dev/null 2>&1; then
       printf '%s\n' timed_out > "$marker"
-      echo "FAIL: $label exceeded ${deadline_seconds}s; terminating" >&2
       kill -TERM "$child_pid" >/dev/null 2>&1 || true
       for _ in {1..20}; do
         kill -0 "$child_pid" >/dev/null 2>&1 || exit 0
@@ -262,7 +288,7 @@ run_with_deadline() {
         kill -KILL "$child_pid" >/dev/null 2>&1 || true
       fi
     fi
-  ) &
+  ) >/dev/null 2>&1 &
   watchdog_pid=$!
 
   if wait "$child_pid"; then
@@ -274,6 +300,7 @@ run_with_deadline() {
   wait "$watchdog_pid" >/dev/null 2>&1 || true
   if [[ -s "$marker" ]]; then
     command_status=124
+    echo "FAIL: $label exceeded ${deadline_seconds}s; terminating" >&2
   fi
   rm -f "$marker"
   return "$command_status"

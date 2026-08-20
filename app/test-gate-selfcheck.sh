@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GATE_SCRIPT="$SCRIPT_DIR/test-gate.sh"
 failure_count=0
+diagnostic_test_root="$(mktemp -d "${TMPDIR:-/tmp}/gradus-gate-diagnostics.XXXXXX")"
+trap 'rm -rf "$diagnostic_test_root"' EXIT INT TERM
+export GRADUS_TEST_GATE_DIAGNOSTIC_ROOT="$diagnostic_test_root/evidence/test-gate"
 
 fail() {
   echo "FAIL: $1" >&2
@@ -62,6 +65,57 @@ fi
 source "$GATE_SCRIPT"
 validate_counting_leg_declarations || fail "live counting-leg declarations are invalid"
 validate_density_image_snapshot_selectors || fail "live density image snapshot selectors are invalid"
+
+emit_failed_diagnostic_fixture() {
+  printf 'credential-free failure detail\n'
+  return 37
+}
+if assert_counting_leg "swift-testing" emit_failed_diagnostic_fixture; then
+  fail "failed counting leg unexpectedly passed"
+fi
+diagnostic_path="$(find "$GRADUS_TEST_GATE_DIAGNOSTIC_ROOT" -type f -name 'swift-testing-*.log' -print -quit)"
+[[ -n "$diagnostic_path" && "$(cat "$diagnostic_path")" == "credential-free failure detail" ]] ||
+  fail "failed counting leg did not preserve its diagnostic output"
+[[ -z "$diagnostic_path" || "$(/usr/bin/stat -f '%Lp' "$diagnostic_path")" == "600" ]] ||
+  fail "counting-leg diagnostic output was not written 0600"
+
+# Regression: the executable gate cd's into app/ before a failed leg is
+# preserved. The default diagnostic root must remain the repository root even
+# when the script was sourced through a relative path and the caller is now in
+# app/. Keep the fixture in the real repository so this catches a path that
+# only looks correct under the temporary override above, then remove its log.
+default_diagnostic_root="$PROJECT_ROOT/.release-state/evidence/test-gate"
+default_diagnostic_leg="default-root-regression-${BASHPID:-$$}-${RANDOM:-0}"
+default_diagnostic_status=0
+(
+  cd "$PROJECT_ROOT"
+  unset GRADUS_TEST_GATE_DIAGNOSTIC_ROOT
+  # Deliberately use the relative path that the executable gate receives.
+  source app/test-gate.sh
+  cd app
+  # Declare this synthetic leg only in the isolated fixture shell. It passes
+  # assert_counting_leg's normal lookup without changing the live manifest.
+  COUNTING_LEG_NAMES+=("$default_diagnostic_leg")
+  COUNTING_LEG_REPORTERS+=("pytest")
+  COUNTING_LEG_MINIMUMS+=(1)
+  COUNTING_LEG_SOURCES+=("selfcheck-fixture")
+  emit_default_root_failure() {
+    printf 'credential-free default-root failure\n'
+    return 37
+  }
+  assert_counting_leg "$default_diagnostic_leg" emit_default_root_failure
+) || default_diagnostic_status=$?
+[[ "$default_diagnostic_status" -ne 0 ]] ||
+  fail "default diagnostic-root failure fixture unexpectedly passed"
+default_diagnostic_path=""
+if [[ -d "$default_diagnostic_root" ]]; then
+  default_diagnostic_path="$(find "$default_diagnostic_root" -type f -name "${default_diagnostic_leg}-*.log" -print -quit 2>/dev/null || true)"
+fi
+[[ -n "$default_diagnostic_path" && "$(cat "$default_diagnostic_path")" == "credential-free default-root failure" ]] ||
+  fail "default diagnostic root did not preserve its failure output under the repository"
+[[ -z "$default_diagnostic_path" || "$(/usr/bin/stat -f '%Lp' "$default_diagnostic_path")" == "600" ]] ||
+  fail "default diagnostic output was not written 0600"
+[[ -z "$default_diagnostic_path" ]] || rm -f "$default_diagnostic_path"
 
 # The one semantic density-label assertion stays in the iPhone unit suite.
 # Every selected canonical image test must contain one image assertion, and the
@@ -147,6 +201,7 @@ validate_gradus_mac_deadline_contract() {
   [[ "$helper_block" == *'kill -TERM "$child_pid"'* ]] || return 1
   [[ "$helper_block" == *'kill -KILL "$child_pid"'* ]] || return 1
   [[ "$helper_block" == *'command_status=124'* ]] || return 1
+  [[ "$helper_block" == *') >/dev/null 2>&1 &'* ]] || return 1
   [[ "$helper_block" == *'rm -f "$marker"'* ]] || return 1
   [[ "$mac_leg_block" == *'run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests"'* ]] || return 1
   [[ "$mac_leg_block" != *'assert_counting_leg "GradusiOS-iPhone" run_with_deadline'* ]] || return 1

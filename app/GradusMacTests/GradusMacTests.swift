@@ -109,8 +109,23 @@ func recordID(_ name: String) -> CKRecord.ID {
     #expect(mapped.data == entry.data)
 }
 
-// MARK: - Placeholder retained from initial scaffold
+@Test func makeProviderStatusPreservesFailureMetadataAndSyncSource() throws {
+    let entry = ProviderEntry(
+        name: "Copilot", ok: false, error: "provider probe timed out",
+        windows: [], data: ["payg_enabled": .bool(false)], observedAt: nil
+    )
+    let syncSource = SyncSource(computerName: "Build Mac", userName: "runner")
 
-@Test func placeholder() {
-    #expect(true)
+    let mapped = try makeProviderStatus(
+        from: entry,
+        snapshotUpdatedAt: "2026-08-02T20:05:00-04:00",
+        publishedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        syncSource: syncSource
+    )
+
+    #expect(mapped.ok == false)
+    #expect(mapped.errorMessage == "provider probe timed out")
+    #expect(mapped.observedAt == nil)
+    #expect(mapped.data == entry.data)
+    #expect(mapped.syncSource == syncSource)
 }

@@ -68,7 +68,9 @@ class BridgeTests(unittest.TestCase):
             ")\n"
             "Path(__file__).with_name('readiness-manifest.txt').write_text(\n"
             "    os.environ.get('READINESS_MANIFEST', ''), encoding='utf-8'\n"
-            ")\n",
+            ")\n"
+            "if 'testflight' in sys.argv and '--upload' not in sys.argv:\n"
+            "    print(json.dumps({'candidateId': '1.8.1-21'}))\n",
             encoding="utf-8",
         )
 
@@ -103,6 +105,23 @@ class BridgeTests(unittest.TestCase):
             check=False,
         )
 
+    @staticmethod
+    def _run_release_prepare(
+        checkout: Path, common_dir: Path, bin_dir: Path
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(checkout / "app" / "release-testflight"), "--prepare-only"],
+            cwd=checkout,
+            env={
+                "PATH": f"{bin_dir}:/bin:/usr/bin",
+                "WRAPPER_ROOT": str(checkout),
+                "WRAPPER_COMMON_DIR": str(common_dir),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_prepare_only_freezes_then_stages_without_upload(self) -> None:
         wrapper = (ROOT / "app" / "release-testflight").read_text(encoding="utf-8")
         prepare_branch = wrapper.split("--prepare-only)", 1)[1].split("--upload)", 1)[0]
@@ -111,6 +130,39 @@ class BridgeTests(unittest.TestCase):
         self.assertIn('READINESS_MANIFEST="$readiness_manifest"', prepare_branch)
         self.assertIn('--candidate "$candidate"', prepare_branch)
         self.assertNotIn("--upload", prepare_branch)
+
+    def test_prepare_only_uses_git_common_readiness_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            stale_manifest = (
+                checkout
+                / ".git"
+                / "release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.8.1-21"
+                / "manifest.json"
+            )
+            stale_manifest.parent.mkdir(parents=True)
+            stale_manifest.write_text("{}", encoding="utf-8")
+            canonical_manifest = (
+                common_dir
+                / "release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.8.1-21"
+                / "manifest.json"
+            )
+            canonical_manifest.parent.mkdir(parents=True)
+            canonical_manifest.write_text("{}", encoding="utf-8")
+
+            result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            supplied_manifest = (
+                checkout.parent / "apple_developer" / "release_tools" / "readiness-manifest.txt"
+            ).read_text()
+            self.assertEqual(supplied_manifest, str(canonical_manifest))
 
     def test_upload_uses_git_common_candidate_pointer_not_project_local_pointer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -442,6 +442,7 @@ payload = {
     "reason": "upload-result-ambiguous",
     "transportExitCode": int(sys.argv[4]),
 }
+
 path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
 try:
@@ -456,6 +457,56 @@ except Exception:
     try:
         os.unlink(temporary)
     except FileNotFoundError:
+        pass
+    raise
+PY
+}
+
+persist_upload_failure_diagnostics() {
+  # altool output is useful release evidence but is produced inside the
+  # credential-bearing broker process. Redact exact credential values before
+  # retaining the transcript in the candidate workspace.
+  local source_path="$1" destination_path="$2" transport_status="$3"
+  /usr/bin/python3 - "$source_path" "$destination_path" "$transport_status" <<'PY'
+import os
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+text = source.read_text(encoding="utf-8", errors="replace")
+for name in (
+    "APP_STORE_CONNECT_API_KEY",
+    "APP_STORE_CONNECT_KEY_ID",
+    "APP_STORE_CONNECT_ISSUER_ID",
+):
+    value = os.environ.get(name, "")
+    if value:
+        text = text.replace(value, f"<redacted:{name}>")
+body = (
+    "operation: upload\n"
+    f"transportExitCode: {int(sys.argv[3])}\n"
+    f"observedAt: {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
+    "stdout/stderr:\n"
+    f"{text}"
+)
+if body and not body.endswith("\n"):
+    body += "\n"
+destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+descriptor, temporary = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+try:
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(body)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, destination)
+except Exception:
+    try:
+        os.unlink(temporary)
+    except OSError:
         pass
     raise
 PY
@@ -1617,6 +1668,12 @@ PY
     # Preserve the candidate and require reconciliation instead of re-uploading.
     upload_status=$?
     export GRADUS_UPLOAD_FAILURE_STATUS="$upload_status"
+    if persist_upload_failure_diagnostics "$delivery_log" \
+        "${candidate_workspace}/upload-failure.log" "$upload_status"; then
+      echo "    Diagnostic output preserved at ${candidate_workspace}/upload-failure.log" >&2
+    else
+      echo "FAIL: upload diagnostic output could not be persisted" >&2
+    fi
     rm -f "$delivery_log"
     cleanup_ram_key_volume
     trap - EXIT INT TERM HUP

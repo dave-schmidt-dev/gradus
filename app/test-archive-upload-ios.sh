@@ -536,6 +536,7 @@ cp "$behavior_bin/mktemp" "$failure_bin/mktemp"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s\\n" "$*" >> "$GRADUS_TEST_XCRUN_LOG"' \
+  'printf "transport failed: %s %s %s\\n" "$APP_STORE_CONNECT_API_KEY" "$APP_STORE_CONNECT_KEY_ID" "$APP_STORE_CONNECT_ISSUER_ID" >&2' \
   'exit 42' >"$failure_bin/xcrun"
 chmod 700 "$failure_bin/mktemp" "$failure_bin/xcrun"
 export GRADUS_CANDIDATE_LEDGER_PATH="$failure_ledger"
@@ -560,6 +561,25 @@ set -e
   echo "FAIL: failed upload did not persist RAM and reconciliation evidence" >&2
   exit 1
 }
+failure_diagnostic="$failure_workspace/upload-failure.log"
+[[ -f "$failure_diagnostic" && "$(/usr/bin/stat -f '%Lp' "$failure_diagnostic")" == "600" ]] || {
+  echo "FAIL: failed upload did not preserve a private diagnostic transcript" >&2
+  exit 1
+}
+grep -Fq 'transport failed:' "$failure_diagnostic" || {
+  echo "FAIL: upload diagnostic transcript lost the transport output" >&2
+  exit 1
+}
+grep -Fq '<redacted:APP_STORE_CONNECT_API_KEY>' "$failure_diagnostic" || {
+  echo "FAIL: upload diagnostic transcript did not mark credential redaction" >&2
+  exit 1
+}
+if grep -Fq fixture-api-key "$failure_diagnostic" \
+    || grep -Fq fixture-key-id "$failure_diagnostic" \
+    || grep -Fq fixture-issuer "$failure_diagnostic"; then
+  echo "FAIL: upload diagnostic transcript retained credential material" >&2
+  exit 1
+fi
 /usr/bin/python3 - "$failure_workspace/upload-reconciliation.json" <<'PY'
 import json
 import sys
