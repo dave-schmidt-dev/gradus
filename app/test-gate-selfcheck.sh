@@ -178,7 +178,7 @@ validate_ios_destination_contract "$GATE_SCRIPT" ||
 # source/signing change and make the release gate exercise the wrong bundle.
 validate_derived_data_contract() {
   local gate_path="$1" leg block
-  grep -Fq 'derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"' "$gate_path" ||
+  grep -Fq 'derived_data_dir="$(gate_derived_data)"' "$gate_path" ||
     return 1
   grep -Fq 'rm -rf "$derived_data_dir"' "$gate_path" || return 1
   for leg in GradusMac GradusiOS-iPhone GradusiOS-iPad GradusMacUI GradusiOSUI; do
@@ -454,15 +454,16 @@ if ! (( ipad_ui_line < iphone_ui_line && iphone_ui_line < mac_ui_line )); then
 fi
 
 validate_iphone_ui_handoff_contract() {
-  local gate_path="$1" handoff_block handoff_call_line restore_block
+  local gate_path="$1" handoff_block handoff_call_line
   handoff_block="$(sed -n '/^reset_simulator_ui_session_for_iphone()/,/^}/p' "$gate_path")"
   [[ "$handoff_block" == *'xcrun simctl shutdown "$ipad_udid"'* ]] || return 1
   [[ "$handoff_block" == *'xcrun simctl shutdown "$sim_udid"'* ]] || return 1
   [[ "$handoff_block" == *'xcrun simctl boot "$sim_udid"'* ]] || return 1
   [[ "$handoff_block" == *'xcrun simctl bootstatus "$sim_udid" -b'* ]] || return 1
-  restore_block="$(sed -n '/^restore_preexisting_ipad_after_handoff()/,/^}/p' "$gate_path")"
-  [[ "$restore_block" == *'xcrun simctl boot "$ipad_udid"'* ]] || return 1
-  [[ "$restore_block" == *'xcrun simctl bootstatus "$ipad_udid" -b'* ]] || return 1
+  # Devices are disposable now (gate_sim_create/gate_sweep own their
+  # lifecycle end-to-end), so there is no "restore the pre-existing iPad"
+  # step to prove anymore -- that function was removed with the persistent
+  # named-device model.
   handoff_call_line="$(grep -nF 'reset_simulator_ui_session_for_iphone' "$gate_path" | tail -n 1 | cut -d: -f1)"
   [[ -n "$handoff_call_line" ]] || return 1
   (( ipad_ui_line < handoff_call_line && handoff_call_line < iphone_ui_line ))
@@ -579,12 +580,12 @@ iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALL
   fail "dedicated iPhone UI leg is missing its explicit selector"
 grep -Fq -- "-destination 'platform=macOS,arch=arm64'" "$GATE_SCRIPT" ||
   fail "Mac UI leg must pin the Apple-silicon destination"
-grep -Fq 'simulator_created=0' "$GATE_SCRIPT" ||
-  fail "gate must track whether the iPhone simulator pre-existed"
-grep -Fq 'ipad_simulator_created=0' "$GATE_SCRIPT" ||
-  fail "gate must track whether the iPad simulator pre-existed"
-grep -Fq 'Leaving pre-existing simulators running' "$GATE_SCRIPT" ||
-  fail "gate must preserve pre-existing simulators"
+grep -Fq 'gate_sim_create gradus iphone' "$GATE_SCRIPT" ||
+  fail "gate must create a disposable iPhone simulator via the shared gate lib"
+grep -Fq 'gate_sim_create gradus ipad' "$GATE_SCRIPT" ||
+  fail "gate must create a disposable iPad simulator via the shared gate lib"
+grep -Fq 'gate_sweep gradus' "$GATE_SCRIPT" ||
+  fail "gate must sweep stale gate devices via the shared gate lib"
 
 # Every declared leg passes at its live floor, exercising all three reporter
 # forms and proving the self-check is using the gate's data.

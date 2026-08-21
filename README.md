@@ -375,7 +375,7 @@ Build/test (requires Xcode + `xcodegen`, pinned version in `app/.xcode-version`)
 
 ```bash
 cd app
-bash test-gate.sh   # runs GradusMac + GradusiOS unit/UI tests; preserves pre-existing simulators
+bash test-gate.sh   # runs GradusMac + GradusiOS unit/UI tests; disposable per-run simulators via the shared gate lib
 ```
 
 ### App icons
