@@ -1,7 +1,6 @@
 import AppKit
 import GradusKit
 @testable import GradusMac
-import SnapshotTesting
 import SwiftUI
 import Testing
 
@@ -53,7 +52,7 @@ private func snapshotImage(_ view: some View, size: CGSize) -> NSImage {
         ProviderListView(providers: viewModel.providers, now: fixedNow),
         size: CGSize(width: 256, height: 260)
     )
-    assertSnapshot(of: image, as: .image)
+    assertStagedSnapshot(of: image, as: .image)
 }
 
 private func fixtureCodexEntry() -> ProviderEntry {
@@ -241,7 +240,7 @@ private func fixtureDataProviders() -> [ProviderEntry] {
     // ImageRenderer's text antialiasing changes by a few subpixels across
     // Xcode runtimes; the fixture's exact level assertions above retain the
     // semantic color gate while this permits that renderer-only variation.
-    assertSnapshot(of: image, as: .image(precision: 0.999))
+    assertStagedSnapshot(of: image, as: .image(precision: 0.999))
 }
 
 /// Single-window provider for the ramp baseline. `resetISO` is always present
@@ -271,5 +270,5 @@ private func rampProvider(
 @MainActor
 @Test func providerListViewRendersEmptyState() {
     let image = snapshotImage(ProviderListView(providers: []), size: CGSize(width: 256, height: 40))
-    assertSnapshot(of: image, as: .image)
+    assertStagedSnapshot(of: image, as: .image)
 }

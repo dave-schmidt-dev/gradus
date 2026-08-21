@@ -1,7 +1,6 @@
 import AppKit
 import GradusKit
 @testable import GradusMac
-import SnapshotTesting
 import SwiftUI
 import Testing
 
@@ -99,7 +98,7 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
         ProviderListView(providers: providers, now: menuDensityNow),
         size: CGSize(width: MenuContentView.columnWidth, height: 150)
     )
-    assertSnapshot(of: image, as: .image)
+    assertStagedSnapshot(of: image, as: .image)
 }
 
 @MainActor
@@ -191,7 +190,7 @@ private func menuFixture(providerCount: Int, windowsPerProvider: Int) -> [Provid
         ProviderListView(providers: providers, now: menuDensityNow, density: resolution.rung),
         size: CGSize(width: MenuContentView.columnWidth, height: intrinsicListHeight)
     )
-    assertSnapshot(of: image, as: .image)
+    assertStagedSnapshot(of: image, as: .image)
 }
 
 @Test func menuUsesHumanReadableWindowLabels() {

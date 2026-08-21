@@ -495,6 +495,8 @@ defaults write com.apple.CrashReporter DialogType none
 # source change. Sharing the directory within this gate keeps package/build
 # reuse while making the entire test run disposable.
 derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"
+gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"
+gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"
 installed_gradus_mac_was_running=0
 
 restore_installed_gradus_mac() {
@@ -571,7 +573,30 @@ echo "==> xcodebuild test — GradusMac (platform=macOS)"
 # Tests execute local Debug products and do not produce a distributable artifact.
 # Keeping signing disabled here avoids provisioning/account state becoming a false test gate;
 # archive, export, and notarization scripts retain their normal signing paths.
-assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
+# INV-7 runs inside the hosted GradusMac test process. Stage exactly the source
+# tree it scans outside the checkout before launching that host, then pass the
+# staged root explicitly so the test never reads ~/Documents through #filePath.
+mkdir -p "$(dirname "$gradus_mac_inv7_source_root")"
+/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMac/." "$gradus_mac_inv7_source_root"
+staged_gradus_mac_file="$(find "$gradus_mac_inv7_source_root" -type f -print -quit)"
+if [[ ! -d "$gradus_mac_inv7_source_root" ]] ||
+   [[ -z "$staged_gradus_mac_file" ]]; then
+  echo "FAIL: could not stage non-empty GradusMac source for INV-7" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$gradus_mac_snapshot_root")"
+/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMacTests/__Snapshots__/." "$gradus_mac_snapshot_root"
+staged_gradus_mac_snapshot="$(find "$gradus_mac_snapshot_root" -type f -print -quit)"
+if [[ ! -d "$gradus_mac_snapshot_root" ]] ||
+   [[ -z "$staged_gradus_mac_snapshot" ]]; then
+  echo "FAIL: could not stage non-empty GradusMac snapshot baselines" >&2
+  exit 1
+fi
+assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests" env \
+  GRADUS_DISABLE_PIPELINE=1 \
+  TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
+  TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
+  xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
@@ -655,7 +680,6 @@ assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITest
   CODE_SIGN_IDENTITY="Apple Development" \
   DEVELOPMENT_TEAM=4CJ49V6QHW \
   CODE_SIGN_ENTITLEMENTS="" \
-  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
   PROVISIONING_PROFILE_SPECIFIER=""
 
 assert_counting_legs_complete

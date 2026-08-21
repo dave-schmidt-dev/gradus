@@ -8,12 +8,26 @@ import Testing
 // not a proof; PM-15's fs_usage runtime canary check is deferred
 // beta-hardening, not this gate.
 
+private let inv7SourceRootEnvironmentKey = "GRADUS_INV7_SOURCE_ROOT"
+
 private func publisherSourceFiles() -> [URL] {
-    let thisFile = URL(fileURLWithPath: #filePath)
-    let gradusMacDir = thisFile
-        .deletingLastPathComponent() // GradusMacTests/
-        .deletingLastPathComponent() // app/
-        .appendingPathComponent("GradusMac")
+    // This test is hosted by GradusMac.app. Never derive the source path from
+    // #filePath: that points back into the checkout, which is commonly under
+    // ~/Documents and makes the app test host cross the macOS TCC boundary.
+    // test-gate.sh stages the source into its run-scoped DerivedData directory
+    // and supplies this path explicitly.
+    guard
+        let rawSourceRoot = ProcessInfo.processInfo.environment[inv7SourceRootEnvironmentKey],
+        !rawSourceRoot.isEmpty
+    else { return [] }
+
+    let gradusMacDir = URL(fileURLWithPath: rawSourceRoot, isDirectory: true)
+    var isDirectory: ObjCBool = false
+    guard
+        FileManager.default.fileExists(atPath: gradusMacDir.path, isDirectory: &isDirectory),
+        isDirectory.boolValue
+    else { return [] }
+
     guard
         let enumerator = FileManager.default.enumerator(
             at: gradusMacDir, includingPropertiesForKeys: nil

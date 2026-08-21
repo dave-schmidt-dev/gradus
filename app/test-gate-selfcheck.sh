@@ -192,6 +192,39 @@ validate_derived_data_contract() {
 validate_derived_data_contract "$GATE_SCRIPT" ||
   fail "Xcode test legs are not isolated in fresh run-scoped DerivedData"
 
+validate_inv7_staging_contract() {
+  local gate_path="$1" test_path="$SCRIPT_DIR/GradusMacTests/INV7Tests.swift" stage_block mac_leg_block snapshot_files snapshot_assertion_count
+  stage_block="$(sed -n '/^# INV-7 runs inside/,/assert_counting_leg "GradusMac"/p' "$gate_path")"
+  mac_leg_block="$(sed -n '/assert_counting_leg "GradusMac"/,/assert_counting_leg "GradusiOS-iPhone"/p' "$gate_path")"
+  grep -Fq 'gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"' "$gate_path" || return 1
+  grep -Fq 'gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"' "$gate_path" || return 1
+  [[ "$stage_block" == *'/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMac/." "$gradus_mac_inv7_source_root"'* ]] || return 1
+  [[ "$stage_block" == *'/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMacTests/__Snapshots__/." "$gradus_mac_snapshot_root"'* ]] || return 1
+  [[ "$mac_leg_block" == *'env \
+  GRADUS_DISABLE_PIPELINE=1 \
+  TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
+  TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
+  xcodebuild test'* ]] || return 1
+  grep -Fq 'ProcessInfo.processInfo.environment[inv7SourceRootEnvironmentKey]' "$test_path" || return 1
+  grep -Fq '!rawSourceRoot.isEmpty' "$test_path" || return 1
+  grep -Fq 'fileExists(atPath: gradusMacDir.path, isDirectory: &isDirectory)' "$test_path" || return 1
+
+  snapshot_files=(
+    "$SCRIPT_DIR/GradusMacTests/MenuContentSnapshotTests.swift"
+    "$SCRIPT_DIR/GradusMacTests/ProviderListViewSnapshotTests.swift"
+  )
+  snapshot_assertion_count="$(rg -o 'assertStagedSnapshot\(' "${snapshot_files[@]}" | wc -l | tr -d ' ')"
+  [[ "$snapshot_assertion_count" -eq 5 ]] || return 1
+  ! rg -q 'assertSnapshot\(' "${snapshot_files[@]}" || return 1
+  grep -Fq 'ProcessInfo.processInfo.environment[stagedSnapshotRootEnvironmentKey]' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
+  grep -Fq '!rawRoot.isEmpty' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
+  grep -Fq 'fileExists(atPath: root.path, isDirectory: &isDirectory)' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
+  grep -Fq 'snapshotDirectory: snapshotDirectory.path' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
+}
+
+validate_inv7_staging_contract "$GATE_SCRIPT" ||
+  fail "INV-7 hosted test does not use the staged, explicit source root"
+
 validate_gradus_mac_deadline_contract() {
   local gate_path="$1" helper_block mac_leg_block
   helper_block="$(sed -n '/^run_with_deadline()/,/^}/p' "$gate_path")"
@@ -518,12 +551,15 @@ grep -Fq -- "-only-testing:GradusiOSUITests" "$GATE_SCRIPT" ||
   fail "iOS UI target-level selector is missing from the canonical gate"
 
 mac_ui_block="$(sed -n '/assert_counting_leg "GradusMacUI"/,/PROVISIONING_PROFILE_SPECIFIER=/p' "$GATE_SCRIPT")"
+gradus_mac_debug_block="$(sed -n '/^  GradusMac:$/,/^  GradusiOS:$/p' "$SCRIPT_DIR/project.yml" | sed -n '/^        Debug:$/,/^        Release:$/p')"
 [[ "$mac_ui_block" == *'CODE_SIGN_IDENTITY="Apple Development"'* ]] ||
   fail "Mac UI runner must use an explicit development signing identity"
 [[ "$mac_ui_block" == *'DEVELOPMENT_TEAM=4CJ49V6QHW'* ]] ||
   fail "Mac UI runner must pin the development team"
-[[ "$mac_ui_block" == *'CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO'* ]] ||
-  fail "Mac UI runner must disable base entitlement injection"
+[[ "$mac_ui_block" != *'CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO'* ]] ||
+  fail "Mac UI runner must not disable the host's base entitlement injection"
+[[ "$gradus_mac_debug_block" == *'CODE_SIGN_INJECT_BASE_ENTITLEMENTS: YES'* ]] ||
+  fail "GradusMac Debug must inject the XCTest host base entitlements"
 [[ "$mac_ui_block" != *'CODE_SIGNING_ALLOWED=NO'* ]] ||
   fail "Mac UI runner must not use the unsigned test path"
 
