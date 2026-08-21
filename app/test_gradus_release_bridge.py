@@ -1367,11 +1367,33 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root, context = self._fixture(temporary)
             calls = []
+            correction_proof = (
+                root
+                / ".release-state"
+                / "evidence"
+                / context.candidate_id
+                / "allocate-identity.json"
+            )
+            correction_proof.parent.mkdir(parents=True)
+            correction_proof.write_bytes(
+                (root / ".release-state" / "evidence" / "allocate-identity.json").read_bytes()
+            )
 
             def runner(argv, **kwargs):
                 calls.append((argv, kwargs))
                 self.assertNotIn("APP_STORE_CONNECT_API_KEY", kwargs["env"])
                 self.assertEqual(kwargs["env"]["GRADUS_CANDIDATE_ID"], context.candidate_id)
+                correction_proof = (
+                    root
+                    / ".release-state"
+                    / "evidence"
+                    / context.candidate_id
+                    / "allocate-identity.json"
+                )
+                self.assertEqual(
+                    kwargs["env"]["GRADUS_IDENTITY_ALLOCATION_PROOF_PATH"],
+                    str(correction_proof),
+                )
                 archived = root / ".release-state" / "archived" / "gradus-ios-20"
                 archived.mkdir(parents=True)
                 (archived / "candidate.json").write_text(
@@ -1522,6 +1544,13 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            replacement_manifest = json.loads(replacement.read_text(encoding="utf-8"))
+            replacement_manifest["identityAllocation"] = {
+                "proofSha256": hashlib.sha256(
+                    (replacement.parent / "identity-allocation.json").read_bytes()
+                ).hexdigest()
+            }
+            replacement.write_text(json.dumps(replacement_manifest), encoding="utf-8")
             successor = PREPARE.load_context(
                 replacement,
                 git_common_dir=replacement.parents[4],
@@ -1534,6 +1563,84 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
             )
             self.assertEqual((proof["marketingVersion"], proof["buildNumber"]), ("1.8.2", 22))
             self.assertEqual(proof["remoteHighestBuildNumber"], 21)
+
+    def test_failed_preupload_successor_rejects_identity_allocation_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            manifest = json.loads(context.manifest_path.read_text())
+            manifest["candidateId"] = "1.8.2-22"
+            manifest["release"]["buildNumber"] = "22"
+            replacement = context.manifest_path.parent.parent / "1.8.2-22" / "manifest.json"
+            replacement.parent.mkdir()
+            allocation_path = replacement.parent / "identity-allocation.json"
+            allocation_path.write_text(
+                json.dumps(
+                    {
+                        "allocation": {
+                            "productKey": "gradus-ios",
+                            "requestedMarketingVersion": "1.8.2",
+                            "allocatedBuildNumber": 22,
+                            "remoteHighestMarketingVersion": "1.8.2",
+                            "remoteHighestBuildNumber": 21,
+                            "observedAt": "2026-08-21T15:02:30Z",
+                            "result": "allocated",
+                        },
+                        "reuseAuthorization": {
+                            "kind": "failed-preupload-correction",
+                            "priorCandidateId": "1.8.2-21",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest["identityAllocation"] = {"proofSha256": "0" * 64}
+            replacement.write_text(json.dumps(manifest), encoding="utf-8")
+            successor = PREPARE.load_context(
+                replacement,
+                git_common_dir=replacement.parents[4],
+            )
+
+            with self.assertRaises(PREPARE.BridgeError):
+                PREPARE.reconcile_assigned_candidate(root, successor)
+
+            self.assertFalse(
+                (
+                    root / ".release-state" / "evidence" / "1.8.2-22" / "allocate-identity.json"
+                ).exists()
+            )
+
+    def test_failed_preupload_successor_rejects_non_mapping_allocation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            manifest = json.loads(context.manifest_path.read_text())
+            manifest["candidateId"] = "1.8.2-22"
+            manifest["release"]["buildNumber"] = "22"
+            replacement = context.manifest_path.parent.parent / "1.8.2-22" / "manifest.json"
+            replacement.parent.mkdir()
+            allocation_path = replacement.parent / "identity-allocation.json"
+            allocation_path.write_text(
+                json.dumps(
+                    {
+                        "allocation": [],
+                        "reuseAuthorization": {
+                            "kind": "failed-preupload-correction",
+                            "priorCandidateId": "1.8.2-21",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest["identityAllocation"] = {
+                "proofSha256": hashlib.sha256(allocation_path.read_bytes()).hexdigest()
+            }
+            replacement.write_text(json.dumps(manifest), encoding="utf-8")
+            successor = PREPARE.load_context(
+                replacement,
+                git_common_dir=replacement.parents[4],
+            )
+
+            with self.assertRaises(PREPARE.BridgeError):
+                PREPARE.reconcile_assigned_candidate(root, successor)
 
     def test_each_preupload_operation_emits_the_central_expected_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

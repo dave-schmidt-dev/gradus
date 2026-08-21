@@ -57,6 +57,7 @@ class CandidateContext:
     source_digest: str
     marketing_version: str
     build_number: int
+    identity_allocation_proof_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,16 +77,21 @@ class ArtifactInspection:
     metadata_sha256: str
 
 
-def _load_json(path: Path) -> Mapping[str, Any]:
+def _load_json_bytes(path: Path) -> tuple[bytes, Mapping[str, Any]]:
     if path.is_symlink() or not path.is_file():
         raise BridgeError("required-record-unavailable")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        value = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise BridgeError("required-record-unreadable") from exc
     if not isinstance(value, Mapping):
         raise BridgeError("required-record-invalid")
-    return value
+    return raw, value
+
+
+def _load_json(path: Path) -> Mapping[str, Any]:
+    return _load_json_bytes(path)[1]
 
 
 def _sha256(path: Path) -> str:
@@ -165,6 +171,17 @@ def load_context(
     source_digest = source.get("sha256")
     marketing_version = release.get("marketingVersion")
     raw_build = release.get("buildNumber")
+    identity_allocation = manifest.get("identityAllocation")
+    identity_allocation_proof_sha256 = None
+    if identity_allocation is not None:
+        if not isinstance(identity_allocation, Mapping):
+            raise BridgeError("central-candidate-invalid")
+        identity_allocation_proof_sha256 = identity_allocation.get("proofSha256")
+        if (
+            not isinstance(identity_allocation_proof_sha256, str)
+            or _HEX64.fullmatch(identity_allocation_proof_sha256) is None
+        ):
+            raise BridgeError("central-candidate-invalid")
     if (
         not isinstance(source_digest, str)
         or _HEX64.fullmatch(source_digest) is None
@@ -181,12 +198,19 @@ def load_context(
     if build_number < 1 or str(build_number) != str(raw_build):
         raise BridgeError("central-candidate-invalid")
     return CandidateContext(
-        manifest_path, candidate, source_digest, marketing_version, build_number
+        manifest_path,
+        candidate,
+        source_digest,
+        marketing_version,
+        build_number,
+        identity_allocation_proof_sha256,
     )
 
 
 def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
     proof = _load_json(root / ".release-state" / "evidence" / "allocate-identity.json")
+    remote_highest_build = proof.get("remoteHighestBuildNumber")
+    remote_highest_version = proof.get("remoteHighestMarketingVersion")
     if (
         proof.get("proofVersion") != "1.0.0"
         or proof.get("operationClass") != "identityAllocation"
@@ -194,16 +218,28 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
         or proof.get("productKey") != PRODUCT
         or proof.get("marketingVersion") != context.marketing_version
         or proof.get("buildNumber") != context.build_number
-        or proof.get("buildNumber") != proof.get("remoteHighestBuildNumber", -1) + 1
+        or isinstance(remote_highest_build, bool)
+        or not isinstance(remote_highest_build, int)
+        or proof.get("buildNumber") != remote_highest_build + 1
+        or not isinstance(remote_highest_version, str)
+        or _SEMVER.fullmatch(remote_highest_version) is None
         or not isinstance(proof.get("responseSha256"), str)
         or _HEX64.fullmatch(str(proof.get("responseSha256"))) is None
     ):
-        central = _load_json(context.manifest_path.parent / "identity-allocation.json")
+        central_bytes, central = _load_json_bytes(
+            context.manifest_path.parent / "identity-allocation.json"
+        )
+        if (
+            context.identity_allocation_proof_sha256 is None
+            or hashlib.sha256(central_bytes).hexdigest() != context.identity_allocation_proof_sha256
+        ):
+            raise BridgeError("identity-proof-central-mismatch")
         allocation = central.get("allocation")
         authorization = central.get("reuseAuthorization")
+        if not isinstance(allocation, Mapping):
+            raise BridgeError("identity-proof-central-mismatch")
         if (
-            not isinstance(allocation, Mapping)
-            or not isinstance(authorization, Mapping)
+            not isinstance(authorization, Mapping)
             or authorization.get("kind") != "failed-preupload-correction"
             or authorization.get("priorCandidateId")
             != f"{context.marketing_version}-{context.build_number - 1}"
@@ -211,6 +247,9 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
             or allocation.get("requestedMarketingVersion") != context.marketing_version
             or allocation.get("allocatedBuildNumber") != context.build_number
             or allocation.get("remoteHighestBuildNumber") != context.build_number - 1
+            or not isinstance(allocation.get("remoteHighestMarketingVersion"), str)
+            or _SEMVER.fullmatch(allocation["remoteHighestMarketingVersion"]) is None
+            or allocation.get("remoteHighestMarketingVersion") != context.marketing_version
             or allocation.get("result") != "allocated"
             or not isinstance(allocation.get("observedAt"), str)
         ):
@@ -222,7 +261,7 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
             "productKey": PRODUCT,
             "marketingVersion": context.marketing_version,
             "buildNumber": context.build_number,
-            "remoteHighestMarketingVersion": allocation.get("remoteHighestMarketingVersion"),
+            "remoteHighestMarketingVersion": allocation["remoteHighestMarketingVersion"],
             "remoteHighestBuildNumber": context.build_number - 1,
             "observedAt": allocation["observedAt"],
             "responseSha256": _canonical_digest(central),
@@ -237,6 +276,8 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
 def _allocation_matches(
     allocation: Mapping[str, Any], *, candidate: str, version: str, build: int
 ) -> bool:
+    if not isinstance(allocation, Mapping):
+        return False
     return (
         allocation.get("state") == "allocated-but-unfrozen"
         and allocation.get("candidateId") == candidate
@@ -321,6 +362,7 @@ def reconcile_assigned_candidate(root: Path, context: CandidateContext) -> str |
         not isinstance(legacy_id, str)
         or _CANDIDATE.fullmatch(legacy_id) is None
         or not isinstance(legacy_version, str)
+        or _SEMVER.fullmatch(legacy_version) is None
         or isinstance(legacy_build, bool)
         or not isinstance(legacy_build, int)
         or not isinstance(workspace, str)
