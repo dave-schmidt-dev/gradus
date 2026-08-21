@@ -51,8 +51,11 @@ An assigned candidate is immutable. To prepare a replacement for a
 release-blocking correction, run the upload wrapper from `app/` with
 `--rollover-assigned --supersession-reason "<reason>"`. The wrapper archives the
 old candidate workspace, evidence, and receipt under
-`.release-state/archived/<candidate-id>/` before creating the replacement; an
-assigned candidate is otherwise a hard stop. Upload, local-install, and
+`.release-state/archived/<candidate-id>/` before creating the replacement.
+Superseding a frozen candidate is Amber per `~/.agent/prompts/_shared/gar.md`:
+do it, record the supersession reason, and continue. Immutability forbids
+mutating an assigned candidate in place; it is not a reason to end the turn.
+Upload, local-install, and
 notarization provenance checks allow only the exact untracked verification
 report `verifications/2026-08-09-internal-testflight-candidate-migration-verification.md`.
 The receipt journal must be inside the candidate workspace; rollover emits
@@ -94,11 +97,37 @@ Before candidate upload:
 
 1. Identify the producer, consumer, and shared contract in the release notes.
 2. Build and test both GradusMac and GradusiOS with `app/test-gate.sh`.
-3. Build GradusMac with the entitlements for the CloudKit environment being
-   exercised, launch that binary locally, and confirm it publishes the new
-   contract/data. A local republish does not require notarization.
+3. Run the scripted CloudKit schema-parity check — no manual CloudKit Console
+   comparison required:
 
-   Read both logs. `cloudd` reports what CloudKit did; GradusMac's own log
+   ```bash
+   ~/Documents/Projects/apple_developer/integrations/cloudkit-producer-check \
+     --container iCloud.com.zerodelta.gradus --team 4CJ49V6QHW \
+     --app-ledger .release-state/cloudkit-ledger.log
+   ```
+
+   This fails closed if the Production schema is missing anything the
+   Development schema carries — the same class of drift wwpis's identical
+   check caught for the `cloudkit.share` record type on 2026-08-14 (see
+   `apple_developer/integrations/cloudkit_ckdb.py` in the shared
+   `apple_developer` project). It needs `CLOUDKIT_MANAGEMENT_TOKEN`; no BWS
+   consumer is wired for gradus's container yet. Registering one is Red per
+   `~/.agent/prompts/_shared/gar.md` (new broker consumer), so notify once with
+   that exact request and keep going: run the check if the release owner has
+   already supplied a token, otherwise waive it with a recorded reason in the
+   release notes and proceed through the remaining gates rather than ending the
+   turn on it. This checks schema shape only; it does not confirm a publish
+   actually reached CloudKit (see step 4) and does not push or promote — use
+   `apple_developer/integrations/cloudkit-dev-push` /
+   `cloudkit-prod-promote` for that, never the CloudKit Console.
+4. Build GradusMac with the entitlements for the CloudKit environment being
+   exercised, launch that binary locally, and confirm it publishes the new
+   contract/data. A local republish does not require notarization. The actual
+   gate is step 5 below — `archive-upload-ios.sh` refusing absent or stale
+   producer evidence; treat the rest of this step as a troubleshooting aid for
+   a failed publish, not a second manual sign-off.
+
+   Read both logs when a publish looks wrong. `cloudd` reports what CloudKit did; GradusMac's own log
    reports what the app intended, and is the only place a *failed* save
    appears at all:
 
@@ -140,18 +169,23 @@ Before candidate upload:
    bundle is hosted inside a real GradusMac process, so the suite would
    otherwise append its own staged failures here, and it is redirected to a
    temporary directory instead (`GRADUS_MAC_LOG_DIR` overrides the location).
-4. Confirm `archive-upload-ios.sh` accepts the current machine-written producer
+5. Confirm `archive-upload-ios.sh` accepts the current machine-written producer
    evidence for INV-9 before preparing/uploading the iOS artifact.
-5. If the Mac artifact itself is being distributed, run the notarization gate
+6. If the Mac artifact itself is being distributed, run the notarization gate
    too; local publisher verification alone is not a distribution artifact.
-6. Record the matching Mac build, iOS build, schema state, and candidate
+7. Record the matching Mac build, iOS build, schema state, and candidate
    preparation/upload results in local `HISTORY.md`; keep the user-facing
    `CHANGELOG.md` limited to concise tester-facing notes.
 
-After upload, wait for the exact candidate build to process, handle Missing
-Compliance as an explicit human gate, and assign only the attended,
-pre-confirmed internal group. Persist the redacted processing/compliance/
-assignment receipt. This does not submit to the App Store.
+After upload, poll for the exact candidate build to process, surfacing progress
+as it goes rather than blocking silently. Missing Compliance and internal-group
+assignment are Red per `~/.agent/prompts/_shared/gar.md`: the first is a legal
+declaration and the second needs the release owner's confirmed group identity,
+so neither may be answered on their behalf. Notify once with the exact action
+each requires, then continue every other parallelizable step instead of ending
+the turn. Assign only the attended, pre-confirmed internal group. Persist the
+redacted processing/compliance/assignment receipt. This does not submit to the
+App Store.
 
 The attended assignment trigger has this shape; replace every placeholder only
 after the release owner has reviewed the candidate tuple and group identity:
