@@ -32,7 +32,7 @@ case "${1:-}" in
       exit 4
     }
     prepared="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
-      --adapter "$ADAPTER" --repository "$ROOT")" || {
+      --adapter "$ADAPTER" --repository "$ROOT" --successor-correction)" || {
       status=$?
       printf '%s\n' "$prepared"
       exit "$status"

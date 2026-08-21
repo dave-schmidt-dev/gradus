@@ -141,6 +141,13 @@ class BridgeTests(unittest.TestCase):
         self.assertIn('--candidate "$candidate"', prepare_branch)
         self.assertNotIn("--upload", prepare_branch)
 
+    def test_prepare_only_uses_the_closed_failed_preupload_correction(self) -> None:
+        wrapper = (ROOT / "app" / "release-testflight").read_text(encoding="utf-8")
+        prepare_branch = wrapper.split("--prepare-only)", 1)[1].split("--upload)", 1)[0]
+        self.assertIn("--successor-correction", prepare_branch)
+        self.assertNotIn("bws-run", prepare_branch)
+        self.assertNotIn("bws-get", prepare_branch)
+
     def test_prepare_only_uses_git_common_readiness_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
