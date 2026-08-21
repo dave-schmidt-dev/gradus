@@ -1,3 +1,4 @@
+import Foundation
 import GradusKit
 import SwiftUI
 
@@ -179,6 +180,7 @@ private struct ProviderRow: View {
             .frame(height: density.barHeight)
 
             MenuWindowMetadata(window: window, now: now, density: density)
+            zenCreditRow
         }
     }
 
@@ -224,6 +226,34 @@ private struct ProviderRow: View {
                     MenuWindowRow(provider: provider, window: window, now: now, density: density)
                 }
             }
+            zenCreditRow
+        }
+    }
+
+    private var zenCreditText: String? {
+        guard provider.name == "OpenCode Go",
+              let credit = provider.data["zen_credit"]?.doubleValue,
+              credit.isFinite,
+              credit >= 0 else {
+            return nil
+        }
+        return String(
+            format: "$%.3f", locale: Locale(identifier: "en_US_POSIX"), credit
+        )
+    }
+
+    @ViewBuilder
+    private var zenCreditRow: some View {
+        if let credit = zenCreditText {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Zen credit")
+                    .font(density.metadataFont.weight(.medium))
+                Spacer(minLength: 4)
+                Text(credit)
+                    .font(density.metadataFont.monospacedDigit())
+            }
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
         }
     }
 }

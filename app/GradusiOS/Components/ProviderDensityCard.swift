@@ -1,3 +1,4 @@
+import Foundation
 import GradusKit
 import SwiftUI
 
@@ -80,12 +81,19 @@ struct ProviderDensityCard: View {
     /// that is errored or window-less reads the same on both screens.
     @ViewBuilder
     private func body(for provider: ProviderStatus) -> some View {
-        if !visibleWindows.isEmpty {
+        if !visibleWindows.isEmpty || zenCreditSummary != nil {
             VStack(spacing: metrics.rowGap) {
                 ForEach(Array(visibleWindows.enumerated()), id: \.offset) { _, window in
                     WindowRow(
                         window: window, now: now, showsReset: showsReset, metrics: metrics
                     )
+                }
+                if let credit = zenCreditSummary {
+                    Text(credit)
+                        .font(metrics.labelFont.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: metrics.rowHeight, alignment: .leading)
+                        .accessibilityLabel(credit)
                 }
                 if !provider.ok,
                    !IOSProviderRetryAccessibility.isCarriedFailure(provider)
@@ -125,5 +133,20 @@ struct ProviderDensityCard: View {
     /// pool the user has run down, not as missing data.
     var visibleWindows: [ProviderWindow] {
         CrossSurfaceParity.visibleWindows(provider.windows)
+    }
+
+    var zenCreditSummary: String? {
+        let isOpenCode = provider.providerName.lowercased().contains("opencode")
+            || provider.providerDisplayName.lowercased().contains("opencode")
+        guard isOpenCode,
+              let credit = provider.data["zen_credit"]?.doubleValue,
+              credit.isFinite,
+              credit >= 0 else {
+            return nil
+        }
+        let amount = String(
+            format: "$%.3f", locale: Locale(identifier: "en_US_POSIX"), credit
+        )
+        return "Zen credit \(amount)"
     }
 }

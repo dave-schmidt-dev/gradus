@@ -19,7 +19,11 @@ func window(
 }
 
 func provider(
-    _ name: String, windows: [ProviderWindow], ok isOK: Bool = true, error: String? = nil
+    _ name: String,
+    windows: [ProviderWindow],
+    ok isOK: Bool = true,
+    error: String? = nil,
+    data: [String: JSONValue] = [:]
 ) -> ProviderStatus {
     ProviderStatus(
         providerName: name,
@@ -27,7 +31,7 @@ func provider(
         ok: isOK,
         errorMessage: error,
         windows: windows,
-        data: [:],
+        data: data,
         observedAt: ISO8601DateFormatter().string(from: fixedNow),
         snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
         publishedAt: fixedNow
@@ -156,6 +160,24 @@ func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewModel {
         now: fixedNow
     )
     #expect(withInvalid.visibleWindows.map(\.id) == ["auto"])
+}
+
+@Test func densityCardShowsThreeDecimalZenCreditOnlyForOpenCodeData() {
+    let withCredit = provider(
+        "opencode", windows: [window("weekly", 61)], data: ["zen_credit": .double(12.345)]
+    )
+    #expect(
+        ProviderDensityCard(provider: withCredit, now: fixedNow).zenCreditSummary
+            == "Zen credit $12.345"
+    )
+
+    let withoutCredit = provider("opencode", windows: [window("weekly", 61)])
+    #expect(ProviderDensityCard(provider: withoutCredit, now: fixedNow).zenCreditSummary == nil)
+
+    let wrongProvider = provider(
+        "codex", windows: [window("weekly", 61)], data: ["zen_credit": .double(12.345)]
+    )
+    #expect(ProviderDensityCard(provider: wrongProvider, now: fixedNow).zenCreditSummary == nil)
 }
 
 /// The candidate is deliberately row-major: every row is left-to-right and

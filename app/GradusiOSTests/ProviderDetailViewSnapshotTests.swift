@@ -23,7 +23,7 @@ private let providerDetailSnapshotRecording: SnapshotTestingConfiguration.Record
     #endif
 }()
 
-private func multiWindowProvider() -> ProviderStatus {
+private func multiWindowProvider(data: [String: JSONValue] = [:]) -> ProviderStatus {
     ProviderStatus(
         providerName: "opencode-go",
         providerDisplayName: "OpenCode Go",
@@ -43,7 +43,7 @@ private func multiWindowProvider() -> ProviderStatus {
                 paceDelta: -0.15
             )
         ],
-        data: [:],
+        data: data,
         observedAt: ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(-30)),
         snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
         publishedAt: fixedNow
@@ -77,6 +77,17 @@ private func erroredProvider() -> ProviderStatus {
         as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .light)),
         record: providerDetailSnapshotRecording
     )
+}
+
+@MainActor
+@Test func providerDetailShowsThreeDecimalZenCreditOnlyWhenPresent() {
+    let withCredit = ProviderDetailView(
+        provider: multiWindowProvider(data: ["zen_credit": .double(12.345)]), now: fixedNow
+    )
+    #expect(withCredit.zenCreditSummary == "Zen credit $12.345")
+
+    let withoutCredit = ProviderDetailView(provider: multiWindowProvider(), now: fixedNow)
+    #expect(withoutCredit.zenCreditSummary == nil)
 }
 
 @MainActor

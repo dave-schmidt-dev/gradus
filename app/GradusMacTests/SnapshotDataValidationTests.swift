@@ -8,6 +8,7 @@ import Testing
 private func allProducerKeysData() -> [String: JSONValue] {
     [
         "credits": .double(42),
+        "zen_credit": .double(12.345),
         "five_hour_percent_left": .double(80),
         "weekly_percent_left": .double(90),
         "five_hour_reset": .string("in 2h"),
@@ -37,6 +38,7 @@ private func allProducerKeysData() -> [String: JSONValue] {
 private func expectedProducerKeys() -> Set<String> {
     [
         "credits",
+        "zen_credit",
         "five_hour_percent_left",
         "weekly_percent_left",
         "five_hour_reset",
@@ -66,7 +68,7 @@ private func expectedProducerKeys() -> Set<String> {
 @Test func snapshotDataValidationAcceptsExactProducerKeys() throws {
     let data = allProducerKeysData()
 
-    #expect(data.count == 24)
+    #expect(data.count == 25)
     #expect(Set(data.keys) == expectedProducerKeys())
     #expect(try validatedSnapshotData(data) == data)
 }

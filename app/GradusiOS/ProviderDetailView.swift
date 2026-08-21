@@ -1,3 +1,4 @@
+import Foundation
 import GradusKit
 import SwiftUI
 
@@ -44,10 +45,16 @@ struct ProviderDetailView: View {
 
     @ViewBuilder
     private var windowsBody: some View {
-        if !provider.windows.isEmpty {
+        if !provider.windows.isEmpty || zenCreditSummary != nil {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(provider.windows.enumerated()), id: \.offset) { _, window in
                     windowCard(window)
+                }
+                if let credit = zenCreditSummary {
+                    Text(credit)
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel(credit)
                 }
                 if !provider.ok,
                    !IOSProviderRetryAccessibility.isCarriedFailure(provider)
@@ -129,5 +136,20 @@ struct ProviderDetailView: View {
         case .unknown:
             "observed: unknown"
         }
+    }
+
+    var zenCreditSummary: String? {
+        let isOpenCode = provider.providerName.lowercased().contains("opencode")
+            || provider.providerDisplayName.lowercased().contains("opencode")
+        guard isOpenCode,
+              let credit = provider.data["zen_credit"]?.doubleValue,
+              credit.isFinite,
+              credit >= 0 else {
+            return nil
+        }
+        let amount = String(
+            format: "$%.3f", locale: Locale(identifier: "en_US_POSIX"), credit
+        )
+        return "Zen credit \(amount)"
     }
 }
