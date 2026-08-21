@@ -198,7 +198,39 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
         or not isinstance(proof.get("responseSha256"), str)
         or _HEX64.fullmatch(str(proof.get("responseSha256"))) is None
     ):
-        raise BridgeError("identity-proof-central-mismatch")
+        central = _load_json(context.manifest_path.parent / "identity-allocation.json")
+        allocation = central.get("allocation")
+        authorization = central.get("reuseAuthorization")
+        if (
+            not isinstance(allocation, Mapping)
+            or not isinstance(authorization, Mapping)
+            or authorization.get("kind") != "failed-preupload-correction"
+            or authorization.get("priorCandidateId")
+            != f"{context.marketing_version}-{context.build_number - 1}"
+            or allocation.get("productKey") != PRODUCT
+            or allocation.get("requestedMarketingVersion") != context.marketing_version
+            or allocation.get("allocatedBuildNumber") != context.build_number
+            or allocation.get("remoteHighestBuildNumber") != context.build_number - 1
+            or allocation.get("result") != "allocated"
+            or not isinstance(allocation.get("observedAt"), str)
+        ):
+            raise BridgeError("identity-proof-central-mismatch")
+        proof = {
+            "proofVersion": "1.0.0",
+            "operationClass": "identityAllocation",
+            "result": "passed",
+            "productKey": PRODUCT,
+            "marketingVersion": context.marketing_version,
+            "buildNumber": context.build_number,
+            "remoteHighestMarketingVersion": allocation.get("remoteHighestMarketingVersion"),
+            "remoteHighestBuildNumber": context.build_number - 1,
+            "observedAt": allocation["observedAt"],
+            "responseSha256": _canonical_digest(central),
+        }
+        _write_json(
+            root / ".release-state" / "evidence" / context.candidate_id / "allocate-identity.json",
+            proof,
+        )
     return proof
 
 
@@ -293,8 +325,17 @@ def reconcile_assigned_candidate(root: Path, context: CandidateContext) -> str |
         or not isinstance(legacy_build, int)
         or not isinstance(workspace, str)
         or not Path(workspace).is_dir()
-        or proof.get("remoteHighestMarketingVersion") != legacy_version
-        or proof.get("remoteHighestBuildNumber") != legacy_build
+        or not (
+            (
+                proof.get("remoteHighestMarketingVersion") == legacy_version
+                and proof.get("remoteHighestBuildNumber") == legacy_build
+            )
+            or (
+                proof.get("buildNumber") == context.build_number
+                and proof.get("remoteHighestBuildNumber") == context.build_number - 1
+                and context.build_number > legacy_build
+            )
+        )
     ):
         raise BridgeError("assigned-candidate-allocation-mismatch")
 
@@ -577,6 +618,11 @@ def execute(
         }
         environment["GRADUS_CANDIDATE_ID"] = context.candidate_id
         environment["GRADUS_RELEASE_BRIDGE_ACTIVE"] = "1"
+        correction_proof = (
+            root / ".release-state" / "evidence" / context.candidate_id / "allocate-identity.json"
+        )
+        if correction_proof.is_file() and not correction_proof.is_symlink():
+            environment["GRADUS_IDENTITY_ALLOCATION_PROOF_PATH"] = str(correction_proof)
         argv = [
             str(root / "app" / "archive-upload-ios.sh"),
             "--prepare-only",

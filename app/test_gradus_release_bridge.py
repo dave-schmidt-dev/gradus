@@ -1493,6 +1493,48 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
             staged = root / ".release-state" / ".rollover" / "gradus-ios-20" / "allocated-ios.json"
             self.assertEqual(json.loads(staged.read_text())["candidateId"], "gradus-ios-20")
 
+    def test_failed_preupload_successor_derives_its_legacy_allocation_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            manifest = json.loads(context.manifest_path.read_text())
+            manifest["candidateId"] = "1.8.2-22"
+            manifest["release"]["buildNumber"] = "22"
+            replacement = context.manifest_path.parent.parent / "1.8.2-22" / "manifest.json"
+            replacement.parent.mkdir()
+            replacement.write_text(json.dumps(manifest), encoding="utf-8")
+            (replacement.parent / "identity-allocation.json").write_text(
+                json.dumps(
+                    {
+                        "allocation": {
+                            "productKey": "gradus-ios",
+                            "requestedMarketingVersion": "1.8.2",
+                            "allocatedBuildNumber": 22,
+                            "remoteHighestMarketingVersion": "1.8.2",
+                            "remoteHighestBuildNumber": 21,
+                            "observedAt": "2026-08-21T15:02:30Z",
+                            "result": "allocated",
+                        },
+                        "reuseAuthorization": {
+                            "kind": "failed-preupload-correction",
+                            "priorCandidateId": "1.8.2-21",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            successor = PREPARE.load_context(
+                replacement,
+                git_common_dir=replacement.parents[4],
+            )
+            self.assertEqual(PREPARE.reconcile_assigned_candidate(root, successor), "gradus-ios-20")
+            proof = json.loads(
+                (
+                    root / ".release-state" / "evidence" / "1.8.2-22" / "allocate-identity.json"
+                ).read_text()
+            )
+            self.assertEqual((proof["marketingVersion"], proof["buildNumber"]), ("1.8.2", 22))
+            self.assertEqual(proof["remoteHighestBuildNumber"], 21)
+
     def test_each_preupload_operation_emits_the_central_expected_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, context = self._fixture(temporary)
