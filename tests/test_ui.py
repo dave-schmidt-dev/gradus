@@ -772,6 +772,38 @@ class ProviderPanelTests(unittest.TestCase):
         # Truncated, not rounded -- the raw value is 97.x.
         self.assertIn("97%", output)
 
+    def test_opencode_panel_shows_three_decimal_zen_credit_only_when_present(self) -> None:
+        data = {
+            "five_hour_percent_left": 75,
+            "weekly_percent_left": 90,
+            "monthly_percent_left": 80,
+            "zen_credit": 12.345,
+        }
+        snap = ProviderSnapshot(name="OpenCode Go", ok=True, source="api", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("Zen credit", output)
+        self.assertIn("$12.345", output)
+
+        without_credit = ProviderSnapshot(
+            name="OpenCode Go",
+            ok=True,
+            source="api",
+            data={key: value for key, value in data.items() if key != "zen_credit"},
+        )
+        self.assertNotIn(
+            "Zen credit", _capture(build_provider_panel(without_credit, self.now), width=50)
+        )
+
+    def test_opencode_compact_line_shows_three_decimal_zen_credit(self) -> None:
+        snap = ProviderSnapshot(
+            name="OpenCode Go",
+            ok=True,
+            source="api",
+            data={"weekly_percent_left": 90, "zen_credit": 12.345},
+        )
+        parts = [text for text, _style in _compact_window_parts(snap, self.now)]
+        self.assertIn("Zen credit:$12.345", parts)
+
     def test_panel_shows_decimal_for_fractional_percent_below_ten(self) -> None:
         snap = ProviderSnapshot(
             name="Codex",

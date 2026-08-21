@@ -183,6 +183,7 @@ class OpenCodeGoStatus:
     weekly_reset: str | None
     monthly_percent_left: float | None
     monthly_reset: str | None
+    zen_credit: float | None
     raw_text: str
 
     def __post_init__(self) -> None:
@@ -193,6 +194,15 @@ class OpenCodeGoStatus:
             val = getattr(self, field)
             if val is not None and not isinstance(val, str):
                 object.__setattr__(self, field, None)
+        if (
+            isinstance(self.zen_credit, bool)
+            or not isinstance(self.zen_credit, (int, float))
+            or not math.isfinite(self.zen_credit)
+            or self.zen_credit < 0
+        ):
+            object.__setattr__(self, "zen_credit", None)
+        else:
+            object.__setattr__(self, "zen_credit", float(self.zen_credit))
         if not isinstance(self.raw_text, str):
             object.__setattr__(self, "raw_text", str(self.raw_text))
 

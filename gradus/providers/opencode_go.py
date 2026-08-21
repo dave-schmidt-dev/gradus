@@ -21,12 +21,14 @@ from ._base import (
 from ._seroval import _seroval_decode
 
 HISTORY_SERVER_ROUTE = "https://opencode.ai/_server"
-HISTORY_WORKSPACE_ROUTE_TEMPLATE = "https://opencode.ai/workspace/{workspace_id}/go"
+HISTORY_WORKSPACE_ROUTE_TEMPLATE = "https://opencode.ai/workspace/{workspace_id}"
+HISTORY_SUBSCRIPTION_ROUTE_TEMPLATE = "https://opencode.ai/workspace/{workspace_id}/go"
 HISTORY_PROVENANCE = {
     "provenance_available": True,
     "method": "POST",
     "route_template": HISTORY_SERVER_ROUTE,
-    "subscription_route_template": HISTORY_WORKSPACE_ROUTE_TEMPLATE,
+    "subscription_route_template": HISTORY_SUBSCRIPTION_ROUTE_TEMPLATE,
+    "workspace_route_template": HISTORY_WORKSPACE_ROUTE_TEMPLATE,
     "workspace_identifiers": "redacted",
     "observation": "host-observed capacity only",
 }
@@ -43,11 +45,13 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 class OpenCodeGoProvider:
     _SERVER_URL = HISTORY_SERVER_ROUTE
     _WORKSPACE_ROUTE_TEMPLATE = HISTORY_WORKSPACE_ROUTE_TEMPLATE
+    _SUBSCRIPTION_ROUTE_TEMPLATE = HISTORY_SUBSCRIPTION_ROUTE_TEMPLATE
     _WORKSPACES_FN_ID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
     _CACHE_PATH = (
         Path(__file__).resolve().parent.parent.parent / ".cache" / "opencode_go_cookies.json"
     )
     _USER_AGENT = "gradus (opencode-go quota probe)"
+    _MICROCENTS_PER_USD = 100_000_000
 
     def __init__(self) -> None:
         self._auth_cookie = ""
@@ -134,19 +138,52 @@ class OpenCodeGoProvider:
             reset = _format_reset_time(time.time() + float(reset_in))
         return percent_left, reset
 
-    def _fetch_subscription(self, workspace_id: str) -> dict[str, Any] | None:
+    @classmethod
+    def _zen_credit_from_html(cls, html: str) -> float | None:
+        """Return the workspace's available Zen balance in US dollars.
+
+        OpenCode stores the billing balance as integer microcents (one
+        hundred-millionth of a US dollar). The SSR payload can contain other
+        ``balance`` properties, so only accept the billing object whose nearby
+        fields describe automatic reload behavior.
+        """
+        import math
         import re
-        import urllib.error
+
+        if not isinstance(html, str):
+            return None
+        for match in re.finditer(r"(?:^|[{,])balance:(-?\d+)(?=[,}])", html):
+            billing_tail = html[match.end() : match.end() + 512]
+            if not re.search(r"(?:^|,)reload(?:Min|Amount)?:", billing_tail):
+                continue
+            try:
+                microcents = int(match.group(1))
+                dollars = microcents / cls._MICROCENTS_PER_USD
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if microcents < 0 or not math.isfinite(dollars):
+                return None
+            return dollars
+        return None
+
+    def _fetch_page(self, route: str) -> str:
         import urllib.request
 
         req = urllib.request.Request(
-            self._WORKSPACE_ROUTE_TEMPLATE.format(workspace_id=workspace_id),
+            route,
             headers={"Cookie": f"auth={self._auth_cookie}", "User-Agent": self._USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             if "auth.opencode.ai" in resp.url or "/auth/authorize" in resp.url:
                 raise _AuthRejected("redirect to sign-in")
-            html = resp.read().decode("utf-8", errors="replace")
+            return resp.read().decode("utf-8", errors="replace")
+
+    def _fetch_subscription(self, workspace_id: str) -> dict[str, Any] | None:
+        import re
+        import urllib.error
+        import urllib.request
+
+        html = self._fetch_page(self._SUBSCRIPTION_ROUTE_TEMPLATE.format(workspace_id=workspace_id))
 
         def _extract_usage(name: str) -> dict[str, Any] | None:
             m = re.search(
@@ -165,11 +202,21 @@ class OpenCodeGoProvider:
         weekly = _extract_usage("weeklyUsage")
         monthly = _extract_usage("monthlyUsage")
         if rolling or weekly or monthly:
-            return {
+            result = {
                 "rollingUsage": rolling,
                 "weeklyUsage": weekly,
                 "monthlyUsage": monthly,
             }
+            try:
+                workspace_html = self._fetch_page(
+                    self._WORKSPACE_ROUTE_TEMPLATE.format(workspace_id=workspace_id)
+                )
+            except _AuthRejected:
+                raise
+            except (urllib.error.URLError, urllib.error.HTTPError):
+                workspace_html = ""
+            result["zen_credit"] = self._zen_credit_from_html(workspace_html)
+            return result
         return None
 
     def fetch(self) -> OpenCodeGoStatus:
@@ -269,6 +316,7 @@ class OpenCodeGoProvider:
             weekly_reset=weekly_reset,
             monthly_percent_left=monthly_percent_left,
             monthly_reset=monthly_reset,
+            zen_credit=subscription.get("zen_credit"),
             raw_text=raw_text,
         )
 

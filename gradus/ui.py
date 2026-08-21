@@ -1031,6 +1031,18 @@ def build_provider_panel(
         elif spec:
             _add_usage_rows(body, snapshot.data, now, spec.windows)
 
+    if base_name == "OpenCode Go" and (
+        zen_credit := _zen_credit_text(snapshot.data.get("zen_credit"))
+    ):
+        body = Group(
+            body,
+            Text.assemble(
+                ("Zen credit", "text.muted"),
+                ("  ", ""),
+                (zen_credit, "text.ink"),
+            ),
+        )
+
     panel_kwargs: dict[str, object] = {
         "title": title_text,
         "border_style": "text.yellow" if snapshot.cached_since else accent,
@@ -1082,6 +1094,18 @@ def _add_usage_rows(
             Text(reset_display, style="text.cyan"),
             PaceLabel(pace),
         )
+
+
+def _zen_credit_text(value: object) -> str | None:
+    """Format a validated OpenCode Zen balance as USD with three decimals."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        return None
+    return f"${float(value):.3f}"
 
 
 def _antigravity_cg_data(data: dict[str, object]) -> dict[str, object]:
@@ -1906,6 +1930,9 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
         pace = _pace_label(percent, reset_str, now, window.window_hours)
         part = f"{window.session_label}:{pct}% {_compact_pace(pace)}"
         parts.append((part, _pace_style(part)))
+
+    if name == "OpenCode Go" and (credit := _zen_credit_text(snapshot.data.get("zen_credit"))):
+        parts.append((f"Zen credit:{credit}", "text.ink"))
 
     # Antigravity C+G windows
     if name == "Antigravity":

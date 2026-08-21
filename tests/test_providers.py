@@ -2990,6 +2990,30 @@ class OpenCodeGoProviderTests(unittest.TestCase):
             assert reset is not None
             self.assertTrue(reset.startswith("Resets "))
 
+    def test_zen_credit_is_normalized_from_workspace_microcents(self) -> None:
+        html = "payload={balance:1234500000,reload:false,reloadMin:500000000}"
+        self.assertEqual(OpenCodeGoProvider._zen_credit_from_html(html), 12.345)
+
+        provider = self._provider()
+        subscription = {**self.SUBSCRIPTION, "zen_credit": 12.345}
+        with (
+            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch.object(provider, "_fetch_subscription", return_value=subscription),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.zen_credit, 12.345)
+
+    def test_missing_or_malformed_workspace_balance_is_omitted(self) -> None:
+        malformed = (
+            "payload={reload:false,reloadMin:500000000}",
+            'payload={balance:"1234500000",reload:false,reloadMin:500000000}',
+            "payload={balance:-1,reload:false,reloadMin:500000000}",
+            "payload={balance:1234500000,other:true}",
+        )
+        for html in malformed:
+            with self.subTest(html=html):
+                self.assertIsNone(OpenCodeGoProvider._zen_credit_from_html(html))
+
     def test_percent_left_fields_are_float(self) -> None:
         provider = self._provider()
         with (

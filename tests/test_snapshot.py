@@ -89,6 +89,19 @@ class TestAllowlist(unittest.TestCase):
         projected = snap.project_data(cursor)
         self.assertEqual(projected, {"auto_percent_used": 20.0, "api_percent_used": 30.0})
 
+    def test_opencode_projection_keeps_only_zen_credit_not_workspace_metadata(self) -> None:
+        opencode = _ps(
+            "OpenCode Go",
+            True,
+            data={
+                "zen_credit": 12.345,
+                "workspace_id": "must-not-leave-process",
+                "workspace_name": "must-not-leave-process",
+                "reload": True,
+            },
+        )
+        self.assertEqual(snap.project_data(opencode), {"zen_credit": 12.345})
+
     def test_cursor_dollar_meter_field_is_not_allowlisted(self) -> None:
         """The router projection excludes the dollar-spend meter; per-pool fields are kept.
 

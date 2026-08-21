@@ -914,6 +914,7 @@ def warning_membership(
 SAFE_DATA_KEYS = frozenset(
     {
         "credits",
+        "zen_credit",
         "five_hour_percent_left",
         "weekly_percent_left",
         "five_hour_reset",
