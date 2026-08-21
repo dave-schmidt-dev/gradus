@@ -602,6 +602,8 @@ contract, because the overrides are command-line only.
 
 During one Gradus implementation, repeated in-scope local validation commands should use one narrow reusable approval before their first run, rather than interrupting for every equivalent invocation. Run validation at the relevant phase boundaries; do not defer it all to the end. Require a separate approval for a new dependency or package source, external writes, destructive actions, or any broader command/scope.
 
+Decision gates follow the G/A/R autonomy contract: `~/.agent/prompts/_shared/gar.md` (Green = do; Amber = do + ledger; Red = human-only). Never end a turn on a recoverable obstacle.
+
 ### Project layout
 
 - `gradus/providers/` — provider package:
