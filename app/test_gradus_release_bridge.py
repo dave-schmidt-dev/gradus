@@ -6,8 +6,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +22,14 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 BRIDGE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BRIDGE)
+
+PREPARE_SPEC = importlib.util.spec_from_file_location(
+    "release_prepare_bridge", ROOT / "app" / "release_prepare_bridge.py"
+)
+assert PREPARE_SPEC and PREPARE_SPEC.loader
+PREPARE = importlib.util.module_from_spec(PREPARE_SPEC)
+sys.modules[PREPARE_SPEC.name] = PREPARE
+PREPARE_SPEC.loader.exec_module(PREPARE)
 
 
 class _RecordingClient:
@@ -1263,6 +1273,291 @@ class BridgeTests(unittest.TestCase):
             )
             self.assertEqual(proof["result"], "blocked")
             self.assertEqual(proof["reason"], "assignment-not-confirmed")
+
+
+class ReleasePrepareBridgeTests(unittest.TestCase):
+    """Regression coverage for the central-to-legacy preparation boundary."""
+
+    @staticmethod
+    def _fixture(temporary: str) -> tuple[Path, PREPARE.CandidateContext]:
+        root = Path(temporary)
+        common = root / "git-common"
+        candidate = "1.8.2-21"
+        manifest = (
+            common / "release-state" / "gradus-ios" / "candidates" / candidate / "manifest.json"
+        )
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(
+            json.dumps(
+                {
+                    "formatVersion": 2,
+                    "immutable": True,
+                    "candidateId": candidate,
+                    "productIdentifier": "gradus-ios",
+                    "sourceSnapshot": {"sha256": "a" * 64},
+                    "release": {
+                        "marketingVersion": "1.8.2",
+                        "buildNumber": "21",
+                        "frozen": True,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        evidence = root / ".release-state" / "evidence"
+        evidence.mkdir(parents=True)
+        (evidence / "allocate-identity.json").write_text(
+            json.dumps(
+                {
+                    "proofVersion": "1.0.0",
+                    "operationClass": "identityAllocation",
+                    "result": "passed",
+                    "productKey": "gradus-ios",
+                    "marketingVersion": "1.8.2",
+                    "buildNumber": 21,
+                    "remoteHighestMarketingVersion": "1.8.0",
+                    "remoteHighestBuildNumber": 20,
+                    "observedAt": "2026-08-21T13:23:59Z",
+                    "responseSha256": "b" * 64,
+                }
+            ),
+            encoding="utf-8",
+        )
+        old_workspace = root / ".release-state" / "candidates" / "gradus-ios-20"
+        old_workspace.mkdir(parents=True)
+        (old_workspace / "GradusiOS.ipa").write_bytes(b"old-assigned-artifact")
+        ledger = {
+            "candidateId": "gradus-ios-20",
+            "state": "assigned",
+            "marketingVersion": "1.8.0",
+            "build": 20,
+            "sourceSha256": "c" * 64,
+            "projectSha256": "d" * 64,
+            "artifactSha256": hashlib.sha256(b"old-assigned-artifact").hexdigest(),
+            "metadata": {
+                "candidateWorkspace": str(old_workspace),
+                "ipaPath": str(old_workspace / "GradusiOS.ipa"),
+            },
+        }
+        (root / ".release-state" / "candidate.json").write_text(
+            json.dumps(ledger), encoding="utf-8"
+        )
+        (root / ".release-state" / "allocated-ios.json").write_text(
+            json.dumps(
+                {
+                    "candidateId": "gradus-ios-20",
+                    "state": "allocated-but-unfrozen",
+                    "marketingVersion": "1.8.0",
+                    "build": 20,
+                    "allocatedAt": "2026-08-18T01:58:33Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return root, PREPARE.load_context(manifest, git_common_dir=common)
+
+    def test_assigned_legacy_state_is_archived_only_for_exact_central_allocation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            calls = []
+
+            def runner(argv, **kwargs):
+                calls.append((argv, kwargs))
+                self.assertNotIn("APP_STORE_CONNECT_API_KEY", kwargs["env"])
+                self.assertEqual(kwargs["env"]["GRADUS_CANDIDATE_ID"], context.candidate_id)
+                archived = root / ".release-state" / "archived" / "gradus-ios-20"
+                archived.mkdir(parents=True)
+                (archived / "candidate.json").write_text(
+                    json.dumps({"candidateId": "gradus-ios-20", "state": "superseded"}),
+                    encoding="utf-8",
+                )
+                artifact_root = root / ".release-state" / "candidates" / context.candidate_id
+                artifact_root.mkdir(parents=True)
+                ipa = artifact_root / "GradusiOS.ipa"
+                ipa.write_bytes(b"central-candidate-artifact")
+                digest = hashlib.sha256(ipa.read_bytes()).hexdigest()
+                (root / ".release-state" / "candidate.json").write_text(
+                    json.dumps(
+                        {
+                            "candidateId": context.candidate_id,
+                            "state": "prepared",
+                            "marketingVersion": context.marketing_version,
+                            "build": context.build_number,
+                            "sourceSha256": "e" * 64,
+                            "projectSha256": "f" * 64,
+                            "artifactSha256": digest,
+                            "metadata": {
+                                "candidateWorkspace": str(artifact_root),
+                                "ipaPath": str(ipa),
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (root / ".release-state" / "allocated-ios.json").write_text(
+                    json.dumps(
+                        {
+                            "candidateId": context.candidate_id,
+                            "state": "allocated-but-unfrozen",
+                            "marketingVersion": context.marketing_version,
+                            "build": context.build_number,
+                            "allocatedAt": "2026-08-21T13:23:59Z",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(argv, 0)
+
+            with patch.dict(os.environ, {"APP_STORE_CONNECT_API_KEY": "fixture-secret"}):
+                PREPARE.execute(
+                    "all",
+                    context,
+                    root=root,
+                    runner=runner,
+                    inspector=lambda *_args: PREPARE.ArtifactInspection(
+                        "1" * 64, "2" * 64, "3" * 64
+                    ),
+                )
+
+            self.assertEqual(len(calls), 1)
+            argv = calls[0][0]
+            self.assertEqual(argv[1:4], ["--prepare-only", "--candidate", "1.8.2-21"])
+            self.assertIn("--rollover-assigned", argv)
+            archived_allocation = (
+                root / ".release-state" / "archived" / "gradus-ios-20" / "allocated-ios.json"
+            )
+            self.assertEqual(
+                json.loads(archived_allocation.read_text())["candidateId"], "gradus-ios-20"
+            )
+            self.assertFalse((root / ".release-state" / ".rollover").exists())
+            proof = json.loads(
+                (
+                    root
+                    / ".release-state"
+                    / "evidence"
+                    / context.candidate_id
+                    / "production-build.json"
+                ).read_text()
+            )
+            self.assertEqual(proof["candidateId"], context.candidate_id)
+            self.assertEqual(proof["sourceDigest"], context.source_digest)
+            self.assertEqual(proof["operationClass"], "productionReleaseBuild")
+            self.assertEqual(proof["signingMode"], "appStore")
+            self.assertTrue(proof["reuseAuthorized"])
+            for name in ("archive.json", "signing.json", "artifact.json"):
+                self.assertTrue(
+                    (root / ".release-state" / "evidence" / context.candidate_id / name).is_file()
+                )
+
+    def test_rollover_refuses_nonmatching_remote_predecessor_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            proof_path = root / ".release-state" / "evidence" / "allocate-identity.json"
+            proof = json.loads(proof_path.read_text())
+            proof["remoteHighestBuildNumber"] = 19
+            proof["buildNumber"] = 20
+            proof_path.write_text(json.dumps(proof), encoding="utf-8")
+            ledger_before = (root / ".release-state" / "candidate.json").read_bytes()
+            allocation_before = (root / ".release-state" / "allocated-ios.json").read_bytes()
+
+            with self.assertRaises(PREPARE.BridgeError):
+                PREPARE.execute(
+                    "production-build",
+                    context,
+                    root=root,
+                    runner=lambda *_args, **_kwargs: self.fail("legacy preparation ran"),
+                )
+
+            self.assertEqual(
+                (root / ".release-state" / "candidate.json").read_bytes(), ledger_before
+            )
+            self.assertEqual(
+                (root / ".release-state" / "allocated-ios.json").read_bytes(),
+                allocation_before,
+            )
+
+    def test_staged_exact_allocation_remains_retryable_before_ledger_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+
+            self.assertEqual(PREPARE.reconcile_assigned_candidate(root, context), "gradus-ios-20")
+            self.assertFalse((root / ".release-state" / "allocated-ios.json").exists())
+            self.assertEqual(PREPARE.reconcile_assigned_candidate(root, context), "gradus-ios-20")
+            staged = root / ".release-state" / ".rollover" / "gradus-ios-20" / "allocated-ios.json"
+            self.assertEqual(json.loads(staged.read_text())["candidateId"], "gradus-ios-20")
+
+    def test_each_preupload_operation_emits_the_central_expected_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            artifact_root = root / ".release-state" / "candidates" / context.candidate_id
+            artifact_root.mkdir(parents=True)
+            ipa = artifact_root / "GradusiOS.ipa"
+            ipa.write_bytes(b"frozen-signed-ipa")
+            digest = hashlib.sha256(ipa.read_bytes()).hexdigest()
+            (root / ".release-state" / "candidate.json").write_text(
+                json.dumps(
+                    {
+                        "candidateId": context.candidate_id,
+                        "state": "prepared",
+                        "marketingVersion": context.marketing_version,
+                        "build": context.build_number,
+                        "sourceSha256": "e" * 64,
+                        "projectSha256": "f" * 64,
+                        "artifactSha256": digest,
+                        "metadata": {"ipaPath": str(ipa)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / ".release-state" / "allocated-ios.json").write_text(
+                json.dumps(
+                    {
+                        "candidateId": context.candidate_id,
+                        "state": "allocated-but-unfrozen",
+                        "marketingVersion": context.marketing_version,
+                        "build": context.build_number,
+                        "allocatedAt": "2026-08-21T13:23:59Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            inspection = PREPARE.ArtifactInspection("1" * 64, "2" * 64, "3" * 64)
+
+            for operation, filename, operation_class in (
+                ("archive", "archive.json", "archive"),
+                ("sign", "signing.json", "sign"),
+                ("artifact-verify", "artifact.json", "artifactVerify"),
+            ):
+                with self.subTest(operation=operation):
+                    path = PREPARE.execute(
+                        operation,
+                        context,
+                        root=root,
+                        inspector=lambda *_args: inspection,
+                    )
+                    self.assertEqual(path.name, filename)
+                    proof = json.loads(path.read_text())
+                    self.assertEqual(proof["operationClass"], operation_class)
+                    self.assertEqual(proof["candidateId"], context.candidate_id)
+                    self.assertEqual(proof["sourceDigest"], context.source_digest)
+                    self.assertEqual(proof["result"], "passed")
+                    self.assertEqual(proof.get("signedArtifactSha256", digest), digest)
+
+    def test_adapter_keeps_frozen_command_contract_while_entrypoint_routes_to_bridge(self) -> None:
+        adapter = json.loads((ROOT / ".release" / "release-adapter.json").read_text())
+        operations = {entry["id"]: entry for entry in adapter["operations"]}
+        for operation in ("production-build", "archive", "sign", "artifact-verify"):
+            with self.subTest(operation=operation):
+                entry = operations[operation]
+                self.assertEqual(
+                    entry["argv"], ["bash", "app/archive-upload-ios.sh", "--prepare-only"]
+                )
+                self.assertEqual(entry["environment"]["inputs"], [])
+        entrypoint = (ROOT / "app" / "archive-upload-ios.sh").read_text(encoding="utf-8")
+        self.assertIn('"$SCRIPT_DIR/release_prepare_bridge.py" --operation all', entrypoint)
+        self.assertIn('"${GRADUS_RELEASE_BRIDGE_ACTIVE:-0}" != "1"', entrypoint)
+        self.assertEqual(operations["upload"]["mode"], "credential")
+        self.assertNotIn("release_prepare_bridge.py", " ".join(operations["upload"]["arguments"]))
 
 
 if __name__ == "__main__":

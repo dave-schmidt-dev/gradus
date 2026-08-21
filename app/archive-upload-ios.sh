@@ -1293,6 +1293,16 @@ main() {
     echo "FAIL: --supersession-reason requires --rollover-assigned" >&2
     return 64
   fi
+  # The central adapter still invokes this fixed legacy entrypoint for each
+  # pre-upload operation. The first invocation enters the candidate-aware
+  # bridge, which prepares once and emits all four immutable proofs. Its child
+  # sets the marker below so the actual archive implementation runs exactly
+  # once instead of recursing back through the bridge.
+  if (( prepare_only )) \
+      && [[ "${GRADUS_RELEASE_BRIDGE_ACTIVE:-0}" != "1" ]] \
+      && [[ -z "${HOME:-}" && -z "${USER:-}" && -z "${LOGNAME:-}" ]]; then
+    exec /usr/bin/python3 "$SCRIPT_DIR/release_prepare_bridge.py" --operation all
+  fi
   cd "$SCRIPT_DIR"
   local project_root evidence_path expected_mac_build expected_cloudkit_environment expected_project_digest
   local baseline_source_digest baseline_project_digest current_artifact_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path
