@@ -14,7 +14,7 @@ GATE_REPO_ROOT="$(cd -P "$GATE_SCRIPT_DIR/.." && pwd)"
 # `assert_counting_leg`.  The Python paths are intentionally listed here so
 # the self-check can detect a new hermetic suite that is not wired into the
 # canonical gate.
-EXPECTED_COUNTING_LEG_COUNT=14
+EXPECTED_COUNTING_LEG_COUNT=15
 COUNTING_LEG_NAMES=(
   "swift-testing"
   "pytest"
@@ -24,6 +24,7 @@ COUNTING_LEG_NAMES=(
   "release-candidate"
   "release-candidate-validation"
   "asc-api"
+  "build-upload"
   "release-reconcile"
   "testflight-assignment"
   "candidate-walkthrough"
@@ -37,6 +38,7 @@ COUNTING_LEG_REPORTERS=(
   "xctest"
   "aggregate-xctest-swift"
   "aggregate-xctest-swift"
+  "pytest"
   "pytest"
   "pytest"
   "pytest"
@@ -60,7 +62,7 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 5 5 4 31 2 9)
+COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 15 5 5 4 31 2 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -70,6 +72,7 @@ COUNTING_LEG_SOURCES=(
   "test_release_candidate.py"
   "test_release_candidate_validation.py"
   "test_asc_api.py"
+  "test_asc_build_upload.py"
   "test_release_reconcile.py"
   "testflight-setup-tests.py"
   "test_walkthrough.py"
@@ -338,6 +341,11 @@ assert_counting_leg "release-candidate-validation" uv run pytest -q test_release
 echo "==> Hermetic App Store Connect client tests"
 assert_counting_leg "asc-api" uv run pytest -q test_asc_api.py
 
+# Transport for the App Store Connect REST build-uploads flow that replaced
+# altool. Hermetic: every test drives a fake transport, so no credential or
+# network access is required to run this leg.
+assert_counting_leg "build-upload" uv run pytest -q test_asc_build_upload.py
+
 echo "==> Hermetic release reconciliation tests"
 assert_counting_leg "release-reconcile" uv run pytest -q test_release_reconcile.py
 
@@ -373,11 +381,6 @@ if ! [[ "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "FAIL: GRADUS_MAC_TEST_TIMEOUT_SECONDS must be a positive integer" >&2
   exit 2
 fi
-# Plain "iPhone 16" collides with whatever other iPhone 16 simulators exist
-# on this machine (Xcode's own default, other projects' gate devices); a
-# dedicated name is the only way `simctl list | grep` can resolve to exactly
-# one UDID instead of silently picking whichever one `simctl` lists first.
-SIM_DEVICE_NAME="Gradus Gate iPhone 16 2026-08-11"
 SIM_OS_VERSION="26.5"
 SIM_RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
 SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
@@ -394,9 +397,6 @@ SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 # the snapshots do. The iPad leg selects the UI tests and the 12 canonical
 # image snapshot functions; rerunning the whole iOS suite on a second simulator
 # would roughly double the gate's slowest phase.
-# Plain "iPad Pro 11-inch (M5)" collides the same way the iPhone name did
-# above -- a dedicated fixture (already created 2026-08-11) is required.
-IPAD_DEVICE_NAME="Gradus Gate iPad Pro 11 2026-08-11"
 IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
 
 # The deterministic local Mac UI fixture uses Debug app behavior, but its
@@ -431,54 +431,11 @@ echo "    Xcode $active_xcode_version, iOS $SIM_OS_VERSION runtime present. OK."
 echo "==> Regenerating Xcode project from project.yml"
 xcodegen generate
 
-echo "==> Ensuring the pinned simulator exists: $SIM_DEVICE_NAME / iOS $SIM_OS_VERSION"
-simulator_created=0
-sim_matches="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep "$SIM_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' || true)"
-sim_match_count="$(printf '%s\n' "$sim_matches" | sed '/^$/d' | wc -l | tr -d ' ')"
-if [[ "$sim_match_count" -gt 1 ]]; then
-  echo "FAIL: $sim_match_count simulators are named \"$SIM_DEVICE_NAME\" on iOS $SIM_OS_VERSION" >&2
-  echo "      -- the gate needs exactly one match to pin reliably; delete the duplicate." >&2
-  exit 1
-fi
-sim_udid="$sim_matches"
-if [[ -z "$sim_udid" ]]; then
-  echo "    Creating $SIM_DEVICE_NAME (iOS $SIM_OS_VERSION) simulator..."
-  sim_udid="$(xcrun simctl create "$SIM_DEVICE_NAME" "$SIM_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
-  simulator_created=1
-fi
-echo "    Simulator UDID: $sim_udid"
-
-echo "==> Ensuring the pinned iPad exists: $IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION"
-# -F: the device name contains literal parentheses. The trailing " (" anchors
-# the match to the UDID column so a same-prefix variant (e.g. the "(16GB)"
-# device type) can't be picked up by accident.
-ipad_simulator_created=0
-ipad_matches="$(xcrun simctl list devices "$SIM_OS_VERSION" | grep -F "$IPAD_DEVICE_NAME (" | grep -oE '[0-9A-F-]{36}' || true)"
-ipad_match_count="$(printf '%s\n' "$ipad_matches" | sed '/^$/d' | wc -l | tr -d ' ')"
-if [[ "$ipad_match_count" -gt 1 ]]; then
-  echo "FAIL: $ipad_match_count simulators are named \"$IPAD_DEVICE_NAME\" on iOS $SIM_OS_VERSION" >&2
-  echo "      -- the gate needs exactly one match to pin reliably; delete the duplicate." >&2
-  exit 1
-fi
-ipad_udid="$ipad_matches"
-if [[ -z "$ipad_udid" ]]; then
-  echo "    Creating $IPAD_DEVICE_NAME (iOS $SIM_OS_VERSION) simulator..."
-  ipad_udid="$(xcrun simctl create "$IPAD_DEVICE_NAME" "$IPAD_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
-  ipad_simulator_created=1
-fi
-echo "    iPad UDID: $ipad_udid"
-
 is_simulator_booted() {
   local udid="$1"
   xcrun simctl list devices "$SIM_OS_VERSION" |
     grep -F "$udid) (Booted)" >/dev/null
 }
-
-ipad_was_booted=0
-if is_simulator_booted "$ipad_udid"; then
-  ipad_was_booted=1
-fi
-ipad_handoff_shutdown=0
 
 # A crashing test (e.g. a segfault inside a snapshot-diffing dependency)
 # still produces a valid, useful .ips in ~/Library/Logs/DiagnosticReports --
@@ -493,10 +450,11 @@ defaults write com.apple.CrashReporter DialogType none
 # unsigned invocation) from being rediscovered by testmanagerd on the next
 # run. The iOS legs also need isolation so snapshot resources cannot survive a
 # source change. Sharing the directory within this gate keeps package/build
-# reuse while making the entire test run disposable.
-derived_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-gate-derived-data.XXXXXX")"
-gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"
-gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"
+# reuse while making the entire test run disposable. Declared empty here (set
+# for real via the shared gate lib's gate_derived_data below, once sourced) so
+# the EXIT trap below always has a bound variable to rm -rf even if the run
+# fails before that point -- `rm -rf ""` is a safe no-op, never `rm -rf` of cwd.
+derived_data_dir=""
 installed_gradus_mac_was_running=0
 
 restore_installed_gradus_mac() {
@@ -530,33 +488,16 @@ stop_installed_gradus_mac_for_ui_tests() {
   exit 1
 }
 
-# Preserve a developer's already-running simulator and its account/share state.
-# A gate-created disposable simulator can still be stopped after the run to
-# avoid leaving a new background workload behind.
-restore_preexisting_ipad_after_handoff() {
-  if [[ "$ipad_handoff_shutdown" == "1" && "$ipad_was_booted" == "1" ]]; then
-    echo "==> Restoring pre-existing iPad simulator after UI-test handoff"
-    xcrun simctl boot "$ipad_udid" >/dev/null 2>&1 || true
-    xcrun simctl bootstatus "$ipad_udid" -b || true
-  fi
-}
-
+# This gate's own EXIT trap only handles state it owns directly (the
+# installed Mac app, the CrashReporter dialog override, DerivedData). It is
+# set BEFORE sourcing the shared simctl gate lib below, on purpose: the lib's
+# own EXIT-trap installation composes onto whatever trap already exists at
+# source time (see simctl_gate_lib.sh's header) rather than clobbering it, so
+# simulator create/delete lifecycle is entirely the shared lib's
+# responsibility from here on -- this gate no longer tracks whether a device
+# pre-existed, because gate_sim_create always makes a fresh disposable one.
 trap '
   restore_installed_gradus_mac
-  restore_preexisting_ipad_after_handoff
-  if [[ "${GRADUS_KEEP_SIMULATORS:-0}" == "1" ]]; then
-    echo "==> Leaving simulators running (GRADUS_KEEP_SIMULATORS=1)"
-  else
-    if [[ "$simulator_created" == "1" ]]; then
-      xcrun simctl shutdown "$sim_udid" >/dev/null 2>&1 || true
-    fi
-    if [[ "$ipad_simulator_created" == "1" ]]; then
-      xcrun simctl shutdown "$ipad_udid" >/dev/null 2>&1 || true
-    fi
-    if [[ "$simulator_created" != "1" && "$ipad_simulator_created" != "1" ]]; then
-      echo "==> Leaving pre-existing simulators running"
-    fi
-  fi
   if [[ -z "$prior_dialog_type" ]]; then
     defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
   else
@@ -564,6 +505,25 @@ trap '
   fi
   rm -rf "$derived_data_dir"
 ' EXIT
+
+# shellcheck source=/dev/null
+source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+
+echo "==> Sweeping stale Gradus gate simulators (>24h)"
+swept_count="$(gate_sweep gradus)"
+echo "    Swept $swept_count stale gate device(s)."
+
+derived_data_dir="$(gate_derived_data)"
+gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"
+gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"
+
+echo "==> Creating disposable Gradus gate iPhone simulator (iOS $SIM_OS_VERSION)"
+sim_udid="$(gate_sim_create gradus iphone "$SIM_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
+echo "    Simulator UDID: $sim_udid"
+
+echo "==> Creating disposable Gradus gate iPad simulator (iOS $SIM_OS_VERSION)"
+ipad_udid="$(gate_sim_create gradus ipad "$IPAD_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
+echo "    iPad UDID: $ipad_udid"
 
 echo "==> Booting simulators"
 xcrun simctl bootstatus "$sim_udid" -b || true
@@ -630,8 +590,8 @@ assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
 # idiom skip, so removing this step would not make it go silently green -- it
 # would just stop covering the multi-column geometry. Kept as a named,
 # separate gate line so that loss is visible if anyone deletes it.
-echo "==> xcodebuild test — GradusiOS UI tests ($IPAD_DEVICE_NAME / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI tests ($IPAD_DEVICE_NAME)" -- xcodebuild test \
+echo "==> xcodebuild test — GradusiOS UI tests ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
+assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI tests ($ipad_udid)" -- xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
@@ -646,7 +606,6 @@ assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI
 reset_simulator_ui_session_for_iphone() {
   echo "==> Resetting simulator UI session before iPhone UI tests"
   if is_simulator_booted "$ipad_udid"; then
-    ipad_handoff_shutdown=1
     xcrun simctl shutdown "$ipad_udid"
   fi
   if is_simulator_booted "$sim_udid"; then

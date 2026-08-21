@@ -451,6 +451,7 @@ behavior_bin="$behavior_root/bin"
 behavior_transition_log="$behavior_root/transitions.log"
 behavior_key_log="$behavior_root/mktemp.log"
 behavior_xcrun_log="$behavior_root/xcrun.log"
+behavior_transport_log="$behavior_root/transport.log"
 mkdir -p "$behavior_bin"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
@@ -460,7 +461,21 @@ printf '%s\n' \
   '#!/usr/bin/env bash' \
   'printf "%s\\n" "$*" >> "$GRADUS_TEST_XCRUN_LOG"' \
   'exit 0' >"$behavior_bin/xcrun"
-chmod 700 "$behavior_bin/mktemp" "$behavior_bin/xcrun"
+# The upload transport is a Python module run through uv, so uv is now the
+# stub point that xcrun used to be. resolve_uv prefers `command -v uv`, which
+# is why placing it on PATH is enough. The stub serves both calls the upload
+# path makes: the credential preflight (`python -c ...`) and the transport
+# itself, which reports the delivery id on stdout for the receipt writer.
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf "%s\\n" "$*" >> "$GRADUS_TEST_TRANSPORT_LOG"' \
+  'case "$*" in' \
+  '  *asc_build_upload.py*)' \
+  '    printf "Delivery UUID: %s\\n" "fixture-delivery-id"' \
+  '    exit 0 ;;' \
+  'esac' \
+  'exit 0' >"$behavior_bin/uv"
+chmod 700 "$behavior_bin/mktemp" "$behavior_bin/xcrun" "$behavior_bin/uv"
 
 # The seam records production's transition requests while preventing even a
 # mocked transition from mutating the fixture before the assertions run.
@@ -479,9 +494,9 @@ export GRADUS_CANDIDATE_LEDGER_PATH="$behavior_ledger"
 export GRADUS_CANDIDATE_RECEIPT_PATH="$behavior_receipt"
 export GRADUS_TEST_KEY_LOG="$behavior_key_log"
 export GRADUS_TEST_XCRUN_LOG="$behavior_xcrun_log"
+export GRADUS_TEST_TRANSPORT_LOG="$behavior_transport_log"
 behavior_path="$PATH"
 export PATH="$behavior_bin:$behavior_path"
-unset API_PRIVATE_KEYS_DIR
 
 set +e
 prepare_only_output="$(main --prepare-only 2>&1)"
@@ -492,8 +507,9 @@ set -e
   echo "$prepare_only_output" >&2
   exit 1
 }
-[[ ! -s "$behavior_transition_log" && ! -s "$behavior_key_log" && ! -s "$behavior_xcrun_log" ]] || {
-  echo "FAIL: --prepare-only reached upload transition, key creation, or xcrun" >&2
+[[ ! -s "$behavior_transition_log" && ! -s "$behavior_key_log" \
+  && ! -s "$behavior_xcrun_log" && ! -s "$behavior_transport_log" ]] || {
+  echo "FAIL: --prepare-only reached the upload transition, mktemp, xcrun, or the transport" >&2
   exit 1
 }
 PYTHONPATH="$SCRIPT_DIR" /usr/bin/python3 - "$behavior_ledger" <<'PY'
@@ -504,10 +520,11 @@ record = CandidateLedger(sys.argv[1]).load()
 assert record is not None and record.state == CandidateState.PREPARED
 PY
 
-# A failed transport must detach the key volume and leave both the RAM proof
-# and an explicit reconciliation-required record before returning the transport
-# status. Build a second prepared fixture so the successful resume below stays
-# independent of this failure path.
+# A failed transport must leave an explicit reconciliation-required record
+# before returning the transport status: the transfer may have reached Apple
+# before failing, so the ambiguity has to survive as evidence rather than
+# invite a retry. Build a second prepared fixture so the successful resume
+# below stays independent of this failure path.
 failure_root="$TEST_ROOT/upload-failure-behavior"
 failure_workspace="$failure_root/candidate"
 failure_ledger="$failure_root/candidate.json"
@@ -531,18 +548,29 @@ persist_candidate_evidence "$failure_ledger" "$failure_candidate_evidence" "$fai
 failure_bin="$failure_root/bin"
 failure_key_log="$failure_root/mktemp.log"
 failure_xcrun_log="$failure_root/xcrun.log"
+failure_transport_log="$failure_root/transport.log"
 mkdir -p "$failure_bin"
 cp "$behavior_bin/mktemp" "$failure_bin/mktemp"
+cp "$behavior_bin/xcrun" "$failure_bin/xcrun"
+# Only the transport fails. The credential preflight ahead of it must still
+# succeed, or this would exercise the preflight's refusal path instead of the
+# ambiguous-transport path it is here to cover. The stub echoes the injected
+# credentials so the redaction assertions below have something to detect.
 printf '%s\n' \
   '#!/usr/bin/env bash' \
-  'printf "%s\\n" "$*" >> "$GRADUS_TEST_XCRUN_LOG"' \
-  'printf "transport failed: %s %s %s\\n" "$APP_STORE_CONNECT_API_KEY" "$APP_STORE_CONNECT_KEY_ID" "$APP_STORE_CONNECT_ISSUER_ID" >&2' \
-  'exit 42' >"$failure_bin/xcrun"
-chmod 700 "$failure_bin/mktemp" "$failure_bin/xcrun"
+  'printf "%s\\n" "$*" >> "$GRADUS_TEST_TRANSPORT_LOG"' \
+  'case "$*" in' \
+  '  *asc_build_upload.py*)' \
+  '    printf "transport failed: %s %s %s\\n" "$APP_STORE_CONNECT_API_KEY" "$APP_STORE_CONNECT_KEY_ID" "$APP_STORE_CONNECT_ISSUER_ID" >&2' \
+  '    exit 42 ;;' \
+  'esac' \
+  'exit 0' >"$failure_bin/uv"
+chmod 700 "$failure_bin/mktemp" "$failure_bin/xcrun" "$failure_bin/uv"
 export GRADUS_CANDIDATE_LEDGER_PATH="$failure_ledger"
 export GRADUS_CANDIDATE_RECEIPT_PATH="$failure_receipt"
 export GRADUS_TEST_KEY_LOG="$failure_key_log"
 export GRADUS_TEST_XCRUN_LOG="$failure_xcrun_log"
+export GRADUS_TEST_TRANSPORT_LOG="$failure_transport_log"
 export PATH="$failure_bin:$behavior_path"
 export APP_STORE_CONNECT_API_KEY=fixture-api-key
 export APP_STORE_CONNECT_KEY_ID=fixture-key-id
@@ -557,8 +585,8 @@ set -e
   echo "$failed_upload_output" >&2
   exit 1
 }
-[[ -f "$failure_workspace/ram-volume-attestation.json" && -f "$failure_workspace/upload-reconciliation.json" ]] || {
-  echo "FAIL: failed upload did not persist RAM and reconciliation evidence" >&2
+[[ -f "$failure_workspace/upload-reconciliation.json" ]] || {
+  echo "FAIL: failed upload did not persist reconciliation evidence" >&2
   exit 1
 }
 failure_diagnostic="$failure_workspace/upload-failure.log"
@@ -595,6 +623,7 @@ export GRADUS_CANDIDATE_LEDGER_PATH="$behavior_ledger"
 export GRADUS_CANDIDATE_RECEIPT_PATH="$behavior_receipt"
 export GRADUS_TEST_KEY_LOG="$behavior_key_log"
 export GRADUS_TEST_XCRUN_LOG="$behavior_xcrun_log"
+export GRADUS_TEST_TRANSPORT_LOG="$behavior_transport_log"
 export PATH="$behavior_bin:$behavior_path"
 unset GRADUS_UPLOAD_FAILURE_STATUS
 
@@ -611,18 +640,38 @@ grep -Fxq uploading "$behavior_transition_log" || {
   echo "FAIL: normal resume did not request the uploading transition" >&2
   exit 1
 }
-grep -Fq -- '--upload-package' "$behavior_xcrun_log" || {
-  echo "FAIL: normal resume did not reach the mocked xcrun altool attempt" >&2
+grep -Fq -- 'asc_build_upload.py' "$behavior_transport_log" || {
+  echo "FAIL: normal resume did not reach the mocked upload transport" >&2
   exit 1
 }
-grep -Fq -- '-d' "$behavior_key_log" || {
-  echo "FAIL: normal resume did not create the hermetic RAM-volume fixture" >&2
+# No positive assertion on the mktemp stub here: the delivery transcript is
+# created through the absolute /usr/bin/mktemp, so the stub is unreachable on
+# this path. The receipt assertion below is the real proof that the transcript
+# was written, teed, and parsed. The stub stays on PATH because the
+# prepare-only check above still requires nothing to reach it.
+# Nothing on the upload path may write the private key to disk any more.
+# Assert the absence directly rather than trusting that the code which used
+# to do it is gone: this is the property, not the implementation detail.
+if /usr/bin/find "$behavior_root" -name 'AuthKey_*.p8' -print -quit | grep -q .; then
+  echo "FAIL: upload path wrote App Store Connect key material to disk" >&2
   exit 1
-}
+fi
+# End-to-end proof that the receipt writer's pattern still matches what the
+# transport actually prints. The old pattern accepted only hex-and-dash, so a
+# non-hex delivery id would have been dropped from the evidence in silence.
+/usr/bin/python3 - "$behavior_workspace/upload-delivery.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert payload["deliveryUuid"] == "fixture-delivery-id", payload
+PY
 export PATH="$behavior_path"
 unset APP_STORE_CONNECT_API_KEY APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID
-unset API_PRIVATE_KEYS_DIR GRADUS_PRODUCER_EVIDENCE_PATH GRADUS_CANDIDATE_LEDGER_PATH
+unset GRADUS_PRODUCER_EVIDENCE_PATH GRADUS_CANDIDATE_LEDGER_PATH
 unset GRADUS_CANDIDATE_RECEIPT_PATH GRADUS_TEST_KEY_LOG GRADUS_TEST_XCRUN_LOG
+unset GRADUS_TEST_TRANSPORT_LOG
 
 write_evidence_fixture "$TEST_ROOT/missing-fields.json" "$EXPECTED_MAC_BUILD" "$EXPECTED_CLOUDKIT_ENVIRONMENT" "$now_timestamp"
 assert_boundary_refused missing-fields "$TEST_ROOT/missing-fields.json"
@@ -811,17 +860,24 @@ prepare_line="$(grep -n 'Persisting machine-written candidate ledger before walk
 walkthrough_line="$(grep -n -- '-m release_candidate.walkthrough' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 uploading_line="$(grep -n 'transition_candidate_state "\$candidate_ledger_path" uploading' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 prepare_only_line="$(grep -n 'if (( prepare_only )); then' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
-key_dir_line="$(grep -n '^  create_ram_key_volume$' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
-altool_line="$(grep -n 'xcrun altool --upload-package' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+preflight_line="$(grep -n '_asc_api.make_token()' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
+transport_line="$(grep -n 'asc_build_upload.py' "$UPLOAD_SCRIPT" | tail -1 | cut -d: -f1)"
 [[ -n "$prepare_line" && -n "$walkthrough_line" && -n "$uploading_line" \
-  && -n "$prepare_only_line" && -n "$key_dir_line" && -n "$altool_line" \
+  && -n "$prepare_only_line" && -n "$preflight_line" && -n "$transport_line" \
   && "$prepare_line" -lt "$walkthrough_line" && "$walkthrough_line" -lt "$uploading_line" ]] || {
   echo "FAIL: candidate ledger, walkthrough, and uploading transitions are out of order" >&2
   exit 1
 }
 [[ "$walkthrough_line" -lt "$prepare_only_line" && "$prepare_only_line" -lt "$uploading_line" \
-  && "$prepare_only_line" -lt "$key_dir_line" && "$prepare_only_line" -lt "$altool_line" ]] || {
-  echo "FAIL: prepare-only exit is not before upload transition or key/altool setup" >&2
+  && "$prepare_only_line" -lt "$preflight_line" && "$prepare_only_line" -lt "$transport_line" ]] || {
+  echo "FAIL: prepare-only exit is not before the upload transition, preflight, or transport" >&2
+  exit 1
+}
+# The credential preflight has to sit before the uploading transition. That
+# state only forward-transitions to failed/abandoned, so a key that cannot
+# sign must be caught while the candidate is still retryable as "prepared".
+[[ "$preflight_line" -lt "$uploading_line" && "$uploading_line" -lt "$transport_line" ]] || {
+  echo "FAIL: credential preflight does not precede the uploading transition" >&2
   exit 1
 }
 
@@ -833,243 +889,78 @@ grep -Fq 'allocated-but-unfrozen' "$SCRIPT_DIR/release_candidate/allocation.py" 
   echo "FAIL: allocated-but-unfrozen recovery state is missing" >&2
   exit 1
 }
-grep -Fq 'persist_ram_volume_attestation' "$UPLOAD_SCRIPT" || {
-  echo "FAIL: RAM-volume detach proof is not persisted" >&2
+grep -Fq 'persist_upload_outcome' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: ambiguous-upload reconciliation evidence is not persisted" >&2
   exit 1
 }
 
-# hdiutil detach can transiently report "Resource busy" against a RAM volume
-# right after its last reader lets go (observed live on the gradus-ios-19
-# upload, immediately after a successful altool transfer). detach_ram_key_volume
-# must retry with backoff rather than fail on the first busy response, and
-# must still fail closed once retries are exhausted.
-detach_retry_root="$TEST_ROOT/detach-retry"
-detach_retry_bin="$detach_retry_root/bin"
-mkdir -p "$detach_retry_bin"
-printf '%s\n' \
-  '#!/usr/bin/env bash' \
-  'count=0' \
-  '[[ -f "$GRADUS_TEST_HDIUTIL_COUNT_FILE" ]] && count="$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")"' \
-  'count=$(( count + 1 ))' \
-  'printf "%s" "$count" > "$GRADUS_TEST_HDIUTIL_COUNT_FILE"' \
-  'printf "%s\n" "$*" >> "$GRADUS_TEST_HDIUTIL_LOG"' \
-  'if (( count < GRADUS_TEST_HDIUTIL_FAIL_UNTIL )); then' \
-  '  echo "hdiutil: couldn'"'"'t eject \"$2\" - Resource busy" >&2' \
-  '  exit 16' \
-  'fi' \
-  'exit 0' >"$detach_retry_bin/hdiutil"
-printf '%s\n' \
-  '#!/usr/bin/env bash' \
-  'printf "%s\n" "$*" >> "$GRADUS_TEST_SLEEP_LOG"' >"$detach_retry_bin/sleep"
-chmod 700 "$detach_retry_bin/hdiutil" "$detach_retry_bin/sleep"
-
-detach_retry_path="$PATH"
-export PATH="$detach_retry_bin:$detach_retry_path"
-unset GRADUS_RAM_VOLUME_MOUNT_PATH GRADUS_TEST_KEY_LOG
-
-RAM_VOLUME_DEVICE=/dev/disk99
-RAM_VOLUME_MOUNTPOINT=/tmp/fixture-ram-volume-mountpoint
-RAM_VOLUME_DETACHED=0
-export GRADUS_TEST_HDIUTIL_COUNT_FILE="$detach_retry_root/succeed-on-3rd.count"
-export GRADUS_TEST_HDIUTIL_LOG="$detach_retry_root/succeed-on-3rd.log"
-export GRADUS_TEST_SLEEP_LOG="$detach_retry_root/succeed-on-3rd.sleep.log"
-export GRADUS_TEST_HDIUTIL_FAIL_UNTIL=3
-detach_ram_key_volume || {
-  echo "FAIL: detach_ram_key_volume did not recover from transient busy failures" >&2
-  exit 1
-}
-[[ "$RAM_VOLUME_DETACHED" -eq 1 ]] || {
-  echo "FAIL: detach_ram_key_volume did not mark the volume detached after recovery" >&2
-  exit 1
-}
-[[ "$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")" -eq 3 ]] || {
-  echo "FAIL: detach_ram_key_volume did not retry hdiutil detach the expected number of times" >&2
-  exit 1
-}
-grep -Fq 'detach /dev/disk99' "$GRADUS_TEST_HDIUTIL_LOG" || {
-  echo "FAIL: detach_ram_key_volume did not invoke hdiutil detach with the volume device" >&2
+# An interrupted transfer is the ambiguous case: Apple may already hold the
+# package. SIGINT/SIGTERM/SIGHUP bypass the EXIT trap, so the script handles
+# them explicitly. Assert the real script installs every handler -- a deleted
+# trap line would otherwise leave this suite green.
+for signal_name in INT TERM HUP; do
+  grep -Eq "trap 'persist_upload_outcome; exit [0-9]+' $signal_name\b" "$UPLOAD_SCRIPT" || {
+    echo "FAIL: archive-upload-ios.sh does not reconcile an interrupted upload on $signal_name" >&2
+    exit 1
+  }
+done
+grep -Fq "trap 'persist_upload_outcome' EXIT" "$UPLOAD_SCRIPT" || {
+  echo "FAIL: archive-upload-ios.sh does not reconcile an ambiguous upload on EXIT" >&2
   exit 1
 }
 
-# shellcheck disable=SC2034 # read by detach_ram_key_volume via "$RAM_VOLUME_DEVICE"; see note above
-RAM_VOLUME_DEVICE=/dev/disk99
-RAM_VOLUME_MOUNTPOINT=/tmp/fixture-ram-volume-mountpoint
-RAM_VOLUME_DETACHED=0
-export GRADUS_TEST_HDIUTIL_COUNT_FILE="$detach_retry_root/never-succeeds.count"
-export GRADUS_TEST_HDIUTIL_LOG="$detach_retry_root/never-succeeds.log"
-export GRADUS_TEST_SLEEP_LOG="$detach_retry_root/never-succeeds.sleep.log"
-export GRADUS_TEST_HDIUTIL_FAIL_UNTIL=99
-set +e
-detach_retry_output="$(detach_ram_key_volume 2>&1)"
-detach_retry_status=$?
-set -e
-[[ "$detach_retry_status" -ne 0 && "$detach_retry_output" == *"did not succeed after 4 attempts"* ]] || {
-  echo "FAIL: detach_ram_key_volume did not fail closed once retries were exhausted" >&2
-  echo "$detach_retry_output" >&2
-  exit 1
-}
-[[ "$RAM_VOLUME_DETACHED" -eq 0 ]] || {
-  echo "FAIL: detach_ram_key_volume marked an unresolved failure as detached" >&2
-  exit 1
-}
-[[ "$(cat "$GRADUS_TEST_HDIUTIL_COUNT_FILE")" -eq 6 ]] || {
-  echo "FAIL: detach_ram_key_volume did not exhaust 4 attempts plus 2 forced detaches" >&2
-  exit 1
-}
-grep -Fq 'detach -force /dev/disk99' "$GRADUS_TEST_HDIUTIL_LOG" || {
-  echo "FAIL: detach_ram_key_volume did not escalate to a forced detach" >&2
-  exit 1
-}
-
-export PATH="$detach_retry_path"
-unset RAM_VOLUME_DEVICE RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DETACHED RAM_VOLUME_DETACH_DIGEST
-unset GRADUS_TEST_HDIUTIL_COUNT_FILE GRADUS_TEST_HDIUTIL_LOG GRADUS_TEST_HDIUTIL_FAIL_UNTIL GRADUS_TEST_SLEEP_LOG
-
-# A successful upload followed by a since-recovered cleanup hiccup must not
-# report the transient failure's exit code as the script's own outcome.
-# ShellCheck's cross-file dataflow does not trace these globals into
-# cleanup_ram_key_volume's tail (archive-upload-ios.sh); each is genuinely
-# read there via "${VAR:-default}".
-cleanup_recovery_root="$TEST_ROOT/cleanup-recovery"
-mkdir -p "$cleanup_recovery_root"
-# shellcheck disable=SC2034
-GRADUS_UPLOAD_ATTEMPTED=1
-# shellcheck disable=SC2034
-GRADUS_UPLOAD_SUCCEEDED=1
-# shellcheck disable=SC2034
-GRADUS_UPLOAD_FAILURE_STATUS=""
-# shellcheck disable=SC2034
-RAM_VOLUME_MOUNTPOINT=""
-RAM_VOLUME_DETACHED=1
-# shellcheck disable=SC2034
-GRADUS_RAM_VOLUME_ATTESTATION_PATH=""
-# shellcheck disable=SC2034
-GRADUS_UPLOAD_RECONCILIATION_PATH=""
-set +e
-(exit 16)
-cleanup_ram_key_volume >/dev/null
-cleanup_recovery_exit=$?
-set -e
-[[ "$cleanup_recovery_exit" -eq 0 ]] || {
-  echo "FAIL: cleanup_ram_key_volume reported a failure once cleanup was already clean" >&2
-  exit 1
-}
-unset GRADUS_UPLOAD_ATTEMPTED GRADUS_UPLOAD_SUCCEEDED GRADUS_UPLOAD_FAILURE_STATUS
-unset RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DETACHED GRADUS_RAM_VOLUME_ATTESTATION_PATH GRADUS_UPLOAD_RECONCILIATION_PATH
-
-# Regression: a delivered upload whose key volume could NOT be detached must
-# still report the upload's outcome. Returning the cleanup status here reported
-# an accepted build as a failed release, which drove repeated retries of a
-# transfer Apple had already accepted (and would reject as a duplicate build).
-# The unresolved secret-hygiene condition must survive as durable evidence
-# rather than as a conflated exit code, so both are asserted together.
-leak_root="$TEST_ROOT/cleanup-leak"
-mkdir -p "$leak_root"
-export PATH="$detach_retry_bin:$detach_retry_path"
-unset GRADUS_RAM_VOLUME_MOUNT_PATH GRADUS_TEST_KEY_LOG
-# shellcheck disable=SC2034 # read by cleanup_ram_key_volume via "${VAR:-default}"
-GRADUS_UPLOAD_ATTEMPTED=1
-# shellcheck disable=SC2034
-GRADUS_UPLOAD_SUCCEEDED=1
-# shellcheck disable=SC2034
-RAM_VOLUME_DEVICE=/dev/disk99
-RAM_VOLUME_MOUNTPOINT="$leak_root/mount"
-mkdir -p "$RAM_VOLUME_MOUNTPOINT"
-leak_key="$RAM_VOLUME_MOUNTPOINT/AuthKey_FIXTURE123.p8"
-printf 'not-a-real-key-but-the-right-shape' >"$leak_key"
-chmod 600 "$leak_key"
-RAM_VOLUME_DETACHED=0
-# shellcheck disable=SC2034
-GRADUS_RAM_VOLUME_CANDIDATE_ID="gradus-ios-fixture"
-export GRADUS_RAM_VOLUME_ATTESTATION_PATH="$leak_root/ram-volume-attestation.json"
-# shellcheck disable=SC2034
-GRADUS_UPLOAD_RECONCILIATION_PATH=""
-export GRADUS_TEST_HDIUTIL_COUNT_FILE="$leak_root/leak.count"
-export GRADUS_TEST_HDIUTIL_LOG="$leak_root/leak.log"
-export GRADUS_TEST_SLEEP_LOG="$leak_root/leak.sleep.log"
-export GRADUS_TEST_HDIUTIL_FAIL_UNTIL=99
-set +e
-leak_output="$(cleanup_ram_key_volume 2>&1)"
-leak_exit=$?
-set -e
-[[ "$leak_exit" -eq 0 ]] || {
-  echo "FAIL: a delivered upload was reported as failed because local cleanup failed" >&2
-  echo "$leak_output" >&2
-  exit 1
-}
-[[ "$leak_output" == *"ACTION REQUIRED"* ]] || {
-  echo "FAIL: unresolved key-volume leak was not surfaced on stderr" >&2
-  exit 1
-}
-[[ -e "$leak_key" ]] && {
-  echo "FAIL: key material survived a teardown whose detach never succeeded" >&2
-  exit 1
-}
-[[ -f "$leak_root/ram-volume-leak.json" ]] || {
-  echo "FAIL: unresolved key-volume leak left no durable evidence" >&2
-  exit 1
-}
-grep -Fq '"keyMaterialDestroyed": true' "$leak_root/ram-volume-leak.json" || {
-  echo "FAIL: leak evidence did not record that key material was destroyed" >&2
-  exit 1
-}
-grep -Fq '"result": "key-volume-not-detached"' "$leak_root/ram-volume-leak.json" || {
-  echo "FAIL: key-volume leak evidence did not record the unresolved condition" >&2
-  exit 1
-}
-[[ "$(/usr/bin/stat -f '%Lp' "$leak_root/ram-volume-leak.json")" == "600" ]] || {
-  echo "FAIL: key-volume leak evidence was not written 0600" >&2
-  exit 1
-}
-export PATH="$detach_retry_path"
-unset GRADUS_UPLOAD_ATTEMPTED GRADUS_UPLOAD_SUCCEEDED RAM_VOLUME_DEVICE RAM_VOLUME_MOUNTPOINT
-unset RAM_VOLUME_DETACHED GRADUS_RAM_VOLUME_CANDIDATE_ID GRADUS_RAM_VOLUME_ATTESTATION_PATH
-unset GRADUS_UPLOAD_RECONCILIATION_PATH GRADUS_TEST_HDIUTIL_COUNT_FILE GRADUS_TEST_HDIUTIL_LOG
-unset GRADUS_TEST_SLEEP_LOG GRADUS_TEST_HDIUTIL_FAIL_UNTIL
-
-# An interrupted release must not outlive its key. SIGINT/SIGTERM/SIGHUP
-# bypass the EXIT trap, so they are handled explicitly; this asserts the
-# handler both destroys the key and still lets EXIT-based cleanup run.
-signal_root="$TEST_ROOT/signal-teardown"
-mkdir -p "$signal_root/mount"
-cat >"$signal_root/probe.sh" <<'PROBE'
+# The probe mirrors the script's handler shape but calls the real function, so
+# an interrupted upload is proven to leave durable reconciliation evidence.
+interrupt_root="$TEST_ROOT/interrupt-reconciliation"
+mkdir -p "$interrupt_root"
+cat >"$interrupt_root/probe.sh" <<'PROBE'
 #!/usr/bin/env bash
 set -euo pipefail
-source "$3"
-unset GRADUS_RAM_VOLUME_MOUNT_PATH GRADUS_TEST_KEY_LOG
-export RAM_VOLUME_MOUNTPOINT="$1"
-printf 'fake-key-material-of-some-length' >"$RAM_VOLUME_MOUNTPOINT/AuthKey_SIGTEST.p8"
-chmod 600 "$RAM_VOLUME_MOUNTPOINT/AuthKey_SIGTEST.p8"
-trap 'echo exit-trap-ran >>"$2"' EXIT
-trap 'shred_ram_key_material; exit 143' TERM
+source "$2"
+export GRADUS_UPLOAD_RECONCILIATION_PATH="$1"
+export GRADUS_UPLOAD_CANDIDATE_ID=fixture-interrupted
+export GRADUS_UPLOAD_ARTIFACT_SHA256=fixture-digest
+export GRADUS_UPLOAD_ATTEMPTED=1 GRADUS_UPLOAD_SUCCEEDED=0
+trap 'persist_upload_outcome; exit 143' TERM
 kill -TERM $$
 sleep 10
 PROBE
 set +e
-bash "$signal_root/probe.sh" "$signal_root/mount" "$signal_root/log" "$UPLOAD_SCRIPT" >/dev/null 2>&1
-signal_exit=$?
+bash "$interrupt_root/probe.sh" "$interrupt_root/upload-reconciliation.json" "$UPLOAD_SCRIPT" >/dev/null 2>&1
+interrupt_exit=$?
 set -e
-[[ "$signal_exit" -eq 143 ]] || {
-  echo "FAIL: SIGTERM teardown did not exit through its handler (got $signal_exit)" >&2
+[[ "$interrupt_exit" -eq 143 ]] || {
+  echo "FAIL: interrupted upload did not exit through its handler (got $interrupt_exit)" >&2
   exit 1
 }
-[[ -e "$signal_root/mount/AuthKey_SIGTEST.p8" ]] && {
-  echo "FAIL: key material survived an interrupted release" >&2
-  exit 1
-}
-grep -Fq exit-trap-ran "$signal_root/log" || {
-  echo "FAIL: signal handler suppressed the EXIT-based cleanup" >&2
-  exit 1
-}
+/usr/bin/python3 - "$interrupt_root/upload-reconciliation.json" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-# The probe above mirrors the handler, so assert the real script installs it:
-# otherwise a deleted trap line would leave this suite green.
-for signal_name in INT TERM HUP; do
-  grep -Eq "trap 'shred_ram_key_material; exit [0-9]+' $signal_name\b" "$UPLOAD_SCRIPT" || {
-    echo "FAIL: archive-upload-ios.sh does not shred key material on $signal_name" >&2
-    exit 1
-  }
-done
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert payload["result"] == "reconciliation-required", payload
+assert payload["reason"] == "upload-result-ambiguous", payload
+assert payload["candidateId"] == "fixture-interrupted", payload
+PY
+
+# A delivered upload must leave no reconciliation record. A stale one would
+# send a build Apple already accepted back to manual reconciliation forever.
+success_root="$TEST_ROOT/succeeded-no-reconciliation"
+mkdir -p "$success_root"
+(
+  # shellcheck source=./archive-upload-ios.sh
+  source "$UPLOAD_SCRIPT"
+  export GRADUS_UPLOAD_RECONCILIATION_PATH="$success_root/upload-reconciliation.json"
+  export GRADUS_UPLOAD_CANDIDATE_ID=fixture-delivered
+  export GRADUS_UPLOAD_ARTIFACT_SHA256=fixture-digest
+  export GRADUS_UPLOAD_ATTEMPTED=1 GRADUS_UPLOAD_SUCCEEDED=1
+  persist_upload_outcome
+)
+[[ ! -e "$success_root/upload-reconciliation.json" ]] || {
+  echo "FAIL: a delivered upload was recorded as needing reconciliation" >&2
+  exit 1
+}
 
 # A post-prepare interruption must leave one resumable tuple; a retry may not
 # allocate a new build or rebind the IPA digest.
@@ -1223,23 +1114,25 @@ set -e
   exit 1
 }
 
-# Ordering is the security property: adoption runs before any credential is
-# provisioned, so the App Store Connect key never reaches a volume on a run
-# that transfers nothing.
+# Ordering is the availability property: adoption runs before the credential
+# preflight, so a run that transfers nothing can still adopt a delivery Apple
+# already accepted even when no usable key is present.
 adopt_line="$(awk '/delivery_receipt_matches "\$\{candidate_workspace\}\/upload-delivery.json"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
-key_volume_line="$(awk '/^  create_ram_key_volume$/ {print NR; exit}' "$UPLOAD_SCRIPT")"
-[[ -n "$adopt_line" && -n "$key_volume_line" && "$adopt_line" -lt "$key_volume_line" ]] || {
-  echo "FAIL: delivery adoption does not precede RAM key-volume creation" >&2
+credential_line="$(awk '/_asc_api.make_token\(\)/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+[[ -n "$adopt_line" && -n "$credential_line" && "$adopt_line" -lt "$credential_line" ]] || {
+  echo "FAIL: delivery adoption does not precede the credential preflight" >&2
   exit 1
 }
 
 # Ordering is also the durability property: the receipt must be on disk before
-# the teardown steps that have already been observed to fail on a delivered
-# build.
+# the traps that would otherwise record a delivered build as ambiguous are
+# released, so the delivery is never left with neither record.
 persist_line="$(awk '/^  persist_delivery_receipt "\$GRADUS_UPLOAD_DELIVERY_RECEIPT_PATH"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
-detach_line="$(awk '/^  detach_ram_key_volume$/ {print NR; exit}' "$UPLOAD_SCRIPT")"
-[[ -n "$persist_line" && -n "$detach_line" && "$persist_line" -lt "$detach_line" ]] || {
-  echo "FAIL: delivery receipt is not persisted before key-volume teardown" >&2
+# The failure branch releases the same traps earlier, so match the last
+# occurrence: the one on the delivered path this ordering is about.
+release_line="$(awk '/^  trap - EXIT INT TERM HUP$/ {found = NR} END {if (found) print found}' "$UPLOAD_SCRIPT")"
+[[ -n "$persist_line" && -n "$release_line" && "$persist_line" -lt "$release_line" ]] || {
+  echo "FAIL: delivery receipt is not persisted before the reconciliation traps are released" >&2
   exit 1
 }
 
@@ -1250,6 +1143,7 @@ for candidate_suite in \
   test_release_candidate.py \
   test_release_candidate_validation.py \
   test_asc_api.py \
+  test_asc_build_upload.py \
   test_release_reconcile.py \
   testflight-setup-tests.py \
   test_walkthrough.py; do

@@ -14,8 +14,9 @@ import os
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 API_BASE = "https://api.appstoreconnect.apple.com/v1"
 DEFAULT_TOKEN_TTL_SECONDS = 1190
@@ -230,34 +231,28 @@ class ASCClient:
         self._sleep = sleep
         self._retry_delay_seconds = retry_delay_seconds
 
-    def request(
+    def _send(
         self,
-        method: str,
-        path: str,
-        body: dict | None = None,
+        build_request: Callable[[], urllib.request.Request],
         *,
-        idempotent: bool | None = None,
-    ) -> dict | None:
-        method = method.upper()
-        retry_allowed = method == "GET" if idempotent is None else idempotent
-        url = path if path.startswith("http") else f"{API_BASE}{path}"
-        payload = json.dumps(body).encode() if body is not None else None
+        retry_allowed: bool,
+        parse_response: Callable[[HTTPResponse], Any],
+    ) -> Any:
+        """Shared bounded-retry transport loop for both JSON and raw-byte sends.
+
+        Every caller supplies its own request construction (so credentials and
+        headers stay call-site-specific) and its own response parsing; the
+        retry/error-classification policy stays identical for both, which is
+        the property that matters for a client sending bearer-token-bearing
+        API calls and un-authenticated pre-signed-URL transfers side by side.
+        """
         for attempt in range(self._max_attempts):
-            request = urllib.request.Request(url, data=payload, method=method)
-            request.add_header("Authorization", f"Bearer {self._token_provider.token()}")
-            if payload is not None:
-                request.add_header("Content-Type", "application/json")
+            request = build_request()
             try:
                 response = self._transport(request, self._timeout_seconds)
                 if not 200 <= response.status <= 299:
                     raise _http_error(response.status, response.headers)
-                try:
-                    return json.loads(response.body) if response.body else None
-                except (TypeError, ValueError) as error:
-                    del error
-                    raise PermanentASCError(
-                        ASCOutcome(None, "invalid_response", False, response.status)
-                    )
+                return parse_response(response)
             except urllib.error.HTTPError as error:
                 failure = _http_error(error.code, error.headers)
             except TimeoutError:
@@ -275,6 +270,73 @@ class ASCClient:
             if self._retry_delay_seconds:
                 self._sleep(self._retry_delay_seconds)
         raise AssertionError("retry loop exhausted unexpectedly")
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        *,
+        idempotent: bool | None = None,
+    ) -> dict | None:
+        method = method.upper()
+        retry_allowed = method == "GET" if idempotent is None else idempotent
+        url = path if path.startswith("http") else f"{API_BASE}{path}"
+        payload = json.dumps(body).encode() if body is not None else None
+
+        def build_request() -> urllib.request.Request:
+            request = urllib.request.Request(url, data=payload, method=method)
+            request.add_header("Authorization", f"Bearer {self._token_provider.token()}")
+            if payload is not None:
+                request.add_header("Content-Type", "application/json")
+            return request
+
+        def parse_response(response: HTTPResponse) -> dict | None:
+            try:
+                return json.loads(response.body) if response.body else None
+            except (TypeError, ValueError) as error:
+                del error
+                raise PermanentASCError(
+                    ASCOutcome(None, "invalid_response", False, response.status)
+                )
+
+        return self._send(build_request, retry_allowed=retry_allowed, parse_response=parse_response)
+
+    def upload_bytes(
+        self,
+        url: str,
+        method: str,
+        headers: Sequence[Mapping[str, str]],
+        data: bytes,
+        *,
+        idempotent: bool = True,
+    ) -> HTTPResponse:
+        """Send raw bytes to an Apple-issued pre-signed build-upload URL.
+
+        These transfer URLs (``deliveryFileUploadOperation`` in the ASC
+        ``buildUploadFiles`` flow) are self-authorizing: no ``Authorization``
+        bearer token is added, and only the exact headers Apple specified for
+        this operation are sent -- the ASC API key must never reach a
+        third-party storage endpoint, and an unexpected header can invalidate
+        the pre-signed URL's own signature. ``url`` is used exactly as given
+        and never routed through ``API_BASE``. Each chunk PUT is idempotent
+        by construction (same offset, same bytes), so it defaults to retryable;
+        pass ``idempotent=False`` for a call that must not be retried.
+        """
+
+        def build_request() -> urllib.request.Request:
+            request = urllib.request.Request(url, data=data, method=method.upper())
+            for header in headers:
+                name = header.get("name") if isinstance(header, Mapping) else None
+                if not name:
+                    continue
+                value = header.get("value") if isinstance(header, Mapping) else None
+                request.add_header(str(name), "" if value is None else str(value))
+            return request
+
+        return self._send(
+            build_request, retry_allowed=idempotent, parse_response=lambda response: response
+        )
 
 
 def make_token_provider(**kwargs: object) -> TokenProvider:

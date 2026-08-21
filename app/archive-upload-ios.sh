@@ -6,16 +6,23 @@
 # the only supported credential boundary; the same key serves the attended
 # assignment and profile-renewal paths.
 #
-# Packages and uploads manually (codesign + ditto + altool) instead of
-# `xcodebuild -exportArchive`. That command fails with a generic
-# `error: exportArchive Copy failed` on this project even with manual
-# signing and a confirmed-good local private key -- reproduced with
-# -destination local-only (no App Store Connect interaction at all), so
-# it's a packaging-step bug unrelated to signing/upload auth, and Xcode's
-# own logs (IDEDistribution.verbose.log) give no further detail. Manually
-# resigning the archived .app with the same identity/profile succeeds
-# every time and the resulting .ipa validates cleanly against ASC's real
-# servers via `altool --validate-app`, so that's the reliable path.
+# Packages and uploads manually (codesign + ditto + a direct App Store
+# Connect REST upload) instead of `xcodebuild -exportArchive`. That command
+# fails with a generic `error: exportArchive Copy failed` on this project
+# even with manual signing and a confirmed-good local private key --
+# reproduced with -destination local-only (no App Store Connect interaction
+# at all), so it's a packaging-step bug unrelated to signing/upload auth,
+# and Xcode's own logs (IDEDistribution.verbose.log) give no further
+# detail. Manually resigning the archived .app with the same identity and
+# profile succeeds every time, and the resulting .ipa validated cleanly
+# against ASC's real servers when this path was established, so that's the
+# reliable path.
+#
+# The upload itself runs through app/asc_build_upload.py, which drives
+# Apple's REST buildUploads flow. The API key is read from the environment
+# into memory, used only to sign short-lived ES256 JWTs, and is never
+# written to disk in any form -- so there is no key file to place, protect,
+# or destroy on this path.
 #
 # Agent-safe upload path:
 #   bws-secret-exec app-store-connect-upload --
@@ -322,107 +329,6 @@ if record is not None:
 PY
 }
 
-persist_ram_volume_attestation() {
-  local path="$1" candidate_id="$2" mount_digest="$3" detach_digest="$4" volume_id="$5" filesystem="$6"
-  /usr/bin/python3 - "$SCRIPT_DIR" "$path" "$candidate_id" "$mount_digest" "$detach_digest" "$volume_id" "$filesystem" <<'PY'
-import json
-import os
-import sys
-import tempfile
-from pathlib import Path
-
-sys.path.insert(0, sys.argv[1])
-from release_candidate.ram_volume import validate  # noqa: E402
-
-path = Path(sys.argv[2])
-payload = {
-    "proofVersion": "release.proof.ram-volume.v1",
-    "operationClass": "ram-volume",
-    "candidateId": sys.argv[3],
-    "mountEvidenceSha256": sys.argv[4],
-    "detachEvidenceSha256": sys.argv[5],
-    "volumeId": sys.argv[6],
-    "filesystem": sys.argv[7],
-    "diskBacked": False,
-    "detached": True,
-    "result": "passed",
-}
-validate(payload)
-path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-try:
-    os.fchmod(descriptor, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(payload, stream, sort_keys=True, indent=2)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-except Exception:
-    try:
-        os.unlink(temporary)
-    except FileNotFoundError:
-        pass
-    raise
-PY
-}
-
-persist_cleanup_leak_evidence() {
-  # Raised when the transfer succeeded but the key volume could not be
-  # detached. The upload's outcome owns the exit code (see
-  # cleanup_ram_key_volume), so this file -- not the status -- is what carries
-  # the secret-hygiene condition forward.
-  local status="$1" path workspace
-  workspace="${GRADUS_RAM_VOLUME_ATTESTATION_PATH:-}"
-  workspace="${workspace%/*}"
-  [[ -n "$workspace" && -d "$workspace" ]] || return 0
-  path="${workspace}/ram-volume-leak.json"
-  /usr/bin/python3 - "$path" "${GRADUS_RAM_VOLUME_CANDIDATE_ID:-}" \
-    "${RAM_VOLUME_DEVICE:-}" "${RAM_VOLUME_MOUNTPOINT:-}" "$status" \
-    "${RAM_VOLUME_KEY_DESTROYED:-0}" <<'PY' || return 0
-import json
-import os
-import sys
-import tempfile
-from datetime import datetime, timezone
-from pathlib import Path
-
-path = Path(sys.argv[1])
-payload = {
-    "schemaVersion": "1.0.0",
-    "operationClass": "cleanup",
-    "candidateId": sys.argv[2],
-    "device": sys.argv[3],
-    "mountpoint": sys.argv[4],
-    "cleanupExitCode": int(sys.argv[5]),
-    # The field that says whether a stranded volume is an actual credential
-    # exposure or merely 2 MB of empty RAM awaiting the next reboot.
-    "keyMaterialDestroyed": sys.argv[6] == "1",
-    "result": "key-volume-not-detached",
-    "reason": "upload-succeeded-cleanup-failed",
-    "remediation": "detach the RAM-backed key volume; it clears on reboot",
-    "observedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-}
-path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-try:
-    os.fchmod(descriptor, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(payload, stream, sort_keys=True, indent=2)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-except Exception:
-    try:
-        os.unlink(temporary)
-    except OSError:
-        pass
-    raise
-PY
-  return 0
-}
-
 persist_upload_reconciliation() {
   local path="$1" candidate_id="$2" artifact_digest="$3" transport_status="$4"
   /usr/bin/python3 - "$path" "$candidate_id" "$artifact_digest" "$transport_status" <<'PY'
@@ -462,10 +368,33 @@ except Exception:
 PY
 }
 
+persist_upload_outcome() {
+  # An upload that was attempted but did not demonstrably succeed is
+  # ambiguous: the transport can hand the package to Apple and still fail
+  # afterwards, so a retry risks re-sending a build Apple already holds and
+  # will reject on the duplicate build number. Leave a durable
+  # reconciliation record instead of letting the ambiguity disappear.
+  #
+  # Installed on EXIT and on INT/TERM/HUP because an interrupt part-way
+  # through a multi-minute transfer is exactly the ambiguous case, and a
+  # signal would otherwise bypass the EXIT trap. The `! -e` guard makes the
+  # signal handlers idempotent against the EXIT trap that follows them.
+  local exit_status="${GRADUS_UPLOAD_FAILURE_STATUS:-$?}"
+  if [[ "${GRADUS_UPLOAD_ATTEMPTED:-0}" -eq 1 && "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 0 \
+    && -n "${GRADUS_UPLOAD_RECONCILIATION_PATH:-}" \
+    && ! -e "$GRADUS_UPLOAD_RECONCILIATION_PATH" ]]; then
+    persist_upload_reconciliation "$GRADUS_UPLOAD_RECONCILIATION_PATH" \
+      "${GRADUS_UPLOAD_CANDIDATE_ID:-}" "${GRADUS_UPLOAD_ARTIFACT_SHA256:-}" "$exit_status" \
+      || echo "FAIL: upload reconciliation evidence could not be persisted" >&2
+  fi
+}
+
 persist_upload_failure_diagnostics() {
-  # altool output is useful release evidence but is produced inside the
-  # credential-bearing broker process. Redact exact credential values before
-  # retaining the transcript in the candidate workspace.
+  # Transport output is useful release evidence but is produced inside the
+  # credential-bearing broker process, and a traceback out of the upload
+  # subprocess can quote the environment it was handed. Redact exact
+  # credential values before retaining the transcript in the candidate
+  # workspace.
   local source_path="$1" destination_path="$2" transport_status="$3"
   /usr/bin/python3 - "$source_path" "$destination_path" "$transport_status" <<'PY'
 import os
@@ -605,199 +534,6 @@ raise SystemExit(
     else 1
 )
 PY
-}
-
-create_ram_key_volume() {
-  local mountpoint device mount_record mount_type
-  if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
-    # Hermetic tests provide a declared RAM-volume fixture. The fixture is
-    # explicit and never becomes a production disk-backed fallback.
-    if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" ]]; then
-      mountpoint="$GRADUS_RAM_VOLUME_MOUNT_PATH"
-    else
-      mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/gradus-test-ram-volume.XXXXXX")"
-    fi
-    mkdir -p "$mountpoint"
-    device="${GRADUS_RAM_VOLUME_DEVICE:-fixture-ram-volume}"
-    mount_type="${GRADUS_RAM_VOLUME_FILESYSTEM:-hfs}"
-    [[ "${GRADUS_RAM_VOLUME_DISK_BACKED:-false}" != "true" ]] || {
-      echo "FAIL: disk-backed key volume fixture was rejected" >&2
-      return 1
-    }
-  else
-    mountpoint="$(mktemp -d "${TMPDIR:-/tmp}/gradus-ios-key-volume.XXXXXX")"
-    device="$(hdiutil attach -nomount ram://4096 | /usr/bin/awk 'NF {value=$NF} END {print value}')"
-    [[ "$device" == /dev/disk* ]] || {
-      echo "FAIL: hdiutil did not return a RAM-backed device" >&2
-      return 1
-    }
-    newfs_hfs "$device" >/dev/null
-    # "nobrowse" keeps the volume out of the Finder/volume list so fseventsd
-    # never opens a watch on it, and ".fseventsd/no_log" tells fseventsd not to
-    # journal it even if it does. Without both, fseventsd holds the volume open
-    # and the later "hdiutil detach" fails "Resource busy", stranding a mounted
-    # volume that still holds the App Store Connect private key (observed live
-    # on the 1.8.0 build 20 upload).
-    mount -t hfs -o noowners -o nobrowse "$device" "$mountpoint"
-    mkdir -p "${mountpoint}/.fseventsd"
-    : > "${mountpoint}/.fseventsd/no_log"
-    # Match on $device (always a canonical /dev/diskN, unlike the mktemp
-    # mountpoint, which mount(8) reports through its /private-resolved
-    # symlink target and would never string-match otherwise) and read the
-    # filesystem token out of field 4 ("(hfs,"), not field 3 (the mountpoint).
-    mount_type="$(mount | /usr/bin/awk -v dev="$device" '$1 == dev {print $4; exit}')"
-    mount_type="${mount_type#\(}"
-    mount_type="${mount_type%,}"
-    mount_type="${mount_type%\)}"
-    [[ "$mount_type" == "hfs" || "$mount_type" == "apfs" ]] || {
-      echo "FAIL: key volume mount type was not verified" >&2
-      return 1
-    }
-    # The RAM device is the proof that this regular-file volume is volatile;
-    # a normal mktemp directory is never accepted as the key directory.
-    [[ "$device" == /dev/disk* ]] || return 1
-  fi
-  [[ -d "$mountpoint" ]] || {
-    echo "FAIL: RAM-backed key volume mountpoint is unavailable" >&2
-    return 1
-  }
-  mount_record="device=$device;mountpoint=$mountpoint;filesystem=$mount_type;disk_backed=false"
-  RAM_VOLUME_MOUNTPOINT="$mountpoint"
-  RAM_VOLUME_DEVICE="$device"
-  RAM_VOLUME_FILESYSTEM="$mount_type"
-  RAM_VOLUME_MOUNT_DIGEST="$(printf '%s' "$mount_record" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
-  RAM_VOLUME_DETACHED=0
-  export RAM_VOLUME_MOUNTPOINT RAM_VOLUME_DEVICE RAM_VOLUME_FILESYSTEM RAM_VOLUME_MOUNT_DIGEST RAM_VOLUME_DETACHED
-}
-
-shred_ram_key_material() {
-  # The credential's exposure window is the mount, not the process: a detach
-  # that fails leaves the App Store Connect key readable for as long as the
-  # volume stays up (four hours, on the 1.8.0 build 20 upload). Destroying the
-  # key first means the worst case degrades from an exposed secret to 2 MB of
-  # stranded empty RAM.
-  #
-  # Idempotent by construction -- shredding an absent key is a no-op -- so it
-  # is safe to call from every teardown path, and calling it too few times is
-  # the only real failure. It runs inside an EXIT trap under "set -e", so it
-  # must never propagate a non-zero status and abort the rest of cleanup.
-  local key size
-  if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
-    return 0
-  fi
-  [[ -n "${RAM_VOLUME_MOUNTPOINT:-}" && -d "${RAM_VOLUME_MOUNTPOINT}" ]] || return 0
-  for key in "$RAM_VOLUME_MOUNTPOINT"/AuthKey_*.p8; do
-    [[ -f "$key" ]] || continue
-    # Overwrite the exact length in place before unlinking; a short write
-    # would leave the tail of the original key in the same blocks.
-    size="$(/usr/bin/stat -f %z "$key" 2>/dev/null || printf '0')"
-    if [[ "$size" =~ ^[0-9]+$ ]] && (( size > 0 )); then
-      /bin/dd if=/dev/urandom of="$key" bs=1 count="$size" conv=notrunc >/dev/null 2>&1 || true
-    fi
-    rm -f "$key" || true
-  done
-  if compgen -G "$RAM_VOLUME_MOUNTPOINT/AuthKey_*.p8" >/dev/null 2>&1; then
-    RAM_VOLUME_KEY_DESTROYED=0
-  else
-    RAM_VOLUME_KEY_DESTROYED=1
-  fi
-  export RAM_VOLUME_KEY_DESTROYED
-  return 0
-}
-
-detach_ram_key_volume() {
-  # Ahead of the already-detached short circuit: the success path calls this
-  # directly before the EXIT trap fires, so a shred behind that return would
-  # be skipped on exactly the run that completed.
-  shred_ram_key_material
-  [[ "${RAM_VOLUME_DETACHED:-0}" -eq 1 ]] && return 0
-  local detach_record
-  if [[ -n "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" || -n "${GRADUS_TEST_KEY_LOG:-}" ]]; then
-    detach_record="device=$RAM_VOLUME_DEVICE;mountpoint=$RAM_VOLUME_MOUNTPOINT;detached=true"
-  else
-    # hdiutil detach can transiently fail "Resource busy" against a RAM
-    # volume moments after its last reader lets go (observed live on the
-    # gradus-ios-19 upload, immediately after a successful altool transfer,
-    # with nothing in lsof/ps holding the mount). Retry with backoff before
-    # treating it as a real failure.
-    local attempt delay=1
-    for attempt in 1 2 3 4; do
-      hdiutil detach "$RAM_VOLUME_DEVICE" >/dev/null && break
-      if (( attempt == 4 )); then
-        # Escalate rather than strand the volume. Nothing here prompts: this
-        # runs inside the BWS broker subprocess with no TTY, so a privileged
-        # "umount -f" could only hang, and is deliberately not attempted.
-        hdiutil detach -force "$RAM_VOLUME_DEVICE" >/dev/null 2>&1 && break
-        /usr/sbin/diskutil unmount force "$RAM_VOLUME_MOUNTPOINT" >/dev/null 2>&1 || true
-        hdiutil detach -force "$RAM_VOLUME_DEVICE" >/dev/null 2>&1 && break
-        echo "FAIL: hdiutil detach $RAM_VOLUME_DEVICE did not succeed after $attempt attempts" >&2
-        return 1
-      fi
-      echo "    hdiutil detach $RAM_VOLUME_DEVICE busy, retrying in ${delay}s (attempt $attempt/4)..." >&2
-      sleep "$delay"
-      delay=$(( delay * 2 ))
-    done
-    detach_record="device=$RAM_VOLUME_DEVICE;mountpoint=$RAM_VOLUME_MOUNTPOINT;detached=true"
-  fi
-  RAM_VOLUME_DETACH_DIGEST="$(printf '%s' "$detach_record" | /usr/bin/shasum -a 256 | /usr/bin/awk '{print $1}')"
-  RAM_VOLUME_DETACHED=1
-  export RAM_VOLUME_DETACH_DIGEST RAM_VOLUME_DETACHED
-}
-
-cleanup_ram_key_volume() {
-  local exit_status="${GRADUS_UPLOAD_FAILURE_STATUS:-$?}"
-  local cleanup_status=0
-  shred_ram_key_material
-  if [[ -n "${RAM_VOLUME_MOUNTPOINT:-}" && "${RAM_VOLUME_DETACHED:-0}" -eq 0 ]]; then
-    if ! detach_ram_key_volume; then
-      echo "FAIL: RAM-backed key volume could not be detached" >&2
-      cleanup_status=70
-    fi
-  fi
-  if [[ -n "${GRADUS_RAM_VOLUME_ATTESTATION_PATH:-}" && "${RAM_VOLUME_DETACHED:-0}" -eq 1 \
-    && ! -e "$GRADUS_RAM_VOLUME_ATTESTATION_PATH" ]]; then
-    if ! persist_ram_volume_attestation "$GRADUS_RAM_VOLUME_ATTESTATION_PATH" \
-      "$GRADUS_RAM_VOLUME_CANDIDATE_ID" "$RAM_VOLUME_MOUNT_DIGEST" \
-      "$RAM_VOLUME_DETACH_DIGEST" "$RAM_VOLUME_DEVICE" "$RAM_VOLUME_FILESYSTEM"; then
-      echo "FAIL: RAM-volume attestation could not be persisted" >&2
-      cleanup_status=70
-    fi
-  fi
-  if [[ "${GRADUS_UPLOAD_ATTEMPTED:-0}" -eq 1 && "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 0 \
-    && -n "${GRADUS_UPLOAD_RECONCILIATION_PATH:-}" ]]; then
-    if ! persist_upload_reconciliation "$GRADUS_UPLOAD_RECONCILIATION_PATH" \
-      "$GRADUS_RAM_VOLUME_CANDIDATE_ID" "$GRADUS_RAM_VOLUME_ARTIFACT_SHA256" "$exit_status"; then
-      echo "FAIL: upload reconciliation evidence could not be persisted" >&2
-      cleanup_status=70
-    fi
-  fi
-  if [[ -n "${RAM_VOLUME_MOUNTPOINT:-}" && -d "$RAM_VOLUME_MOUNTPOINT" && -z "${GRADUS_RAM_VOLUME_MOUNT_PATH:-}" ]]; then
-    rmdir "$RAM_VOLUME_MOUNTPOINT" 2>/dev/null || true
-  fi
-  if (( cleanup_status != 0 )); then
-    if [[ "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 1 ]]; then
-      # The transfer is complete and not repeatable: Apple holds the build and
-      # rejects a duplicate build number, so re-running is not a recovery path.
-      # Returning the cleanup status here reported a delivered release as a
-      # failed one, which sent every caller back to retry an upload that had
-      # already succeeded. The upload owns the exit code; the cleanup failure
-      # is carried by durable evidence plus stderr, which a retry cannot erase.
-      persist_cleanup_leak_evidence "$cleanup_status"
-      echo "==> Upload to App Store Connect SUCCEEDED; local key-volume cleanup did NOT." >&2
-      echo "    ACTION REQUIRED: ${RAM_VOLUME_MOUNTPOINT:-the key volume} is still mounted and holds" >&2
-      echo "    the App Store Connect private key. Detach it; it is RAM-backed and clears on reboot." >&2
-      return 0
-    fi
-    return "$cleanup_status"
-  fi
-  # A successful upload followed by an aborted intermediate step (e.g. the
-  # first, now-retried detach attempt) leaves $exit_status holding that
-  # step's stale failure code even once cleanup above has fully recovered.
-  # Once cleanup is clean, the outcome is whatever the upload itself was.
-  if [[ "${GRADUS_UPLOAD_SUCCEEDED:-0}" -eq 1 ]]; then
-    return 0
-  fi
-  return "$exit_status"
 }
 
 failure_hook() {
@@ -1229,6 +965,21 @@ resolve_uv() {
   return 1
 }
 
+restore_account_environment() {
+  # The fixed BWS consumer starts children with a minimal environment. uv,
+  # xcodebuild, and the provisioning-profile lookup all need a real HOME, so
+  # restore it from the local account record rather than whatever the broker
+  # passed down. Idempotent, and called from both the build path and the
+  # --upload-only resume path -- only one of those runs a build, but both now
+  # run uv.
+  local account_home account_user
+  account_home="$(resolve_user_home)" || return 1
+  account_user="$(resolve_user_name)" || return 1
+  export HOME="$account_home"
+  export USER="$account_user"
+  export LOGNAME="$account_user"
+}
+
 resolve_user_name() {
   /usr/bin/id -un
 }
@@ -1305,7 +1056,7 @@ main() {
   fi
   cd "$SCRIPT_DIR"
   local project_root evidence_path expected_mac_build expected_cloudkit_environment expected_project_digest
-  local baseline_source_digest baseline_project_digest current_artifact_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path
+  local baseline_source_digest baseline_project_digest current_artifact_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path uv_bin
   local candidate_workspace candidate_ledger_path candidate_evidence_path walkthrough_path candidate_id source_revision producer_published_at
   local producer_evidence_digest artifact_digest marketing_version walkthrough_digest candidate_ipa_path durable_ipa_path prepared_metadata resume_candidate=0
   local allocation_record_path identity_proof_path allocation_metadata candidate_id_hint
@@ -1389,15 +1140,7 @@ main() {
   candidate_script_dir="$candidate_root/app"
   failure_hook allocation
 
-  # The fixed BWS consumer starts children with a minimal environment. Restore
-  # HOME from the local account record before uv,
-  # xcodebuild, and the provisioning-profile lookup need it.
-  # shellcheck disable=SC2155
-  export HOME="$(resolve_user_home)"
-  # shellcheck disable=SC2155
-  export USER="$(resolve_user_name)"
-  export LOGNAME="$USER"
-  local uv_bin
+  restore_account_environment
   uv_bin="$(resolve_uv)"
 
   # Pin the certificate fingerprint that is actually embedded in the checked-
@@ -1623,8 +1366,9 @@ PY
   # again. The receipt is matched on the artifact digest, so this adopts the
   # exact delivered bytes and never a merely same-numbered build.
   #
-  # Deliberately ahead of create_ram_key_volume: adopting needs no credential,
-  # so the App Store Connect key is never written to a volume on this path.
+  # Deliberately ahead of the credential preflight below: adopting an existing
+  # receipt needs no App Store Connect credential at all, so a candidate Apple
+  # already accepted stays adoptable even when no usable key is present.
   if delivery_receipt_matches "${candidate_workspace}/upload-delivery.json" \
       "$candidate_id" "$NEXT_BUILD" "$artifact_digest"; then
     echo "==> Candidate $candidate_id build $NEXT_BUILD was already delivered to App Store Connect; adopting the existing receipt"
@@ -1632,46 +1376,75 @@ PY
     return 0
   fi
 
-# altool's --api-key auth looks for AuthKey_<key-id>.p8 in a fixed set of
-# directories (or $API_PRIVATE_KEYS_DIR). Keep that regular file only on a
-# verified RAM-backed volume; a disk-backed temporary directory is forbidden.
-  create_ram_key_volume
-  trap 'cleanup_ram_key_volume' EXIT
-  # An interrupt would otherwise bypass the EXIT trap entirely and leave the
-  # key mounted. Destroy it in the handler, then exit so cleanup still runs.
-  trap 'shred_ram_key_material; exit 130' INT
-  trap 'shred_ram_key_material; exit 143' TERM
-  trap 'shred_ram_key_material; exit 129' HUP
-  export GRADUS_RAM_VOLUME_ATTESTATION_PATH="${candidate_workspace}/ram-volume-attestation.json"
   export GRADUS_UPLOAD_RECONCILIATION_PATH="${candidate_workspace}/upload-reconciliation.json"
   export GRADUS_UPLOAD_DELIVERY_RECEIPT_PATH="${candidate_workspace}/upload-delivery.json"
-  export GRADUS_RAM_VOLUME_CANDIDATE_ID="$candidate_id"
-  export GRADUS_RAM_VOLUME_ARTIFACT_SHA256="$artifact_digest"
   export GRADUS_UPLOAD_ATTEMPTED=0 GRADUS_UPLOAD_SUCCEEDED=0
+  export GRADUS_UPLOAD_CANDIDATE_ID="$candidate_id"
+  export GRADUS_UPLOAD_ARTIFACT_SHA256="$artifact_digest"
+  trap 'persist_upload_outcome' EXIT
+  trap 'persist_upload_outcome; exit 130' INT
+  trap 'persist_upload_outcome; exit 143' TERM
+  trap 'persist_upload_outcome; exit 129' HUP
+  # Keep the delivery log and the receipt written below owner-only.
   umask 077
-  printf '%s' "$APP_STORE_CONNECT_API_KEY" > "${RAM_VOLUME_MOUNTPOINT}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
-  chmod 600 "${RAM_VOLUME_MOUNTPOINT}/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
-  export API_PRIVATE_KEYS_DIR="$RAM_VOLUME_MOUNTPOINT"
 
-  # Record "uploading" only once local pre-flight work (RAM volume, key
-  # material) has succeeded and the next step is the network call itself.
+  # A credential that cannot sign must fail while the candidate is still
+  # retryable. The transport mints its own tokens in-process, but only after
+  # the "uploading" transition below, and that state forward-transitions to
+  # failed/abandoned only -- so a malformed key first discovered inside the
+  # transport would strand the candidate rather than leave it prepared. Mint
+  # one here, where the failure is unambiguously local. Output is discarded
+  # rather than logged: a signing error can quote the key material it failed
+  # to parse, and this runs before the redacting diagnostics writer exists.
+  # --upload-only resumes a prepared candidate without entering the build
+  # branch, which is where the account environment is restored and uv is
+  # resolved. Both are needed here now that the transport runs through uv, and
+  # both are idempotent, so do them on every path that reaches the upload.
+  restore_account_environment
+  if [[ -z "$uv_bin" ]]; then
+    uv_bin="$(resolve_uv)"
+  fi
+
+  if ! (cd "$SCRIPT_DIR" && "$uv_bin" run --with pyjwt --with cryptography \
+      python -c 'import _asc_api; _asc_api.make_token()') >/dev/null 2>&1; then
+    echo "FAIL: App Store Connect credentials did not produce a signed token" >&2
+    return 1
+  fi
+
+  # Record "uploading" only once local pre-flight work (packaging, token
+  # signing) has succeeded and the next step is the network call itself.
   # A failure before this point is unambiguously local-only and must leave
   # the candidate in a retryable "prepared" state rather than stranding it
   # in "uploading", which only forward-transitions to failed/abandoned.
+  # The transport's first network call is a non-mutating app lookup, so the
+  # first request that can change anything at Apple is the build-upload
+  # reservation, strictly after this point.
   transition_candidate_state "$candidate_ledger_path" uploading
 
   echo "==> Uploading to App Store Connect"
   export GRADUS_UPLOAD_ATTEMPTED=1
   local delivery_log delivery_uuid artifact_bytes upload_status
-  # altool reports the delivery outcome, including the UUID Apple assigns, on
-  # stderr. Tee the merged stream so the receipt below can quote Apple's own
-  # confirmation while the operator still sees transfer progress live -- a
-  # plain redirect would buffer a multi-minute upload into silence.
+  # The transport reports per-chunk progress as it runs and the delivery id
+  # Apple assigns on its final line. Tee the merged stream so the receipt
+  # below can quote Apple's own confirmation while the operator still sees
+  # transfer progress live -- a plain redirect would buffer a multi-minute
+  # upload into silence. `set -o pipefail` (line 29) is what makes the
+  # transport's exit status rather than tee's decide the branch below.
+  # Invoked by absolute path, with no `cd`, so every path argument stays
+  # resolved against the caller's directory; Python still puts the script's
+  # own directory on sys.path, which is how it reaches _asc_api.
+  #
+  # Deliberately $SCRIPT_DIR and not the candidate checkout: the transport is
+  # release tooling, not a build input. Gradus declares its source scope as
+  # app/GradusiOS, app/Shared, app/GradusKit and app/project.yml, so this file
+  # is outside it by design -- and the candidate checkout is not resolved at
+  # all on the --upload-only path.
   delivery_log="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/gradus-delivery.XXXXXX")"
-  if xcrun altool --upload-package "$IPA_PATH" \
-      -t ios \
-      --api-key "$APP_STORE_CONNECT_KEY_ID" \
-      --api-issuer "$APP_STORE_CONNECT_ISSUER_ID" 2>&1 | tee "$delivery_log"; then
+  if "$uv_bin" run --with pyjwt --with cryptography \
+      "$SCRIPT_DIR/asc_build_upload.py" \
+      --ipa-path "$IPA_PATH" \
+      --marketing-version "$marketing_version" \
+      --build "$NEXT_BUILD" 2>&1 | tee "$delivery_log"; then
     export GRADUS_UPLOAD_SUCCEEDED=1
   else
     # The transport may have accepted the package before returning a failure.
@@ -1685,7 +1458,7 @@ PY
       echo "FAIL: upload diagnostic output could not be persisted" >&2
     fi
     rm -f "$delivery_log"
-    cleanup_ram_key_volume
+    persist_upload_outcome
     trap - EXIT INT TERM HUP
     return "$upload_status"
   fi
@@ -1693,16 +1466,23 @@ PY
   # point -- detach, attestation, the exit trap -- has already been observed to
   # fail on a delivered build, and each one of those failures used to erase the
   # only record that the delivery happened.
+  # Apple's buildUploads ids are opaque and not necessarily hex, so match any
+  # non-space token rather than the hex-and-dash class this line inherited
+  # from the previous transport's output format. It is optional metadata
+  # -- adoption matches candidateId + build + artifactSha256 + result, never
+  # this -- but letting the pattern silently miss would discard Apple's only
+  # confirmation identifier from the evidence record.
   delivery_uuid="$(/usr/bin/sed -n \
-    's/.*Delivery UUID: *\([0-9a-fA-F][0-9a-fA-F-]*\).*/\1/p' "$delivery_log" | /usr/bin/head -n 1)"
+    's/.*Delivery UUID: *\([^[:space:]][^[:space:]]*\).*/\1/p' "$delivery_log" | /usr/bin/head -n 1)"
   artifact_bytes="$(/usr/bin/stat -f %z "$IPA_PATH" 2>/dev/null || printf '0')"
   rm -f "$delivery_log"
   persist_delivery_receipt "$GRADUS_UPLOAD_DELIVERY_RECEIPT_PATH" \
     "$candidate_id" "$marketing_version" "$NEXT_BUILD" \
     "$artifact_digest" "$artifact_bytes" "$delivery_uuid"
-  detach_ram_key_volume
-  persist_ram_volume_attestation "$GRADUS_RAM_VOLUME_ATTESTATION_PATH" \
-    "$candidate_id" "$RAM_VOLUME_MOUNT_DIGEST" "$RAM_VOLUME_DETACH_DIGEST" "$RAM_VOLUME_DEVICE" "$RAM_VOLUME_FILESYSTEM"
+  # The delivery is recorded, so nothing downstream is ambiguous any more.
+  # GRADUS_UPLOAD_SUCCEEDED already makes the handler a no-op; dropping the
+  # traps here keeps that from depending on one exported variable.
+  trap - EXIT INT TERM HUP
   failure_hook assignment
 
   echo "==> Done. Candidate $candidate_id build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."
