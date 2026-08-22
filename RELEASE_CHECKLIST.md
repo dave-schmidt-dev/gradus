@@ -145,7 +145,9 @@ Before candidate upload:
    `published N record(s) successfully` — and if anything failed, a
    `save failed for <provider>: <code name> (CKError <number>)` line per
    record (e.g. `save failed for Codex: zoneNotFound (CKError 26)`) plus a
-   `publish incomplete` summary. A publish that fails now says so; before
+   `publish incomplete` summary. A failure before any record result exists
+   instead logs `cloud sync failed (operation <number>, error <code name>
+   (CKError <number>))`. A publish that fails now says so; before
    2026-08-06 the app returned a bare failure count and `cloudd` showed only
    the records that worked.
 

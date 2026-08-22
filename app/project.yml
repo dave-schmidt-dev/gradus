@@ -354,6 +354,18 @@ schemes:
       # and watching a test run rewrite it with a live `Date()`.
       environmentVariables:
         GRADUS_DISABLE_PIPELINE: "1"
+  # Cloud runs a separate scheme so the local gate keeps its DerivedData-staged
+  # INV-7 inputs and never reads the checkout from a hosted app process.
+  GradusMacCloud:
+    build:
+      targets:
+        GradusMac: all
+    test:
+      targets:
+        - GradusMacTests
+        - GradusMacUITests
+      environmentVariables:
+        GRADUS_DISABLE_PIPELINE: "1"
   GradusiOS:
     build:
       targets:

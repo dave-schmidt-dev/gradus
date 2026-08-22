@@ -9,15 +9,29 @@ import Testing
 // beta-hardening, not this gate.
 
 private let inv7SourceRootEnvironmentKey = "GRADUS_INV7_SOURCE_ROOT"
+private let xcodeCloudEnvironmentKey = "CI_XCODE_CLOUD"
+private let xcodeCloudWorkspaceEnvironmentKey = "CI_WORKSPACE_PATH"
 
-private func publisherSourceFiles() -> [URL] {
+private func xcodeCloudPublisherSourceRoot(in environment: [String: String]) -> URL? {
+    guard
+        environment[xcodeCloudEnvironmentKey]?.uppercased() == "TRUE",
+        let workspacePath = environment[xcodeCloudWorkspaceEnvironmentKey],
+        !workspacePath.isEmpty
+    else { return nil }
+
+    return URL(fileURLWithPath: workspacePath, isDirectory: true)
+        .appendingPathComponent("app/GradusMac", isDirectory: true)
+}
+
+private func publisherSourceFiles(environment: [String: String] = ProcessInfo.processInfo.environment) -> [URL] {
     // This test is hosted by GradusMac.app. Never derive the source path from
     // #filePath: that points back into the checkout, which is commonly under
     // ~/Documents and makes the app test host cross the macOS TCC boundary.
     // test-gate.sh stages the source into its run-scoped DerivedData directory
     // and supplies this path explicitly.
     guard
-        let rawSourceRoot = ProcessInfo.processInfo.environment[inv7SourceRootEnvironmentKey],
+        let rawSourceRoot = environment[inv7SourceRootEnvironmentKey]
+        ?? xcodeCloudPublisherSourceRoot(in: environment)?.path,
         !rawSourceRoot.isEmpty
     else { return [] }
 
@@ -34,6 +48,26 @@ private func publisherSourceFiles() -> [URL] {
         )
     else { return [] }
     return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+}
+
+@Test func xcodeCloudPublisherSourceRootUsesTheTemporaryWorkspace() {
+    let root = xcodeCloudPublisherSourceRoot(in: [
+        xcodeCloudEnvironmentKey: "TRUE",
+        xcodeCloudWorkspaceEnvironmentKey: "/tmp/xcode-cloud-workspace"
+    ])
+    #expect(root?.path == "/tmp/xcode-cloud-workspace/app/GradusMac")
+}
+
+@Test func publisherSourceRootDoesNotFallbackToTheCheckoutOutsideXcodeCloud() {
+    #expect(xcodeCloudPublisherSourceRoot(in: [:]) == nil)
+}
+
+@Test func xcodeCloudSnapshotRootUsesTheTemporaryWorkspace() {
+    let root = xcodeCloudSnapshotRoot(in: [
+        "CI_XCODE_CLOUD": "TRUE",
+        "CI_WORKSPACE_PATH": "/tmp/xcode-cloud-workspace"
+    ])
+    #expect(root?.path == "/tmp/xcode-cloud-workspace/app/GradusMacTests/__Snapshots__")
 }
 
 /// Dot-prefixed terms name *files*, so a following letter means the match is
@@ -116,6 +150,18 @@ private func strippingLineComments(_ contents: String) -> String {
             )
         }
     }
+}
+
+@Test func publisherFailureLogsTheSanitizedOperationName() throws {
+    let source = try #require(
+        publisherSourceFiles().first { $0.lastPathComponent == "GradusMacApp.swift" },
+        "expected GradusMacApp.swift in the publisher source scan"
+    )
+    let contents = try String(contentsOf: source, encoding: .utf8)
+
+    #expect(contents.contains("GradusLog.publish.warning("))
+    #expect(contents.contains("PublishCoordinator.describe(error)"))
+    #expect(!contents.contains("error.localizedDescription"))
 }
 
 /// The narrowing above must not become a hole: a real `.env` reference still

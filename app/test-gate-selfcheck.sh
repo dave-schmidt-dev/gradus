@@ -205,9 +205,13 @@ validate_inv7_staging_contract() {
   TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
   TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
   xcodebuild test'* ]] || return 1
-  grep -Fq 'ProcessInfo.processInfo.environment[inv7SourceRootEnvironmentKey]' "$test_path" || return 1
+  grep -Fq 'environment[inv7SourceRootEnvironmentKey]' "$test_path" || return 1
   grep -Fq '!rawSourceRoot.isEmpty' "$test_path" || return 1
   grep -Fq 'fileExists(atPath: gradusMacDir.path, isDirectory: &isDirectory)' "$test_path" || return 1
+  grep -Fq 'CI_WORKSPACE_PATH' "$test_path" || return 1
+  grep -Fq 'app/GradusMac' "$test_path" || return 1
+  grep -Fq 'xcodeCloudSnapshotRoot' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
+  grep -Fq 'app/GradusMacTests/__Snapshots__' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
 
   snapshot_files=(
     "$SCRIPT_DIR/GradusMacTests/MenuContentSnapshotTests.swift"
@@ -216,7 +220,7 @@ validate_inv7_staging_contract() {
   snapshot_assertion_count="$(rg -o 'assertStagedSnapshot\(' "${snapshot_files[@]}" | wc -l | tr -d ' ')"
   [[ "$snapshot_assertion_count" -eq 5 ]] || return 1
   ! rg -q 'assertSnapshot\(' "${snapshot_files[@]}" || return 1
-  grep -Fq 'ProcessInfo.processInfo.environment[stagedSnapshotRootEnvironmentKey]' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
+  grep -Fq 'environment[stagedSnapshotRootEnvironmentKey]' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
   grep -Fq '!rawRoot.isEmpty' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
   grep -Fq 'fileExists(atPath: root.path, isDirectory: &isDirectory)' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
   grep -Fq 'snapshotDirectory: snapshotDirectory.path' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
@@ -224,6 +228,23 @@ validate_inv7_staging_contract() {
 
 validate_inv7_staging_contract "$GATE_SCRIPT" ||
   fail "INV-7 hosted test does not use the staged, explicit source root"
+
+validate_xcode_cloud_scheme_contract() {
+  local project_path="$1" local_block cloud_block
+  local_block="$(sed -n '/^  GradusMac:$/,/^  GradusMacCloud:$/p' "$project_path")"
+  cloud_block="$(sed -n '/^  GradusMacCloud:$/,/^  GradusiOS:$/p' "$project_path")"
+  [[ -n "$cloud_block" ]] || return 1
+  [[ "$cloud_block" == *'- GradusMacTests'* ]] || return 1
+  [[ "$cloud_block" == *'- GradusMacUITests'* ]] || return 1
+  [[ "$cloud_block" == *'GRADUS_DISABLE_PIPELINE: "1"'* ]] || return 1
+  [[ "$cloud_block" != *'GRADUS_INV7_SOURCE_ROOT'* ]] || return 1
+  [[ "$cloud_block" != *'GRADUS_SNAPSHOT_ROOT'* ]] || return 1
+  [[ "$local_block" != *'TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT'* ]] || return 1
+  [[ "$local_block" != *'TEST_RUNNER_GRADUS_SNAPSHOT_ROOT'* ]] || return 1
+}
+
+validate_xcode_cloud_scheme_contract "$SCRIPT_DIR/project.yml" ||
+  fail "GradusMacCloud must preserve a separate, explicit Cloud test-path contract"
 
 validate_gradus_mac_deadline_contract() {
   local gate_path="$1" helper_block mac_leg_block

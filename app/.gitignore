@@ -1,5 +1,7 @@
-# XcodeGen-generated project — regenerate with `xcodegen generate` from project.yml
-Gradus.xcodeproj/
+# XcodeGen-generated project — shared project data is committed for Xcode Cloud.
+# Per-user state remains local.
+Gradus.xcodeproj/xcuserdata/
+Gradus.xcodeproj/project.xcworkspace/xcuserdata/
 
 # SwiftPM build artifacts
 .build/

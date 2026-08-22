@@ -357,6 +357,7 @@ badges, Settings controls for sorting/visibility, and the shared expected-pace
 redline across the TUI, Mac, and iOS surfaces.
 
 - **GradusMac** — a menu-bar app that reads the credential-free schema-v2 mirror in `~/Library/Application Support/Gradus/` and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/`, any credential path, or the Documents-backed checkout (INV-7) — its only input is the monitor-owned snapshot copy, threaded through a single injected path dependency. Each publish also carries the Mac's user-visible computer name, short local username, and publish timestamp so iOS can show the connected computer and when it last reported; it never sends an email, serial number, path, or credential. The dropdown shows active providers as name + percentage + usage bar (metadata only where it needs attention) followed by a compact exhausted section — name and earliest reset, one line each. The menu's Settings… row opens a settings window holding the same device-local display preferences iOS has — sort mode, warning threshold, and Show exhausted — alongside the sync and launch-at-login toggles. That window is an `NSWindow` this app builds itself (`SettingsWindow`) rather than SwiftUI's `Settings` scene: on macOS 26.5.2 `showSettingsWindow:` returns `true` and opens nothing, so the idiomatic route fails silently. See `SettingsWindow.swift` for the measurements.
+- A failed CloudKit publish records only the safe operation-level error code/name in the Mac log; record contents, localized error text, and other metadata are deliberately excluded. A successful publish updates local evidence that the CloudKit write completed.
   - **Debug safety:** Debug GradusMac builds do not read the snapshot mirror or contact CloudKit unless launched with `GRADUS_ENABLE_PIPELINE=1`. This keeps hosted `xcodebuild test` runs hermetic even when a command bypasses the Xcode scheme; `app/test-gate.sh` additionally exports `GRADUS_DISABLE_PIPELINE=1` for its Mac leg. Release/distribution builds start the pipeline normally.
 - Provider ordering is defined **once**, in `app/Shared/ProviderRanking.swift`, which is compiled into both app targets. `rankedPartition()` splits active from exhausted before applying any presentation comparator — so no sort mode can pull a depleted provider back among the actionable ones — then tiers each partition errored → attention-needed → normal and sorts by the chosen mode with a deterministic name tie-break. Each app conforms its own model (`ProviderEntry` on the Mac, `ProviderStatus` on iOS) to `RankableProvider`; the Mac recomputes depletion locally because, unlike the CloudKit model, the snapshot model has no stored `isDepleted`. This lives in `Shared/` rather than `GradusKit` deliberately: the rules are device-local presentation, so putting them in the kit would widen its INV-7-governed scope.
 - **GradusiOS** — a fully-featured mobile dashboard (iOS 17+). Implements the "Zero Delta Design System": a hero-ranked "Now" screen, a Provider Detail drill-in showing all windows per provider, and a functional Settings screen with per-device warning-threshold override and notification toggle. No independent data source — renders whatever the Mac last published, kept current via a `CKRecordZoneSubscription` (silent push, delta sync with `CKFetchRecordZoneChangesOperation`) plus a silent `CKQuerySubscription`; the app compares cached warning state and emits one local notification when a provider enters a warning episode. The local-only `Explore Sample` flow uses an isolated sample cache/preferences suite, waits for live operations to quiesce before entry, suppresses remote pushes and notification registration while active, and resumes the live lifecycle only after explicit exit. Uses the shared `rankedPartition()` described above, rendering active providers as full density cards and exhausted ones as compact name + reset cells beneath them.
@@ -377,6 +378,15 @@ Build/test (requires Xcode + `xcodegen`, pinned version in `app/.xcode-version`)
 cd app
 bash test-gate.sh   # runs GradusMac + GradusiOS unit/UI tests; disposable per-run simulators via the shared gate lib
 ```
+
+For a macOS UI run that does not take over the local desktop, use the manual
+Xcode Cloud workflow with the shared `GradusMacCloud` scheme. Its hosted test
+runner derives the checked-out source and snapshot roots from
+`CI_WORKSPACE_PATH`; it never asks a local Mac for Automation Mode. The
+workflow stays manual and **Not Required to Pass** until its first green run is
+recorded. `app/Gradus.xcodeproj` is generated from `project.yml`, but its shared
+project/workspace/scheme files are committed so Cloud can build a fresh clone;
+per-user Xcode state remains ignored.
 
 ### App icons
 
@@ -575,10 +585,9 @@ simulator products ad-hoc and strips their entitlements. The script still assert
 that every produced bundle is ad-hoc with no `TeamIdentifier`, which is what
 catches a target regaining a `DEVELOPMENT_TEAM` later.
 
-There is deliberately **no `VMProfileFreeTest` build configuration**. An earlier
-attempt added one by hand to `app/Gradus.xcodeproj/project.pbxproj` — a file that
-is gitignored and regenerated from `project.yml` — so the next `xcodegen generate`
-erased it, and this README kept describing it for two days. A script that passes
+There is deliberately **no `VMProfileFreeTest` build configuration**. Do not
+hand-edit `app/Gradus.xcodeproj/project.pbxproj`: `xcodegen generate` rebuilds
+the committed shared project data from `project.yml`. A script that passes
 settings on the command line survives regeneration, and a third configuration
 would propagate through every target and SPM dependency to buy nothing this
 project needs.
@@ -624,8 +633,10 @@ Decision gates follow the G/A/R autonomy contract: `~/.agent/prompts/_shared/gar
 
 ### Git hooks (enforcement)
 
-This project has **no CI** — the local git hooks *are* the gate. Python hooks run
-through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
+The local git hooks remain the primary gate. A manual Xcode Cloud macOS test
+workflow supplements the local UI leg without needing local Automation Mode; it
+is intentionally not a required remote status until its first hosted run proves
+the configuration. Python hooks run through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
 tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
 enforced by `scripts/check-static-tool-versions.sh`.
 

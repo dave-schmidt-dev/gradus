@@ -3,6 +3,19 @@ import SnapshotTesting
 import Testing
 
 private let stagedSnapshotRootEnvironmentKey = "GRADUS_SNAPSHOT_ROOT"
+private let xcodeCloudEnvironmentKey = "CI_XCODE_CLOUD"
+private let xcodeCloudWorkspaceEnvironmentKey = "CI_WORKSPACE_PATH"
+
+func xcodeCloudSnapshotRoot(in environment: [String: String]) -> URL? {
+    guard
+        environment[xcodeCloudEnvironmentKey]?.uppercased() == "TRUE",
+        let workspacePath = environment[xcodeCloudWorkspaceEnvironmentKey],
+        !workspacePath.isEmpty
+    else { return nil }
+
+    return URL(fileURLWithPath: workspacePath, isDirectory: true)
+        .appendingPathComponent("app/GradusMacTests/__Snapshots__", isDirectory: true)
+}
 
 private func snapshotSourceLocation(
     fileID: StaticString,
@@ -22,10 +35,14 @@ private func stagedSnapshotRoot(
     fileID: StaticString,
     file: StaticString,
     line: UInt,
-    column: UInt
+    column: UInt,
+    environment: [String: String] = ProcessInfo.processInfo.environment
 ) -> URL? {
     let location = snapshotSourceLocation(fileID: fileID, file: file, line: line, column: column)
-    guard let rawRoot = ProcessInfo.processInfo.environment[stagedSnapshotRootEnvironmentKey], !rawRoot.isEmpty else {
+    guard let rawRoot = environment[stagedSnapshotRootEnvironmentKey]
+        ?? xcodeCloudSnapshotRoot(in: environment)?.path,
+        !rawRoot.isEmpty
+    else {
         Issue.record(
             Comment(rawValue: "\(stagedSnapshotRootEnvironmentKey) is unset; refusing checkout snapshot access"),
             sourceLocation: location
