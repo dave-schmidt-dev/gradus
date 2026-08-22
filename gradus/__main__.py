@@ -100,20 +100,17 @@ CLAUDE_MIN_PROBE_INTERVAL_SECONDS = 600
 # Back off for an hour instead of retrying every normal Claude interval.
 CLAUDE_RATE_LIMIT_BACKOFF_SECONDS = 3600
 
-# The producer is invoked every two minutes, but provider probes do not all
-# need to land on that boundary. Each non-Claude provider gets a fixed base
-# cadence plus a stable offset; fixed values keep scheduling reproducible
-# across processes (unlike Python's randomized hash()) and spread work across
-# producer ticks. Claude retains its independent cooldown/backoff below.
-PROVIDER_REFRESH_SCHEDULE_SECONDS: dict[str, tuple[int, int]] = {
-    # Primaries with synthetic v2 entries stay on the producer anchor so their
-    # synthetic observations are always rebuilt from a real current probe.
-    "Codex": (120, 0),
-    "Antigravity": (120, 0),
-    "Copilot": (300, 17),
-    "Cursor": (300, 47),
-    "OpenCode Go": (300, 73),
-    "Vibe": (300, 101),
+# Every consumer-visible provider is refreshed on each producer cycle. Stable
+# short offsets spread request starts inside that one cycle without making any
+# observation old enough to approach the iOS 180-second freshness boundary.
+PROVIDER_REFRESH_START_OFFSETS_SECONDS: dict[str, float] = {
+    "Codex": 0.0,
+    "Antigravity": 5.0,
+    "Copilot": 10.0,
+    "Cursor": 15.0,
+    "OpenCode Go": 20.0,
+    "Vibe": 25.0,
+    "Claude": 30.0,
 }
 
 
@@ -167,6 +164,8 @@ def _provider_next_probe_at(
     payload: Mapping[str, object] | None, name: str, now: datetime
 ) -> datetime:
     """Return one deterministic provider due time from canonical probe state."""
+    if name != "Claude":
+        return now
     entry = _canonical_entry(payload, name)
     if entry is None:
         return now
@@ -184,20 +183,19 @@ def _provider_next_probe_at(
         current - parsed
     except (TypeError, ValueError, OverflowError):
         return now
-    if name == "Claude":
-        error = entry.get("error")
-        lower_error = error.lower() if isinstance(error, str) else ""
-        interval = (
-            CLAUDE_RATE_LIMIT_BACKOFF_SECONDS
-            if "http 429" in lower_error
-            or "rate limited" in lower_error
-            or "rate-limit" in lower_error
-            else CLAUDE_MIN_PROBE_INTERVAL_SECONDS
-        )
-    else:
-        cadence, jitter = PROVIDER_REFRESH_SCHEDULE_SECONDS.get(name, (120, 0))
-        interval = cadence + jitter
+    error = entry.get("error")
+    lower_error = error.lower() if isinstance(error, str) else ""
+    interval = (
+        CLAUDE_RATE_LIMIT_BACKOFF_SECONDS
+        if "http 429" in lower_error or "rate limited" in lower_error or "rate-limit" in lower_error
+        else CLAUDE_MIN_PROBE_INTERVAL_SECONDS
+    )
     return parsed + timedelta(seconds=interval)
+
+
+def _provider_start_delay(name: str) -> float:
+    """Return the stable intra-refresh start offset for one provider."""
+    return PROVIDER_REFRESH_START_OFFSETS_SECONDS.get(name, 0.0)
 
 
 def _schedule_refresh_providers(
@@ -211,6 +209,9 @@ def _schedule_refresh_providers(
     scheduled: list[tuple[str, object]] = []
     current = now if now.tzinfo is not None else now.astimezone()
     for name, provider in providers:
+        if name != "Claude":
+            scheduled.append((name, provider))
+            continue
         next_due = _provider_next_probe_at(prior_payload, name, current)
         if current >= next_due:
             scheduled.append((name, provider))
@@ -617,9 +618,12 @@ def collect_snapshots(
     debug: bool,
     *,
     on_start: Callable[[str], None] | None = None,
+    on_scheduled: Callable[[str, float], None] | None = None,
     on_complete: Callable[[ProviderSnapshot], None] | None = None,
     on_waiting: Callable[[int], None] | None = None,
     safe_errors: bool = False,
+    start_delays: Mapping[str, float] | None = None,
+    sleeper: Callable[[float], None] | None = None,
 ) -> list[ProviderSnapshot]:
     snapshots: list[ProviderSnapshot] = []
     workers: list[tuple[str, object]] = [
@@ -644,17 +648,30 @@ def collect_snapshots(
 
     executor = ThreadPoolExecutor(max_workers=max(1, len(workers)))
     try:
+        sleep = time.sleep if sleeper is None else sleeper
 
-        def fetch_one(name: str, provider: object) -> ProviderSnapshot:
+        def fetch_one(
+            name: str, provider: object, delay: float, deferred: bool
+        ) -> ProviderSnapshot:
             if isinstance(provider, _CanonicalProviderDeferred):
                 return provider.fetch()
+            if delay > 0:
+                sleep(delay)
+            if on_start is not None and not deferred:
+                on_start(name)
             return fetch_provider_snapshot(name, provider, debug)
 
-        future_map = {}
+        worker_plans: list[tuple[str, object, float, bool]] = []
         for name, provider in workers:
-            if on_start is not None:
-                on_start(name)
-            future_map[executor.submit(fetch_one, name, provider)] = name
+            deferred = isinstance(provider, _CanonicalProviderDeferred)
+            delay = start_delays.get(name, 0.0) if start_delays is not None else 0.0
+            if on_scheduled is not None and not deferred:
+                on_scheduled(name, delay)
+            worker_plans.append((name, provider, delay, deferred))
+
+        future_map = {}
+        for name, provider, delay, deferred in worker_plans:
+            future_map[executor.submit(fetch_one, name, provider, delay, deferred)] = name
 
         def consume(future: object) -> None:
             """Consume one completed future without exposing provider errors."""
@@ -1002,13 +1019,19 @@ def _refresh_snapshot_once(
             safe_name = name if name in _PROVIDER_REGISTRY else "provider"
             _refresh_progress(f"provider {safe_name} started")
 
+        def provider_scheduled(name: str, delay: float) -> None:
+            safe_name = name if name in _PROVIDER_REGISTRY else "provider"
+            _refresh_progress(f"provider {safe_name} scheduled in {delay:.2f}s")
+
         snapshots = collect_snapshots(
             providers,
             debug,
             on_start=provider_start,
+            on_scheduled=provider_scheduled,
             on_complete=provider_complete,
             on_waiting=lambda pending: _refresh_progress(f"waiting for {pending} provider(s)"),
             safe_errors=True,
+            start_delays={name: _provider_start_delay(name) for name, _ in providers},
         )
         v1_ok, v2_ok, history_ok = _write_snapshot_versions(
             snapshots,

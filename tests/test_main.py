@@ -38,6 +38,7 @@ from gradus.__main__ import (
     _merge_with_previous,
     _notify_warning,
     _provider_next_probe_at,
+    _provider_start_delay,
     _refresh_snapshot_once,
     _release_refresh_snapshot_lock,
     _resolve_log_path,
@@ -1555,89 +1556,88 @@ class TestProviderRefreshSchedule(unittest.TestCase):
             ],
         }
 
-    def test_per_provider_due_times_are_stable_and_staggered(self) -> None:
-        payload = self._payload()
-        expected_seconds = {
-            "Codex": 120,
-            "Claude": 600,
-            "Antigravity": 120,
-            "Copilot": 317,
-            "Cursor": 347,
-            "OpenCode Go": 373,
-            "Vibe": 401,
+    def test_start_offsets_are_stable_staggered_and_below_ios_staleness(self) -> None:
+        names = ("Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe")
+        expected = {
+            "Codex": 0.0,
+            "Antigravity": 5.0,
+            "Copilot": 10.0,
+            "Cursor": 15.0,
+            "OpenCode Go": 20.0,
+            "Vibe": 25.0,
         }
-
-        first = {
-            name: _provider_next_probe_at(payload, name, self.BASE) for name in expected_seconds
-        }
-        second = {
-            name: _provider_next_probe_at(payload, name, self.BASE)
-            for name in reversed(expected_seconds)
-        }
+        first = {name: _provider_start_delay(name) for name in names}
+        second = {name: _provider_start_delay(name) for name in reversed(names)}
 
         self.assertEqual(first, second)
-        self.assertEqual(
-            first,
-            {
-                name: self.BASE + timedelta(seconds=seconds)
-                for name, seconds in expected_seconds.items()
-            },
-        )
-        staggered = {
-            name: due for name, due in first.items() if name not in {"Codex", "Antigravity"}
-        }
-        self.assertEqual(len(set(staggered.values())), len(staggered))
+        self.assertEqual(first, expected)
+        self.assertEqual(len(set(first.values())), len(first))
+        self.assertLess(max(first.values()), 180)
+        for name in names:
+            self.assertEqual(_provider_next_probe_at(self._payload(), name, self.BASE), self.BASE)
 
-    def test_deferred_non_synthetic_provider_preserves_full_v2_entry(self) -> None:
-        observed_at = (self.BASE - timedelta(seconds=30)).isoformat()
-        attempted_at = self.BASE.isoformat()
-        window = {
-            "id": "monthly",
-            "percent_left": 55.0,
-            "reset_iso": (self.BASE + timedelta(days=10)).isoformat(),
-            "window_hours": 720.0,
-            "pace_delta": -2.5,
-        }
-        data = {
-            "five_hour_percent_left": 70.0,
-            "monthly_percent_left": 55.0,
-        }
-        prior = {
-            "schema_version": 2,
-            "updated_at": self.BASE.isoformat(),
-            "providers": [
-                {
-                    "name": "OpenCode Go",
-                    "ok": True,
-                    "error": None,
-                    "windows": [window],
-                    "data": data,
-                    "observed_at": observed_at,
-                    "probe_attempted_at": attempted_at,
-                }
-            ],
-        }
-        deferred = ProviderSnapshot(
-            name="OpenCode Go",
-            ok=True,
-            source="snapshot",
-            data=data,
+    def test_staggered_collect_uses_stable_delays_without_real_sleeping(self) -> None:
+        names = ("Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe")
+        scheduled: list[tuple[str, float]] = []
+        slept: list[float] = []
+        probed: list[str] = []
+
+        def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
+            probed.append(name)
+            return ProviderSnapshot(name=name, ok=True, source="api", data={})
+
+        with patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch):
+            collect_snapshots(
+                [(name, MagicMock()) for name in names],
+                False,
+                on_scheduled=lambda name, delay: scheduled.append((name, delay)),
+                start_delays={name: _provider_start_delay(name) for name in names},
+                sleeper=slept.append,
+            )
+
+        self.assertEqual(scheduled, [(name, _provider_start_delay(name)) for name in names])
+        self.assertCountEqual(probed, names)
+        self.assertCountEqual(
+            slept,
+            [_provider_start_delay(name) for name in names if _provider_start_delay(name) > 0],
         )
 
+    def test_manual_sub_120s_refresh_probes_synthetic_primaries_fresh(self) -> None:
+        providers = [("Codex", MagicMock()), ("Antigravity", MagicMock())]
+        scheduled = _schedule_refresh_providers(
+            providers,
+            self._payload(),
+            self.BASE + timedelta(seconds=1),
+            on_deferred=lambda _name, _seconds: self.fail("non-Claude provider deferred"),
+        )
+
+        def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
+            data = {
+                "five_hour_percent_left": 80.0,
+                "weekly_percent_left": 70.0,
+            }
+            if name == "Codex":
+                data["spark_weekly_percent_left"] = 60.0
+            else:
+                data["third_party_five_hour_percent_left"] = 50.0
+                data["third_party_weekly_percent_left"] = 40.0
+            return ProviderSnapshot(name=name, ok=True, source="api", data=data)
+
+        with patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch):
+            snapshots = collect_snapshots(scheduled, False)
         payload = build_snapshot_v2_payload(
-            [deferred],
-            self.BASE + timedelta(seconds=150),
-            prior=prior,
+            snapshots,
+            self.BASE + timedelta(seconds=1),
+            prior=self._payload(),
         )
-        entry = next(item for item in payload["providers"] if item["name"] == "OpenCode Go")
+        by_name = {entry["name"]: entry for entry in payload["providers"]}
+        for name in ("Codex", "Codex (Spark)", "Antigravity", "Antigravity (Claude)"):
+            self.assertEqual(by_name[name]["observed_at"], payload["updated_at"])
+            self.assertEqual(by_name[name]["probe_attempted_at"], payload["updated_at"])
 
-        self.assertEqual(entry["data"], data)
-        self.assertEqual(entry["windows"], [window])
-        self.assertEqual(entry["observed_at"], observed_at)
-        self.assertEqual(entry["probe_attempted_at"], attempted_at)
-
-    def test_schedule_probes_only_due_provider_and_reports_every_deferral(self) -> None:
-        providers = [(name, MagicMock()) for name in ("Codex", "Claude", "Antigravity")]
+    def test_schedule_probes_all_non_claude_and_reports_claude_deferral(self) -> None:
+        non_claude = ("Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe")
+        providers = [(name, MagicMock()) for name in (*non_claude, "Claude")]
         statuses: list[tuple[str, int]] = []
         scheduled = _schedule_refresh_providers(
             providers,
@@ -1654,11 +1654,11 @@ class TestProviderRefreshSchedule(unittest.TestCase):
         with patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch):
             snapshots = collect_snapshots(scheduled, False)
 
-        self.assertCountEqual(probed, ["Codex", "Antigravity"])
+        self.assertCountEqual(probed, non_claude)
         self.assertEqual(statuses, [("Claude", 450)])
         self.assertEqual(
             {snapshot.name for snapshot in snapshots},
-            {"Codex", "Claude", "Antigravity"},
+            {*non_claude, "Claude"},
         )
         self.assertEqual(
             {snapshot.name for snapshot in snapshots if snapshot.source == "snapshot"},
@@ -1733,7 +1733,7 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 parse_args()
         self.assertEqual(ctx.exception.code, 2)
 
-    def test_refresh_reports_deferred_provider_without_raw_prior_data(self) -> None:
+    def test_refresh_reports_safe_schedule_start_and_complete_progress(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / ".state"
             state_dir.mkdir()
@@ -1764,7 +1764,16 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 ),
                 patch("gradus.__main__.read_prior_snapshot", return_value=prior),
                 patch("gradus.__main__.set_headless"),
-                patch("gradus.__main__.fetch_provider_snapshot") as fetch,
+                patch("gradus.__main__.time.sleep"),
+                patch(
+                    "gradus.__main__.fetch_provider_snapshot",
+                    return_value=ProviderSnapshot(
+                        name="OpenCode Go",
+                        ok=True,
+                        source="api",
+                        data={"monthly_percent_left": 75.0},
+                    ),
+                ) as fetch,
                 patch(
                     "gradus.__main__._write_snapshot_versions",
                     return_value=(True, True, True),
@@ -1774,13 +1783,15 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 result = _refresh_snapshot_once(tmp, None, False)
 
             self.assertEqual(result, 0)
-            fetch.assert_not_called()
+            fetch.assert_called_once_with("OpenCode Go", provider, False)
             write.assert_called_once()
             snapshots = write.call_args.args[0]
             self.assertEqual(len(snapshots), 1)
-            self.assertEqual(snapshots[0].source, "snapshot")
+            self.assertEqual(snapshots[0].source, "api")
             status = stderr.getvalue()
-            self.assertIn("refresh: provider OpenCode Go deferred; next due in ", status)
+            self.assertIn("refresh: provider OpenCode Go scheduled in 20.00s", status)
+            self.assertIn("refresh: provider OpenCode Go started", status)
+            self.assertIn("refresh: provider OpenCode Go complete", status)
             self.assertIn("refresh: completed", status)
             self.assertNotIn("raw-data-sentinel", status)
 
@@ -1866,8 +1877,8 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             self.assertIn("refresh: provider Codex started", status)
             self.assertIn("refresh: provider Antigravity started", status)
             self.assertLess(
-                status.index("refresh: provider Antigravity complete"),
                 status.index("refresh: provider Codex complete"),
+                status.index("refresh: provider Antigravity complete"),
             )
             self.assertIn("refresh: schema-v1 persisted", status)
             self.assertIn("refresh: schema-v2 persisted", status)
@@ -2120,6 +2131,7 @@ class TestCredentialAwareRefresh(unittest.TestCase):
                 patch("gradus.__main__.os.getcwd", return_value=tmp),
                 patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
                 patch("gradus.__main__.initialize_providers", return_value=(providers, [])),
+                patch("gradus.__main__.time.sleep"),
                 patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch),
                 patch("gradus.__main__.read_prior_snapshot", side_effect=fake_read),
                 patch("gradus.__main__.append_history_record", return_value=True),
