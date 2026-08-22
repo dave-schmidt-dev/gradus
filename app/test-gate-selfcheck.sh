@@ -522,6 +522,19 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
 [[ "${#COUNTING_LEG_SOURCES[@]}" -eq "$EXPECTED_COUNTING_LEG_COUNT" ]] ||
   fail "live expected count does not match live sources"
 
+# The pre-push selector may omit exactly the hosted macOS UI leg. Source a
+# separate shell so the remainder of this self-check continues to prove the
+# default, complete local gate.
+skip_selection_contract="$(bash -c '
+  source "$1"
+  configure_counting_legs --skip-macos-ui
+  printf "%s|%s" "$EXPECTED_COUNTING_LEG_COUNT" "${COUNTING_LEG_NAMES[*]}"
+' _ "$GATE_SCRIPT")"
+[[ "$skip_selection_contract" == "14|swift-testing pytest GradusMac GradusiOS-iPhone GradusiOS-iPad release-candidate release-candidate-validation asc-api build-upload release-reconcile testflight-assignment candidate-walkthrough release-bridge GradusiOSUI" ]] ||
+  fail "--skip-macos-ui must omit exactly the GradusMacUI counting leg"
+grep -Fq 'if [[ "$skip_macos_ui" == true ]]; then' "$GATE_SCRIPT" ||
+  fail "test gate does not guard the explicit macOS UI invocation"
+
 # The iPad leg also carries the 12 canonical image snapshots. Its aggregate
 # floor must therefore include every image plus every shipped iOS UI test;
 # otherwise the image count can hide a zero-test UI target.

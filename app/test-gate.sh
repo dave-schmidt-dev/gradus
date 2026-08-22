@@ -99,6 +99,33 @@ DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS=(
 )
 COUNTING_LEG_RUN_COUNT=0
 
+# The default gate remains complete. The pre-push hook may explicitly omit the
+# macOS UI leg only after the matching Xcode Cloud PR status is required.
+configure_counting_legs() {
+  local selector="${1:-}"
+  if [[ "$selector" != "--skip-macos-ui" ]]; then
+    return 0
+  fi
+
+  local index
+  local -a kept_names=() kept_reporters=() kept_minimums=() kept_sources=()
+  for ((index = 0; index < ${#COUNTING_LEG_NAMES[@]}; index++)); do
+    if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusMacUI" ]]; then
+      continue
+    fi
+    kept_names+=("${COUNTING_LEG_NAMES[index]}")
+    kept_reporters+=("${COUNTING_LEG_REPORTERS[index]}")
+    kept_minimums+=("${COUNTING_LEG_MINIMUMS[index]}")
+    kept_sources+=("${COUNTING_LEG_SOURCES[index]}")
+  done
+
+  COUNTING_LEG_NAMES=("${kept_names[@]}")
+  COUNTING_LEG_REPORTERS=("${kept_reporters[@]}")
+  COUNTING_LEG_MINIMUMS=("${kept_minimums[@]}")
+  COUNTING_LEG_SOURCES=("${kept_sources[@]}")
+  EXPECTED_COUNTING_LEG_COUNT="${#COUNTING_LEG_NAMES[@]}"
+}
+
 validate_counting_leg_declarations() {
   local leg_count="${#COUNTING_LEG_NAMES[@]}"
   if [[ "$leg_count" -ne "$EXPECTED_COUNTING_LEG_COUNT" ||
@@ -311,6 +338,28 @@ run_with_deadline() {
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 set -euo pipefail
+
+skip_macos_ui=false
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --skip-macos-ui)
+      skip_macos_ui=true
+      ;;
+    --help)
+      echo "Usage: bash test-gate.sh [--skip-macos-ui]"
+      exit 0
+      ;;
+    *)
+      echo "FAIL: unknown test-gate option '$1'" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ "$skip_macos_ui" == true ]]; then
+  configure_counting_legs --skip-macos-ui
+fi
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -628,18 +677,22 @@ assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITest
   -only-testing:GradusiOSUITests \
   CODE_SIGNING_ALLOWED=NO
 
-echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
-stop_installed_gradus_mac_for_ui_tests
-assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITests" -- env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusMac \
-  -destination 'platform=macOS,arch=arm64' \
-  -only-testing:GradusMacUITests \
-  CODE_SIGN_IDENTITY="Apple Development" \
-  DEVELOPMENT_TEAM=4CJ49V6QHW \
-  CODE_SIGN_ENTITLEMENTS="" \
-  PROVISIONING_PROFILE_SPECIFIER=""
+if [[ "$skip_macos_ui" == true ]]; then
+  echo "==> Skipping GradusMacUITests; required Xcode Cloud PR status owns this leg"
+else
+  echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
+  stop_installed_gradus_mac_for_ui_tests
+  assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITests" -- env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusMac \
+    -destination 'platform=macOS,arch=arm64' \
+    -only-testing:GradusMacUITests \
+    CODE_SIGN_IDENTITY="Apple Development" \
+    DEVELOPMENT_TEAM=4CJ49V6QHW \
+    CODE_SIGN_ENTITLEMENTS="" \
+    PROVISIONING_PROFILE_SPECIFIER=""
+fi
 
 assert_counting_legs_complete
 
