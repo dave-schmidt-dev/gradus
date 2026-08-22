@@ -5,7 +5,7 @@ set -euo pipefail
 # Keep the static gate reproducible across developer machines. This check only
 # observes tool version output; installation and PATH changes are deliberate
 # operator actions outside the hook.
-readonly REQUIRED_SWIFTLINT="0.65.0"
+readonly REQUIRED_SWIFTLINT="0.65.1"
 readonly REQUIRED_SWIFTFORMAT="0.62.1"
 readonly REQUIRED_SHELLCHECK="0.11.0"
 

@@ -36,6 +36,21 @@ import Testing
     #expect(PublishCoordinator.describe(nil).contains("no result"))
 }
 
+/// Zone creation fails before `upsert` has per-record results. The operation
+/// failure path must still expose only the stable CloudKit code and name.
+@Test func failureDescriptionHandlesOperationLevelCloudKitErrors() {
+    let error = CKError(
+        .zoneNotFound,
+        userInfo: [NSLocalizedDescriptionKey: "zone contains weekly_percent_left=3"]
+    )
+
+    let described = PublishCoordinator.describe(error)
+
+    #expect(described == "zoneNotFound (CKError \(CKError.Code.zoneNotFound.rawValue))")
+    #expect(!described.contains("weekly_percent_left"))
+    #expect(!described.contains(error.localizedDescription))
+}
+
 /// `RELEASE_CHECKLIST.md` tells a reviewer they may see `unmappedCKErrorCode`
 /// and to look the number up rather than assume the publish path is broken, so
 /// that string is a documented contract and not just a `default:` arm.

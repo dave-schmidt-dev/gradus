@@ -636,7 +636,7 @@ uv run pre-commit install   # installs both pre-commit and pre-push hooks
 ```
 
 - **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files,
-  plus a fail-closed check requiring SwiftLint 0.65.0, SwiftFormat 0.62.1, and
+  plus a fail-closed check requiring SwiftLint 0.65.1, SwiftFormat 0.62.1, and
   ShellCheck 0.11.0,
   plus strict SwiftLint and non-mutating SwiftFormat checks on changed Swift
   files, plus ShellCheck on changed shell scripts. SwiftLint uses the committed `.swiftlint-baseline.json` for the

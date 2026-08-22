@@ -319,6 +319,9 @@ final class PublishPipeline {
                     // Do not put CloudKit's error description in the UI: it
                     // can include record metadata. The menu exposes a stable,
                     // actionable state without reflecting payload contents.
+                    GradusLog.publish.warning(
+                        "cloud sync failed (operation \(operationID), error \(PublishCoordinator.describe(error)))"
+                    )
                     await viewModel.cloudSyncDidFail(operationID: operationID)
                 }
             }

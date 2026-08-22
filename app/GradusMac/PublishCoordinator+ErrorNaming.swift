@@ -11,6 +11,13 @@ extension PublishCoordinator {
     static func describe(_ result: Result<CKRecord, Error>?) -> String {
         guard let result else { return "no result returned for this record" }
         guard case let .failure(error) = result else { return "success" }
+        return describe(error)
+    }
+
+    /// Describes an operation-level failure without reading its localized
+    /// description or interpolating the error itself. Zone creation can fail
+    /// before there are any per-record results to describe.
+    static func describe(_ error: Error) -> String {
         guard let ckError = error as? CKError else {
             let nsError = error as NSError
             return "\(type(of: error)) (code \(nsError.code), domain \(nsError.domain))"
