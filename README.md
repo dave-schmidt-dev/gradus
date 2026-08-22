@@ -387,12 +387,14 @@ bash test-gate.sh   # runs GradusMac + GradusiOS unit/UI tests; disposable per-r
 ```
 
 The Xcode Cloud workflow `Gradus macOS UI Trial` runs the shared
-`GradusMacCloud` scheme for pull-request changes and is the required macOS UI
-status. Its hosted runner derives checked-out source and snapshot roots from
-`CI_WORKSPACE_PATH`; it never asks a local Mac for Automation Mode. Build 1
-passed 10/10 tests in two minutes. `app/Gradus.xcodeproj` is generated from
-`project.yml`, but shared project/workspace/scheme files are committed so Cloud
-can build a fresh clone; per-user Xcode state remains ignored.
+`GradusMacCloud` scheme as a manual branch build for each pull-request head
+and is the required macOS UI status. Start it in App Store Connect after a PR
+update, then retain the passing build against that exact head. Its hosted
+runner derives checked-out source and snapshot roots from `CI_WORKSPACE_PATH`;
+it never asks a local Mac for Automation Mode. Build 1 passed 10/10 tests in
+two minutes. `app/Gradus.xcodeproj` is generated from `project.yml`, but shared
+project/workspace/scheme files are committed so Cloud can build a fresh clone;
+per-user Xcode state remains ignored.
 
 ### App icons
 
