@@ -28,6 +28,7 @@ from gradus.__main__ import (
     _build_fix_actions,
     _canonical_snapshots,
     _check_warnings,
+    _claude_probe_is_due,
     _emit_debug_details,
     _health_sample_reason,
     _is_auth_error,
@@ -36,8 +37,11 @@ from gradus.__main__ import (
     _load_config,
     _merge_with_previous,
     _notify_warning,
+    _provider_next_probe_at,
+    _refresh_snapshot_once,
     _release_refresh_snapshot_lock,
     _resolve_log_path,
+    _schedule_refresh_providers,
     _setup_logging,
     _verify_refresh_health,
     _write_snapshot_versions,
@@ -46,7 +50,11 @@ from gradus.__main__ import (
     parse_args,
 )
 from gradus.providers import ProviderSnapshot, set_headless
-from gradus.snapshot import ANTIGRAVITY_AUTH_RETRY_MESSAGE, SnapshotWrite
+from gradus.snapshot import (
+    ANTIGRAVITY_AUTH_RETRY_MESSAGE,
+    SnapshotWrite,
+    build_snapshot_v2_payload,
+)
 from gradus.ui import THEME, build_dashboard, render_json
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
@@ -1515,6 +1523,186 @@ class HistoryPersistenceIntegrationTests(unittest.TestCase):
         journal.assert_not_called()
 
 
+class TestProviderRefreshSchedule(unittest.TestCase):
+    """Provider cadence is stable while every cycle remains consolidated."""
+
+    BASE = datetime(2026, 8, 22, 12, tzinfo=timezone.utc)
+
+    @classmethod
+    def _payload(cls, *, claude_error: str | None = None) -> dict[str, object]:
+        return {
+            "schema_version": 2,
+            "updated_at": cls.BASE.isoformat(),
+            "providers": [
+                {
+                    "name": name,
+                    "ok": claude_error is None or name != "Claude",
+                    "error": claude_error if name == "Claude" else None,
+                    "data": {"marker": name},
+                    "windows": [],
+                    "observed_at": cls.BASE.isoformat(),
+                    "probe_attempted_at": cls.BASE.isoformat(),
+                }
+                for name in (
+                    "Codex",
+                    "Claude",
+                    "Antigravity",
+                    "Copilot",
+                    "Cursor",
+                    "OpenCode Go",
+                    "Vibe",
+                )
+            ],
+        }
+
+    def test_per_provider_due_times_are_stable_and_staggered(self) -> None:
+        payload = self._payload()
+        expected_seconds = {
+            "Codex": 120,
+            "Claude": 600,
+            "Antigravity": 120,
+            "Copilot": 317,
+            "Cursor": 347,
+            "OpenCode Go": 373,
+            "Vibe": 401,
+        }
+
+        first = {
+            name: _provider_next_probe_at(payload, name, self.BASE) for name in expected_seconds
+        }
+        second = {
+            name: _provider_next_probe_at(payload, name, self.BASE)
+            for name in reversed(expected_seconds)
+        }
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            first,
+            {
+                name: self.BASE + timedelta(seconds=seconds)
+                for name, seconds in expected_seconds.items()
+            },
+        )
+        staggered = {
+            name: due for name, due in first.items() if name not in {"Codex", "Antigravity"}
+        }
+        self.assertEqual(len(set(staggered.values())), len(staggered))
+
+    def test_deferred_non_synthetic_provider_preserves_full_v2_entry(self) -> None:
+        observed_at = (self.BASE - timedelta(seconds=30)).isoformat()
+        attempted_at = self.BASE.isoformat()
+        window = {
+            "id": "monthly",
+            "percent_left": 55.0,
+            "reset_iso": (self.BASE + timedelta(days=10)).isoformat(),
+            "window_hours": 720.0,
+            "pace_delta": -2.5,
+        }
+        data = {
+            "five_hour_percent_left": 70.0,
+            "monthly_percent_left": 55.0,
+        }
+        prior = {
+            "schema_version": 2,
+            "updated_at": self.BASE.isoformat(),
+            "providers": [
+                {
+                    "name": "OpenCode Go",
+                    "ok": True,
+                    "error": None,
+                    "windows": [window],
+                    "data": data,
+                    "observed_at": observed_at,
+                    "probe_attempted_at": attempted_at,
+                }
+            ],
+        }
+        deferred = ProviderSnapshot(
+            name="OpenCode Go",
+            ok=True,
+            source="snapshot",
+            data=data,
+        )
+
+        payload = build_snapshot_v2_payload(
+            [deferred],
+            self.BASE + timedelta(seconds=150),
+            prior=prior,
+        )
+        entry = next(item for item in payload["providers"] if item["name"] == "OpenCode Go")
+
+        self.assertEqual(entry["data"], data)
+        self.assertEqual(entry["windows"], [window])
+        self.assertEqual(entry["observed_at"], observed_at)
+        self.assertEqual(entry["probe_attempted_at"], attempted_at)
+
+    def test_schedule_probes_only_due_provider_and_reports_every_deferral(self) -> None:
+        providers = [(name, MagicMock()) for name in ("Codex", "Claude", "Antigravity")]
+        statuses: list[tuple[str, int]] = []
+        scheduled = _schedule_refresh_providers(
+            providers,
+            self._payload(),
+            self.BASE + timedelta(seconds=150),
+            on_deferred=lambda name, seconds: statuses.append((name, seconds)),
+        )
+        probed: list[str] = []
+
+        def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
+            probed.append(name)
+            return ProviderSnapshot(name=name, ok=True, source="api", data={})
+
+        with patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch):
+            snapshots = collect_snapshots(scheduled, False)
+
+        self.assertCountEqual(probed, ["Codex", "Antigravity"])
+        self.assertEqual(statuses, [("Claude", 450)])
+        self.assertEqual(
+            {snapshot.name for snapshot in snapshots},
+            {"Codex", "Claude", "Antigravity"},
+        )
+        self.assertEqual(
+            {snapshot.name for snapshot in snapshots if snapshot.source == "snapshot"},
+            {"Claude"},
+        )
+
+    def test_claude_cooldown_and_rate_limit_backoff_are_preserved(self) -> None:
+        normal = self._payload()
+        limited = self._payload(claude_error="HTTP 429 rate limited")
+
+        self.assertEqual(
+            _provider_next_probe_at(normal, "Claude", self.BASE),
+            self.BASE + timedelta(seconds=600),
+        )
+        self.assertFalse(_claude_probe_is_due(normal, self.BASE + timedelta(seconds=599)))
+        self.assertTrue(_claude_probe_is_due(normal, self.BASE + timedelta(seconds=600)))
+        self.assertEqual(
+            _provider_next_probe_at(limited, "Claude", self.BASE),
+            self.BASE + timedelta(seconds=3600),
+        )
+        self.assertFalse(_claude_probe_is_due(limited, self.BASE + timedelta(seconds=3599)))
+        self.assertTrue(_claude_probe_is_due(limited, self.BASE + timedelta(seconds=3600)))
+
+    def test_rate_limited_claude_is_deferred_safely_before_one_hour(self) -> None:
+        raw_detail = "HTTP 429 rate limited raw-account-detail"
+        payload = self._payload(claude_error=raw_detail)
+        provider = MagicMock()
+        statuses: list[tuple[str, int]] = []
+        scheduled = _schedule_refresh_providers(
+            [("Claude", provider)],
+            payload,
+            self.BASE + timedelta(seconds=3599),
+            on_deferred=lambda name, seconds: statuses.append((name, seconds)),
+        )
+
+        with patch("gradus.__main__.fetch_provider_snapshot") as fetch:
+            snapshots = collect_snapshots(scheduled, False)
+
+        fetch.assert_not_called()
+        self.assertEqual(statuses, [("Claude", 1)])
+        self.assertEqual(snapshots[0].source, "snapshot")
+        self.assertNotIn("raw-account-detail", repr(statuses))
+
+
 class TestCredentialAwareRefresh(unittest.TestCase):
     """The explicit refresh command is credential-aware but non-interactive."""
 
@@ -1544,6 +1732,57 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 parse_args()
         self.assertEqual(ctx.exception.code, 2)
+
+    def test_refresh_reports_deferred_provider_without_raw_prior_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / ".state"
+            state_dir.mkdir()
+            attempted_at = datetime.now(timezone.utc)
+            prior = {
+                "schema_version": 2,
+                "updated_at": attempted_at.isoformat(),
+                "providers": [
+                    {
+                        "name": "OpenCode Go",
+                        "ok": True,
+                        "error": None,
+                        "windows": [],
+                        "data": {"monthly_percent_left": "raw-data-sentinel"},
+                        "observed_at": attempted_at.isoformat(),
+                        "probe_attempted_at": attempted_at.isoformat(),
+                    }
+                ],
+            }
+            provider = MagicMock()
+            stderr = StringIO()
+
+            with (
+                patch("gradus.__main__._snapshot_state_dir", return_value=state_dir),
+                patch(
+                    "gradus.__main__.initialize_providers",
+                    return_value=([("OpenCode Go", provider)], []),
+                ),
+                patch("gradus.__main__.read_prior_snapshot", return_value=prior),
+                patch("gradus.__main__.set_headless"),
+                patch("gradus.__main__.fetch_provider_snapshot") as fetch,
+                patch(
+                    "gradus.__main__._write_snapshot_versions",
+                    return_value=(True, True, True),
+                ) as write,
+                patch("gradus.__main__.sys.stderr", stderr),
+            ):
+                result = _refresh_snapshot_once(tmp, None, False)
+
+            self.assertEqual(result, 0)
+            fetch.assert_not_called()
+            write.assert_called_once()
+            snapshots = write.call_args.args[0]
+            self.assertEqual(len(snapshots), 1)
+            self.assertEqual(snapshots[0].source, "snapshot")
+            status = stderr.getvalue()
+            self.assertIn("refresh: provider OpenCode Go deferred; next due in ", status)
+            self.assertIn("refresh: completed", status)
+            self.assertNotIn("raw-data-sentinel", status)
 
     def test_refresh_is_explicit_single_flight_progress_visible_and_one_probe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
