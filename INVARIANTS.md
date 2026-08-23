@@ -136,7 +136,7 @@ rationale: MARKETING_VERSION is the user-facing MAJOR.MINOR.PATCH product versio
   releases and prevents small fixes from appearing as large version jumps.
 
 ### INV-11 — New features and user-facing UI ship with automated regression coverage
-area: ["app/GradusKit/**", "app/GradusMac/**", "app/GradusiOS/**", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/GradusMacUITests/**", "app/GradusiOSUITests/**", "gradus/**", "tests/**", "TESTING.md"]
+area: ["app/GradusKit/**", "app/GradusMac/**", "app/GradusiOS/**", "app/GradusWidget/**", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/GradusWidgetTests/**", "app/GradusMacUITests/**", "app/GradusiOSUITests/**", "gradus/**", "tests/**", "TESTING.md"]
 gate_test: app/test-gate.sh
 threshold: 3
 rationale: Every new behavior has a test at the lowest layer that proves it; new SwiftUI appearance has
@@ -144,8 +144,9 @@ rationale: Every new behavior has a test at the lowest layer that proves it; new
   producer/consumer behavior has tests on both sides. Tests must be wired into the runner and gate.
   Silent-zero execution is a discriminated failure: each counted gate leg must report at least its
   declared minimum number of tests, and a successful command with no recognized count is not proof.
-  The canonical gate also runs explicit target-level GradusMacUITests and GradusiOSUITests legs with
-  floors above a placeholder-only run, so a broad scheme leg cannot mask a missing UI target.
+  The local canonical gate runs explicit target-level GradusiOSUITests legs with
+  floors above a placeholder-only run, so a broad scheme leg cannot mask a missing iOS UI target.
+  GradusMacCloud is the sole GradusMacUITests runner.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
 
@@ -168,13 +169,21 @@ rationale: GradusiOS is one artifact with one version, so a size class is a rend
   iPhone UI 2, iPad UI 2). Harvest still reports `frozen: true` with three
   INV-12 recurrence entries (threshold three). The 2026-08-07 resolution
   remains unchanged; no closure or backdated resolution is recorded.
-  The current 13-leg manifest keeps the iPhone UI target explicit and combines
-  the iPad UI target with its 12 canonical image snapshots; its aggregate floor
-  is therefore 15, and `test-gate-selfcheck.sh` rejects a snapshot-only iPad
-  result or either destination pointed at the other simulator.
+  The current 15-leg local manifest keeps the widget and iPhone UI targets explicit and combines
+  the iPad UI target with its 12 canonical image snapshots; the iPad leg's individual floor
+  is therefore 21 (12 snapshot selectors + 9 UI workflows, distinct from the full 15-leg gate
+  floor that sums to 299). `test-gate-selfcheck.sh` rejects a snapshot-only iPad
+  result, either destination pointed at the other simulator, or a widget leg
+  with the wrong selector, duplicate embed, or absent target source.
 
 ### INV-13 — Mac, iPhone, and iPad preserve the same live provider state
-area: ["app/Shared/ProviderRanking.swift", "app/GradusMac/MenuProviderList.swift", "app/GradusiOS/DashboardView.swift", "app/GradusiOS/DashboardView+DenseGrid.swift", "app/GradusiOS/Components/ProviderDensityCard.swift", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/test-gate.sh"]
+area: ["app/Shared/ProviderRanking.swift", "app/GradusMac/MenuProviderList.swift", "app/GradusiOS/DashboardView.swift", "app/GradusiOS/DashboardView+DenseGrid.swift", "app/GradusiOS/Components/ProviderDensityCard.swift", "app/GradusWidget/**", "app/GradusWidgetTests/**", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/test-gate.sh"]
 gate_test: app/test-gate.sh
 threshold: 3
-rationale: Platform layout may change density, navigation chrome, and exact recovery copy, but the same live snapshot must retain every valid provider/window, put exhausted providers after active providers, and derive an exhausted provider's recovery reset only from depleted windows. iOS exposes account/retry recovery as a full-screen state while the Mac exposes publish/setup recovery in its menu and Settings; both must retain an actionable unavailable state rather than presenting stale data as connected. The shared CrossSurfaceParity seam is the mutation boundary: selecting one window, filtering only on one platform, or deriving a reset from a healthy sibling is a contract violation. Tests exercise iPhone, iPad, and Mac fixtures with the same multi-window exhausted provider and explicit unavailable/recovery states.
+rationale: Full app surfaces (Mac menu, iPhone dashboard, and iPad dashboard) must retain every valid provider and window, put exhausted providers after active providers, and derive an exhausted provider's recovery reset only from depleted windows. The only exception to showing every valid provider and window is the systemSmall widget (GradusWidget), which deterministically projects a single selected window (requiring its normalized window label) and routes dashboard-on-tap behavior into the full app. iOS exposes account/retry recovery as a full-screen state while the Mac exposes publish/setup recovery in its menu and Settings; both must retain an actionable unavailable state rather than presenting stale data as connected. The shared CrossSurfaceParity seam is the mutation boundary for full app surfaces: selecting one window on full app surfaces, filtering only on one platform, or deriving a reset from a healthy sibling is a contract violation. Tests exercise iPhone, iPad, and Mac fixtures with the same multi-window exhausted provider and explicit unavailable/recovery states.
+
+### INV-14 — The widget consumes an atomic, credential-free projection and performs no network, CloudKit, or credential operations
+area: ["app/GradusKit/Sources/GradusKit/WidgetSnapshot.swift", "app/GradusKit/Sources/GradusKit/WidgetSnapshotStore.swift", "app/GradusKit/Tests/GradusKitTests/WidgetSnapshotTests.swift", "app/GradusWidget/**", "app/GradusWidgetTests/**"]
+gate_test: app/test-gate.sh
+threshold: 3
+rationale: The small widget extension operates under a read-only boundary and consumes only an atomic schema-v1 JSON projection written to shared storage by the main application. The widget snapshot model strictly excludes ProviderStatus.data, error messages, identity, CloudKit change tokens, tokens, cookies, credentials, and filesystem paths. The widget process performs zero network, CloudKit, token refresh, or credential access. Missing files, malformed JSON, and unknown schema versions fall back deterministically to an empty state without crashing or attempting recovery over the network. File replacement is atomic so an interrupted or failed write preserves prior complete file bytes.

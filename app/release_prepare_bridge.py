@@ -28,10 +28,23 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = "gradus-ios"
 BUNDLE_IDENTIFIER = "com.zerodelta.gradus.ios"
+WIDGET_BUNDLE_IDENTIFIER = "com.zerodelta.gradus.ios.widget"
 TEAM_IDENTIFIER = "4CJ49V6QHW"
+APP_GROUP_IDENTIFIER = "group.com.zerodelta.gradus"
+WIDGET_EXTENSION_NAME = "GradusWidget.appex"
 ARCHIVE_SCRIPT = ROOT / "app" / "archive-upload-ios.sh"
 PROOF_OPERATIONS = ("production-build", "archive", "sign", "artifact-verify")
 OPERATIONS = frozenset((*PROOF_OPERATIONS, "all"))
+DISALLOWED_EXTENSION_ENTITLEMENT_KEYS = frozenset(
+    {
+        "com.apple.developer.icloud-container-identifiers",
+        "com.apple.developer.ubiquity-kvstore-identifier",
+        "com.apple.developer.icloud-services",
+        "com.apple.developer.icloud-container-environment",
+        "com.apple.developer.aps-environment",
+        "aps-environment",
+    }
+)
 _CANDIDATE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
@@ -75,6 +88,8 @@ class ArtifactInspection:
     embedded_profile_sha256: str
     signing_certificate_sha256: str
     metadata_sha256: str
+    widget_embedded_profile_sha256: str | None = None
+    widget_signing_certificate_sha256: str | None = None
 
 
 def _load_json_bytes(path: Path) -> tuple[bytes, Mapping[str, Any]]:
@@ -473,12 +488,20 @@ def inspect_artifact(artifact: PreparedArtifact, context: CandidateContext) -> A
     with tempfile.TemporaryDirectory(prefix="gradus-release-proof.") as temporary:
         unpacked = Path(temporary)
         _run_checked(["/usr/bin/ditto", "-x", "-k", str(artifact.ipa_path), str(unpacked)])
-        applications = list((unpacked / "Payload").glob("*.app"))
-        if len(applications) != 1 or not applications[0].is_dir():
+        payload = unpacked / "Payload"
+        if payload.is_symlink() or not payload.is_dir():
+            raise BridgeError("artifact-layout-invalid")
+        applications = list(payload.glob("*.app"))
+        if len(applications) != 1 or not applications[0].is_dir() or applications[0].is_symlink():
             raise BridgeError("artifact-layout-invalid")
         application = applications[0]
+
+        # 1. Main app Info.plist
+        info_path = application / "Info.plist"
+        if info_path.is_symlink() or not info_path.is_file():
+            raise BridgeError("artifact-metadata-invalid")
         try:
-            info = plistlib.loads((application / "Info.plist").read_bytes())
+            info = plistlib.loads(info_path.read_bytes())
         except (OSError, plistlib.InvalidFileException) as exc:
             raise BridgeError("artifact-metadata-invalid") from exc
         if (
@@ -488,9 +511,47 @@ def inspect_artifact(artifact: PreparedArtifact, context: CandidateContext) -> A
         ):
             raise BridgeError("artifact-metadata-mismatch")
 
+        # 2. Nested widget extension presence and layout
+        plugins_dir = application / "PlugIns"
+        if plugins_dir.is_symlink() or not plugins_dir.is_dir():
+            raise BridgeError("artifact-layout-invalid")
+        appex_bundles = [p for p in plugins_dir.glob("*.appex") if not p.is_symlink()]
+        if len(appex_bundles) != 1:
+            raise BridgeError("artifact-layout-invalid")
+        widget_bundle = appex_bundles[0]
+        if widget_bundle.name != WIDGET_EXTENSION_NAME or not widget_bundle.is_dir():
+            raise BridgeError("artifact-layout-invalid")
+
+        # 3. Extension Info.plist
+        widget_info_path = widget_bundle / "Info.plist"
+        if widget_info_path.is_symlink() or not widget_info_path.is_file():
+            raise BridgeError("artifact-metadata-invalid")
+        try:
+            widget_info = plistlib.loads(widget_info_path.read_bytes())
+        except (OSError, plistlib.InvalidFileException) as exc:
+            raise BridgeError("artifact-metadata-invalid") from exc
+        if (
+            widget_info.get("CFBundleIdentifier") != WIDGET_BUNDLE_IDENTIFIER
+            or widget_info.get("CFBundleShortVersionString") != context.marketing_version
+            or str(widget_info.get("CFBundleVersion")) != str(context.build_number)
+        ):
+            raise BridgeError("artifact-metadata-mismatch")
+
+        # 4. Embedded mobileprovision profiles
         profile_path = application / "embedded.mobileprovision"
         if profile_path.is_symlink() or not profile_path.is_file():
             raise BridgeError("embedded-profile-missing")
+        widget_profile_path = widget_bundle / "embedded.mobileprovision"
+        if widget_profile_path.is_symlink() or not widget_profile_path.is_file():
+            raise BridgeError("embedded-profile-missing")
+
+        # Profile swap detection (profiles must be distinct files)
+        profile_bytes = profile_path.read_bytes()
+        widget_profile_bytes = widget_profile_path.read_bytes()
+        if profile_bytes == widget_profile_bytes:
+            raise BridgeError("embedded-profile-mismatch")
+
+        # Verify and parse main app profile
         profile_result = _run_checked(
             [
                 "/usr/bin/openssl",
@@ -512,7 +573,77 @@ def inspect_artifact(artifact: PreparedArtifact, context: CandidateContext) -> A
         if not isinstance(profile_entitlements, Mapping):
             raise BridgeError("embedded-profile-invalid")
 
+        # Verify and parse widget profile
+        widget_profile_result = _run_checked(
+            [
+                "/usr/bin/openssl",
+                "smime",
+                "-verify",
+                "-noverify",
+                "-inform",
+                "der",
+                "-in",
+                str(widget_profile_path),
+            ],
+            capture_output=True,
+        )
+        try:
+            widget_profile = plistlib.loads(widget_profile_result.stdout)
+        except plistlib.InvalidFileException as exc:
+            raise BridgeError("embedded-profile-invalid") from exc
+        widget_profile_entitlements = widget_profile.get("Entitlements")
+        if not isinstance(widget_profile_entitlements, Mapping):
+            raise BridgeError("embedded-profile-invalid")
+
+        application_identifier = f"{TEAM_IDENTIFIER}.{BUNDLE_IDENTIFIER}"
+        widget_application_identifier = f"{TEAM_IDENTIFIER}.{WIDGET_BUNDLE_IDENTIFIER}"
+
+        # Profile identity validation
+        if (
+            profile_entitlements.get("application-identifier") != application_identifier
+            or widget_profile_entitlements.get("application-identifier")
+            != widget_application_identifier
+            or profile_entitlements.get("com.apple.developer.team-identifier") != TEAM_IDENTIFIER
+            or widget_profile_entitlements.get("com.apple.developer.team-identifier")
+            != TEAM_IDENTIFIER
+        ):
+            raise BridgeError("embedded-profile-mismatch")
+
+        # Profile CloudKit environment for main app
+        main_profile_cloudkit = profile_entitlements.get(
+            "com.apple.developer.icloud-container-environment"
+        )
+        if isinstance(main_profile_cloudkit, str):
+            if main_profile_cloudkit != "Production":
+                raise BridgeError("signed-entitlements-mismatch")
+        elif isinstance(main_profile_cloudkit, (list, tuple)):
+            if "Production" not in main_profile_cloudkit:
+                raise BridgeError("signed-entitlements-mismatch")
+        else:
+            raise BridgeError("signed-entitlements-mismatch")
+
+        # Profile App Groups
+        main_profile_groups = profile_entitlements.get("com.apple.security.application-groups", ())
+        widget_profile_groups = widget_profile_entitlements.get(
+            "com.apple.security.application-groups", ()
+        )
+        if (
+            not isinstance(main_profile_groups, (list, tuple))
+            or APP_GROUP_IDENTIFIER not in main_profile_groups
+            or not isinstance(widget_profile_groups, (list, tuple))
+            or APP_GROUP_IDENTIFIER not in widget_profile_groups
+        ):
+            raise BridgeError("signed-entitlements-mismatch")
+
+        # Disallowed keys in widget profile
+        if any(key in widget_profile_entitlements for key in DISALLOWED_EXTENSION_ENTITLEMENT_KEYS):
+            raise BridgeError("signed-entitlements-mismatch")
+
+        # 5. Codesign deep & strict verification (widget first, then main app)
+        _run_checked(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(widget_bundle)])
         _run_checked(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(application)])
+
+        # 6. Extract signed entitlements
         entitlements_result = _run_checked(
             ["/usr/bin/codesign", "-d", "--entitlements", ":-", str(application)],
             capture_output=True,
@@ -521,17 +652,44 @@ def inspect_artifact(artifact: PreparedArtifact, context: CandidateContext) -> A
             entitlements = plistlib.loads(entitlements_result.stdout)
         except plistlib.InvalidFileException as exc:
             raise BridgeError("signed-entitlements-invalid") from exc
-        application_identifier = f"{TEAM_IDENTIFIER}.{BUNDLE_IDENTIFIER}"
+
+        widget_entitlements_result = _run_checked(
+            ["/usr/bin/codesign", "-d", "--entitlements", ":-", str(widget_bundle)],
+            capture_output=True,
+        )
+        try:
+            widget_entitlements = plistlib.loads(widget_entitlements_result.stdout)
+        except plistlib.InvalidFileException as exc:
+            raise BridgeError("signed-entitlements-invalid") from exc
+
+        # Main app signed entitlements
+        main_signed_groups = entitlements.get("com.apple.security.application-groups", ())
         if (
             entitlements.get("application-identifier") != application_identifier
             or entitlements.get("com.apple.developer.team-identifier") != TEAM_IDENTIFIER
             or entitlements.get("com.apple.developer.icloud-container-environment") != "Production"
             or entitlements.get("get-task-allow") is not False
-            or "Production"
-            not in profile_entitlements.get("com.apple.developer.icloud-container-environment", ())
+            or not isinstance(main_signed_groups, (list, tuple))
+            or APP_GROUP_IDENTIFIER not in main_signed_groups
         ):
             raise BridgeError("signed-entitlements-mismatch")
 
+        # Widget signed entitlements
+        widget_signed_groups = widget_entitlements.get("com.apple.security.application-groups", ())
+        if (
+            widget_entitlements.get("application-identifier") != widget_application_identifier
+            or widget_entitlements.get("com.apple.developer.team-identifier") != TEAM_IDENTIFIER
+            or widget_entitlements.get("get-task-allow") is not False
+            or not isinstance(widget_signed_groups, (list, tuple))
+            or APP_GROUP_IDENTIFIER not in widget_signed_groups
+        ):
+            raise BridgeError("signed-entitlements-mismatch")
+
+        # Disallowed keys in widget signed entitlements
+        if any(key in widget_entitlements for key in DISALLOWED_EXTENSION_ENTITLEMENT_KEYS):
+            raise BridgeError("signed-entitlements-mismatch")
+
+        # 7. Signing certificates extraction
         certificate_prefix = unpacked / "signing-certificate-"
         _run_checked(
             [
@@ -544,22 +702,55 @@ def inspect_artifact(artifact: PreparedArtifact, context: CandidateContext) -> A
         leaf_certificate = Path(f"{certificate_prefix}0")
         if not leaf_certificate.is_file():
             raise BridgeError("signing-certificate-missing")
+
+        widget_certificate_prefix = unpacked / "widget-signing-certificate-"
+        _run_checked(
+            [
+                "/usr/bin/codesign",
+                "-d",
+                f"--extract-certificates={widget_certificate_prefix}",
+                str(widget_bundle),
+            ]
+        )
+        widget_leaf_certificate = Path(f"{widget_certificate_prefix}0")
+        if not widget_leaf_certificate.is_file():
+            raise BridgeError("signing-certificate-missing")
+
         profile_digest = _sha256(profile_path)
         certificate_digest = _sha256(leaf_certificate)
+        widget_profile_digest = _sha256(widget_profile_path)
+        widget_certificate_digest = _sha256(widget_leaf_certificate)
+
         metadata = {
+            "appGroup": APP_GROUP_IDENTIFIER,
+            "applicationIdentifier": application_identifier,
             "artifactSha256": artifact.artifact_sha256,
             "bundleIdentifier": BUNDLE_IDENTIFIER,
-            "marketingVersion": context.marketing_version,
             "buildNumber": str(context.build_number),
-            "applicationIdentifier": application_identifier,
-            "teamIdentifier": TEAM_IDENTIFIER,
             "cloudKitEnvironment": "Production",
             "embeddedProfileSha256": profile_digest,
+            "marketingVersion": context.marketing_version,
             "signingCertificateSha256": certificate_digest,
             "strictSignatureResult": "passed",
+            "teamIdentifier": TEAM_IDENTIFIER,
             "uploadValidationResult": "passed",
+            "widgetAppGroup": APP_GROUP_IDENTIFIER,
+            "widgetApplicationIdentifier": widget_application_identifier,
+            "widgetBundleIdentifier": WIDGET_BUNDLE_IDENTIFIER,
+            "widgetBuildNumber": str(context.build_number),
+            "widgetEmbeddedProfileSha256": widget_profile_digest,
+            "widgetExtensionName": WIDGET_EXTENSION_NAME,
+            "widgetMarketingVersion": context.marketing_version,
+            "widgetSigningCertificateSha256": widget_certificate_digest,
+            "widgetStrictSignatureResult": "passed",
         }
-        return ArtifactInspection(profile_digest, certificate_digest, _canonical_digest(metadata))
+        return ArtifactInspection(
+            profile_digest,
+            certificate_digest,
+            _canonical_digest(metadata),
+            widget_profile_digest,
+            widget_certificate_digest,
+        )
 
 
 def build_proof(

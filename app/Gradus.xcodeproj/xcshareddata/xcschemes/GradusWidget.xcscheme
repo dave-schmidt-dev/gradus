@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
    LastUpgradeVersion = "1430"
+   wasCreatedForAppExtension = "YES"
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
@@ -15,9 +16,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "C0498B399E6E33BD81633710"
-               BuildableName = "GradusMac.app"
-               BlueprintName = "GradusMac"
+               BlueprintIdentifier = "524691D545B25811BD2847F9"
+               BuildableName = "GradusWidget.appex"
+               BlueprintName = "GradusWidget"
                ReferencedContainer = "container:Gradus.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -27,14 +28,14 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "NO"
+      shouldUseLaunchSchemeArgsEnv = "YES"
       onlyGenerateCoverageForSpecifiedTargets = "NO">
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C0498B399E6E33BD81633710"
-            BuildableName = "GradusMac.app"
-            BlueprintName = "GradusMac"
+            BlueprintIdentifier = "524691D545B25811BD2847F9"
+            BuildableName = "GradusWidget.appex"
+            BlueprintName = "GradusWidget"
             ReferencedContainer = "container:Gradus.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
@@ -44,51 +45,34 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D292A9109066CF1E93C60B80"
-               BuildableName = "GradusMacTests.xctest"
-               BlueprintName = "GradusMacTests"
-               ReferencedContainer = "container:Gradus.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D06D52273502B7569707F818"
-               BuildableName = "GradusCredentialBridgeTests.xctest"
-               BlueprintName = "GradusCredentialBridgeTests"
+               BlueprintIdentifier = "5013E9D968BCDFE9D6558CFF"
+               BuildableName = "GradusWidgetTests.xctest"
+               BlueprintName = "GradusWidgetTests"
                ReferencedContainer = "container:Gradus.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>
-      <EnvironmentVariables>
-         <EnvironmentVariable
-            key = "GRADUS_DISABLE_PIPELINE"
-            value = "1"
-            isEnabled = "YES">
-         </EnvironmentVariable>
-      </EnvironmentVariables>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
-      selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
-      selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      selectedDebuggerIdentifier = ""
+      selectedLauncherIdentifier = "Xcode.IDEFoundation.Launcher.PosixSpawn"
       launchStyle = "0"
       useCustomWorkingDirectory = "NO"
       ignoresPersistentStateOnLaunch = "NO"
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
-      allowLocationSimulation = "YES">
+      allowLocationSimulation = "YES"
+      launchAutomaticallySubstyle = "2">
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C0498B399E6E33BD81633710"
-            BuildableName = "GradusMac.app"
-            BlueprintName = "GradusMac"
+            BlueprintIdentifier = "524691D545B25811BD2847F9"
+            BuildableName = "GradusWidget.appex"
+            BlueprintName = "GradusWidget"
             ReferencedContainer = "container:Gradus.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -103,9 +87,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C0498B399E6E33BD81633710"
-            BuildableName = "GradusMac.app"
-            BlueprintName = "GradusMac"
+            BlueprintIdentifier = "524691D545B25811BD2847F9"
+            BuildableName = "GradusWidget.appex"
+            BlueprintName = "GradusWidget"
             ReferencedContainer = "container:Gradus.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

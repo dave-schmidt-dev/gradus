@@ -352,7 +352,7 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 
 ## Companion apps (macOS/iOS)
 
-`app/` holds a Swift companion pair that mirrors this dashboard off-machine:
+`app/` holds the Swift companion apps and iOS widget that mirror this dashboard off-machine:
 
 The canonical Zero Delta design-system source package is preserved at
 [`app/design-system/zero-delta/`](app/design-system/zero-delta/). It includes
@@ -374,6 +374,7 @@ redline across the TUI, Mac, and iOS surfaces.
   - **Provider Detail** (Phase 4): all windows per provider rendered at full size, with age metadata.
   - **Settings** (Phase 5): Sync toggle (moved from toolbar), Notifications toggle (independent of sync, unsubscribes from CloudKit on toggle-off with success-gated UI update), local warning-threshold slider, provider sorting, Automatic plus the device-relative Small-to-Large card-size slider where multiple columns are possible, Show exhausted, connected-computer details, provider count, and app version. Display preferences are device-local; one-column devices show Automatic only.
   - **Window ID labels** (Phase 4): verified against `gradus/snapshot.py`'s `V2_WINDOW_SPECS` (the schema-v2 window specs that actually flow to CloudKit/iOS), with explicit labels for the nine confirmed ids (`five_hour`/`weekly`/`monthly`/`premium`/`cg_five_hour`/`cg_weekly`/`ac`/`ap`/`billing_cycle`) plus legacy `cg5`/`cg1w` aliases, and raw-ID fallback for unknown ids.
+- **GradusWidget** — one `systemSmall`-only WidgetKit extension embedded in GradusiOS (`com.zerodelta.gradus.ios.widget`) with its own dedicated App Store provisioning profile ("Gradus Widget App Store (API-created)"). The release pipeline enforces inside-out nested signing (extension first, containing app second) and strict version/build parity with GradusiOS. The main app writes an atomic, allowlisted JSON projection to `group.com.zerodelta.gradus`; the extension reads only that file and performs no network, CloudKit, notification, or credential work. It shows the fixed most-urgent provider/window, remaining percentage (truncating with one decimal below 10%), signal rail, reset time, and age of the phone's last successful sync. Missing or invalid data asks the user to open Gradus. Tapping opens the app dashboard. Sample and UI-test fixtures never publish widget data. Physical device acceptance requires verifying the add/remove lifecycle on hardware.
 - Both apps share `GradusKit`, a CloudKit-free Swift package holding the reconciliation logic and the fixed `windowWarns` threshold, so it can be unit-tested against mocks instead of live CloudKit. `windowWarns` is defined as `signalLevel(...).needsAttention`, and `providerNeedsAttention` aggregates it over every window — one predicate with one aggregation, which is what keeps the Mac's badge and the iPhone's warning count from disagreeing about the same snapshot. Only one of the two models stores the answer: the Mac evaluates it, and stamps it onto each CloudKit record as `isWarning` for iOS and the push subscription to read. The device-local warning threshold is kept out of GradusKit per INV-7 scope — it lives in `app/Shared/` with the ranking rules, where both apps can reach it without widening the kit.
 - The expected-pace marker is defined once per concern: `expectedRemaining()` in GradusKit says *where* it goes, and `markerOffset(fraction:barWidth:markerWidth:)` beside it says how that maps to a leading-edge offset. Both apps call both. The offset moved into the kit after the two drifted — iOS clamped the marker inside its bar and the Mac did not, so a Mac window at 0% or 100% drew half a marker hanging off the end. Its colour is shared the same way, as `SignalColor.paceMarker` (`#005FD7`, matching the TUI's `bar.marker`) — deliberately outside the four-tier ramp, because the marker is a reference line rather than a signal level, and blue is the one hue no tier uses. Only the marker's *size* stays per-app, because the two bars are different heights. The TUI shares the colour but not the shape: it draws the marker as one whole cell of the bar's own fill glyph rather than a thin line. That is a constraint of the character grid, not a style choice — a thin stroke there has to change glyph to move within a cell, which changes its width, and can never ink as much of its cell as the fill does, so the terminal background shows through around it. The Swift bars position a real rectangle at a continuous offset and have neither problem.
 - Sync is opt-in per device (off by default) and independent per device — pairing two devices doesn't couple them beyond both reading the same published snapshot.
@@ -382,13 +383,14 @@ Build/test (requires Xcode + `xcodegen`, pinned version in `app/.xcode-version`)
 
 ```bash
 cd app
-bash test-gate.sh   # runs GradusMac + GradusiOS unit/UI tests; disposable per-run simulators via the shared gate lib
+bash test-gate.sh   # runs GradusMac, GradusiOS, and GradusWidget tests; disposable per-run simulators via the shared gate lib
 ```
 
 The Xcode Cloud workflow `Gradus macOS UI Trial` runs the shared
 `GradusMacCloud` scheme as a manual branch build for each pull-request head
-and is the required macOS UI status. Start it in App Store Connect after a PR
-update, then retain the passing build against that exact head. Its hosted
+and is the sole `GradusMacUITests` owner and required macOS UI status. Start it
+in App Store Connect after a PR update, then retain the passing build against
+that exact head. Its hosted
 runner derives checked-out source and snapshot roots from `CI_WORKSPACE_PATH`;
 it never asks a local Mac for Automation Mode. Build 1 passed 10/10 tests in
 two minutes. `app/Gradus.xcodeproj` is generated from `project.yml`, but shared
@@ -478,10 +480,9 @@ status against its candidate record before any upload work, and source drift
 fails closed.
 
 The central fleet audit reports Gradus as adopted. The pre-push hook runs
-`bash app/test-gate.sh --skip-macos-ui`; the required Xcode Cloud PR status owns
-that omitted macOS UI leg. `bash app/test-gate.sh` without an option remains the
-complete local fallback. Local gate results remain separate from candidate-bound
-canary evidence.
+`bash app/test-gate.sh`; the local gate owns every counted iOS and non-UI leg,
+while the required Xcode Cloud PR status is the sole `GradusMacUITests` owner.
+Local gate results remain separate from candidate-bound canary evidence.
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
 its release summary and test-focus text into App Store Connect's “What to
@@ -644,7 +645,7 @@ Decision gates follow the G/A/R autonomy contract: `~/.agent/prompts/_shared/gar
 
 The local hooks and required Xcode Cloud PR status form the primary gate. Cloud
 owns `GradusMacUITests` without needing local Automation Mode; the hook retains
-every other counted leg and the default command retains the full local fallback.
+every local iOS UI and non-UI counted leg.
 Python hooks run through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
 tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
 enforced by `scripts/check-static-tool-versions.sh`.
@@ -666,9 +667,9 @@ uv run pre-commit install   # installs both pre-commit and pre-push hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **pre-push**: `bash app/test-gate.sh --skip-macos-ui` runs every local counted
-  leg except `GradusMacUI`; the required Xcode Cloud status supplies that one
-  headless. Run `bash app/test-gate.sh` for the complete local fallback.
+- **pre-push**: `bash app/test-gate.sh` runs every local iOS UI and non-UI
+  counted leg. The required Xcode Cloud status is the sole `GradusMacUITests`
+  runner.
 
 Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
 `.swiftformat`, Swift source scope and generated directory exclusions in

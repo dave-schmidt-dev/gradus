@@ -84,11 +84,12 @@ read_marketing_version() {
 }
 
 validate_common_marketing_version() {
-  local project_path="$1" mac_version ios_version
+  local project_path="$1" mac_version ios_version widget_version
   mac_version="$(read_marketing_version "$project_path" GradusMac)"
   ios_version="$(read_marketing_version "$project_path" GradusiOS)"
-  [[ -n "$mac_version" && "$mac_version" == "$ios_version" ]] || {
-    echo "FAIL: Mac and iOS marketing versions must match" >&2
+  widget_version="$(read_marketing_version "$project_path" GradusWidget)"
+  [[ -n "$mac_version" && "$mac_version" == "$ios_version" && "$ios_version" == "$widget_version" ]] || {
+    echo "FAIL: Mac, iOS, and Widget marketing versions must match" >&2
     return 1
   }
 }
@@ -189,10 +190,17 @@ assert_digest_unchanged() {
 }
 
 create_candidate_workspace() {
-  local project_root="$1" workspace
+  local project_root="$1" workspace rsync_bin
   workspace="${GRADUS_CANDIDATE_WORKSPACE:-$(mktemp -d "${TMPDIR:-/tmp}/gradus-ios-candidate.XXXXXX")}"
   mkdir -p "$workspace"
-  /opt/homebrew/bin/rsync -a \
+  if [[ -x /opt/homebrew/bin/rsync ]]; then
+    rsync_bin=/opt/homebrew/bin/rsync
+  elif command -v rsync >/dev/null 2>&1; then
+    rsync_bin="$(command -v rsync)"
+  else
+    rsync_bin=/usr/bin/rsync
+  fi
+  "$rsync_bin" -a \
     --exclude='.git' --exclude='build' --exclude='.state' --exclude='.release-state' \
     --exclude='.venv' --exclude='verifications' --exclude='.ruff_cache' \
     --exclude='.pytest_cache' --exclude='.cache' --exclude='.build' \
@@ -850,6 +858,369 @@ assert_required_entitlement() {
   }
 }
 
+validate_profile() {
+  local profile_path="$1" expected_bundle_id="$2" expected_team="$3" expected_cert_sha1="$4" expected_app_group="$5"
+  /usr/bin/python3 - "$profile_path" "$expected_bundle_id" "$expected_team" "$expected_cert_sha1" "$expected_app_group" <<'PY'
+import datetime
+import hashlib
+import plistlib
+import sys
+from pathlib import Path
+
+profile_path, expected_bundle_id, expected_team, expected_cert_sha1, expected_app_group = sys.argv[1:]
+
+path = Path(profile_path)
+if not path.is_file():
+    print(f"FAIL: provisioning profile not found: {path}", file=sys.stderr)
+    sys.exit(1)
+
+content = path.read_bytes()
+xml_start = content.find(b"<?xml")
+xml_end = content.find(b"</plist>")
+data = None
+if xml_start != -1 and xml_end != -1:
+    try:
+        data = plistlib.loads(content[xml_start : xml_end + len(b"</plist>")])
+    except Exception:
+        pass
+
+if data is None:
+    try:
+        data = plistlib.loads(content)
+    except Exception:
+        print(f"FAIL: provisioning profile '{path}' is malformed or cannot be parsed", file=sys.stderr)
+        sys.exit(1)
+
+# 1. Exact Bundle ID
+entitlements = data.get("Entitlements", {})
+app_id = entitlements.get("application-identifier", "")
+expected_app_id = f"{expected_team}.{expected_bundle_id}"
+if app_id != expected_app_id:
+    if not app_id.startswith(f"{expected_team}."):
+        print(f"FAIL: profile '{path.name}' team mismatch in application-identifier: expected prefix '{expected_team}.', got '{app_id}'", file=sys.stderr)
+        sys.exit(1)
+    print(f"FAIL: profile '{path.name}' bundle ID mismatch: expected '{expected_app_id}', got '{app_id}'", file=sys.stderr)
+    sys.exit(1)
+
+# 2. Team
+team_id = entitlements.get("com.apple.developer.team-identifier")
+team_list = data.get("TeamIdentifier", [])
+if team_id != expected_team or expected_team not in team_list:
+    print(f"FAIL: profile '{path.name}' team mismatch: expected '{expected_team}', got '{team_id}'", file=sys.stderr)
+    sys.exit(1)
+
+# 3. Certificate
+cert_fingerprints = []
+for cert_der in data.get("DeveloperCertificates", []):
+    if isinstance(cert_der, (bytes, bytearray)):
+        cert_fingerprints.append(hashlib.sha1(cert_der).hexdigest().upper())
+if expected_cert_sha1.upper() not in cert_fingerprints:
+    print(f"FAIL: profile '{path.name}' does not contain expected certificate '{expected_cert_sha1}'", file=sys.stderr)
+    sys.exit(1)
+
+# 4. App Group
+app_groups = entitlements.get("com.apple.security.application-groups", [])
+if not isinstance(app_groups, list) or expected_app_group not in app_groups:
+    print(f"FAIL: profile '{path.name}' missing expected App Group '{expected_app_group}'", file=sys.stderr)
+    sys.exit(1)
+
+# 5. Distribution Type (App Store: get-task-allow is False, no ProvisionedDevices, not ProvisionsAllDevices)
+get_task_allow = entitlements.get("get-task-allow")
+if get_task_allow is not False:
+    print(f"FAIL: profile '{path.name}' is not distribution (get-task-allow={get_task_allow})", file=sys.stderr)
+    sys.exit(1)
+if "ProvisionedDevices" in data:
+    print(f"FAIL: profile '{path.name}' is not App Store distribution (contains ProvisionedDevices)", file=sys.stderr)
+    sys.exit(1)
+if data.get("ProvisionsAllDevices") is True:
+    print(f"FAIL: profile '{path.name}' is Enterprise distribution (ProvisionsAllDevices=True)", file=sys.stderr)
+    sys.exit(1)
+
+# 6. Expiry
+exp = data.get("ExpirationDate")
+if not isinstance(exp, datetime.datetime):
+    print(f"FAIL: profile '{path.name}' has no valid ExpirationDate", file=sys.stderr)
+    sys.exit(1)
+now = datetime.datetime.now(datetime.timezone.utc)
+if exp.tzinfo is None:
+    exp = exp.replace(tzinfo=datetime.timezone.utc)
+if exp <= now:
+    print(f"FAIL: profile '{path.name}' expired on {exp.isoformat()}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+resolve_provisioning_profile() {
+  local bundle_id="$1" explicit_path="${2:-}"
+  if [[ -n "$explicit_path" && -f "$explicit_path" ]]; then
+    printf '%s\n' "$explicit_path"
+    return 0
+  fi
+  local user_home profiles_dir
+  user_home="$(resolve_user_home)" || return 1
+  profiles_dir="${GRADUS_PROVISIONING_PROFILES_DIR:-$user_home/Library/MobileDevice/Provisioning Profiles}"
+
+  if [[ "$bundle_id" == "com.zerodelta.gradus.ios" ]]; then
+    for candidate in \
+      "${GRADUS_IOS_APP_PROFILE_PATH:-}" \
+      "$profiles_dir/gradus-ios-app-store.provisionprofile" \
+      "$profiles_dir/gradus-ios-app-store.mobileprovision"; do
+      if [[ -n "$candidate" && -f "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  elif [[ "$bundle_id" == "com.zerodelta.gradus.ios.widget" ]]; then
+    for candidate in \
+      "${GRADUS_IOS_WIDGET_PROFILE_PATH:-}" \
+      "${GRADUS_WIDGET_PROFILE_PATH:-}" \
+      "$profiles_dir/gradus-widget-app-store.provisionprofile" \
+      "$profiles_dir/gradus-widget-app-store.mobileprovision" \
+      "$profiles_dir/gradus-ios-widget-app-store.provisionprofile" \
+      "$profiles_dir/gradus-ios-widget-app-store.mobileprovision"; do
+      if [[ -n "$candidate" && -f "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return 0
+      fi
+    done
+  fi
+
+  if [[ -d "$profiles_dir" ]]; then
+    local matched_profile=""
+    while IFS= read -r profile_candidate; do
+      [[ -f "$profile_candidate" ]] || continue
+      if /usr/bin/python3 - "$profile_candidate" "$bundle_id" <<'PY' >/dev/null 2>&1
+import plistlib, sys
+from pathlib import Path
+c = Path(sys.argv[1]).read_bytes()
+s, e = c.find(b"<?xml"), c.find(b"</plist>")
+d = None
+if s != -1 and e != -1:
+    try:
+        d = plistlib.loads(c[s : e + 8])
+    except Exception:
+        pass
+if d is None:
+    try:
+        d = plistlib.loads(c)
+    except Exception:
+        sys.exit(1)
+app_id = d.get("Entitlements", {}).get("application-identifier", "")
+if app_id.endswith("." + sys.argv[2]) or app_id == sys.argv[2]:
+    sys.exit(0)
+sys.exit(1)
+PY
+      then
+        matched_profile="$profile_candidate"
+        break
+      fi
+    done < <(find "$profiles_dir" -maxdepth 1 \( -name "*.provisionprofile" -o -name "*.mobileprovision" \) 2>/dev/null | sort)
+    if [[ -n "$matched_profile" ]]; then
+      printf '%s\n' "$matched_profile"
+      return 0
+    fi
+  fi
+
+  echo "FAIL: could not locate App Store provisioning profile for $bundle_id" >&2
+  return 1
+}
+
+locate_and_validate_distribution_profiles() {
+  local app_profile_override="${1:-${GRADUS_IOS_APP_PROFILE_PATH:-}}"
+  local widget_profile_override="${2:-${GRADUS_IOS_WIDGET_PROFILE_PATH:-}}"
+  local expected_team="4CJ49V6QHW"
+  local expected_cert_sha1="${SIGNING_IDENTITY:-FD247ACDEBCD05C725AE29B40218FB0F57807A2C}"
+  local expected_app_group="group.com.zerodelta.gradus"
+
+  local app_profile_path widget_profile_path
+  app_profile_path="$(resolve_provisioning_profile "com.zerodelta.gradus.ios" "$app_profile_override")" || return 1
+  widget_profile_path="$(resolve_provisioning_profile "com.zerodelta.gradus.ios.widget" "$widget_profile_override")" || return 1
+
+  echo "==> Validating iOS app distribution profile ($app_profile_path)" >&2
+  validate_profile "$app_profile_path" "com.zerodelta.gradus.ios" "$expected_team" "$expected_cert_sha1" "$expected_app_group" || return 1
+
+  echo "==> Validating iOS widget distribution profile ($widget_profile_path)" >&2
+  validate_profile "$widget_profile_path" "com.zerodelta.gradus.ios.widget" "$expected_team" "$expected_cert_sha1" "$expected_app_group" || return 1
+
+  printf '%s\t%s\n' "$app_profile_path" "$widget_profile_path"
+}
+
+ensure_required_app_group() {
+  local plist="$1" group="$2"
+  /usr/bin/python3 - "$plist" "$group" <<'PY'
+import plistlib, sys
+from pathlib import Path
+plist_path, group = sys.argv[1], sys.argv[2]
+path = Path(plist_path)
+try:
+    data = plistlib.loads(path.read_bytes())
+except Exception:
+    data = {}
+groups = data.setdefault("com.apple.security.application-groups", [])
+if not isinstance(groups, list):
+    groups = [groups]
+    data["com.apple.security.application-groups"] = groups
+if group not in groups:
+    groups.append(group)
+path.write_bytes(plistlib.dumps(data))
+PY
+}
+
+assert_required_app_group() {
+  local plist="$1" expected_group="$2"
+  /usr/bin/python3 - "$plist" "$expected_group" <<'PY'
+import plistlib, sys
+from pathlib import Path
+plist_path, expected_group = sys.argv[1], sys.argv[2]
+try:
+    data = plistlib.loads(Path(plist_path).read_bytes())
+except Exception as e:
+    print(f"FAIL: could not parse entitlements plist {plist_path}: {e}", file=sys.stderr)
+    sys.exit(1)
+groups = data.get("com.apple.security.application-groups", [])
+if not isinstance(groups, list) or expected_group not in groups:
+    print(f"FAIL: entitlements {plist_path} missing required App Group '{expected_group}'", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+assert_no_disallowed_extension_entitlements() {
+  local plist="$1"
+  /usr/bin/python3 - "$plist" <<'PY'
+import plistlib, sys
+from pathlib import Path
+plist_path = sys.argv[1]
+try:
+    data = plistlib.loads(Path(plist_path).read_bytes())
+except Exception as e:
+    print(f"FAIL: could not parse entitlements plist {plist_path}: {e}", file=sys.stderr)
+    sys.exit(1)
+disallowed_keys = [
+    "com.apple.developer.icloud-container-identifiers",
+    "com.apple.developer.icloud-services",
+    "com.apple.developer.icloud-container-environment",
+    "com.apple.developer.aps-environment",
+    "aps-environment",
+]
+for key in disallowed_keys:
+    if key in data:
+        print(f"FAIL: extension leaked disallowed entitlement: '{key}'", file=sys.stderr)
+        sys.exit(1)
+PY
+}
+
+validate_bundle_version_parity() {
+  local app_bundle="$1" extension_bundle="$2" expected_marketing="$3" expected_build="$4"
+  local app_marketing app_build ext_marketing ext_build
+
+  app_marketing="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app_bundle/Info.plist" 2>/dev/null)" || app_marketing=""
+  app_build="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$app_bundle/Info.plist" 2>/dev/null)" || app_build=""
+  ext_marketing="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$extension_bundle/Info.plist" 2>/dev/null)" || ext_marketing=""
+  ext_build="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$extension_bundle/Info.plist" 2>/dev/null)" || ext_build=""
+
+  [[ -n "$app_marketing" && "$app_marketing" == "$expected_marketing" ]] || {
+    echo "FAIL: app CFBundleShortVersionString is '$app_marketing', expected '$expected_marketing'" >&2
+    return 1
+  }
+  [[ -n "$app_build" && "$app_build" == "$expected_build" ]] || {
+    echo "FAIL: app CFBundleVersion is '$app_build', expected '$expected_build'" >&2
+    return 1
+  }
+  [[ -n "$ext_marketing" && "$ext_marketing" == "$expected_marketing" ]] || {
+    echo "FAIL: extension CFBundleShortVersionString is '$ext_marketing', expected '$expected_marketing'" >&2
+    return 1
+  }
+  [[ -n "$ext_build" && "$ext_build" == "$expected_build" ]] || {
+    echo "FAIL: extension CFBundleVersion is '$ext_build', expected '$expected_build'" >&2
+    return 1
+  }
+  [[ "$app_marketing" == "$ext_marketing" && "$app_build" == "$ext_build" ]] || {
+    echo "FAIL: marketing version or build number drift between app and extension" >&2
+    return 1
+  }
+}
+
+repackage_and_sign_ios_candidate() {
+  local archive_path="$1" package_dir="$2" app_profile_path="$3" widget_profile_path="$4"
+  local signing_identity="$5" expected_cloudkit_environment="$6" marketing_version="$7" next_build="$8"
+
+  mkdir -p "$package_dir/Payload"
+  cp -R "$archive_path/Products/Applications/GradusiOS.app" "$package_dir/Payload/GradusiOS.app"
+
+  local app_bundle="$package_dir/Payload/GradusiOS.app"
+  local plugins_dir="$app_bundle/PlugIns"
+  local widget_bundle="$plugins_dir/GradusWidget.appex"
+
+  # 1. Require exactly one GradusWidget.appex
+  [[ -d "$plugins_dir" ]] || {
+    echo "FAIL: PlugIns directory is missing from GradusiOS.app" >&2
+    return 1
+  }
+  [[ -d "$widget_bundle" ]] || {
+    echo "FAIL: GradusWidget.appex is missing from PlugIns" >&2
+    return 1
+  }
+  local appex_count
+  appex_count="$(find "$plugins_dir" -mindepth 1 -maxdepth 1 -name "*.appex" | wc -l | tr -d ' ')"
+  [[ "$appex_count" -eq 1 ]] || {
+    echo "FAIL: expected exactly 1 .appex in PlugIns, found $appex_count" >&2
+    return 1
+  }
+
+  # 2. Embed each profile into its own bundle
+  cp "$app_profile_path" "$app_bundle/embedded.mobileprovision"
+  cp "$widget_profile_path" "$widget_bundle/embedded.mobileprovision"
+
+  # 3. Derive and assert exact entitlements for extension
+  xattr -cr "$widget_bundle"
+  codesign -d --entitlements :- "$widget_bundle" 2>/dev/null \
+    | plutil -convert xml1 -o "$package_dir/widget-entitlements.plist" - 2>/dev/null || {
+      echo "FAIL: could not extract entitlements from GradusWidget.appex" >&2
+      return 1
+    }
+  set_required_entitlement "$package_dir/widget-entitlements.plist" get-task-allow bool false || return 1
+  assert_required_entitlement "$package_dir/widget-entitlements.plist" get-task-allow false || return 1
+  ensure_required_app_group "$package_dir/widget-entitlements.plist" "group.com.zerodelta.gradus" || return 1
+  assert_required_app_group "$package_dir/widget-entitlements.plist" "group.com.zerodelta.gradus" || return 1
+  assert_no_disallowed_extension_entitlements "$package_dir/widget-entitlements.plist" || return 1
+
+  # 4. Sign extension FIRST
+  echo "==> Signing GradusWidget.appex"
+  codesign --force --sign "$signing_identity" \
+    --entitlements "$package_dir/widget-entitlements.plist" --generate-entitlement-der --timestamp \
+    "$widget_bundle" || return 1
+  xattr -cr "$widget_bundle"
+
+  # 5. Derive and assert exact entitlements for main app
+  xattr -cr "$app_bundle"
+  codesign -d --entitlements :- "$app_bundle" 2>/dev/null \
+    | plutil -convert xml1 -o "$package_dir/entitlements.plist" - || return 1
+  set_required_entitlement "$package_dir/entitlements.plist" get-task-allow bool false || return 1
+  set_required_entitlement "$package_dir/entitlements.plist" aps-environment string production || return 1
+  set_required_entitlement "$package_dir/entitlements.plist" "$CLOUDKIT_ENVIRONMENT_KEY" string "$expected_cloudkit_environment" || return 1
+  assert_required_entitlement "$package_dir/entitlements.plist" aps-environment production || return 1
+  assert_required_entitlement "$package_dir/entitlements.plist" "$CLOUDKIT_ENVIRONMENT_KEY" "$expected_cloudkit_environment" || return 1
+  ensure_required_app_group "$package_dir/entitlements.plist" "group.com.zerodelta.gradus" || return 1
+  assert_required_app_group "$package_dir/entitlements.plist" "group.com.zerodelta.gradus" || return 1
+
+  # 6. Sign main app LAST
+  echo "==> Signing GradusiOS.app"
+  codesign --force --sign "$signing_identity" \
+    --entitlements "$package_dir/entitlements.plist" --generate-entitlement-der --timestamp \
+    "$app_bundle" || return 1
+  xattr -cr "$app_bundle"
+  failure_hook signing
+
+  # 7. Verify signatures
+  echo "==> Verifying signatures"
+  codesign --verify --deep --strict "$widget_bundle" || return 1
+  codesign --verify --deep --strict "$app_bundle" || return 1
+
+  # 8. Verify marketing and build version parity
+  echo "==> Verifying app and extension version parity"
+  validate_bundle_version_parity "$app_bundle" "$widget_bundle" "$marketing_version" "$next_build" || return 1
+}
+
 validate_producer_evidence() {
   local evidence_path="$1"
   local expected_build="$2"
@@ -984,12 +1355,23 @@ resolve_user_name() {
   /usr/bin/id -un
 }
 
+bump_target_build_number() {
+  local target="$1" next_build="$2"
+  local project_path="${3:-project.yml}"
+  local target_pattern
+  target_pattern="/^  ${target}:/,/^  [A-Za-z0-9_]+:/ s/(CURRENT_PROJECT_VERSION: )\"[0-9]+\"/\\1\"$next_build\"/"
+  sed -i '' -E "$target_pattern" "$project_path"
+}
+
+bump_build_number() {
+  bump_target_build_number "$@"
+}
+
 bump_ios_build_number() {
   local next_build="$1"
   local project_path="${2:-project.yml}"
-  local ios_build_pattern
-  ios_build_pattern="/^  GradusiOS:/,/^  [A-Za-z0-9_]+:/ s/(CURRENT_PROJECT_VERSION: )\"[0-9]+\"/\\1\"$next_build\"/"
-  sed -i '' -E "$ios_build_pattern" "$project_path"
+  bump_target_build_number GradusiOS "$next_build" "$project_path"
+  bump_target_build_number GradusWidget "$next_build" "$project_path"
 }
 
 main() {
@@ -1148,8 +1530,12 @@ main() {
   # Xcode choose a different installed distribution certificate when more than
   # one exists, which the profile rejects.
   SIGNING_IDENTITY="FD247ACDEBCD05C725AE29B40218FB0F57807A2C"
-  SIGNING_PROFILE_NAME="Gradus iOS App Store (API-created)"
-  PROFILE_PATH="${HOME}/Library/MobileDevice/Provisioning Profiles/gradus-ios-app-store.provisionprofile"
+  echo "==> Locating and validating App Store distribution profiles"
+  local validated_profiles app_profile_path widget_profile_path
+  validated_profiles="$(locate_and_validate_distribution_profiles)" || return 1
+  app_profile_path="$(printf '%s\n' "$validated_profiles" | cut -f1)"
+  widget_profile_path="$(printf '%s\n' "$validated_profiles" | cut -f2)"
+
   ARCHIVE_PATH="$candidate_script_dir/build/GradusiOS.xcarchive"
   PACKAGE_DIR="$candidate_script_dir/build/package-ios"
 
@@ -1204,60 +1590,12 @@ main() {
     -archivePath "$ARCHIVE_PATH" \
     -destination "generic/platform=iOS" \
     CODE_SIGN_STYLE=Manual \
-    CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
-    PROVISIONING_PROFILE_SPECIFIER="$SIGNING_PROFILE_NAME")
+    CODE_SIGN_IDENTITY="$SIGNING_IDENTITY")
   failure_hook archive
 
-  echo "==> Repackaging for App Store distribution (manual codesign)"
-  mkdir -p "$PACKAGE_DIR/Payload"
-  cp -R "$ARCHIVE_PATH/Products/Applications/GradusiOS.app" "$PACKAGE_DIR/Payload/GradusiOS.app"
-  cp "$PROFILE_PATH" "$PACKAGE_DIR/Payload/GradusiOS.app/embedded.mobileprovision"
-
-# Xcode/archive tooling can attach Finder/provenance metadata to the copied
-# bundle.  codesign rejects that metadata before it can replace the archive's
-# development signature, so clear it before extracting entitlements and
-# signing.  codesign can add provenance metadata again; the second cleanup
-# below remains necessary before packaging the IPA.
-  xattr -cr "$PACKAGE_DIR/Payload/GradusiOS.app"
-
-# Entitlements to sign with come from the app's OWN archived entitlements,
-# not the provisioning profile's `Entitlements` dict -- that dict is the
-# profile's maximal *permitted* grant (often wildcards like icloud-services
-# "*" or ubiquity-kvstore-identifier "TeamID.*"), and ASC's upload validator
-# rejects those literal wildcard values if actually present in a shipped
-# binary's signature (confirmed: errors 90211/90045/90046 on exactly those
-# keys). Only two things need to change for a distribution build: drop
-# get-task-allow (debug-only) and grant aps-environment=production (the
-# archive's dev-signed entitlements have neither aps-environment nor
-# get-task-allow=false, since the wildcard dev profile doesn't declare push).
-  codesign -d --entitlements :- "$PACKAGE_DIR/Payload/GradusiOS.app" 2>/dev/null \
-    | plutil -convert xml1 -o "$PACKAGE_DIR/entitlements.plist" -
-  set_required_entitlement "$PACKAGE_DIR/entitlements.plist" get-task-allow bool false
-  set_required_entitlement "$PACKAGE_DIR/entitlements.plist" aps-environment string production
-# Without an explicit value here, `--generate-entitlement-der` tries to derive
-# this key from the embedded profile's own (multi-valued: Production AND
-# Development) icloud-container-environment grant, can't resolve a single
-# value, and silently emits an empty string -- which ASC's upload validator
-# rejects outright ("this value should be a string value of 'Production'").
-  set_required_entitlement "$PACKAGE_DIR/entitlements.plist" "$CLOUDKIT_ENVIRONMENT_KEY" string "$expected_cloudkit_environment"
-  assert_required_entitlement "$PACKAGE_DIR/entitlements.plist" aps-environment production
-  assert_required_entitlement "$PACKAGE_DIR/entitlements.plist" "$CLOUDKIT_ENVIRONMENT_KEY" "$expected_cloudkit_environment"
-
-  codesign --force --sign "$SIGNING_IDENTITY" \
-    --entitlements "$PACKAGE_DIR/entitlements.plist" --generate-entitlement-der --timestamp \
-    "$PACKAGE_DIR/Payload/GradusiOS.app"
-  failure_hook signing
-
-# Every file in the bundle -- including ones codesign itself just wrote/
-# touched -- can carry a com.apple.provenance extended attribute (macOS
-# re-tags files as a side effect of codesign running). A strict codesign
-# verify rejects it ("resource fork, Finder information, or similar detritus
-# not allowed"); stripping post-signature doesn't invalidate the signature
-# (confirmed: verify passes clean afterward with no re-sign needed).
-  xattr -cr "$PACKAGE_DIR/Payload/GradusiOS.app"
-
-  echo "==> Verifying signature"
-  codesign --verify --deep --strict "$PACKAGE_DIR/Payload/GradusiOS.app"
+  echo "==> Repackaging for App Store distribution (nested manual codesign)"
+  repackage_and_sign_ios_candidate "$ARCHIVE_PATH" "$PACKAGE_DIR" "$app_profile_path" "$widget_profile_path" \
+    "$SIGNING_IDENTITY" "$expected_cloudkit_environment" "$marketing_version" "$NEXT_BUILD"
 
   IPA_PATH="$PACKAGE_DIR/GradusiOS.ipa"
   echo "==> Building .ipa"

@@ -44,18 +44,14 @@ extension DashboardViewModel {
         case let .success(changed, deletedProviderNames, newToken):
             reconcile(changed: changed, deletedProviderNames: deletedProviderNames)
             try? cache.saveChangeToken(newToken)
-            let syncedAt = Date()
-            lastSyncedAt = syncedAt
-            try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
+            commitCachedProvidersAndWidget(at: Date())
         case let .successWithPresence(changed, deletedProviderNames, _, _, newToken):
             // Presence is consumed by the Mac directory. Keeping it as a
             // separately typed outcome here prevents a mobile-device deletion
             // from ever entering provider reconciliation.
             reconcile(changed: changed, deletedProviderNames: deletedProviderNames)
             try? cache.saveChangeToken(newToken)
-            let syncedAt = Date()
-            lastSyncedAt = syncedAt
-            try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
+            commitCachedProvidersAndWidget(at: Date())
         case .changeTokenExpired:
             // PM-3: drop the stale token and do one full refetch from
             // scratch (nil token). Bounded to one retry -- a fetcher that
@@ -79,7 +75,7 @@ extension DashboardViewModel {
             connectedSourcePublishedAt = nil
             lastSyncedAt = nil
             try? cache.saveChangeToken(nil)
-            try? cache.clear()
+            clearCacheAndWidget()
         case .failure:
             // Leave state as-is; the next subscription-triggered sync retries.
             break
@@ -140,9 +136,7 @@ extension DashboardViewModel {
         notifyForWarningTransitions(from: allProviders, to: fetched)
         allProviders = fetched
         applyPresentationPreferences()
-        let syncedAt = Date()
-        lastSyncedAt = syncedAt
-        try? cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
+        commitCachedProvidersAndWidget(at: Date())
         return true
     }
 
@@ -194,6 +188,41 @@ extension DashboardViewModel {
             }
         connectedSource = latest?.syncSource
         connectedSourcePublishedAt = latest?.publishedAt
+    }
+
+    var isWidgetPublicationAllowed: Bool {
+        requiredICloudMode.allowsLiveWork && syncEnabled && accountStatus == .available
+    }
+
+    func synchronizeWidgetSnapshot() {
+        guard isWidgetPublicationAllowed else {
+            clearWidgetSnapshot()
+            return
+        }
+        widgetSnapshotPublisher?.synchronize(
+            providers: allProviders,
+            phoneSyncDate: lastSyncedAt,
+            localWarningThreshold: localWarningThresholdPercent
+        )
+    }
+
+    func clearWidgetSnapshot() {
+        widgetSnapshotPublisher?.clear()
+    }
+
+    private func commitCachedProvidersAndWidget(at syncedAt: Date) {
+        lastSyncedAt = syncedAt
+        do {
+            try cache.saveCachedStatuses(allProviders, syncedAt: syncedAt)
+            synchronizeWidgetSnapshot()
+        } catch {}
+    }
+
+    private func clearCacheAndWidget() {
+        do {
+            try cache.clear()
+            clearWidgetSnapshot()
+        } catch {}
     }
 
     /// Not `private`: also called directly from `init` in

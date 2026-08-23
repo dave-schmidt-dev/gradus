@@ -9,6 +9,22 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## 1.9.0 — 2026-08-23
+
+### Added
+
+- A small iPhone/iPad Home Screen widget shows the most urgent provider usage
+  window, remaining percentage, reset time, and age of the phone's last sync.
+  Tapping it opens Gradus. Empty or unavailable data directs the user back to
+  the app without exposing stale or sample usage.
+
+### TestFlight focus
+
+- Add the small Gradus widget after opening the app once and confirm its
+  provider, percentage, reset, and sync age match the dashboard's live data.
+- Confirm the widget remains readable in light/dark mode and larger text, and
+  that tapping it opens the Gradus dashboard.
+
 ## 1.8.1 — 2026-08-19
 
 ### Added

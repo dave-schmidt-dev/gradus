@@ -35,6 +35,10 @@ Before that trigger, the release owner must verify:
    build. See Apple's [App Review Guidelines](https://developer.apple.com/app-store/review/guidelines/),
    [App Privacy](https://developer.apple.com/help/app-store-connect/manage-app-information/manage-app-privacy),
    and [export-compliance overview](https://developer.apple.com/help/app-store-connect/manage-app-information/overview-of-export-compliance).
+6. Physical-device acceptance: verify adding and removing the small widget
+   (`systemSmall`) on a physical iOS device, confirming gallery presentation,
+   placeholder, current usage projection, tap-to-open dashboard navigation,
+   and clean widget removal.
 
 No item in this section submits an app; the final submission remains a separate
 release-owner decision after the evidence is reviewed.
@@ -46,6 +50,31 @@ public release, external testers, and group creation/deletion are excluded.
 Preparation, upload acceptance, processing/compliance, and assignment are
 separate gates. Keep the candidate record and receipt bound to the exact source,
 artifact, version, build, producer evidence, and walkthrough digests.
+
+### Nested signing, App Store profiles, and artifact proof
+
+The iOS archive embeds the small widget extension (`GradusWidget.appex`). Release
+signing, packaging, and verification enforce:
+
+1. **Separate App IDs and profiles:** `GradusiOS` (`com.zerodelta.gradus.ios`) and
+   `GradusWidget` (`com.zerodelta.gradus.ios.widget`) each require their own separate
+   App Store provisioning profile ("Gradus iOS App Store (API-created)" and
+   "Gradus Widget App Store (API-created)").
+2. **Inside-out nested signing:** The embedded `.appex`
+   (`Payload/GradusiOS.app/PlugIns/GradusWidget.appex`) must be signed first with
+   the widget profile and widget entitlements, before the containing
+   `Payload/GradusiOS.app` is signed with the iOS app profile.
+3. **Nested artifact proof:** The candidate packager and verification gates inspect
+   the unpackaged IPA to verify:
+   - Nested `.appex` presence and inside-out code signatures.
+   - Exact capability boundaries: the widget requests only
+     `com.apple.security.application-groups` (`group.com.zerodelta.gradus`),
+     plus system signing identity fields; verification rejects CloudKit and APS
+     entitlements, and the extension contains no network or Keychain access.
+   - Strict version and build parity: `CFBundleShortVersionString` and
+     `CFBundleVersion` in the embedded widget match the containing app exactly.
+4. **Small-only scope:** The widget is restricted to `systemSmall`; no medium/large
+   families, configuration intents, or background network modes are permitted.
 
 An assigned candidate is immutable. To prepare a replacement for a
 release-blocking correction, run the upload wrapper from `app/` with
@@ -97,9 +126,8 @@ Before candidate upload:
 
 1. Identify the producer, consumer, and shared contract in the release notes.
 2. Build and test both GradusMac and GradusiOS with `app/test-gate.sh`. For a
-   pull-request candidate, retain the required passing Xcode Cloud macOS UI
-   status as the headless equivalent of the `GradusMacUI` leg; the local
-   pre-push selector does not replace this candidate evidence.
+   pull-request candidate, retain the required passing Xcode Cloud `GradusMacCloud`
+   status as the sole macOS UI runner and exact-head candidate evidence.
 3. Run the scripted CloudKit schema-parity check — no manual CloudKit Console
    comparison required:
 

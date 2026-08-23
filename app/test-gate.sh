@@ -20,6 +20,7 @@ COUNTING_LEG_NAMES=(
   "pytest"
   "GradusMac"
   "GradusiOS-iPhone"
+  "GradusWidget"
   "GradusiOS-iPad"
   "release-candidate"
   "release-candidate-validation"
@@ -29,7 +30,6 @@ COUNTING_LEG_NAMES=(
   "testflight-assignment"
   "candidate-walkthrough"
   "release-bridge"
-  "GradusMacUI"
   "GradusiOSUI"
 )
 COUNTING_LEG_REPORTERS=(
@@ -37,6 +37,7 @@ COUNTING_LEG_REPORTERS=(
   "pytest"
   "xctest"
   "aggregate-xctest-swift"
+  "swift-testing"
   "aggregate-xctest-swift"
   "pytest"
   "pytest"
@@ -47,14 +48,13 @@ COUNTING_LEG_REPORTERS=(
   "pytest"
   "pytest"
   "xctest"
-  "xctest"
 )
 # The iPad leg includes the 12 canonical image tests below as well as the
 # nine GradusiOSUITests workflows. Its floor must exceed the image-only
 # result, or a zero-test UI target could be hidden by the snapshot count.
 #
 # GradusiOS-iPhone's floor (index 3) is pinned to its exact integrated-gate
-# count (171) rather than a loose lower
+# count (177) rather than a loose lower
 # bound, so a test silently dropping out of selection fails the gate instead
 # of hiding under slack. Raise it deliberately when adding tests there. The
 # leg mixes Swift Testing and XCTest in one target, so its reporter is
@@ -62,12 +62,13 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 15 5 5 4 31 2 9)
+COUNTING_LEG_MINIMUMS=(2 2 2 177 10 21 6 5 5 15 5 5 4 31 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
   "GradusMac"
   "GradusiOS-iPhone"
+  "GradusWidgetTests"
   "GradusiOS-iPad"
   "test_release_candidate.py"
   "test_release_candidate_validation.py"
@@ -77,7 +78,6 @@ COUNTING_LEG_SOURCES=(
   "testflight-setup-tests.py"
   "test_walkthrough.py"
   "test_gradus_release_bridge.py"
-  "GradusMacUITests"
   "GradusiOSUITests"
 )
 
@@ -98,33 +98,6 @@ DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS=(
   "GradusiOSTests/densityLargePadPortraitAccessibility5()"
 )
 COUNTING_LEG_RUN_COUNT=0
-
-# The default gate remains complete. The pre-push hook may explicitly omit the
-# macOS UI leg only after the matching Xcode Cloud PR status is required.
-configure_counting_legs() {
-  local selector="${1:-}"
-  if [[ "$selector" != "--skip-macos-ui" ]]; then
-    return 0
-  fi
-
-  local index
-  local -a kept_names=() kept_reporters=() kept_minimums=() kept_sources=()
-  for ((index = 0; index < ${#COUNTING_LEG_NAMES[@]}; index++)); do
-    if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusMacUI" ]]; then
-      continue
-    fi
-    kept_names+=("${COUNTING_LEG_NAMES[index]}")
-    kept_reporters+=("${COUNTING_LEG_REPORTERS[index]}")
-    kept_minimums+=("${COUNTING_LEG_MINIMUMS[index]}")
-    kept_sources+=("${COUNTING_LEG_SOURCES[index]}")
-  done
-
-  COUNTING_LEG_NAMES=("${kept_names[@]}")
-  COUNTING_LEG_REPORTERS=("${kept_reporters[@]}")
-  COUNTING_LEG_MINIMUMS=("${kept_minimums[@]}")
-  COUNTING_LEG_SOURCES=("${kept_sources[@]}")
-  EXPECTED_COUNTING_LEG_COUNT="${#COUNTING_LEG_NAMES[@]}"
-}
 
 validate_counting_leg_declarations() {
   local leg_count="${#COUNTING_LEG_NAMES[@]}"
@@ -339,14 +312,10 @@ run_with_deadline() {
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 set -euo pipefail
 
-skip_macos_ui=false
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
-    --skip-macos-ui)
-      skip_macos_ui=true
-      ;;
     --help)
-      echo "Usage: bash test-gate.sh [--skip-macos-ui]"
+      echo "Usage: bash test-gate.sh"
       exit 0
       ;;
     *)
@@ -356,10 +325,6 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
-
-if [[ "$skip_macos_ui" == true ]]; then
-  configure_counting_legs --skip-macos-ui
-fi
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -448,11 +413,6 @@ SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
 # would roughly double the gate's slowest phase.
 IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
 
-# The deterministic local Mac UI fixture uses Debug app behavior, but its
-# XCTest runner is explicitly development-signed so macOS can launch the
-# bundle. Archive/export scripts retain their independent signing and
-# entitlement checks for release artifacts.
-
 echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
 # One `awk` that reads to EOF, rather than `| head -1 | awk ...`. `head` exits
 # as soon as it has its line, and if `xcodebuild` is still writing it takes
@@ -504,49 +464,16 @@ defaults write com.apple.CrashReporter DialogType none
 # the EXIT trap below always has a bound variable to rm -rf even if the run
 # fails before that point -- `rm -rf ""` is a safe no-op, never `rm -rf` of cwd.
 derived_data_dir=""
-installed_gradus_mac_was_running=0
-
-restore_installed_gradus_mac() {
-  if [[ "$installed_gradus_mac_was_running" == "1" && -d "/Applications/GradusMac.app" ]]; then
-    echo "==> Relaunching the pre-existing GradusMac app"
-    /usr/bin/open -g "/Applications/GradusMac.app" >/dev/null 2>&1 || true
-  fi
-}
-
-stop_installed_gradus_mac_for_ui_tests() {
-  if ! /usr/bin/pgrep -x GradusMac >/dev/null 2>&1; then
-    return 0
-  fi
-  installed_gradus_mac_was_running=1
-  echo "==> Temporarily stopping the installed GradusMac app for UI tests"
-  /usr/bin/osascript \
-    -e 'with timeout of 5 seconds' \
-    -e 'tell application id "com.zerodelta.gradus.mac" to quit' \
-    -e 'end timeout' \
-    >/dev/null 2>&1 || true
-  for _ in {1..20}; do
-    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return 0
-    sleep 0.25
-  done
-  /usr/bin/pkill -TERM -x GradusMac >/dev/null 2>&1 || true
-  for _ in {1..20}; do
-    /usr/bin/pgrep -x GradusMac >/dev/null 2>&1 || return 0
-    sleep 0.25
-  done
-  echo "FAIL: installed GradusMac did not stop before UI tests" >&2
-  exit 1
-}
 
 # This gate's own EXIT trap only handles state it owns directly (the
-# installed Mac app, the CrashReporter dialog override, DerivedData). It is
-# set BEFORE sourcing the shared simctl gate lib below, on purpose: the lib's
+# CrashReporter dialog override and DerivedData). It is set BEFORE sourcing
+# the shared simctl gate lib below, on purpose: the lib's
 # own EXIT-trap installation composes onto whatever trap already exists at
 # source time (see simctl_gate_lib.sh's header) rather than clobbering it, so
 # simulator create/delete lifecycle is entirely the shared lib's
 # responsibility from here on -- this gate no longer tracks whether a device
 # pre-existed, because gate_sim_create always makes a fresh disposable one.
 trap '
-  restore_installed_gradus_mac
   if [[ -z "$prior_dialog_type" ]]; then
     defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
   else
@@ -610,7 +537,6 @@ assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECO
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
   -destination 'platform=macOS,arch=arm64' \
-  -skip-testing:GradusMacUITests \
   CODE_SIGNING_ALLOWED=NO
 
 density_snapshot_skip_args=()
@@ -628,6 +554,15 @@ assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
   -destination "platform=iOS Simulator,id=$sim_udid" \
   -skip-testing:GradusiOSUITests \
   "${density_snapshot_skip_args[@]}" \
+  CODE_SIGNING_ALLOWED=NO
+
+echo "==> xcodebuild test — GradusWidget (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+assert_counting_leg "GradusWidget" xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusWidget \
+  -destination "platform=iOS Simulator,id=$sim_udid" \
+  -only-testing:GradusWidgetTests \
   CODE_SIGNING_ALLOWED=NO
 
 # GradusiOSUITests has its own named iPhone leg below. Keeping it out of this
@@ -666,8 +601,7 @@ reset_simulator_ui_session_for_iphone() {
 
 reset_simulator_ui_session_for_iphone
 
-# Keep both simulator UI legs adjacent. Switching to the macOS UI runner between
-# them can invalidate the simulator accessibility session (kAXErrorAPIDisabled).
+# Keep both simulator UI legs adjacent.
 echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITests" -- xcodebuild test \
   -project Gradus.xcodeproj \
@@ -676,23 +610,6 @@ assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITest
   -destination "platform=iOS Simulator,id=$sim_udid" \
   -only-testing:GradusiOSUITests \
   CODE_SIGNING_ALLOWED=NO
-
-if [[ "$skip_macos_ui" == true ]]; then
-  echo "==> Skipping GradusMacUITests; required Xcode Cloud PR status owns this leg"
-else
-  echo "==> xcodebuild test — GradusMacUITests target (platform=macOS)"
-  stop_installed_gradus_mac_for_ui_tests
-  assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMacUITests" -- env GRADUS_DISABLE_PIPELINE=1 xcodebuild test \
-    -project Gradus.xcodeproj \
-    -derivedDataPath "$derived_data_dir" \
-    -scheme GradusMac \
-    -destination 'platform=macOS,arch=arm64' \
-    -only-testing:GradusMacUITests \
-    CODE_SIGN_IDENTITY="Apple Development" \
-    DEVELOPMENT_TEAM=4CJ49V6QHW \
-    CODE_SIGN_ENTITLEMENTS="" \
-    PROVISIONING_PROFILE_SPECIFIER=""
-fi
 
 assert_counting_legs_complete
 
