@@ -14,12 +14,13 @@ GATE_REPO_ROOT="$(cd -P "$GATE_SCRIPT_DIR/.." && pwd)"
 # `assert_counting_leg`.  The Python paths are intentionally listed here so
 # the self-check can detect a new hermetic suite that is not wired into the
 # canonical gate.
-EXPECTED_COUNTING_LEG_COUNT=15
+EXPECTED_COUNTING_LEG_COUNT=16
 COUNTING_LEG_NAMES=(
   "swift-testing"
   "pytest"
   "GradusMac"
   "GradusiOS-iPhone"
+  "GradusWidget"
   "GradusiOS-iPad"
   "release-candidate"
   "release-candidate-validation"
@@ -37,6 +38,7 @@ COUNTING_LEG_REPORTERS=(
   "pytest"
   "xctest"
   "aggregate-xctest-swift"
+  "swift-testing"
   "aggregate-xctest-swift"
   "pytest"
   "pytest"
@@ -54,7 +56,7 @@ COUNTING_LEG_REPORTERS=(
 # result, or a zero-test UI target could be hidden by the snapshot count.
 #
 # GradusiOS-iPhone's floor (index 3) is pinned to its exact integrated-gate
-# count (171) rather than a loose lower
+# count (177) rather than a loose lower
 # bound, so a test silently dropping out of selection fails the gate instead
 # of hiding under slack. Raise it deliberately when adding tests there. The
 # leg mixes Swift Testing and XCTest in one target, so its reporter is
@@ -62,12 +64,13 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 171 21 6 5 5 15 5 5 4 31 2 9)
+COUNTING_LEG_MINIMUMS=(2 2 2 177 10 21 6 5 5 15 5 5 4 31 2 9)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
   "GradusMac"
   "GradusiOS-iPhone"
+  "GradusWidgetTests"
   "GradusiOS-iPad"
   "test_release_candidate.py"
   "test_release_candidate_validation.py"
@@ -628,6 +631,15 @@ assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
   -destination "platform=iOS Simulator,id=$sim_udid" \
   -skip-testing:GradusiOSUITests \
   "${density_snapshot_skip_args[@]}" \
+  CODE_SIGNING_ALLOWED=NO
+
+echo "==> xcodebuild test — GradusWidget (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+assert_counting_leg "GradusWidget" xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusWidget \
+  -destination "platform=iOS Simulator,id=$sim_udid" \
+  -only-testing:GradusWidgetTests \
   CODE_SIGNING_ALLOWED=NO
 
 # GradusiOSUITests has its own named iPhone leg below. Keeping it out of this

@@ -149,13 +149,18 @@ grep -Fq '"${density_snapshot_only_args[@]}"' "$GATE_SCRIPT" ||
 # silently make the iPad leg green (or vice versa).
 validate_ios_destination_contract() {
   local gate_path="$1"
-  local iphone_block ipad_block iphone_ui_block
+  local iphone_block widget_block ipad_block iphone_ui_block
   iphone_block="$(sed -n '/assert_counting_leg "GradusiOS-iPhone"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+  widget_block="$(sed -n '/assert_counting_leg "GradusWidget"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
   ipad_block="$(sed -n '/assert_counting_leg "GradusiOS-iPad"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
   iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
 
   [[ "$iphone_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
     return 1
+  [[ "$widget_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
+    return 1
+  [[ "$widget_block" == *'-scheme GradusWidget'* ]] || return 1
+  [[ "$widget_block" == *'-only-testing:GradusWidgetTests'* ]] || return 1
   [[ "$ipad_block" == *'-destination "platform=iOS Simulator,id=$ipad_udid"'* ]] ||
     return 1
   [[ "$iphone_ui_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
@@ -181,7 +186,7 @@ validate_derived_data_contract() {
   grep -Fq 'derived_data_dir="$(gate_derived_data)"' "$gate_path" ||
     return 1
   grep -Fq 'rm -rf "$derived_data_dir"' "$gate_path" || return 1
-  for leg in GradusMac GradusiOS-iPhone GradusiOS-iPad GradusMacUI GradusiOSUI; do
+  for leg in GradusMac GradusiOS-iPhone GradusWidget GradusiOS-iPad GradusMacUI GradusiOSUI; do
     block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$gate_path")"
     [[ "$leg" == "GradusMacUI" ]] &&
       block="$(sed -n "/assert_counting_leg \"$leg\"/,/PROVISIONING_PROFILE_SPECIFIER=/p" "$gate_path")"
@@ -191,6 +196,37 @@ validate_derived_data_contract() {
 
 validate_derived_data_contract "$GATE_SCRIPT" ||
   fail "Xcode test legs are not isolated in fresh run-scoped DerivedData"
+
+validate_widget_contract() {
+  local gate_path="$1" project_path="$2" source_root="$3"
+  local widget_block ios_block widget_target tests_target widget_scheme embed_count
+  widget_block="$(sed -n '/assert_counting_leg "GradusWidget"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+  ios_block="$(sed -n '/^  GradusiOS:$/,/^  GradusWidget:$/p' "$project_path")"
+  widget_target="$(sed -n '/^  GradusWidget:$/,/^  GradusWidgetSupport:$/p' "$project_path")"
+  tests_target="$(sed -n '/^  GradusWidgetTests:$/,/^schemes:$/p' "$project_path")"
+  widget_scheme="$(sed -n '/^  GradusWidget:$/,$p' "$project_path")"
+  embed_count="$(grep -Fxc -- '      - target: GradusWidget' "$project_path" || true)"
+
+  [[ "$widget_block" == *'-scheme GradusWidget'* ]] || return 1
+  [[ "$widget_block" == *'-only-testing:GradusWidgetTests'* ]] || return 1
+  [[ "$widget_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] || return 1
+  [[ "$widget_block" == *'-derivedDataPath "$derived_data_dir"'* ]] || return 1
+  [[ "$embed_count" -eq 1 ]] || return 1
+  [[ "$ios_block" == *'- target: GradusWidget'* && "$ios_block" == *'embed: true'* ]] || return 1
+  [[ "$widget_target" == *'type: app-extension'* ]] || return 1
+  [[ "$widget_target" == *'includes: [GradusWidget.swift]'* ]] || return 1
+  [[ "$tests_target" == *'sources: [GradusWidgetTests]'* ]] || return 1
+  [[ "$tests_target" == *'- target: GradusWidgetSupport'* ]] || return 1
+  [[ "$widget_scheme" == *'- GradusWidgetTests'* ]] || return 1
+  [[ -f "$source_root/GradusWidget/GradusWidget.swift" ]] || return 1
+  [[ -f "$source_root/GradusWidgetTests/GradusWidgetTests.swift" ]] || return 1
+  [[ "$(find "$source_root/GradusWidgetTests/__Snapshots__" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 2 ]] || return 1
+  ! rg -q 'URLSession|CKContainer|CloudKit|import Security|Keychain|widgetURL|AppIntent|ActivityKit|aps-environment|UIBackgroundModes' \
+    "$source_root/GradusWidget"
+}
+
+validate_widget_contract "$GATE_SCRIPT" "$SCRIPT_DIR/project.yml" "$SCRIPT_DIR" ||
+  fail "widget target, selector, embed, source, snapshot, or isolation contract is incomplete"
 
 validate_inv7_staging_contract() {
   local gate_path="$1" test_path="$SCRIPT_DIR/GradusMacTests/INV7Tests.swift" stage_block mac_leg_block snapshot_files snapshot_assertion_count
@@ -461,7 +497,7 @@ for leg in GradusiOS-iPad GradusMacUI GradusiOSUI; do
   [[ "$ui_block" == *'"$APPLE_UI_TEST_LOCK" --label'* ]] ||
     fail "$leg is not serialized by apple-ui-test-lock"
 done
-for leg in GradusMac GradusiOS-iPhone; do
+for leg in GradusMac GradusiOS-iPhone GradusWidget; do
   unit_block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$GATE_SCRIPT")"
   [[ "$unit_block" != *'"$APPLE_UI_TEST_LOCK"'* ]] ||
     fail "$leg unit leg must not use apple-ui-test-lock"
@@ -503,6 +539,31 @@ if validate_ios_destination_contract "$mutated_gate"; then
 fi
 rm -f "$mutated_gate"
 
+# Prove the widget boundary rejects the three easy-to-miss regressions: a
+# copied selector, a duplicate containing-app embed, and a missing target
+# source declaration.
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-widget-selector-contract.XXXXXX")"
+sed 's/-only-testing:GradusWidgetTests/-only-testing:GradusiOSTests/' \
+  "$GATE_SCRIPT" > "$mutated_gate"
+if validate_widget_contract "$mutated_gate" "$SCRIPT_DIR/project.yml" "$SCRIPT_DIR"; then
+  fail "widget contract accepted the wrong test selector"
+fi
+rm -f "$mutated_gate"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-widget-embed-contract.XXXXXX")"
+awk '{ print; if (!duplicated && $0 == "      - target: GradusWidget") { print; duplicated = 1 } }' \
+  "$SCRIPT_DIR/project.yml" > "$mutated_project"
+if validate_widget_contract "$GATE_SCRIPT" "$mutated_project" "$SCRIPT_DIR"; then
+  fail "widget contract accepted a duplicate containing-app embed"
+fi
+rm -f "$mutated_project"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-widget-source-contract.XXXXXX")"
+sed 's/includes: \[GradusWidget.swift\]/includes: [MissingWidget.swift]/' \
+  "$SCRIPT_DIR/project.yml" > "$mutated_project"
+if validate_widget_contract "$GATE_SCRIPT" "$mutated_project" "$SCRIPT_DIR"; then
+  fail "widget contract accepted an absent extension source"
+fi
+rm -f "$mutated_project"
+
 # Prove the DerivedData check rejects a partial wiring regression rather than
 # only recognizing the current source.
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-derived-data-contract.XXXXXX")"
@@ -530,7 +591,7 @@ skip_selection_contract="$(bash -c '
   configure_counting_legs --skip-macos-ui
   printf "%s|%s" "$EXPECTED_COUNTING_LEG_COUNT" "${COUNTING_LEG_NAMES[*]}"
 ' _ "$GATE_SCRIPT")"
-[[ "$skip_selection_contract" == "14|swift-testing pytest GradusMac GradusiOS-iPhone GradusiOS-iPad release-candidate release-candidate-validation asc-api build-upload release-reconcile testflight-assignment candidate-walkthrough release-bridge GradusiOSUI" ]] ||
+[[ "$skip_selection_contract" == "15|swift-testing pytest GradusMac GradusiOS-iPhone GradusWidget GradusiOS-iPad release-candidate release-candidate-validation asc-api build-upload release-reconcile testflight-assignment candidate-walkthrough release-bridge GradusiOSUI" ]] ||
   fail "--skip-macos-ui must omit exactly the GradusMacUI counting leg"
 grep -Fq 'if [[ "$skip_macos_ui" == true ]]; then' "$GATE_SCRIPT" ||
   fail "test gate does not guard the explicit macOS UI invocation"
@@ -607,8 +668,8 @@ for ((index = 0; index < leg_count; index++)); do
     iphone_leg_index="$index"
   fi
 done
-[[ "$iphone_leg_index" -ge 0 && "${COUNTING_LEG_MINIMUMS[iphone_leg_index]}" -eq 171 ]] ||
-  fail "iPhone integrated-gate floor must remain exactly 171"
+[[ "$iphone_leg_index" -ge 0 && "${COUNTING_LEG_MINIMUMS[iphone_leg_index]}" -eq 177 ]] ||
+  fail "iPhone integrated-gate floor must remain exactly 177"
 iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALLOWED=NO/p' "$GATE_SCRIPT")"
 [[ "$iphone_ui_block" == *"-only-testing:GradusiOSUITests"* ]] ||
   fail "dedicated iPhone UI leg is missing its explicit selector"

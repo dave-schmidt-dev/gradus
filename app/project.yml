@@ -150,6 +150,8 @@ targets:
     sources: [GradusiOS, Shared]
     dependencies:
       - package: GradusKit
+      - target: GradusWidget
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.ios
@@ -223,6 +225,51 @@ targets:
         com.apple.developer.icloud-services:
           - CloudKit
         com.apple.developer.aps-environment: development
+
+  GradusWidget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: GradusWidget
+        includes: [GradusWidget.swift]
+    dependencies:
+      - target: GradusWidgetSupport
+      - package: GradusKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.ios.widget
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+        MARKETING_VERSION: "1.8.2"
+        CURRENT_PROJECT_VERSION: "12"
+        CODE_SIGN_STYLE: Automatic
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    info:
+      path: GradusWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Gradus
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
+  # Widget extensions produce an `.appex`, not a linkable test host. Keep the
+  # provider, formatting, and view in a static module so both the extension and
+  # the focused unit-test bundle exercise the same implementation.
+  GradusWidgetSupport:
+    type: library.static
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: GradusWidget
+        excludes: [GradusWidget.swift, Info.plist]
+    dependencies:
+      - package: GradusKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.widget-support
+        APPLICATION_EXTENSION_API_ONLY: YES
 
   GradusMacTests:
     type: bundle.unit-test
@@ -325,6 +372,22 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 4CJ49V6QHW
 
+  GradusWidgetTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources: [GradusWidgetTests]
+    dependencies:
+      - target: GradusWidgetSupport
+      - package: GradusKit
+      - package: SnapshotTesting
+        product: SnapshotTesting
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+
 schemes:
   GradusCredentialBridge:
     build:
@@ -374,3 +437,11 @@ schemes:
       targets:
         - GradusiOSTests
         - GradusiOSUITests
+
+  GradusWidget:
+    build:
+      targets:
+        GradusWidget: all
+    test:
+      targets:
+        - GradusWidgetTests
