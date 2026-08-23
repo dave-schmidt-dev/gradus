@@ -421,7 +421,6 @@ schemes:
     test:
       targets:
         - GradusMacTests
-        - GradusMacUITests
         - GradusCredentialBridgeTests
       # `GradusMacTests` is a hosted bundle, so every test run launches the
       # real app. Without this it starts the live pipeline: it publishes to

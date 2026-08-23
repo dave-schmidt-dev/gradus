@@ -282,6 +282,7 @@ validate_xcode_cloud_scheme_contract() {
   local_block="$(sed -n '/^  GradusMac:$/,/^  GradusMacCloud:$/p' "$project_path")"
   cloud_block="$(sed -n '/^  GradusMacCloud:$/,/^  GradusiOS:$/p' "$project_path")"
   [[ -n "$cloud_block" ]] || return 1
+  [[ "$local_block" != *'- GradusMacUITests'* ]] || return 1
   [[ "$cloud_block" == *'- GradusMacTests'* ]] || return 1
   [[ "$cloud_block" == *'- GradusMacUITests'* ]] || return 1
   [[ "$cloud_block" == *'GRADUS_DISABLE_PIPELINE: "1"'* ]] || return 1
@@ -293,8 +294,41 @@ validate_xcode_cloud_scheme_contract() {
   [[ "$local_block" != *'TEST_RUNNER_GRADUS_SNAPSHOT_ROOT'* ]] || return 1
 }
 
+local_scheme_excludes_macos_ui() {
+  local scheme_path="$1"
+  [[ -f "$scheme_path" ]] || return 1
+  [[ "$(grep -Fc 'GradusMacUITests' "$scheme_path" || true)" -eq 0 ]] || return 1
+}
+
+cloud_scheme_keeps_macos_ui() {
+  local scheme_path="$1"
+  [[ -f "$scheme_path" ]] || return 1
+  [[ "$(grep -Fc 'GradusMacUITests' "$scheme_path" || true)" -eq 2 ]] || return 1
+  [[ "$(grep -Fc 'BuildableName = "GradusMacUITests.xctest"' "$scheme_path" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -Fc 'BlueprintName = "GradusMacUITests"' "$scheme_path" || true)" -eq 1 ]] || return 1
+}
+
 validate_xcode_cloud_scheme_contract "$SCRIPT_DIR/project.yml" ||
   fail "GradusMacCloud must preserve a separate, explicit Cloud test-path contract"
+
+release_checklist_cloud_only() {
+  local checklist_path="$1"
+  [[ -f "$checklist_path" ]] || return 1
+  grep -Fq "required passing Xcode Cloud \`GradusMacCloud\`" "$checklist_path" || return 1
+  grep -Fq "sole macOS UI runner" "$checklist_path" || return 1
+  grep -Fq "exact-head candidate evidence" "$checklist_path" || return 1
+  ! grep -Fq "headless equivalent of the \`GradusMacUI\` leg" "$checklist_path" || return 1
+  ! grep -Fq "local pre-push selector does not replace this candidate evidence" "$checklist_path" || return 1
+}
+
+local_scheme_excludes_macos_ui \
+  "$SCRIPT_DIR/Gradus.xcodeproj/xcshareddata/xcschemes/GradusMac.xcscheme" ||
+  fail "local GradusMac scheme must exclude GradusMacUITests"
+cloud_scheme_keeps_macos_ui \
+  "$SCRIPT_DIR/Gradus.xcodeproj/xcshareddata/xcschemes/GradusMacCloud.xcscheme" ||
+  fail "cloud GradusMacCloud scheme must include GradusMacUITests exactly twice"
+release_checklist_cloud_only "$SCRIPT_DIR/../RELEASE_CHECKLIST.md" ||
+  fail "release checklist must name Xcode Cloud as the sole macOS UI runner"
 
 grep -Fq -- '-only-testing:GradusMacUITests' "$GATE_SCRIPT" &&
   fail "local gate must not select GradusMacUITests"

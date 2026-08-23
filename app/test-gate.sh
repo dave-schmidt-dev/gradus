@@ -537,7 +537,6 @@ assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECO
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
   -destination 'platform=macOS,arch=arm64' \
-  -skip-testing:GradusMacUITests \
   CODE_SIGNING_ALLOWED=NO
 
 density_snapshot_skip_args=()

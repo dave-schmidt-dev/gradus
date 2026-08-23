@@ -126,9 +126,8 @@ Before candidate upload:
 
 1. Identify the producer, consumer, and shared contract in the release notes.
 2. Build and test both GradusMac and GradusiOS with `app/test-gate.sh`. For a
-   pull-request candidate, retain the required passing Xcode Cloud macOS UI
-   status as the headless equivalent of the `GradusMacUI` leg; the local
-   pre-push selector does not replace this candidate evidence.
+   pull-request candidate, retain the required passing Xcode Cloud `GradusMacCloud`
+   status as the sole macOS UI runner and exact-head candidate evidence.
 3. Run the scripted CloudKit schema-parity check — no manual CloudKit Console
    comparison required:
 
