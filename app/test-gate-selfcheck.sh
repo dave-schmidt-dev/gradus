@@ -202,10 +202,22 @@ validate_widget_contract() {
   local widget_block ios_block widget_target tests_target widget_scheme embed_count
   widget_block="$(sed -n '/assert_counting_leg "GradusWidget"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
   ios_block="$(sed -n '/^  GradusiOS:$/,/^  GradusWidget:$/p' "$project_path")"
-  widget_target="$(sed -n '/^  GradusWidget:$/,/^  GradusWidgetSupport:$/p' "$project_path")"
-  tests_target="$(sed -n '/^  GradusWidgetTests:$/,/^schemes:$/p' "$project_path")"
-  widget_scheme="$(sed -n '/^  GradusWidget:$/,$p' "$project_path")"
+  widget_target="$(awk '/^  GradusWidget:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$project_path")"
+  tests_target="$(awk '/^  GradusWidgetTests:/ { in_t=1; next } in_t && /^schemes:$/ { exit } in_t { print }' "$project_path")"
+  widget_scheme="$(awk '/^schemes:$/ { in_s=1; next } in_s && /^  GradusWidget:$/ { in_w=1; next } in_w && /^  [A-Za-z0-9_]+:/ { exit } in_w { print }' "$project_path")"
   embed_count="$(grep -Fxc -- '      - target: GradusWidget' "$project_path" || true)"
+
+  local widget_source_dir widget_source_file tests_source_dir
+  widget_source_dir="$(awk '/^  GradusWidget:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t && /path:/ { for (i=1; i<=NF; i++) if ($i == "path:") { print $(i+1); exit } }' "$project_path")"
+  widget_source_file="$(awk '/^  GradusWidget:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t && /includes:/ { for (i=1; i<=NF; i++) if ($i == "includes:") { val=$(i+1); gsub(/[\[\],]/, "", val); print val; exit } }' "$project_path")"
+  tests_source_dir="$(awk '/^  GradusWidgetTests:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t && /sources:/ { for (i=1; i<=NF; i++) if ($i == "sources:") { val=$(i+1); gsub(/[\[\],]/, "", val); print val; exit } }' "$project_path")"
+
+  local mac_marketing ios_marketing widget_marketing ios_build widget_build
+  mac_marketing="$(awk '/^  GradusMac:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t && /MARKETING_VERSION:/ { gsub(/"/, "", $2); print $2; exit }' "$project_path")"
+  ios_marketing="$(awk '/^  GradusiOS:/ { in_t=1; next } in_t && /^  GradusWidget:/ { exit } in_t && /MARKETING_VERSION:/ { gsub(/"/, "", $2); print $2; exit }' "$project_path")"
+  widget_marketing="$(awk '/^  GradusWidget:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t && /MARKETING_VERSION:/ { gsub(/"/, "", $2); print $2; exit }' "$project_path")"
+  ios_build="$(awk '/^  GradusiOS:/ { in_t=1; next } in_t && /^  GradusWidget:/ { exit } in_t && /CURRENT_PROJECT_VERSION:/ { gsub(/"/, "", $2); print $2; exit }' "$project_path")"
+  widget_build="$(awk '/^  GradusWidget:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t && /CURRENT_PROJECT_VERSION:/ { gsub(/"/, "", $2); print $2; exit }' "$project_path")"
 
   [[ "$widget_block" == *'-scheme GradusWidget'* ]] || return 1
   [[ "$widget_block" == *'-only-testing:GradusWidgetTests'* ]] || return 1
@@ -214,19 +226,21 @@ validate_widget_contract() {
   [[ "$embed_count" -eq 1 ]] || return 1
   [[ "$ios_block" == *'- target: GradusWidget'* && "$ios_block" == *'embed: true'* ]] || return 1
   [[ "$widget_target" == *'type: app-extension'* ]] || return 1
-  [[ "$widget_target" == *'includes: [GradusWidget.swift]'* ]] || return 1
-  [[ "$tests_target" == *'sources: [GradusWidgetTests]'* ]] || return 1
+  [[ "$widget_target" == *'APPLICATION_EXTENSION_API_ONLY: YES'* ]] || return 1
   [[ "$tests_target" == *'- target: GradusWidgetSupport'* ]] || return 1
   [[ "$widget_scheme" == *'- GradusWidgetTests'* ]] || return 1
-  [[ -f "$source_root/GradusWidget/GradusWidget.swift" ]] || return 1
-  [[ -f "$source_root/GradusWidgetTests/GradusWidgetTests.swift" ]] || return 1
+  [[ -n "$widget_source_dir" && -n "$widget_source_file" ]] || return 1
+  [[ -f "$source_root/$widget_source_dir/$widget_source_file" ]] || return 1
+  [[ -n "$tests_source_dir" && -f "$source_root/$tests_source_dir/GradusWidgetTests.swift" ]] || return 1
+  [[ -n "$mac_marketing" && "$mac_marketing" == "$ios_marketing" && "$ios_marketing" == "$widget_marketing" ]] || return 1
+  [[ -n "$ios_build" && "$ios_build" == "$widget_build" ]] || return 1
   [[ "$(find "$source_root/GradusWidgetTests/__Snapshots__" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 2 ]] || return 1
-  ! rg -q 'URLSession|CKContainer|CloudKit|import Security|Keychain|widgetURL|AppIntent|ActivityKit|aps-environment|UIBackgroundModes' \
+  ! grep -Eqr 'URLSession|CKContainer|CloudKit|import Security|Keychain|widgetURL|AppIntent|ActivityKit|aps-environment|UIBackgroundModes' \
     "$source_root/GradusWidget"
 }
 
 validate_widget_contract "$GATE_SCRIPT" "$SCRIPT_DIR/project.yml" "$SCRIPT_DIR" ||
-  fail "widget target, selector, embed, source, snapshot, or isolation contract is incomplete"
+  fail "widget target, selector, embed, source, snapshot, version parity, or isolation contract is incomplete"
 
 validate_inv7_staging_contract() {
   local gate_path="$1" test_path="$SCRIPT_DIR/GradusMacTests/INV7Tests.swift" stage_block mac_leg_block snapshot_files snapshot_assertion_count
@@ -539,9 +553,10 @@ if validate_ios_destination_contract "$mutated_gate"; then
 fi
 rm -f "$mutated_gate"
 
-# Prove the widget boundary rejects the three easy-to-miss regressions: a
-# copied selector, a duplicate containing-app embed, and a missing target
-# source declaration.
+# Prove the widget boundary rejects regressions: a copied selector, a
+# duplicate containing-app embed, an absent target source declaration,
+# a corrupted widget scheme testable list, mismatched marketing versions,
+# or mismatched iOS/widget build numbers.
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-widget-selector-contract.XXXXXX")"
 sed 's/-only-testing:GradusWidgetTests/-only-testing:GradusiOSTests/' \
   "$GATE_SCRIPT" > "$mutated_gate"
@@ -561,6 +576,49 @@ sed 's/includes: \[GradusWidget.swift\]/includes: [MissingWidget.swift]/' \
   "$SCRIPT_DIR/project.yml" > "$mutated_project"
 if validate_widget_contract "$GATE_SCRIPT" "$mutated_project" "$SCRIPT_DIR"; then
   fail "widget contract accepted an absent extension source"
+fi
+rm -f "$mutated_project"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-widget-scheme-contract.XXXXXX")"
+awk '
+  /^schemes:$/ { in_s=1 }
+  in_s && /- GradusWidgetTests/ { sub(/- GradusWidgetTests/, "- OtherTests") }
+  { print }
+' "$SCRIPT_DIR/project.yml" > "$mutated_project"
+if validate_widget_contract "$GATE_SCRIPT" "$mutated_project" "$SCRIPT_DIR"; then
+  fail "widget contract accepted wrong testable in widget scheme"
+fi
+rm -f "$mutated_project"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-widget-marketing-contract.XXXXXX")"
+awk '
+  /^  GradusWidget:/ { in_t=1; print; next }
+  in_t && /^  [A-Za-z0-9_]+:/ { in_t=0 }
+  in_t && /MARKETING_VERSION:/ { sub(/MARKETING_VERSION:.*/, "MARKETING_VERSION: \"999.999.999\"") }
+  { print }
+' "$SCRIPT_DIR/project.yml" > "$mutated_project"
+if validate_widget_contract "$GATE_SCRIPT" "$mutated_project" "$SCRIPT_DIR"; then
+  fail "widget contract accepted mismatched widget marketing version"
+fi
+rm -f "$mutated_project"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-mac-marketing-contract.XXXXXX")"
+awk '
+  /^  GradusMac:/ { in_t=1; print; next }
+  in_t && /^  [A-Za-z0-9_]+:/ { in_t=0 }
+  in_t && /MARKETING_VERSION:/ { sub(/MARKETING_VERSION:.*/, "MARKETING_VERSION: \"999.999.999\"") }
+  { print }
+' "$SCRIPT_DIR/project.yml" > "$mutated_project"
+if validate_widget_contract "$GATE_SCRIPT" "$mutated_project" "$SCRIPT_DIR"; then
+  fail "widget contract accepted mismatched Mac marketing version"
+fi
+rm -f "$mutated_project"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-widget-build-contract.XXXXXX")"
+awk '
+  /^  GradusWidget:/ { in_t=1; print; next }
+  in_t && /^  [A-Za-z0-9_]+:/ { in_t=0 }
+  in_t && /CURRENT_PROJECT_VERSION:/ { sub(/CURRENT_PROJECT_VERSION:.*/, "CURRENT_PROJECT_VERSION: \"999999\"") }
+  { print }
+' "$SCRIPT_DIR/project.yml" > "$mutated_project"
+if validate_widget_contract "$GATE_SCRIPT" "$mutated_project" "$SCRIPT_DIR"; then
+  fail "widget contract accepted mismatched iOS/widget build numbers"
 fi
 rm -f "$mutated_project"
 

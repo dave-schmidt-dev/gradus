@@ -424,6 +424,11 @@ def default_manifest() -> dict[str, Any]:
                 "owner": "iOS",
                 "trigger": "Adding the Gradus widget from the Home Screen widget gallery",
             },
+            {
+                "id": "widget-removal",
+                "owner": "iOS",
+                "trigger": "Removing the Gradus widget from the Home Screen or Today View",
+            },
             {"id": "mac-settings-window", "owner": "macOS", "trigger": "Settings from menu"},
         ],
     }

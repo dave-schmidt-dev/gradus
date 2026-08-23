@@ -109,6 +109,7 @@ def test_default_manifest_covers_required_icloud_alert_recovery_and_sample_state
     assert "Warning alerts" in sheets["notification-permission"]
     assert "only after warning alerts are denied" in sheets["notification-settings"]
     assert "Home Screen widget gallery" in sheets["widget-gallery"]
+    assert "Removing the Gradus widget" in sheets["widget-removal"]
     rendered = default_manifest()
     assert "Enable iCloud Sync" not in str(rendered)
     assert "liveModeEnabled" not in str(rendered)

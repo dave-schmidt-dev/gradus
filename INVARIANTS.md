@@ -169,8 +169,9 @@ rationale: GradusiOS is one artifact with one version, so a size class is a rend
   INV-12 recurrence entries (threshold three). The 2026-08-07 resolution
   remains unchanged; no closure or backdated resolution is recorded.
   The current 16-leg manifest keeps the widget and iPhone UI targets explicit and combines
-  the iPad UI target with its 12 canonical image snapshots; its aggregate floor
-  is therefore 21. `test-gate-selfcheck.sh` rejects a snapshot-only iPad
+  the iPad UI target with its 12 canonical image snapshots; the iPad leg's individual floor
+  is therefore 21 (12 snapshot selectors + 9 UI workflows, distinct from the full 16-leg gate
+  floor that sums to 301). `test-gate-selfcheck.sh` rejects a snapshot-only iPad
   result, either destination pointed at the other simulator, or a widget leg
   with the wrong selector, duplicate embed, or absent target source.
 

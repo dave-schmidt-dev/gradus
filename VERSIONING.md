@@ -70,12 +70,18 @@ both, verify the Mac publish in the matching CloudKit environment, and upload
 the iOS artifact only after that evidence exists. A local Mac republish does
 not require notarization; a distributed Mac artifact does.
 
-**GradusMac carries the same `MARKETING_VERSION` as GradusiOS.** Sharing a
-release train means sharing its number: when a train ships coupled behavior,
-bump both targets in `app/project.yml` to the same semantic version in the same
-change. The two `CURRENT_PROJECT_VERSION` values stay independent — they are
-per-target Apple build identifiers, and only the iOS one is allocated from App
-Store Connect.
+**GradusMac, GradusiOS, and GradusWidget carry the same `MARKETING_VERSION`.**
+Sharing a release train means sharing its number: when a train ships coupled
+behavior or widget updates, bump all three targets in `app/project.yml` to the
+same semantic version in the same change.
+
+**GradusWidget requires strict `CURRENT_PROJECT_VERSION` build-number parity with GradusiOS.**
+While Mac build numbers stay independent (allocated locally), Apple strictly
+enforces that an embedded app extension's `CFBundleVersion` matches its containing
+app's `CFBundleVersion` during App Store Connect upload processing. The iOS build
+bump (`archive-upload-ios.sh`) writes the allocated build number to both `GradusiOS`
+and `GradusWidget` targets simultaneously, and `test-gate-selfcheck.sh` enforces
+this parity with mutation tests.
 
 The Mac is not exempt because it is undistributed. It sat at `0.1.0` through
 the `1.5.0` train while containing that train's pace-ramp behavior, which made

@@ -71,13 +71,18 @@ Gradus currently uses Swift Testing/XCTest for logic, XCUITest for iOS user
 flows, and swift-snapshot-testing for visual regression. `app/test-gate.sh`
 is the authoritative local gate. It runs, in order:
 
-1. the hermetic notarization and iOS-upload script tests,
-2. `swift test` over the **GradusKit** package,
+1. the hermetic notarization and iOS-upload script tests (including inside-out
+   nested signing, separate App Store profile verification, and version/build parity),
+2. `swift test` over the **GradusKit** package (including atomic widget snapshot models),
 3. `pytest` over the **Python producer** suite,
-4. `xcodebuild test` for **GradusMac** (macOS) and **GradusiOS** (pinned iPhone
-   simulator),
+4. `xcodebuild test` for **GradusMac** (macOS), **GradusiOS** (pinned iPhone simulator),
+   and **GradusWidget** (`GradusWidgetTests` unit and snapshot tests),
 5. `xcodebuild test -only-testing:GradusiOSUITests` on the pinned **iPad**
    simulator.
+
+Physical device acceptance requires adding and removing the small widget
+(`systemSmall`) on hardware to verify system timeline reload and widget lifecycle,
+as headless CI cannot fully substitute for system WidgetKit presentation.
 
 Steps 2 and 3 are ordered before the simulator work so the gate fails fast, and
 they cost ~8s cold / <1s warm against several minutes for the simulator half.
