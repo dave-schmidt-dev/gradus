@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
@@ -100,23 +100,44 @@ CLAUDE_MIN_PROBE_INTERVAL_SECONDS = 600
 # Back off for an hour instead of retrying every normal Claude interval.
 CLAUDE_RATE_LIMIT_BACKOFF_SECONDS = 3600
 
+# Every consumer-visible provider is refreshed on each producer cycle. Stable
+# short offsets spread request starts inside that one cycle without making any
+# observation old enough to approach the iOS 180-second freshness boundary.
+PROVIDER_REFRESH_START_OFFSETS_SECONDS: dict[str, float] = {
+    "Codex": 0.0,
+    "Antigravity": 5.0,
+    "Copilot": 10.0,
+    "Cursor": 15.0,
+    "OpenCode Go": 20.0,
+    "Vibe": 25.0,
+    "Claude": 30.0,
+}
 
-class _CanonicalClaudeCooldown:
-    """Return a bounded, fail-closed result without touching Claude."""
 
-    def __init__(self, entry: Mapping[str, object]) -> None:
+class _CanonicalProviderDeferred:
+    """Project one prior canonical entry without probing its provider."""
+
+    def __init__(self, name: str, entry: Mapping[str, object]) -> None:
+        self._name = name
         self._entry = dict(entry)
 
     def fetch(self) -> ProviderSnapshot:
         data = self._entry.get("data")
         error = self._entry.get("error")
         return ProviderSnapshot(
-            name="Claude",
+            name=self._name,
             ok=self._entry.get("ok") is True,
             source="snapshot",
             data=dict(data) if isinstance(data, Mapping) else {},
             error=error if isinstance(error, str) else None,
         )
+
+
+class _CanonicalClaudeCooldown(_CanonicalProviderDeferred):
+    """Return a bounded, fail-closed result without touching Claude."""
+
+    def __init__(self, entry: Mapping[str, object]) -> None:
+        super().__init__("Claude", entry)
 
 
 def _canonical_entry(
@@ -135,9 +156,19 @@ def _canonical_entry(
 
 def _claude_probe_is_due(payload: Mapping[str, object] | None, now: datetime) -> bool:
     """Return whether the canonical Claude entry is old enough to probe."""
-    entry = _canonical_entry(payload, "Claude")
+    current = now if now.tzinfo is not None else now.astimezone()
+    return current >= _provider_next_probe_at(payload, "Claude", current)
+
+
+def _provider_next_probe_at(
+    payload: Mapping[str, object] | None, name: str, now: datetime
+) -> datetime:
+    """Return one deterministic provider due time from canonical probe state."""
+    if name != "Claude":
+        return now
+    entry = _canonical_entry(payload, name)
     if entry is None:
-        return True
+        return now
     # This field is advanced only by a real probe.  A cooldown projection is
     # carried through the next payload unchanged, so the 120s producer tick
     # cannot defer Claude forever by moving the top-level snapshot timestamp.
@@ -146,12 +177,12 @@ def _claude_probe_is_due(payload: Mapping[str, object] | None, now: datetime) ->
         timestamp = payload.get("updated_at")  # legacy snapshots only
     parsed = _parse_aware_iso_timestamp(timestamp)
     if parsed is None:
-        return True
+        return now
     current = now if now.tzinfo is not None else now.astimezone()
     try:
-        age = (current - parsed).total_seconds()
+        current - parsed
     except (TypeError, ValueError, OverflowError):
-        return True
+        return now
     error = entry.get("error")
     lower_error = error.lower() if isinstance(error, str) else ""
     interval = (
@@ -159,7 +190,45 @@ def _claude_probe_is_due(payload: Mapping[str, object] | None, now: datetime) ->
         if "http 429" in lower_error or "rate limited" in lower_error or "rate-limit" in lower_error
         else CLAUDE_MIN_PROBE_INTERVAL_SECONDS
     )
-    return age >= interval
+    return parsed + timedelta(seconds=interval)
+
+
+def _provider_start_delay(name: str) -> float:
+    """Return the stable intra-refresh start offset for one provider."""
+    return PROVIDER_REFRESH_START_OFFSETS_SECONDS.get(name, 0.0)
+
+
+def _schedule_refresh_providers(
+    providers: list[tuple[str, object]],
+    prior_payload: Mapping[str, object] | None,
+    now: datetime,
+    *,
+    on_deferred: Callable[[str, int], None],
+) -> list[tuple[str, object]]:
+    """Replace not-yet-due providers with canonical snapshot projections."""
+    scheduled: list[tuple[str, object]] = []
+    current = now if now.tzinfo is not None else now.astimezone()
+    for name, provider in providers:
+        if name != "Claude":
+            scheduled.append((name, provider))
+            continue
+        next_due = _provider_next_probe_at(prior_payload, name, current)
+        if current >= next_due:
+            scheduled.append((name, provider))
+            continue
+        entry = _canonical_entry(prior_payload, name)
+        if entry is None:
+            scheduled.append((name, provider))
+            continue
+        remaining = max(1, math.ceil((next_due - current).total_seconds()))
+        on_deferred(name, remaining)
+        deferred: object
+        if name == "Claude":
+            deferred = _CanonicalClaudeCooldown(entry)
+        else:
+            deferred = _CanonicalProviderDeferred(name, entry)
+        scheduled.append((name, deferred))
+    return scheduled
 
 
 def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datetime] | None:
@@ -549,9 +618,12 @@ def collect_snapshots(
     debug: bool,
     *,
     on_start: Callable[[str], None] | None = None,
+    on_scheduled: Callable[[str, float], None] | None = None,
     on_complete: Callable[[ProviderSnapshot], None] | None = None,
     on_waiting: Callable[[int], None] | None = None,
     safe_errors: bool = False,
+    start_delays: Mapping[str, float] | None = None,
+    sleeper: Callable[[float], None] | None = None,
 ) -> list[ProviderSnapshot]:
     snapshots: list[ProviderSnapshot] = []
     workers: list[tuple[str, object]] = [
@@ -576,17 +648,30 @@ def collect_snapshots(
 
     executor = ThreadPoolExecutor(max_workers=max(1, len(workers)))
     try:
+        sleep = time.sleep if sleeper is None else sleeper
 
-        def fetch_one(name: str, provider: object) -> ProviderSnapshot:
-            if isinstance(provider, _CanonicalClaudeCooldown):
+        def fetch_one(
+            name: str, provider: object, delay: float, deferred: bool
+        ) -> ProviderSnapshot:
+            if isinstance(provider, _CanonicalProviderDeferred):
                 return provider.fetch()
+            if delay > 0:
+                sleep(delay)
+            if on_start is not None and not deferred:
+                on_start(name)
             return fetch_provider_snapshot(name, provider, debug)
 
-        future_map = {}
+        worker_plans: list[tuple[str, object, float, bool]] = []
         for name, provider in workers:
-            if on_start is not None:
-                on_start(name)
-            future_map[executor.submit(fetch_one, name, provider)] = name
+            deferred = isinstance(provider, _CanonicalProviderDeferred)
+            delay = start_delays.get(name, 0.0) if start_delays is not None else 0.0
+            if on_scheduled is not None and not deferred:
+                on_scheduled(name, delay)
+            worker_plans.append((name, provider, delay, deferred))
+
+        future_map = {}
+        for name, provider, delay, deferred in worker_plans:
+            future_map[executor.submit(fetch_one, name, provider, delay, deferred)] = name
 
         def consume(future: object) -> None:
             """Consume one completed future without exposing provider errors."""
@@ -899,27 +984,29 @@ def _refresh_snapshot_once(
         set_headless(False)
         prior_payload = read_prior_snapshot(SNAPSHOT_V2_PATH)
         providers, cleanup = initialize_providers(cwd, enabled_providers)
-        # launchd owns the producer cadence.  Claude additionally gets a
-        # provider-specific backoff derived from the canonical snapshot, so a
-        # 120s tick never replays a just-rate-limited OAuth request.  The
-        # synthetic result is still fed through the normal snapshot builder,
-        # which preserves sanitized windows and keeps ok=false for routing.
+        # launchd owns the producer tick while this path assigns each provider
+        # a stable cadence. Deferred canonical results still flow through the
+        # normal builders, so every invocation commits one coherent snapshot.
+        # Claude's existing cooldown/backoff remains authoritative.
         probe_time = datetime.now().astimezone()
-        if not _claude_probe_is_due(prior_payload, probe_time):
-            claude_entry = _canonical_entry(prior_payload, "Claude")
-            providers = [(name, provider) for name, provider in providers if name != "Claude"]
-            providers.append(
-                (
-                    "Claude",
-                    _CanonicalClaudeCooldown(
-                        claude_entry if isinstance(claude_entry, Mapping) else {}
-                    ),
-                )
-            )
+        providers = _schedule_refresh_providers(
+            providers,
+            prior_payload,
+            probe_time,
+            on_deferred=lambda name, seconds: _refresh_progress(
+                f"provider {name if name in _PROVIDER_REGISTRY else 'provider'} "
+                f"deferred; next due in {seconds}s"
+            ),
+        )
+        deferred_names = {
+            name for name, provider in providers if isinstance(provider, _CanonicalProviderDeferred)
+        }
 
         def provider_complete(snapshot: ProviderSnapshot) -> None:
             # Provider names come from the fixed registry. Do not echo arbitrary
             # provider/error data to the status surface.
+            if snapshot.name in deferred_names and snapshot.source == "snapshot":
+                return
             name = snapshot.name if snapshot.name in _PROVIDER_REGISTRY else "provider"
             if snapshot.error == "provider initialization failed":
                 _refresh_progress(f"provider {name} initialization failed")
@@ -927,16 +1014,24 @@ def _refresh_snapshot_once(
                 _refresh_progress(f"provider {name} complete")
 
         def provider_start(name: str) -> None:
+            if name in deferred_names:
+                return
             safe_name = name if name in _PROVIDER_REGISTRY else "provider"
             _refresh_progress(f"provider {safe_name} started")
+
+        def provider_scheduled(name: str, delay: float) -> None:
+            safe_name = name if name in _PROVIDER_REGISTRY else "provider"
+            _refresh_progress(f"provider {safe_name} scheduled in {delay:.2f}s")
 
         snapshots = collect_snapshots(
             providers,
             debug,
             on_start=provider_start,
+            on_scheduled=provider_scheduled,
             on_complete=provider_complete,
             on_waiting=lambda pending: _refresh_progress(f"waiting for {pending} provider(s)"),
             safe_errors=True,
+            start_delays={name: _provider_start_delay(name) for name, _ in providers},
         )
         v1_ok, v2_ok, history_ok = _write_snapshot_versions(
             snapshots,

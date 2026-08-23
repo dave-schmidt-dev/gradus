@@ -223,7 +223,13 @@ The launchd job and explicit credential-aware `--refresh-snapshot` command are t
 
 **Read-only guarantee.** Consumer surfaces never open a browser, spawn a subprocess, refresh a token, evict a cookie cache, or send notifications. The producer writes canonical v2 atomically. History journaling is a separate best-effort output: it is attempted only after a read-back confirms that schema v2 committed, and a history failure never rolls back a valid snapshot.
 
-**Producer coverage.** The credential-aware producer probes providers and carries recent sanitized observations through transient failures. Claude probes are additionally limited to one attempt per ten minutes, with a one-hour backoff after HTTP 429; a 429 retains bounded windows but remains `ok: false` for fail-closed routing. Snapshot writers use a per-file lock and reject an older payload.
+**Producer coverage.** The credential-aware producer probes every
+consumer-visible provider on each cycle, with stable short start offsets that
+spread requests while committing one coherent snapshot. Refresh progress names
+each safe scheduled/start/complete state. Claude probes are additionally
+limited to one attempt per ten minutes, with a one-hour backoff after HTTP 429;
+a 429 retains bounded windows but remains `ok: false` for fail-closed routing.
+Snapshot writers use a per-file lock and reject an older payload.
 
 Claude cooldown cycles preserve the prior observation and its original probe
 timestamp exactly. A response containing no usable usage buckets is transient,
@@ -380,12 +386,14 @@ bash test-gate.sh   # runs GradusMac + GradusiOS unit/UI tests; disposable per-r
 ```
 
 The Xcode Cloud workflow `Gradus macOS UI Trial` runs the shared
-`GradusMacCloud` scheme for pull-request changes and is the required macOS UI
-status. Its hosted runner derives checked-out source and snapshot roots from
-`CI_WORKSPACE_PATH`; it never asks a local Mac for Automation Mode. Build 1
-passed 10/10 tests in two minutes. `app/Gradus.xcodeproj` is generated from
-`project.yml`, but shared project/workspace/scheme files are committed so Cloud
-can build a fresh clone; per-user Xcode state remains ignored.
+`GradusMacCloud` scheme as a manual branch build for each pull-request head
+and is the required macOS UI status. Start it in App Store Connect after a PR
+update, then retain the passing build against that exact head. Its hosted
+runner derives checked-out source and snapshot roots from `CI_WORKSPACE_PATH`;
+it never asks a local Mac for Automation Mode. Build 1 passed 10/10 tests in
+two minutes. `app/Gradus.xcodeproj` is generated from `project.yml`, but shared
+project/workspace/scheme files are committed so Cloud can build a fresh clone;
+per-user Xcode state remains ignored.
 
 ### App icons
 
