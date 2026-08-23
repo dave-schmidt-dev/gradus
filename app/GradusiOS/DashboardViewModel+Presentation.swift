@@ -1,4 +1,5 @@
 import Foundation
+import GradusKit
 
 /// Read-only presentation values derived from the dashboard's ranked state.
 public extension DashboardViewModel {
