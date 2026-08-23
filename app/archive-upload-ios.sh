@@ -1036,10 +1036,10 @@ locate_and_validate_distribution_profiles() {
   app_profile_path="$(resolve_provisioning_profile "com.zerodelta.gradus.ios" "$app_profile_override")" || return 1
   widget_profile_path="$(resolve_provisioning_profile "com.zerodelta.gradus.ios.widget" "$widget_profile_override")" || return 1
 
-  echo "==> Validating iOS app distribution profile ($app_profile_path)"
+  echo "==> Validating iOS app distribution profile ($app_profile_path)" >&2
   validate_profile "$app_profile_path" "com.zerodelta.gradus.ios" "$expected_team" "$expected_cert_sha1" "$expected_app_group" || return 1
 
-  echo "==> Validating iOS widget distribution profile ($widget_profile_path)"
+  echo "==> Validating iOS widget distribution profile ($widget_profile_path)" >&2
   validate_profile "$widget_profile_path" "com.zerodelta.gradus.ios.widget" "$expected_team" "$expected_cert_sha1" "$expected_app_group" || return 1
 
   printf '%s\t%s\n' "$app_profile_path" "$widget_profile_path"
@@ -1175,7 +1175,8 @@ repackage_and_sign_ios_candidate() {
   xattr -cr "$widget_bundle"
   codesign -d --entitlements :- "$widget_bundle" 2>/dev/null \
     | plutil -convert xml1 -o "$package_dir/widget-entitlements.plist" - 2>/dev/null || {
-      echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict/></plist>" > "$package_dir/widget-entitlements.plist"
+      echo "FAIL: could not extract entitlements from GradusWidget.appex" >&2
+      return 1
     }
   set_required_entitlement "$package_dir/widget-entitlements.plist" get-task-allow bool false || return 1
   assert_required_entitlement "$package_dir/widget-entitlements.plist" get-task-allow false || return 1

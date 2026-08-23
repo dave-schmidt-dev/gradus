@@ -1371,6 +1371,29 @@ resolved_widget="$(GRADUS_PROVISIONING_PROFILES_DIR="$profiles_dir" resolve_prov
   exit 1
 }
 
+# locate_and_validate_distribution_profiles output must stay machine-only on
+# stdout: exercise the exact command-substitution + cut parsing sequence main
+# uses (validated_profiles="$(...)"; app=cut -f1; widget=cut -f2) so any
+# progress text leaking onto stdout corrupts the parsed paths and fails here.
+locate_profiles_dir="$nested_test_root/locate_profiles"
+mkdir -p "$locate_profiles_dir"
+locate_app_profile="$locate_profiles_dir/gradus-ios-app-store.provisionprofile"
+locate_widget_profile="$locate_profiles_dir/gradus-widget-app-store.provisionprofile"
+locate_shared_sha1="$(create_test_profile "$locate_app_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "locate_shared_cert")"
+create_test_profile "$locate_widget_profile" "com.zerodelta.gradus.ios.widget" "4CJ49V6QHW" "locate_shared_cert" >/dev/null
+
+locate_validated="$(GRADUS_PROVISIONING_PROFILES_DIR="$locate_profiles_dir" SIGNING_IDENTITY="$locate_shared_sha1" locate_and_validate_distribution_profiles)"
+locate_app_path="$(printf '%s\n' "$locate_validated" | cut -f1)"
+locate_widget_path="$(printf '%s\n' "$locate_validated" | cut -f2)"
+[[ "$locate_app_path" == "$locate_app_profile" ]] || {
+  echo "FAIL: locate_and_validate_distribution_profiles app path was corrupted by captured progress output (got '$locate_app_path')" >&2
+  exit 1
+}
+[[ "$locate_widget_path" == "$locate_widget_profile" ]] || {
+  echo "FAIL: locate_and_validate_distribution_profiles widget path was corrupted by captured progress output (got '$locate_widget_path')" >&2
+  exit 1
+}
+
 # Mock archive creation helper
 create_mock_archive() {
   local root="$1" app_version="${2:-1.9.0}" app_build="${3:-12}" ext_version="${4:-1.9.0}" ext_build="${5:-12}"
@@ -1418,7 +1441,9 @@ if [[ -n "${MOCK_CODESIGN_LOG:-}" ]]; then
 fi
 if [[ "$*" == *"-d --entitlements"* ]]; then
   if [[ "$target" == *"GradusWidget.appex"* ]]; then
-    if [[ "${MOCK_EXTENSION_LEAK_CLOUDKIT:-0}" == "1" ]]; then
+    if [[ "${MOCK_EXTENSION_ENTITLEMENT_EXTRACT_FAIL:-0}" == "1" ]]; then
+      exit 1
+    elif [[ "${MOCK_EXTENSION_LEAK_CLOUDKIT:-0}" == "1" ]]; then
       cat <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1553,6 +1578,22 @@ leak_aps_status=$?
 set -e
 [[ "$leak_aps_status" -ne 0 && "$leak_aps_output" == *"extension leaked disallowed entitlement"* ]] || {
   echo "FAIL: extension APS leakage was accepted" >&2
+  exit 1
+}
+
+# 11b. Extension entitlement extraction failure must fail closed, not synthesize
+: > "$mock_codesign_log"
+set +e
+extract_fail_output="$(MOCK_EXTENSION_ENTITLEMENT_EXTRACT_FAIL=1 repackage_and_sign_ios_candidate "$valid_archive" "$nested_test_root/pkg_extract_fail" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+extract_fail_status=$?
+set -e
+[[ "$extract_fail_status" -ne 0 && "$extract_fail_output" == *"could not extract entitlements from GradusWidget.appex"* ]] || {
+  echo "FAIL: failed GradusWidget entitlement extraction was not rejected" >&2
+  exit 1
+}
+grep -Fq -- '--sign' "$mock_codesign_log" && {
+  echo "FAIL: signing proceeded despite failed GradusWidget entitlement extraction" >&2
   exit 1
 }
 
