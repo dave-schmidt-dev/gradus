@@ -72,6 +72,7 @@
 		52F93F8AA2B3AF365AB14257 /* WidgetTimelineProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4CF2407ABF3975205F86DD3 /* WidgetTimelineProvider.swift */; };
 		53D076932B7F4581DE4FFE29 /* SampleDataMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A3E1E25595651B1F6D4BDC /* SampleDataMode.swift */; };
 		5537EC1FA42D07216AD55ECA /* DensityLayoutFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C344612899BD159138272014 /* DensityLayoutFixtures.swift */; };
+		56B070E0DE2F6DA88BBB7094 /* gradusSmallWidgetCurrentLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = B70C321E9E10684B8B7ED693 /* gradusSmallWidgetCurrentLight.1.png */; };
 		56E0FB77E54097EB3E63C3F8 /* ListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4120A43B278DB173A2A65089 /* ListRow.swift */; };
 		58B8A6F1DB5D0305B4BBB59A /* Icon.swift in Sources */ = {isa = PBXBuildFile; fileRef = A796B92E8F239359556CD5C0 /* Icon.swift */; };
 		58C9513FE5E8DAF0366DB490 /* ProviderRankingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1ECD975EAE1D081810E74B0 /* ProviderRankingTests.swift */; };
@@ -175,6 +176,7 @@
 		CB77039E21B864E04335B361 /* SampleDataViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85314B67C9128617AD55CF6B /* SampleDataViews.swift */; };
 		CB7750BAC229F6B6CBDAE612 /* CloudKitDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22E9EDCA74D938789D0FD71D /* CloudKitDatabase.swift */; };
 		CC5661642C7D94A4FDD5E7CB /* DensityColumnPackingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C37323C78295BD2C2B02F36F /* DensityColumnPackingTests.swift */; };
+		CC803BC43F70FC7EE32C19B5 /* gradusSmallWidgetCurrentDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 5F2E2CC0663928F8C3501AC7 /* gradusSmallWidgetCurrentDark.1.png */; };
 		CCFA29037834F5A59C1FC233 /* iconButtonSnapshotLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = E6BDE0A3257F0BCB9E72B0DD /* iconButtonSnapshotLight.1.png */; };
 		CD0A112EB79A1395ED67610E /* DevicePresenceSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6F8EAC96579D0F02407DB83 /* DevicePresenceSettingsTests.swift */; };
 		CEAC09488AA671497C75244C /* WidgetSnapshotPublisherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A89DBFD34D3E2AD9849711F /* WidgetSnapshotPublisherTests.swift */; };
@@ -386,6 +388,7 @@
 		5CF375B5C2686010AAE0B6C2 /* SignalColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalColor.swift; sourceTree = "<group>"; };
 		5D78F3031CC08877D6751516 /* mobileNavBarTitleWithTrailingIconButtonDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = mobileNavBarTitleWithTrailingIconButtonDark.1.png; sourceTree = "<group>"; };
 		5E758316544F1A565826870C /* WarningNotificationScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WarningNotificationScheduler.swift; sourceTree = "<group>"; };
+		5F2E2CC0663928F8C3501AC7 /* gradusSmallWidgetCurrentDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = gradusSmallWidgetCurrentDark.1.png; sourceTree = "<group>"; };
 		5F921644EC255B8548BC067E /* CKCloudFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CKCloudFetcher.swift; sourceTree = "<group>"; };
 		6147B3E0BD8061C88B39930A /* GradusiOSAppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusiOSAppConfiguration.swift; sourceTree = "<group>"; };
 		6823FF052589D70CBF925382 /* GradusWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusWidget.swift; sourceTree = "<group>"; };
@@ -415,6 +418,7 @@
 		8A2568672FA1AA6C4CEC00C7 /* PipelineGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineGuardTests.swift; sourceTree = "<group>"; };
 		8B3CDDA3CFDB93003709A681 /* GradusiOSUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = GradusiOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8DB5088B3E4B29318262D1D8 /* listRowToggleOnDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = listRowToggleOnDark.1.png; sourceTree = "<group>"; };
+		8ED6766F6F7743891278FE15 /* GradusWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GradusWidget.entitlements; sourceTree = "<group>"; };
 		8F78B2281A33F00201D8C80D /* GradusMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GradusMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9004F0EF8EEFF279EFC6DF4E /* GradusCredentialBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GradusCredentialBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		916CBC47B8228AFD5B2DBA17 /* PublishCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishCoordinator.swift; sourceTree = "<group>"; };
@@ -453,6 +457,7 @@
 		AFA82E79F71C729ECB4F2411 /* WidgetSnapshotPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotPublisher.swift; sourceTree = "<group>"; };
 		B05C8F176108C96ED6428FC6 /* CloudKitSpike.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitSpike.swift; sourceTree = "<group>"; };
 		B11195274D6D880D13469AEE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		B70C321E9E10684B8B7ED693 /* gradusSmallWidgetCurrentLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = gradusSmallWidgetCurrentLight.1.png; sourceTree = "<group>"; };
 		B92DC1CA01A6E9C1C75DFDA1 /* PublishCoordinator+ErrorNaming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PublishCoordinator+ErrorNaming.swift"; sourceTree = "<group>"; };
 		BDFD6CD431EE85AE136D96BF /* ProviderStatus+Ranking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProviderStatus+Ranking.swift"; sourceTree = "<group>"; };
 		BE1AFA6159459E3688BAC6E7 /* MenuContentSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuContentSnapshotTests.swift; sourceTree = "<group>"; };
@@ -600,6 +605,7 @@
 			isa = PBXGroup;
 			children = (
 				D9412C16431BA54883E06E8F /* GradusWidgetTests.swift */,
+				B925745603D6474DA1475ADB /* __Snapshots__ */,
 			);
 			path = GradusWidgetTests;
 			sourceTree = "<group>";
@@ -751,6 +757,7 @@
 			isa = PBXGroup;
 			children = (
 				59969EFA3432FC7B6EFBEF5A /* GradusSmallWidgetView.swift */,
+				8ED6766F6F7743891278FE15 /* GradusWidget.entitlements */,
 				6823FF052589D70CBF925382 /* GradusWidget.swift */,
 				48CB518E3162CE4D9DA4C68B /* WidgetFormatting.swift */,
 				A4CF2407ABF3975205F86DD3 /* WidgetTimelineProvider.swift */,
@@ -800,6 +807,15 @@
 				ADFDC0D08F1D8D015F79E6AC /* providerDetailRendersErrorStateLight.1.png */,
 			);
 			path = ProviderDetailViewSnapshotTests;
+			sourceTree = "<group>";
+		};
+		723265C15D3E927F5DF5172A /* GradusWidgetTests */ = {
+			isa = PBXGroup;
+			children = (
+				5F2E2CC0663928F8C3501AC7 /* gradusSmallWidgetCurrentDark.1.png */,
+				B70C321E9E10684B8B7ED693 /* gradusSmallWidgetCurrentLight.1.png */,
+			);
+			path = GradusWidgetTests;
 			sourceTree = "<group>";
 		};
 		734657890BFF4AF5D4AFBE3D /* GradusMac */ = {
@@ -905,6 +921,14 @@
 				2E6FB520E5C2035AE7E6123F /* WindowRow.swift */,
 			);
 			path = Components;
+			sourceTree = "<group>";
+		};
+		B925745603D6474DA1475ADB /* __Snapshots__ */ = {
+			isa = PBXGroup;
+			children = (
+				723265C15D3E927F5DF5172A /* GradusWidgetTests */,
+			);
+			path = __Snapshots__;
 			sourceTree = "<group>";
 		};
 		BFBB206BC5E050BC9A6A6799 /* GradusMacTests */ = {
@@ -1054,6 +1078,7 @@
 			buildConfigurationList = 28ED7A0C95EE68CCB577874E /* Build configuration list for PBXNativeTarget "GradusWidgetTests" */;
 			buildPhases = (
 				98242E0EB7552F76F8B35731 /* Sources */,
+				31AE5EB54665C6AC38C42D55 /* Resources */,
 				F9F314680982553D63E19AC8 /* Frameworks */,
 			);
 			buildRules = (
@@ -1406,6 +1431,15 @@
 				A8F1D9A3904A35041C919103 /* settingsViewNotificationsOnLight.1.png in Resources */,
 				1AE4CC516278A62DAEE116DF /* settingsViewWarnsWhenSystemNotificationsAreDeniedDark.1.png in Resources */,
 				E102C0CAE62D102C482C20F1 /* settingsViewWarnsWhenSystemNotificationsAreDeniedLight.1.png in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		31AE5EB54665C6AC38C42D55 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CC803BC43F70FC7EE32C19B5 /* gradusSmallWidgetCurrentDark.1.png in Resources */,
+				56B070E0DE2F6DA88BBB7094 /* gradusSmallWidgetCurrentLight.1.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1827,7 +1861,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.mac.dev;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
@@ -1947,7 +1981,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.ios;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -1995,7 +2029,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.mac;
 				PROVISIONING_PROFILE_SPECIFIER = "Gradus Mac Developer ID (API-created)";
 				SDKROOT = macosx;
@@ -2086,7 +2120,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.ios;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -2135,6 +2169,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = GradusWidget/GradusWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = 4CJ49V6QHW;
@@ -2145,7 +2180,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.9.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -2267,6 +2302,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = GradusWidget/GradusWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = 4CJ49V6QHW;
@@ -2277,7 +2313,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.8.2;
+				MARKETING_VERSION = 1.9.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",

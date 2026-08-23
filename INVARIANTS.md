@@ -136,7 +136,7 @@ rationale: MARKETING_VERSION is the user-facing MAJOR.MINOR.PATCH product versio
   releases and prevents small fixes from appearing as large version jumps.
 
 ### INV-11 — New features and user-facing UI ship with automated regression coverage
-area: ["app/GradusKit/**", "app/GradusMac/**", "app/GradusiOS/**", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/GradusMacUITests/**", "app/GradusiOSUITests/**", "gradus/**", "tests/**", "TESTING.md"]
+area: ["app/GradusKit/**", "app/GradusMac/**", "app/GradusiOS/**", "app/GradusWidget/**", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/GradusWidgetTests/**", "app/GradusMacUITests/**", "app/GradusiOSUITests/**", "gradus/**", "tests/**", "TESTING.md"]
 gate_test: app/test-gate.sh
 threshold: 3
 rationale: Every new behavior has a test at the lowest layer that proves it; new SwiftUI appearance has
@@ -168,10 +168,11 @@ rationale: GradusiOS is one artifact with one version, so a size class is a rend
   iPhone UI 2, iPad UI 2). Harvest still reports `frozen: true` with three
   INV-12 recurrence entries (threshold three). The 2026-08-07 resolution
   remains unchanged; no closure or backdated resolution is recorded.
-  The current 13-leg manifest keeps the iPhone UI target explicit and combines
+  The current 16-leg manifest keeps the widget and iPhone UI targets explicit and combines
   the iPad UI target with its 12 canonical image snapshots; its aggregate floor
-  is therefore 15, and `test-gate-selfcheck.sh` rejects a snapshot-only iPad
-  result or either destination pointed at the other simulator.
+  is therefore 21. `test-gate-selfcheck.sh` rejects a snapshot-only iPad
+  result, either destination pointed at the other simulator, or a widget leg
+  with the wrong selector, duplicate embed, or absent target source.
 
 ### INV-13 — Mac, iPhone, and iPad preserve the same live provider state
 area: ["app/Shared/ProviderRanking.swift", "app/GradusMac/MenuProviderList.swift", "app/GradusiOS/DashboardView.swift", "app/GradusiOS/DashboardView+DenseGrid.swift", "app/GradusiOS/Components/ProviderDensityCard.swift", "app/GradusWidget/**", "app/GradusWidgetTests/**", "app/GradusMacTests/**", "app/GradusiOSTests/**", "app/test-gate.sh"]

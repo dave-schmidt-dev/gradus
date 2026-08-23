@@ -41,6 +41,7 @@ _SOURCE_ROUTE_MARKERS = {
     "sample-dashboard": ("GradusiOS/SampleDataViews.swift", "struct SampleDataDashboard"),
     "ios-settings": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
     "ios-settings-sample": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
+    "small-widget": ("GradusWidget/GradusSmallWidgetView.swift", "struct GradusSmallWidgetView"),
     "mac-menu": ("GradusMac/MenuContentView.swift", "struct MenuContentView"),
     "mac-settings": ("GradusMac/MacSettingsView.swift", "struct MacSettingsView"),
 }
@@ -103,6 +104,12 @@ _SOURCE_CONTROL_MARKERS = {
         "sample-data-exit-settings": (
             "GradusiOS/SettingsView+SampleMode.swift",
             'accessibilityIdentifier("sample-data-exit-settings")',
+        ),
+    },
+    "small-widget": {
+        "open-widget-dashboard": (
+            "GradusWidget/GradusWidget.swift",
+            "StaticConfiguration",
         ),
     },
     "mac-menu": {
@@ -298,6 +305,11 @@ def default_manifest() -> dict[str, Any]:
                 "controls": [control("back", "Back")],
             },
             {
+                "id": "small-widget",
+                "title": "Small Home Screen widget",
+                "controls": [control("open-widget-dashboard", "Open Gradus dashboard")],
+            },
+            {
                 "id": "ios-settings",
                 "title": "Settings",
                 "controls": [
@@ -392,6 +404,9 @@ def default_manifest() -> dict[str, Any]:
             {"id": "recovery", "label": "Recovery"},
             {"id": "sample", "label": "Local-only sample data"},
             {"id": "notification-denied", "label": "Warning alerts denied by iOS"},
+            {"id": "widget-current", "label": "Current usage projection"},
+            {"id": "widget-empty", "label": "Open Gradus to sync"},
+            {"id": "widget-unavailable", "label": "Usage unavailable"},
         ],
         "systemOwnedSheets": [
             {
@@ -403,6 +418,11 @@ def default_manifest() -> dict[str, Any]:
                 "id": "notification-settings",
                 "owner": "iOS",
                 "trigger": "Open iOS Settings only after warning alerts are denied by iOS",
+            },
+            {
+                "id": "widget-gallery",
+                "owner": "iOS",
+                "trigger": "Adding the Gradus widget from the Home Screen widget gallery",
             },
             {"id": "mac-settings-window", "owner": "macOS", "trigger": "Settings from menu"},
         ],

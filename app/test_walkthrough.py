@@ -76,6 +76,7 @@ def test_default_manifest_covers_required_icloud_alert_recovery_and_sample_state
         "sample-dashboard"
     ]
     assert {"explore-sample-settings"} <= routes["ios-settings"]
+    assert {"open-widget-dashboard"} <= routes["small-widget"]
     assert {"sample-data-reset-settings", "sample-data-exit-settings"} <= routes[
         "ios-settings-sample"
     ]
@@ -100,10 +101,14 @@ def test_default_manifest_covers_required_icloud_alert_recovery_and_sample_state
         "recovery",
         "sample",
         "notification-denied",
+        "widget-current",
+        "widget-empty",
+        "widget-unavailable",
     } <= state_ids
     sheets = {sheet["id"]: sheet["trigger"] for sheet in manifest["systemOwnedSheets"]}
     assert "Warning alerts" in sheets["notification-permission"]
     assert "only after warning alerts are denied" in sheets["notification-settings"]
+    assert "Home Screen widget gallery" in sheets["widget-gallery"]
     rendered = default_manifest()
     assert "Enable iCloud Sync" not in str(rendered)
     assert "liveModeEnabled" not in str(rendered)
