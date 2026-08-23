@@ -144,8 +144,9 @@ rationale: Every new behavior has a test at the lowest layer that proves it; new
   producer/consumer behavior has tests on both sides. Tests must be wired into the runner and gate.
   Silent-zero execution is a discriminated failure: each counted gate leg must report at least its
   declared minimum number of tests, and a successful command with no recognized count is not proof.
-  The canonical gate also runs explicit target-level GradusMacUITests and GradusiOSUITests legs with
-  floors above a placeholder-only run, so a broad scheme leg cannot mask a missing UI target.
+  The local canonical gate runs explicit target-level GradusiOSUITests legs with
+  floors above a placeholder-only run, so a broad scheme leg cannot mask a missing iOS UI target.
+  GradusMacCloud is the sole GradusMacUITests runner.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
 
@@ -168,10 +169,10 @@ rationale: GradusiOS is one artifact with one version, so a size class is a rend
   iPhone UI 2, iPad UI 2). Harvest still reports `frozen: true` with three
   INV-12 recurrence entries (threshold three). The 2026-08-07 resolution
   remains unchanged; no closure or backdated resolution is recorded.
-  The current 16-leg manifest keeps the widget and iPhone UI targets explicit and combines
+  The current 15-leg local manifest keeps the widget and iPhone UI targets explicit and combines
   the iPad UI target with its 12 canonical image snapshots; the iPad leg's individual floor
-  is therefore 21 (12 snapshot selectors + 9 UI workflows, distinct from the full 16-leg gate
-  floor that sums to 301). `test-gate-selfcheck.sh` rejects a snapshot-only iPad
+  is therefore 21 (12 snapshot selectors + 9 UI workflows, distinct from the full 15-leg gate
+  floor that sums to 299). `test-gate-selfcheck.sh` rejects a snapshot-only iPad
   result, either destination pointed at the other simulator, or a widget leg
   with the wrong selector, duplicate embed, or absent target source.
 

@@ -388,8 +388,9 @@ bash test-gate.sh   # runs GradusMac, GradusiOS, and GradusWidget tests; disposa
 
 The Xcode Cloud workflow `Gradus macOS UI Trial` runs the shared
 `GradusMacCloud` scheme as a manual branch build for each pull-request head
-and is the required macOS UI status. Start it in App Store Connect after a PR
-update, then retain the passing build against that exact head. Its hosted
+and is the sole `GradusMacUITests` owner and required macOS UI status. Start it
+in App Store Connect after a PR update, then retain the passing build against
+that exact head. Its hosted
 runner derives checked-out source and snapshot roots from `CI_WORKSPACE_PATH`;
 it never asks a local Mac for Automation Mode. Build 1 passed 10/10 tests in
 two minutes. `app/Gradus.xcodeproj` is generated from `project.yml`, but shared
@@ -479,10 +480,9 @@ status against its candidate record before any upload work, and source drift
 fails closed.
 
 The central fleet audit reports Gradus as adopted. The pre-push hook runs
-`bash app/test-gate.sh --skip-macos-ui`; the required Xcode Cloud PR status owns
-that omitted macOS UI leg. `bash app/test-gate.sh` without an option remains the
-complete local fallback. Local gate results remain separate from candidate-bound
-canary evidence.
+`bash app/test-gate.sh`; the local gate owns every counted iOS and non-UI leg,
+while the required Xcode Cloud PR status is the sole `GradusMacUITests` owner.
+Local gate results remain separate from candidate-bound canary evidence.
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
 its release summary and test-focus text into App Store Connect's “What to
@@ -645,7 +645,7 @@ Decision gates follow the G/A/R autonomy contract: `~/.agent/prompts/_shared/gar
 
 The local hooks and required Xcode Cloud PR status form the primary gate. Cloud
 owns `GradusMacUITests` without needing local Automation Mode; the hook retains
-every other counted leg and the default command retains the full local fallback.
+every local iOS UI and non-UI counted leg.
 Python hooks run through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
 tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
 enforced by `scripts/check-static-tool-versions.sh`.
@@ -667,9 +667,9 @@ uv run pre-commit install   # installs both pre-commit and pre-push hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **pre-push**: `bash app/test-gate.sh --skip-macos-ui` runs every local counted
-  leg except `GradusMacUI`; the required Xcode Cloud status supplies that one
-  headless. Run `bash app/test-gate.sh` for the complete local fallback.
+- **pre-push**: `bash app/test-gate.sh` runs every local iOS UI and non-UI
+  counted leg. The required Xcode Cloud status is the sole `GradusMacUITests`
+  runner.
 
 Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
 `.swiftformat`, Swift source scope and generated directory exclusions in

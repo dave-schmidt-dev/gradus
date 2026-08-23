@@ -75,7 +75,7 @@ repos:
       #      "no heavy suite in a pre-push hook" default for this project) ----
       - id: test-gate
         name: Gradus authoritative test gate
-        entry: bash app/test-gate.sh --skip-macos-ui
+        entry: bash app/test-gate.sh
         language: system
         pass_filenames: false
         always_run: true
