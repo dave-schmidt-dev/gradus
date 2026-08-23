@@ -8,7 +8,15 @@ import UIKit
 
 private let widgetNow = Date(timeIntervalSince1970: 1_787_483_600)
 private let widgetTimeZone = TimeZone(identifier: "America/New_York")!
-private let recordWidgetSnapshots: SnapshotTestingConfiguration.Record = .never
+/// Opt in only while intentionally refreshing these baselines:
+/// OTHER_SWIFT_FLAGS='$(inherited) -D WIDGET_SNAPSHOT_RECORD'
+private let recordWidgetSnapshots: SnapshotTestingConfiguration.Record = {
+    #if WIDGET_SNAPSHOT_RECORD
+        return .all
+    #else
+        return .never
+    #endif
+}()
 
 private func widgetSnapshot(
     status: WidgetProviderStatus = .warning,
@@ -36,12 +44,12 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
     GradusSmallWidgetView(entry: GradusWidgetEntry(
         date: widgetNow,
         state: .current(widgetSnapshot())
-    ))
-    .environment(\.calendar, Calendar(identifier: .gregorian))
-    .environment(\.locale, Locale(identifier: "en_US_POSIX"))
-    .environment(\.timeZone, widgetTimeZone)
-    .environment(\.dynamicTypeSize, .large)
-    .preferredColorScheme(style == .dark ? .dark : .light)
+    ), syncAgeOverride: "synced 7 min, 0 sec ago")
+        .environment(\.calendar, Calendar(identifier: .gregorian))
+        .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+        .environment(\.timeZone, widgetTimeZone)
+        .environment(\.dynamicTypeSize, .large)
+        .preferredColorScheme(style == .dark ? .dark : .light)
 }
 
 @Test func missingAndMalformedSnapshotsRenderEmpty() throws {

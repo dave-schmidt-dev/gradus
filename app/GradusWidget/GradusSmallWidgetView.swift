@@ -4,12 +4,19 @@ import WidgetKit
 
 public struct GradusSmallWidgetView: View {
     private let entry: GradusWidgetEntry
+    private let syncAgeOverride: String?
     @Environment(\.calendar) private var calendar
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
 
     public init(entry: GradusWidgetEntry) {
         self.entry = entry
+        syncAgeOverride = nil
+    }
+
+    init(entry: GradusWidgetEntry, syncAgeOverride: String) {
+        self.entry = entry
+        self.syncAgeOverride = syncAgeOverride
     }
 
     public var body: some View {
@@ -106,7 +113,7 @@ public struct GradusSmallWidgetView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Text("synced \(snapshot.phoneSyncDate, style: .relative) ago")
+                syncAgeText(snapshot.phoneSyncDate)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -118,6 +125,15 @@ public struct GradusSmallWidgetView: View {
                 timeZone: timeZone,
                 calendar: calendar
             ))
+        }
+    }
+
+    @ViewBuilder
+    private func syncAgeText(_ phoneSyncDate: Date) -> some View {
+        if let syncAgeOverride {
+            Text(syncAgeOverride)
+        } else {
+            Text("synced \(phoneSyncDate, style: .relative) ago")
         }
     }
 
