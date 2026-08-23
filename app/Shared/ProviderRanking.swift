@@ -307,3 +307,20 @@ enum CrossSurfaceParity {
         earliestResetLabel(windows, now: now)
     }
 }
+
+/// Narrowly named fixed-most-urgent provider ranking helper for non-UI/widget
+/// surfaces that evaluates the complete provider collection using the supplied
+/// local warning threshold, independent of UI sort or show-exhausted preferences.
+func fixedMostUrgentRankedProviders<P: RankableProvider>(
+    _ providers: [P],
+    localThreshold: Double
+) -> [P] {
+    rankProviders(providers, localThreshold: localThreshold, sortOption: .mostUrgent)
+}
+
+func fixedMostUrgentProvider<P: RankableProvider>(
+    _ providers: [P],
+    localThreshold: Double
+) -> P? {
+    fixedMostUrgentRankedProviders(providers, localThreshold: localThreshold).first
+}
