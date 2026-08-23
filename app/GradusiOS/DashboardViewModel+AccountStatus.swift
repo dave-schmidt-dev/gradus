@@ -58,8 +58,10 @@ public extension DashboardViewModel {
             liveLifecycleNeedsRetry = false
         case .noAccount:
             iCloudAvailability = .noAccount
+            clearWidgetSnapshot()
         case .restricted:
             iCloudAvailability = .restricted
+            clearWidgetSnapshot()
         case .couldNotDetermine, .temporarilyUnavailable:
             if !liveLifecycleNeedsRetry {
                 iCloudAvailability = .checkingICloud

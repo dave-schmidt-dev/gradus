@@ -136,6 +136,7 @@ public final class DashboardViewModel: ObservableObject {
         didSet {
             userDefaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
             applyPresentationPreferences()
+            synchronizeWidgetSnapshot()
         }
     }
 
@@ -210,6 +211,7 @@ public final class DashboardViewModel: ObservableObject {
     let warningNotificationScheduler: WarningNotificationScheduling?
     let notificationAuthorizationSource: NotificationAuthorizationSource?
     let liveLifecycleGate: LiveLifecycleGate?
+    let widgetSnapshotPublisher: WidgetSnapshotPublisher?
     let userDefaults: UserDefaults
     var allProviders: [ProviderStatus] = []
     var isReconcilingLiveLifecycle = false
@@ -297,6 +299,7 @@ public final class DashboardViewModel: ObservableObject {
         warningNotificationScheduler: WarningNotificationScheduling? = nil,
         notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
         liveLifecycleGate: LiveLifecycleGate?,
+        widgetSnapshotPublisher: WidgetSnapshotPublisher? = nil,
         userDefaults: UserDefaults = .standard
     ) {
         self.cache = cache
@@ -307,6 +310,7 @@ public final class DashboardViewModel: ObservableObject {
         self.warningNotificationScheduler = warningNotificationScheduler
         self.notificationAuthorizationSource = notificationAuthorizationSource
         self.liveLifecycleGate = liveLifecycleGate
+        self.widgetSnapshotPublisher = widgetSnapshotPublisher
         self.userDefaults = userDefaults
         let migratedMode = RequiredICloudMigration.migrate(
             defaults: userDefaults, legacyKey: Self.syncEnabledKey
@@ -344,6 +348,7 @@ public final class DashboardViewModel: ObservableObject {
         )
         lastSyncedAt = cache.lastSyncedAt()
         updateConnectedSource()
+        synchronizeWidgetSnapshot()
     }
 
     private func commitRequiredICloudMode(_ mode: RequiredICloudMode) {

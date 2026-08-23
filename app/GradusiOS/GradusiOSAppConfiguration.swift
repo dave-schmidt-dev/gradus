@@ -35,6 +35,25 @@ extension GradusiOSApp {
         SampleDataMode.storageDirectory(baseDirectory: cacheDirectory())
     }
 
+    static func shouldCreateWidgetPublisher(
+        isUITesting: Bool,
+        sampleDataModeEnabled: Bool
+    ) -> Bool {
+        !isUITesting && !sampleDataModeEnabled
+    }
+
+    @MainActor
+    static func makeWidgetSnapshotPublisher(
+        isUITesting: Bool,
+        sampleDataModeEnabled: Bool
+    ) -> WidgetSnapshotPublisher? {
+        guard shouldCreateWidgetPublisher(
+            isUITesting: isUITesting,
+            sampleDataModeEnabled: sampleDataModeEnabled
+        ) else { return nil }
+        return WidgetSnapshotPublisher.live()
+    }
+
     /// T3.5's XCUITest asserts the dashboard renders from a seeded offline
     /// cache without needing a live CloudKit round-trip in CI. The XCUITest
     /// passes fixture JSON via `launchEnvironment`; this writes it straight

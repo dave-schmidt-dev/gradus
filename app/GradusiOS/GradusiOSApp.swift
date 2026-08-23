@@ -68,13 +68,18 @@ struct GradusiOSApp: App {
             : Self.makeCloudKitDependencies()
         let warningNotificationScheduler = LocalWarningNotificationScheduler()
         let notificationAuthorizationSource = Self.makeNotificationAuthorizationSource(fixture: uiTestFixture)
+        let widgetSnapshotPublisher = Self.makeWidgetSnapshotPublisher(
+            isUITesting: Self.isUITesting,
+            sampleDataModeEnabled: launchSampleMode
+        )
 
         let viewModel = DashboardViewModel(
             cache: cache, fetcher: dependencies.fetcher, accountSource: dependencies.accountSource,
             zoneChangesFetcher: dependencies.zoneChangesFetcher, subscriptionManager: dependencies.subscriptionManager,
             warningNotificationScheduler: warningNotificationScheduler,
             notificationAuthorizationSource: notificationAuthorizationSource,
-            liveLifecycleGate: liveLifecycleGate
+            liveLifecycleGate: liveLifecycleGate,
+            widgetSnapshotPublisher: widgetSnapshotPublisher
         )
         uiTestFixture?.apply(to: viewModel)
         _viewModel = StateObject(wrappedValue: viewModel)
