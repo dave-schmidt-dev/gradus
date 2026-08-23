@@ -4,142 +4,6 @@ import Foundation
 import GradusKit
 import Testing
 
-private enum PublisherTestError: Error {
-    case expected
-}
-
-private final class RecordingWidgetStore: WidgetSnapshotStore, @unchecked Sendable {
-    var snapshot: WidgetSnapshot?
-    var failSave = false
-    var failClear = false
-    private(set) var saveCount = 0
-    private(set) var clearCount = 0
-
-    func loadSnapshot() -> WidgetSnapshot? {
-        snapshot
-    }
-
-    func saveSnapshot(_ snapshot: WidgetSnapshot) throws {
-        guard !failSave else { throw PublisherTestError.expected }
-        self.snapshot = snapshot
-        saveCount += 1
-    }
-
-    func clear() throws {
-        guard !failClear else { throw PublisherTestError.expected }
-        snapshot = nil
-        clearCount += 1
-    }
-}
-
-@MainActor
-private final class RecordingTimelineReloader: WidgetTimelineReloading {
-    private(set) var reloadCount = 0
-
-    func reloadGradusWidget() {
-        reloadCount += 1
-    }
-}
-
-private final class PublisherCacheStore: LocalCacheStore, @unchecked Sendable {
-    var statuses: [ProviderStatus]
-    var syncedAt: Date?
-    var token: Data?
-    var failSave = false
-    var failClear = false
-
-    init(statuses: [ProviderStatus] = [], syncedAt: Date? = nil) {
-        self.statuses = statuses
-        self.syncedAt = syncedAt
-    }
-
-    func loadCachedStatuses() -> [ProviderStatus] {
-        statuses
-    }
-
-    func lastSyncedAt() -> Date? {
-        syncedAt
-    }
-
-    func saveCachedStatuses(_ statuses: [ProviderStatus], syncedAt: Date) throws {
-        guard !failSave else { throw PublisherTestError.expected }
-        self.statuses = statuses
-        self.syncedAt = syncedAt
-    }
-
-    func loadChangeToken() -> Data? {
-        token
-    }
-
-    func saveChangeToken(_ token: Data?) throws {
-        self.token = token
-    }
-
-    func clear() throws {
-        guard !failClear else { throw PublisherTestError.expected }
-        statuses = []
-        syncedAt = nil
-        token = nil
-    }
-}
-
-private struct StaticPublisherFetcher: CloudFetcher {
-    let result: Result<[ProviderStatus], PublisherTestError>
-
-    func fetchAll() async throws -> [ProviderStatus] {
-        try result.get()
-    }
-}
-
-private func publisherStatus(
-    _ name: String,
-    percentLeft: Double,
-    paceDelta: Double? = 0,
-    isWarning: Bool = false,
-    isDepleted: Bool = false
-) -> ProviderStatus {
-    ProviderStatus(
-        providerName: name,
-        providerDisplayName: name.capitalized,
-        ok: true,
-        errorMessage: nil,
-        windows: [
-            ProviderWindow(
-                id: "weekly",
-                percentLeft: percentLeft,
-                resetISO: "2026-08-30T12:00:00Z",
-                windowHours: 168,
-                paceDelta: paceDelta
-            )
-        ],
-        data: [:],
-        observedAt: nil,
-        snapshotUpdatedAt: "2026-08-23T12:00:00Z",
-        publishedAt: Date(timeIntervalSince1970: 1_787_483_600),
-        isWarning: isWarning,
-        isDepleted: isDepleted
-    )
-}
-
-@MainActor
-private func makePublisherViewModel(
-    cache: LocalCacheStore,
-    publisher: WidgetSnapshotPublisher,
-    fetcher: CloudFetcher? = nil,
-    zoneChangesFetcher: ZoneChangesFetcher? = nil
-) -> DashboardViewModel {
-    let defaults = syncIsolatedDefaults()
-    defaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
-    return DashboardViewModel(
-        cache: cache,
-        fetcher: fetcher,
-        zoneChangesFetcher: zoneChangesFetcher,
-        liveLifecycleGate: nil,
-        widgetSnapshotPublisher: publisher,
-        userDefaults: defaults
-    )
-}
-
 @MainActor
 @Test func cachedLiveStartupPublishesFixedProjectionAndPreferencesDeduplicate() {
     let syncedAt = Date(timeIntervalSince1970: 1_787_483_600)
@@ -165,10 +29,12 @@ private func makePublisherViewModel(
     #expect(reloader.reloadCount == 1)
 
     viewModel.localWarningThresholdPercent = 35
+    viewModel.commitWarningThreshold()
     #expect(store.snapshot?.status == .attention)
     #expect(reloader.reloadCount == 2)
 
     viewModel.localWarningThresholdPercent = 35
+    viewModel.commitWarningThreshold()
     #expect(reloader.reloadCount == 2)
 }
 
@@ -318,4 +184,182 @@ private func makePublisherViewModel(
         isUITesting: false,
         sampleDataModeEnabled: false
     ))
+}
+
+@MainActor
+@Test func relaunchAndThresholdAfterAccountLossDoNotResurrectWidget() {
+    let cached = publisherStatus("cached", percentLeft: 45)
+    let syncedAt = Date(timeIntervalSince1970: 1_787_483_600)
+    let cache = PublisherCacheStore(statuses: [cached], syncedAt: syncedAt)
+
+    let store = RecordingWidgetStore()
+    let reloader = RecordingTimelineReloader()
+    let publisher = WidgetSnapshotPublisher(store: store, timelineReloader: reloader)
+    let viewModel = makePublisherViewModel(cache: cache, publisher: publisher)
+
+    #expect(store.snapshot?.providerName == "cached")
+    #expect(reloader.reloadCount == 1)
+
+    // Account loss clears the widget snapshot while retaining cache
+    viewModel.updateAccountStatus(.noAccount)
+    #expect(store.snapshot == nil)
+    #expect(reloader.reloadCount == 2)
+    #expect(!viewModel.allProviders.isEmpty)
+
+    // Modifying threshold and committing must not resurrect the widget snapshot
+    viewModel.localWarningThresholdPercent = 50
+    viewModel.commitWarningThreshold()
+    #expect(store.snapshot == nil)
+    #expect(reloader.reloadCount == 2)
+
+    // Relaunching with retained cache but unconfirmed/non-available account (.couldNotDetermine) must not publish
+    let relaunchStore = RecordingWidgetStore()
+    let relaunchReloader = RecordingTimelineReloader()
+    let relaunchPublisher = WidgetSnapshotPublisher(store: relaunchStore, timelineReloader: relaunchReloader)
+    let relaunchDefaults = syncIsolatedDefaults()
+    relaunchDefaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
+    let relaunchViewModel = DashboardViewModel(
+        cache: cache,
+        liveLifecycleGate: nil,
+        widgetSnapshotPublisher: relaunchPublisher,
+        userDefaults: relaunchDefaults
+    )
+    #expect(relaunchViewModel.accountStatus == .couldNotDetermine)
+    #expect(relaunchStore.snapshot == nil)
+    #expect(relaunchReloader.reloadCount == 0)
+
+    // Threshold change on relaunch without available account also does not publish
+    relaunchViewModel.localWarningThresholdPercent = 60
+    relaunchViewModel.commitWarningThreshold()
+    #expect(relaunchStore.snapshot == nil)
+    #expect(relaunchReloader.reloadCount == 0)
+}
+
+@MainActor
+@Test func recoveryRepublishesRetainedCacheWithoutRefetch() {
+    let cached = publisherStatus("cached", percentLeft: 45)
+    let syncedAt = Date(timeIntervalSince1970: 1_787_483_600)
+    let cache = PublisherCacheStore(statuses: [cached], syncedAt: syncedAt)
+
+    let store = RecordingWidgetStore()
+    let reloader = RecordingTimelineReloader()
+    let publisher = WidgetSnapshotPublisher(store: store, timelineReloader: reloader)
+    let viewModel = makePublisherViewModel(
+        cache: cache,
+        publisher: publisher,
+        accountStatus: .noAccount
+    )
+
+    #expect(store.snapshot == nil)
+    #expect(reloader.reloadCount == 0)
+
+    // Becoming available republishes the retained cache immediately
+    viewModel.updateAccountStatus(.available)
+    #expect(store.snapshot?.providerName == "cached")
+    #expect(store.snapshot?.phoneSyncDate == syncedAt)
+    #expect(reloader.reloadCount == 1)
+}
+
+@MainActor
+@Test func disabledSyncClearsProjectionAndReenablingRepublishes() {
+    let cached = publisherStatus("cached", percentLeft: 45)
+    let syncedAt = Date(timeIntervalSince1970: 1_787_483_600)
+    let cache = PublisherCacheStore(statuses: [cached], syncedAt: syncedAt)
+
+    let store = RecordingWidgetStore()
+    let reloader = RecordingTimelineReloader()
+    let publisher = WidgetSnapshotPublisher(store: store, timelineReloader: reloader)
+    let viewModel = makePublisherViewModel(cache: cache, publisher: publisher)
+
+    #expect(store.snapshot?.providerName == "cached")
+    #expect(reloader.reloadCount == 1)
+
+    // Disabling sync clears the projection
+    viewModel.syncEnabled = false
+    #expect(store.snapshot == nil)
+    #expect(reloader.reloadCount == 2)
+
+    // Threshold edits while sync is disabled do not publish
+    viewModel.localWarningThresholdPercent = 50
+    viewModel.commitWarningThreshold()
+    #expect(store.snapshot == nil)
+    #expect(reloader.reloadCount == 2)
+
+    // Re-enabling sync republishes the retained cache
+    viewModel.syncEnabled = true
+    #expect(store.snapshot?.providerName == "cached")
+    #expect(reloader.reloadCount == 3)
+}
+
+@MainActor
+@Test func oneReloadPerCommittedThresholdEdit() {
+    let cached = publisherStatus("cached", percentLeft: 45)
+    let syncedAt = Date(timeIntervalSince1970: 1_787_483_600)
+    let cache = PublisherCacheStore(statuses: [cached], syncedAt: syncedAt)
+
+    let store = RecordingWidgetStore()
+    let reloader = RecordingTimelineReloader()
+    let publisher = WidgetSnapshotPublisher(store: store, timelineReloader: reloader)
+    let viewModel = makePublisherViewModel(cache: cache, publisher: publisher)
+
+    #expect(reloader.reloadCount == 1)
+    #expect(store.snapshot?.status == .ok)
+
+    // Simulating slider drag: multiple intermediate value changes
+    viewModel.localWarningThresholdPercent = 46
+    viewModel.localWarningThresholdPercent = 47
+    viewModel.localWarningThresholdPercent = 48
+    viewModel.localWarningThresholdPercent = 49
+    viewModel.localWarningThresholdPercent = 50
+
+    // No intermediate reload fired during slider drag
+    #expect(reloader.reloadCount == 1)
+
+    // Editing commits: single write and reload
+    viewModel.commitWarningThreshold()
+    #expect(reloader.reloadCount == 2)
+    #expect(store.snapshot?.status == .attention)
+}
+
+@MainActor
+@Test func noWindowProviderDoesNotHideProviderWithValidUrgentWindow() {
+    let store = RecordingWidgetStore()
+    let reloader = RecordingTimelineReloader()
+    let publisher = WidgetSnapshotPublisher(store: store, timelineReloader: reloader)
+
+    let erroredWithoutWindows = publisherErrorStatusWithoutWindows()
+    let urgentWithWindow = publisherStatus("urgent", percentLeft: 3, isWarning: true)
+
+    let syncDate = Date(timeIntervalSince1970: 1_787_483_600)
+
+    // Errored provider without windows is tier 0 in rankProviders, but must not hide urgentWithWindow
+    publisher.synchronize(
+        providers: [erroredWithoutWindows, urgentWithWindow],
+        phoneSyncDate: syncDate,
+        localWarningThreshold: 20
+    )
+
+    #expect(store.snapshot?.providerName == "urgent")
+    #expect(store.snapshot?.selectedWindow?.percentLeft == 3)
+    #expect(reloader.reloadCount == 1)
+
+    // Provider with invalid window also does not hide valid urgent window
+    let invalidWindowProvider = publisherInvalidWindowStatus()
+
+    publisher.synchronize(
+        providers: [invalidWindowProvider, urgentWithWindow],
+        phoneSyncDate: syncDate,
+        localWarningThreshold: 20
+    )
+    #expect(store.snapshot?.providerName == "urgent")
+
+    // When only no-window providers exist, selects the most urgent no-window provider with nil window
+    publisher.synchronize(
+        providers: [erroredWithoutWindows],
+        phoneSyncDate: syncDate,
+        localWarningThreshold: 20
+    )
+    #expect(store.snapshot?.providerName == "errored_no_windows")
+    #expect(store.snapshot?.selectedWindow == nil)
+    #expect(store.snapshot?.status == .error)
 }

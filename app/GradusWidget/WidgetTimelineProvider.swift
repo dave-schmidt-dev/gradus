@@ -81,7 +81,7 @@ public struct WidgetTimelineProvider: TimelineProvider {
         guard let snapshot = snapshotLoader() else {
             return GradusWidgetEntry(date: date, state: .empty)
         }
-        guard snapshot.selectedWindow != nil else {
+        guard snapshot.status != .error, snapshot.selectedWindow != nil else {
             return GradusWidgetEntry(date: date, state: .unavailable)
         }
         return GradusWidgetEntry(date: date, state: .current(snapshot))

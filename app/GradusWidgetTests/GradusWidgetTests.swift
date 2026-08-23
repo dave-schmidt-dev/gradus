@@ -11,6 +11,7 @@ private let widgetTimeZone = TimeZone(identifier: "America/New_York")!
 private let recordWidgetSnapshots: SnapshotTestingConfiguration.Record = .never
 
 private func widgetSnapshot(
+    status: WidgetProviderStatus = .warning,
     percentLeft: Double = 17,
     syncAge: TimeInterval = 7 * 60,
     resetDate: Date? = Date(timeIntervalSince1970: 1_788_010_800),
@@ -20,7 +21,7 @@ private func widgetSnapshot(
         phoneSyncDate: widgetNow.addingTimeInterval(-syncAge),
         providerName: "codex",
         providerDisplayName: "Codex",
-        status: .warning,
+        status: status,
         selectedWindow: selectedWindow ? WidgetWindowSnapshot(
             id: "weekly",
             label: "Weekly",
@@ -65,6 +66,14 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
     #expect(provider.entry().state == .unavailable)
 }
 
+@Test func errorStatusSnapshotRendersUnavailable() {
+    let provider = WidgetTimelineProvider(
+        snapshotLoader: { widgetSnapshot(status: .error, selectedWindow: true) },
+        now: { widgetNow }
+    )
+    #expect(provider.entry().state == .unavailable)
+}
+
 @Test func validSnapshotRendersCurrentEntry() {
     let snapshot = widgetSnapshot()
     let provider = WidgetTimelineProvider(snapshotLoader: { snapshot }, now: { widgetNow })
@@ -85,39 +94,137 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
     #expect(GradusWidgetMetadata.supportedFamilies == [.systemSmall])
 }
 
-@Test func percentageAndAgeFormattingAreBounded() {
+@Test func percentageFormattingPreservesSubOnePercentAndMissingValues() {
     #expect(WidgetFormatting.percent(17.9) == "17%")
-    #expect(WidgetFormatting.percent(-4) == "0%")
-    #expect(WidgetFormatting.percent(140) == "100%")
-    #expect(WidgetFormatting.syncedAge(from: widgetNow.addingTimeInterval(-59), now: widgetNow) == "synced <1m ago")
-    let twoHoursAgo = widgetNow.addingTimeInterval(-2 * 3600)
-    let threeDaysAgo = widgetNow.addingTimeInterval(-3 * 86400)
-    #expect(WidgetFormatting.syncedAge(from: twoHoursAgo, now: widgetNow) == "synced 2h ago")
-    #expect(WidgetFormatting.syncedAge(from: threeDaysAgo, now: widgetNow) == "synced 3d ago")
+    #expect(WidgetFormatting.percent(0.7) == "0.7%")
+    #expect(WidgetFormatting.percent(0.6) == "0.6%")
+    #expect(WidgetFormatting.percent(0.0) == "0.0%")
+    #expect(WidgetFormatting.percent(100.0) == "100%")
+    #expect(WidgetFormatting.percent(nil) == "n/a")
+    #expect(WidgetFormatting.percent(Double.nan) == "n/a")
+    #expect(WidgetFormatting.percent(Double.infinity) == "n/a")
 }
 
 @Test func resetCopyHandlesPresentAndMissingDates() {
     let calendar = Calendar(identifier: .gregorian)
-    #expect(WidgetFormatting.reset(
-        Date(timeIntervalSince1970: 1_788_010_800),
+    let resetDate = Date(timeIntervalSince1970: 1_788_010_800)
+    let usReset = WidgetFormatting.reset(
+        resetDate,
+        locale: Locale(identifier: "en_US"),
         timeZone: widgetTimeZone,
         calendar: calendar
-    ) == "resets Aug 29, 9:40 AM")
+    )
+    #expect(usReset?.contains("Aug 29") == true)
+    #expect(usReset?.contains("9:40") == true)
+    #expect(usReset?.contains("AM") == true)
+
+    let gbReset = WidgetFormatting.reset(
+        resetDate,
+        locale: Locale(identifier: "en_GB"),
+        timeZone: widgetTimeZone,
+        calendar: calendar
+    )
+    #expect(gbReset?.contains("29 Aug") == true)
+    #expect(gbReset?.contains("09:40") == true)
+
+    let deReset = WidgetFormatting.reset(
+        resetDate,
+        locale: Locale(identifier: "de_DE"),
+        timeZone: widgetTimeZone,
+        calendar: calendar
+    )
+    #expect(deReset?.contains("29") == true)
+    #expect(deReset?.contains("Aug") == true)
+    #expect(deReset?.contains("09:40") == true)
+
     #expect(WidgetFormatting.reset(nil, timeZone: widgetTimeZone, calendar: calendar) == nil)
 }
 
-@Test func accessibilityNamesProviderWindowPercentResetAndSyncAge() {
+@Test func accessibilityNamesProviderWindowPercentAndResetWithoutStaleSyncAge() {
     let label = WidgetFormatting.accessibilityLabel(
         snapshot: widgetSnapshot(),
-        now: widgetNow,
+        locale: Locale(identifier: "en_US"),
         timeZone: widgetTimeZone,
         calendar: Calendar(identifier: .gregorian)
     )
     #expect(label.contains("Codex"))
     #expect(label.contains("Weekly"))
-    #expect(label.contains("17% remaining"))
+    #expect(label.contains("17 percent remaining"))
     #expect(label.contains("resets"))
-    #expect(label.contains("synced 7m ago"))
+    #expect(!label.contains("synced"))
+
+    // Sub-1 percent accessibility label
+    let subOneLabel = WidgetFormatting.accessibilityLabel(
+        snapshot: widgetSnapshot(percentLeft: 0.7),
+        locale: Locale(identifier: "en_US"),
+        timeZone: widgetTimeZone,
+        calendar: Calendar(identifier: .gregorian)
+    )
+    #expect(subOneLabel.contains("0.7 percent remaining"))
+    #expect(!subOneLabel.contains("0 percent remaining"))
+    #expect(!subOneLabel.contains("synced"))
+
+    // Error status accessibility label
+    let errorLabel = WidgetFormatting.accessibilityLabel(
+        snapshot: widgetSnapshot(status: .error),
+        locale: Locale(identifier: "en_US"),
+        timeZone: widgetTimeZone,
+        calendar: Calendar(identifier: .gregorian)
+    )
+    #expect(errorLabel == "Codex, usage unavailable")
+
+    // Missing window accessibility label
+    let noWindowLabel = WidgetFormatting.accessibilityLabel(
+        snapshot: widgetSnapshot(selectedWindow: false),
+        locale: Locale(identifier: "en_US"),
+        timeZone: widgetTimeZone,
+        calendar: Calendar(identifier: .gregorian)
+    )
+    #expect(noWindowLabel == "Codex, usage unavailable")
+}
+
+@Test func placeholderEntryPreservesPlaceholderState() {
+    let entry = GradusWidgetEntry(date: widgetNow, state: .placeholder)
+    #expect(entry.state == .placeholder)
+}
+
+@Test func resetFormattingHandlesFractionalSecondDates() {
+    let fractionalDate = Date(timeIntervalSince1970: 1_788_010_800.456)
+    let calendar = Calendar(identifier: .gregorian)
+    let reset = WidgetFormatting.reset(
+        fractionalDate,
+        locale: Locale(identifier: "en_US"),
+        timeZone: widgetTimeZone,
+        calendar: calendar
+    )
+    #expect(reset != nil)
+    #expect(reset?.contains("Aug 29") == true)
+    #expect(reset?.contains("9:40") == true)
+    #expect(reset?.contains("AM") == true)
+}
+
+@MainActor
+@Test func viewRendersWithoutCrashingForErrorOrMissingWindow() {
+    let errorEntry = GradusWidgetEntry(
+        date: widgetNow,
+        state: .current(widgetSnapshot(status: .error, selectedWindow: true))
+    )
+    let errorView = GradusSmallWidgetView(entry: errorEntry)
+    _ = errorView.body
+
+    let nilWindowEntry = GradusWidgetEntry(
+        date: widgetNow,
+        state: .current(widgetSnapshot(selectedWindow: false))
+    )
+    let nilWindowView = GradusSmallWidgetView(entry: nilWindowEntry)
+    _ = nilWindowView.body
+
+    let placeholderEntry = GradusWidgetEntry(
+        date: widgetNow,
+        state: .placeholder
+    )
+    let placeholderView = GradusSmallWidgetView(entry: placeholderEntry)
+    _ = placeholderView.body
 }
 
 @MainActor

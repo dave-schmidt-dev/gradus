@@ -77,9 +77,18 @@ public struct WidgetWindowSnapshot: Codable, Equatable, Sendable {
         self.label = label ?? normalizedWidgetWindowLabel(for: window.id)
         percentLeft = window.percentLeft
         signalLevel = widgetSignalLevel(for: window)
-        let formatter = ISO8601DateFormatter()
-        resetDate = window.resetISO.flatMap { formatter.date(from: $0) }
+        resetDate = window.resetISO.flatMap(parseWidgetISO8601Date)
     }
+}
+
+private func parseWidgetISO8601Date(_ value: String) -> Date? {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let date = formatter.date(from: value) {
+        return date
+    }
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter.date(from: value)
 }
 
 /// Rank signal severity from highest (red = 4) to lowest (unknown = 0).

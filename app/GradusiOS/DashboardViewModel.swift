@@ -100,10 +100,15 @@ public final class DashboardViewModel: ObservableObject {
         didSet {
             guard syncEnabled != oldValue else { return }
             commitRequiredICloudMode(syncEnabled ? .confirmed : .awaitingConfirmation)
+            if syncEnabled {
+                synchronizeWidgetSnapshot()
+            } else {
+                clearWidgetSnapshot()
+            }
         }
     }
 
-    @Published public internal(set) var accountStatus: CKAccountStatus = .couldNotDetermine
+    @Published public internal(set) var accountStatus: CKAccountStatus
     @Published public internal(set) var isSyncing = false
 
     /// P5/T5.1: gates `subscribeToWarnings()` independently of `syncEnabled`
@@ -136,8 +141,11 @@ public final class DashboardViewModel: ObservableObject {
         didSet {
             userDefaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
             applyPresentationPreferences()
-            synchronizeWidgetSnapshot()
         }
+    }
+
+    public func commitWarningThreshold() {
+        synchronizeWidgetSnapshot()
     }
 
     /// Device-local dashboard presentation controls. Neither value is part of
@@ -279,6 +287,7 @@ public final class DashboardViewModel: ObservableObject {
         subscriptionManager: CKSubscriptionManager? = nil,
         warningNotificationScheduler: WarningNotificationScheduling? = nil,
         notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
+        initialAccountStatus: CKAccountStatus = .couldNotDetermine,
         userDefaults: UserDefaults = .standard
     ) {
         self.init(
@@ -286,7 +295,10 @@ public final class DashboardViewModel: ObservableObject {
             zoneChangesFetcher: zoneChangesFetcher, subscriptionManager: subscriptionManager,
             warningNotificationScheduler: warningNotificationScheduler,
             notificationAuthorizationSource: notificationAuthorizationSource,
-            liveLifecycleGate: nil, userDefaults: userDefaults
+            liveLifecycleGate: nil,
+            widgetSnapshotPublisher: nil,
+            initialAccountStatus: initialAccountStatus,
+            userDefaults: userDefaults
         )
     }
 
@@ -300,6 +312,7 @@ public final class DashboardViewModel: ObservableObject {
         notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
         liveLifecycleGate: LiveLifecycleGate?,
         widgetSnapshotPublisher: WidgetSnapshotPublisher? = nil,
+        initialAccountStatus: CKAccountStatus = .couldNotDetermine,
         userDefaults: UserDefaults = .standard
     ) {
         self.cache = cache
@@ -312,6 +325,7 @@ public final class DashboardViewModel: ObservableObject {
         self.liveLifecycleGate = liveLifecycleGate
         self.widgetSnapshotPublisher = widgetSnapshotPublisher
         self.userDefaults = userDefaults
+        accountStatus = initialAccountStatus
         let migratedMode = RequiredICloudMigration.migrate(
             defaults: userDefaults, legacyKey: Self.syncEnabledKey
         )
@@ -360,39 +374,5 @@ public final class DashboardViewModel: ObservableObject {
               == Self.requiredICloudModeVersion
         else { return }
         userDefaults.removeObject(forKey: Self.syncEnabledKey)
-    }
-
-    /// `nil` means "render the populated dashboard" -- there is data (fresh
-    /// or offline-stale) to show.
-    public var emptyState: DashboardEmptyState? {
-        guard providers.isEmpty else { return nil }
-        if requiredICloudMode == .awaitingConfirmation {
-            return .awaitingConfirmation
-        }
-        switch iCloudAvailability {
-        case .checkingICloud: return .checkingICloud
-        case .tryAgain: return .tryAgain
-        case .noAccount: return .notSignedIn
-        case .restricted: return .restricted
-        case .available: break
-        }
-        if !syncEnabled {
-            return .syncDisabled
-        }
-        return .waitingForFirstPublish
-    }
-
-    /// The most urgent provider per `rankProviders`' total order (P3/T3.2).
-    /// Always the first element: `providers` is ranked at every one of its
-    /// three assignment sites (`init`, `sync()`, `reconcile()`) -- the
-    /// `.zoneNotFound`/`.zoneDeleted` reset path assigns `[]` directly, which
-    /// is trivially "ranked" (empty), so this invariant holds unconditionally.
-    public var heroProvider: ProviderStatus? {
-        providers.first
-    }
-
-    /// All providers other than the hero, still in ranked order.
-    public var restProviders: [ProviderStatus] {
-        Array(providers.dropFirst())
     }
 }

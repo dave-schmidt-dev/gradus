@@ -58,8 +58,9 @@ final class WidgetSnapshotPublisher {
         localWarningThreshold: Double
     ) {
         guard let phoneSyncDate,
-              let provider = fixedMostUrgentProvider(
-                  providers, localThreshold: localWarningThreshold
+              let provider = selectProvider(
+                  from: providers,
+                  localWarningThreshold: localWarningThreshold
               )
         else {
             clear()
@@ -91,6 +92,17 @@ final class WidgetSnapshotPublisher {
         } catch {
             // Do not reload while the prior snapshot may still be present.
         }
+    }
+
+    private func selectProvider(
+        from providers: [ProviderStatus],
+        localWarningThreshold: Double
+    ) -> ProviderStatus? {
+        let ranked = fixedMostUrgentRankedProviders(
+            providers,
+            localThreshold: localWarningThreshold
+        )
+        return ranked.first { selectWidgetWindow(from: $0.windows) != nil } ?? ranked.first
     }
 
     private func status(

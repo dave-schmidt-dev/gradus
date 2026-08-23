@@ -53,6 +53,7 @@ public struct GradusSmallWidgetView: View {
                 .foregroundStyle(.secondary)
         }
         .redacted(reason: .placeholder)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Gradus usage loading")
     }
 
@@ -74,47 +75,50 @@ public struct GradusSmallWidgetView: View {
         .accessibilityLabel("\(title). \(detail)")
     }
 
+    @ViewBuilder
     private func current(_ snapshot: WidgetSnapshot) -> some View {
-        let window = snapshot.selectedWindow!
-        let signalColor = Color(signalLevel: window.signalLevel)
-        return VStack(alignment: .leading, spacing: 5) {
-            Text(snapshot.providerDisplayName)
-                .font(.headline)
-                .lineLimit(1)
-            Text(window.label)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Text(WidgetFormatting.percent(window.percentLeft))
-                .font(.system(.title, design: .monospaced, weight: .bold))
-                .foregroundStyle(signalColor)
-                .minimumScaleFactor(0.75)
-            usageRail(percentLeft: window.percentLeft, color: signalColor)
-            Spacer(minLength: 0)
-            if let reset = WidgetFormatting.reset(
-                window.resetDate,
-                locale: locale,
-                timeZone: timeZone,
-                calendar: calendar
-            ) {
-                Text(reset)
+        if snapshot.status == .error || snapshot.selectedWindow == nil {
+            message(title: "Usage unavailable", detail: "Open Gradus to refresh.")
+        } else if let window = snapshot.selectedWindow {
+            let signalColor = Color(signalLevel: window.signalLevel)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(snapshot.providerDisplayName)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text(window.label)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(WidgetFormatting.percent(window.percentLeft))
+                    .font(.system(.title, design: .monospaced, weight: .bold))
+                    .foregroundStyle(signalColor)
+                    .minimumScaleFactor(0.75)
+                usageRail(percentLeft: window.percentLeft, color: signalColor)
+                Spacer(minLength: 0)
+                if let reset = WidgetFormatting.reset(
+                    window.resetDate,
+                    locale: locale,
+                    timeZone: timeZone,
+                    calendar: calendar
+                ) {
+                    Text(reset)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text("synced \(snapshot.phoneSyncDate, style: .relative) ago")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Text(WidgetFormatting.syncedAge(from: snapshot.phoneSyncDate, now: entry.date))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(WidgetFormatting.accessibilityLabel(
+                snapshot: snapshot,
+                locale: locale,
+                timeZone: timeZone,
+                calendar: calendar
+            ))
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(WidgetFormatting.accessibilityLabel(
-            snapshot: snapshot,
-            now: entry.date,
-            locale: locale,
-            timeZone: timeZone,
-            calendar: calendar
-        ))
     }
 
     private func usageRail(percentLeft: Double, color: Color) -> some View {

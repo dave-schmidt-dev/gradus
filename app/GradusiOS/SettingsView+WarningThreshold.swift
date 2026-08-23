@@ -16,8 +16,17 @@ extension SettingsView {
                     Text("\(Int(dashboardViewModel.localWarningThresholdPercent))%")
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $dashboardViewModel.localWarningThresholdPercent, in: 0 ... 100, step: 1)
-                    .accessibilityIdentifier("warning-threshold-slider")
+                Slider(
+                    value: $dashboardViewModel.localWarningThresholdPercent,
+                    in: 0 ... 100,
+                    step: 1,
+                    onEditingChanged: { isEditing in
+                        if !isEditing {
+                            dashboardViewModel.commitWarningThreshold()
+                        }
+                    }
+                )
+                .accessibilityIdentifier("warning-threshold-slider")
                 Text(
                     "Highlights providers below this % on this device only -- does not change which alerts get pushed."
                 )

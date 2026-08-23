@@ -190,7 +190,15 @@ extension DashboardViewModel {
         connectedSourcePublishedAt = latest?.publishedAt
     }
 
+    var isWidgetPublicationAllowed: Bool {
+        requiredICloudMode.allowsLiveWork && syncEnabled && accountStatus == .available
+    }
+
     func synchronizeWidgetSnapshot() {
+        guard isWidgetPublicationAllowed else {
+            clearWidgetSnapshot()
+            return
+        }
         widgetSnapshotPublisher?.synchronize(
             providers: allProviders,
             phoneSyncDate: lastSyncedAt,

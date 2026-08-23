@@ -37,7 +37,7 @@ public extension DashboardViewModel {
         guard let accountSource else { return }
         let refresh = {
             if let status = try? await accountSource.currentAccountStatus() {
-                self.accountStatus = status
+                self.updateAccountStatus(status)
             }
         }
         if let liveLifecycleGate {
@@ -56,6 +56,7 @@ public extension DashboardViewModel {
         case .available:
             iCloudAvailability = .available
             liveLifecycleNeedsRetry = false
+            synchronizeWidgetSnapshot()
         case .noAccount:
             iCloudAvailability = .noAccount
             clearWidgetSnapshot()
@@ -66,10 +67,12 @@ public extension DashboardViewModel {
             if !liveLifecycleNeedsRetry {
                 iCloudAvailability = .checkingICloud
             }
+            clearWidgetSnapshot()
         @unknown default:
             if !liveLifecycleNeedsRetry {
                 iCloudAvailability = .checkingICloud
             }
+            clearWidgetSnapshot()
         }
     }
 }
