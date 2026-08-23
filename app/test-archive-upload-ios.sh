@@ -245,8 +245,12 @@ set -e
   exit 1
 }
 
-resolved_uv="$(PATH=/usr/bin:/bin HOME="$EXPECTED_HOME" /bin/bash -c 'source "$1"; resolve_uv' bash "$UPLOAD_SCRIPT")"
-[[ "$resolved_uv" == "$EXPECTED_HOME/.local/bin/uv" ]] || {
+uv_test_home="$TEST_ROOT/uv-test-home"
+mkdir -p "$uv_test_home/.local/bin"
+touch "$uv_test_home/.local/bin/uv"
+chmod 755 "$uv_test_home/.local/bin/uv"
+resolved_uv="$(PATH=/usr/bin:/bin HOME="$uv_test_home" /bin/bash -c 'source "$1"; resolve_uv' bash "$UPLOAD_SCRIPT")"
+[[ "$resolved_uv" == "$uv_test_home/.local/bin/uv" ]] || {
   echo "FAIL: uv fallback resolved to '$resolved_uv'" >&2
   exit 1
 }
@@ -267,6 +271,10 @@ printf '%s\n' \
   '    settings:' \
   '      base:' \
   '        CURRENT_PROJECT_VERSION: "4"' \
+  '  GradusWidget:' \
+  '    settings:' \
+  '      base:' \
+  '        CURRENT_PROJECT_VERSION: "4"' \
   >"$TEST_ROOT/project.yml"
 (
   cd "$TEST_ROOT"
@@ -280,6 +288,20 @@ printf '%s\n' \
 }
 [[ "$(sed -n '9p' "$TEST_ROOT/project.yml")" == '        CURRENT_PROJECT_VERSION: "9"' ]] || {
   echo "FAIL: iOS build bump did not update GradusiOS" >&2
+  exit 1
+}
+[[ "$(sed -n '13p' "$TEST_ROOT/project.yml")" == '        CURRENT_PROJECT_VERSION: "9"' ]] || {
+  echo "FAIL: iOS build bump did not update GradusWidget" >&2
+  exit 1
+}
+(
+  cd "$TEST_ROOT"
+  # shellcheck source=./archive-upload-ios.sh
+  source "$UPLOAD_SCRIPT"
+  bump_target_build_number GradusMac 19 "$TEST_ROOT/project.yml"
+)
+[[ "$(sed -n '5p' "$TEST_ROOT/project.yml")" == '        CURRENT_PROJECT_VERSION: "19"' ]] || {
+  echo "FAIL: target build bump did not update GradusMac" >&2
   exit 1
 }
 
@@ -319,6 +341,14 @@ grep -Fq 'CODE_SIGN_IDENTITY: "Developer ID Application"' "$SCRIPT_DIR/project.y
 }
 grep -Fq 'PROVISIONING_PROFILE_SPECIFIER: "Gradus Mac Developer ID (API-created)"' "$SCRIPT_DIR/project.yml" || {
   echo "FAIL: GradusMac Release archive does not pin its Developer ID profile" >&2
+  exit 1
+}
+grep -Fq 'PROVISIONING_PROFILE_SPECIFIER: "Gradus iOS App Store (API-created)"' "$SCRIPT_DIR/project.yml" || {
+  echo "FAIL: GradusiOS Release archive does not pin its App Store profile" >&2
+  exit 1
+}
+grep -Fq 'PROVISIONING_PROFILE_SPECIFIER: "Gradus Widget App Store (API-created)"' "$SCRIPT_DIR/project.yml" || {
+  echo "FAIL: GradusWidget Release archive does not pin its App Store profile" >&2
   exit 1
 }
 
@@ -779,11 +809,11 @@ grep -Fq 'validate_common_marketing_version "$SCRIPT_DIR/project.yml"' "$UPLOAD_
   echo "FAIL: common marketing-version validation is missing" >&2
   exit 1
 }
-grep -Fq 'set_required_entitlement "$PACKAGE_DIR/entitlements.plist" aps-environment string production' "$UPLOAD_SCRIPT" || {
+grep -Eq 'set_required_entitlement "\$(PACKAGE_DIR|package_dir)/entitlements\.plist" aps-environment string production' "$UPLOAD_SCRIPT" || {
   echo "FAIL: production APS entitlement is not explicit" >&2
   exit 1
 }
-grep -Fq 'set_required_entitlement "$PACKAGE_DIR/entitlements.plist" get-task-allow bool false' "$UPLOAD_SCRIPT" || {
+grep -Eq 'set_required_entitlement "\$(PACKAGE_DIR|package_dir)/entitlements\.plist" get-task-allow bool false' "$UPLOAD_SCRIPT" || {
   echo "FAIL: false get-task-allow entitlement is not explicit" >&2
   exit 1
 }
@@ -799,12 +829,16 @@ grep -Fq 'CODE_SIGN_IDENTITY="$SIGNING_IDENTITY"' "$UPLOAD_SCRIPT" || {
   echo "FAIL: iOS archive signing identity is not pinned" >&2
   exit 1
 }
-grep -Fq 'PROVISIONING_PROFILE_SPECIFIER="$SIGNING_PROFILE_NAME"' "$UPLOAD_SCRIPT" || {
-  echo "FAIL: iOS archive provisioning profile is not pinned" >&2
+! grep -Fq 'PROVISIONING_PROFILE_SPECIFIER="$SIGNING_PROFILE_NAME"' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: global command-line PROVISIONING_PROFILE_SPECIFIER override was not removed from archive invocation" >&2
+  exit 1
+}
+grep -Fq 'repackage_and_sign_ios_candidate' "$UPLOAD_SCRIPT" || {
+  echo "FAIL: nested repackage and sign helper is missing" >&2
   exit 1
 }
 
-first_xattr_cleanup_line="$(awk '/xattr -cr "\$PACKAGE_DIR\/Payload\/GradusiOS\.app"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
+first_xattr_cleanup_line="$(awk '/xattr -cr/ {print NR; exit}' "$UPLOAD_SCRIPT")"
 codesign_line="$(awk '/codesign --force --sign/ {print NR; exit}' "$UPLOAD_SCRIPT")"
 [[ -n "$first_xattr_cleanup_line" && -n "$codesign_line" && "$first_xattr_cleanup_line" -lt "$codesign_line" ]] || {
   echo "FAIL: upload wrapper must clear bundle metadata before codesign" >&2
@@ -1152,5 +1186,470 @@ for candidate_suite in \
     exit 1
   }
 done
+
+# Hermetic profile validation fixtures
+nested_test_root="$TEST_ROOT/nested-signing-tests"
+mkdir -p "$nested_test_root"
+
+create_test_profile() {
+  local path="$1" bundle_id="${2:-com.zerodelta.gradus.ios}" team_id="${3:-4CJ49V6QHW}" cert_sha1="${4:-FD247ACDEBCD05C725AE29B40218FB0F57807A2C}"
+  local app_group="${5:-group.com.zerodelta.gradus}" get_task_allow="${6:-false}" provisioned_devices="${7:-false}"
+  local provisions_all_devices="${8:-false}" expired="${9:-false}"
+  /usr/bin/python3 - "$path" "$bundle_id" "$team_id" "$cert_sha1" "$app_group" "$get_task_allow" "$provisioned_devices" "$provisions_all_devices" "$expired" <<'PY'
+import datetime
+import hashlib
+import plistlib
+import sys
+from pathlib import Path
+
+path, bundle_id, team_id, cert_sha1, app_group, get_task_allow_str, provisioned_devices_str, provisions_all_devices_str, expired_str = sys.argv[1:]
+
+now = datetime.datetime.now(datetime.timezone.utc)
+if expired_str == "true":
+    exp = now - datetime.timedelta(days=1)
+else:
+    exp = now + datetime.timedelta(days=30)
+
+cert_der = f"MOCK_CERT_DER_{cert_sha1}".encode("utf-8")
+actual_sha1 = hashlib.sha1(cert_der).hexdigest().upper()
+
+profile_data = {
+    "AppIDName": "Gradus",
+    "ApplicationIdentifierPrefix": [team_id],
+    "CreationDate": now,
+    "ExpirationDate": exp,
+    "Name": f"Gradus {bundle_id} Profile",
+    "TeamIdentifier": [team_id],
+    "DeveloperCertificates": [cert_der],
+    "Entitlements": {
+        "application-identifier": f"{team_id}.{bundle_id}",
+        "com.apple.developer.team-identifier": team_id,
+        "com.apple.security.application-groups": [app_group] if app_group else [],
+        "get-task-allow": True if get_task_allow_str == "true" else False,
+    },
+}
+if provisioned_devices_str == "true":
+    profile_data["ProvisionedDevices"] = ["00008030-001234567890"]
+if provisions_all_devices_str == "true":
+    profile_data["ProvisionsAllDevices"] = True
+
+target_path = Path(path)
+target_path.parent.mkdir(parents=True, exist_ok=True)
+target_path.write_bytes(plistlib.dumps(profile_data))
+print(actual_sha1)
+PY
+}
+
+app_profile_fixture="$nested_test_root/profiles/app.mobileprovision"
+widget_profile_fixture="$nested_test_root/profiles/widget.mobileprovision"
+
+app_cert_sha1="$(create_test_profile "$app_profile_fixture" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "app_cert")"
+widget_cert_sha1="$(create_test_profile "$widget_profile_fixture" "com.zerodelta.gradus.ios.widget" "4CJ49V6QHW" "widget_cert")"
+
+# 1. Valid profile validation
+validate_profile "$app_profile_fixture" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$app_cert_sha1" "group.com.zerodelta.gradus" || {
+  echo "FAIL: valid app profile was refused" >&2
+  exit 1
+}
+validate_profile "$widget_profile_fixture" "com.zerodelta.gradus.ios.widget" "4CJ49V6QHW" "$widget_cert_sha1" "group.com.zerodelta.gradus" || {
+  echo "FAIL: valid widget profile was refused" >&2
+  exit 1
+}
+
+# 2. Swapped profiles
+set +e
+swapped_app_output="$(validate_profile "$app_profile_fixture" "com.zerodelta.gradus.ios.widget" "4CJ49V6QHW" "$app_cert_sha1" "group.com.zerodelta.gradus" 2>&1)"
+swapped_app_status=$?
+swapped_widget_output="$(validate_profile "$widget_profile_fixture" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$widget_cert_sha1" "group.com.zerodelta.gradus" 2>&1)"
+swapped_widget_status=$?
+set -e
+[[ "$swapped_app_status" -ne 0 && "$swapped_app_output" == *"bundle ID mismatch"* ]] || {
+  echo "FAIL: swapped app profile for widget was accepted" >&2
+  exit 1
+}
+[[ "$swapped_widget_status" -ne 0 && "$swapped_widget_output" == *"bundle ID mismatch"* ]] || {
+  echo "FAIL: swapped widget profile for app was accepted" >&2
+  exit 1
+}
+
+# 3. Team mismatch
+wrong_team_profile="$nested_test_root/profiles/wrong_team.mobileprovision"
+wrong_team_sha1="$(create_test_profile "$wrong_team_profile" "com.zerodelta.gradus.ios" "OTHERTEAM" "cert")"
+set +e
+wrong_team_output="$(validate_profile "$wrong_team_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$wrong_team_sha1" "group.com.zerodelta.gradus" 2>&1)"
+wrong_team_status=$?
+set -e
+[[ "$wrong_team_status" -ne 0 && "$wrong_team_output" == *"team mismatch"* ]] || {
+  echo "FAIL: profile with wrong team was accepted" >&2
+  exit 1
+}
+
+# 4. Certificate mismatch
+set +e
+wrong_cert_output="$(validate_profile "$app_profile_fixture" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "0000000000000000000000000000000000000000" "group.com.zerodelta.gradus" 2>&1)"
+wrong_cert_status=$?
+set -e
+[[ "$wrong_cert_status" -ne 0 && "$wrong_cert_output" == *"does not contain expected certificate"* ]] || {
+  echo "FAIL: profile with wrong certificate fingerprint was accepted" >&2
+  exit 1
+}
+
+# 5. App Group mismatch
+no_group_profile="$nested_test_root/profiles/no_group.mobileprovision"
+no_group_sha1="$(create_test_profile "$no_group_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "cert" "group.wrong")"
+set +e
+no_group_output="$(validate_profile "$no_group_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$no_group_sha1" "group.com.zerodelta.gradus" 2>&1)"
+no_group_status=$?
+set -e
+[[ "$no_group_status" -ne 0 && "$no_group_output" == *"missing expected App Group"* ]] || {
+  echo "FAIL: profile missing required App Group was accepted" >&2
+  exit 1
+}
+
+# 6. Distribution type (get-task-allow, ProvisionedDevices, ProvisionsAllDevices)
+dev_profile="$nested_test_root/profiles/dev.mobileprovision"
+dev_sha1="$(create_test_profile "$dev_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "cert" "group.com.zerodelta.gradus" "true")"
+set +e
+dev_output="$(validate_profile "$dev_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$dev_sha1" "group.com.zerodelta.gradus" 2>&1)"
+dev_status=$?
+set -e
+[[ "$dev_status" -ne 0 && "$dev_output" == *"not distribution"* ]] || {
+  echo "FAIL: development profile with get-task-allow=true was accepted" >&2
+  exit 1
+}
+
+adhoc_profile="$nested_test_root/profiles/adhoc.mobileprovision"
+adhoc_sha1="$(create_test_profile "$adhoc_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "cert" "group.com.zerodelta.gradus" "false" "true")"
+set +e
+adhoc_output="$(validate_profile "$adhoc_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$adhoc_sha1" "group.com.zerodelta.gradus" 2>&1)"
+adhoc_status=$?
+set -e
+[[ "$adhoc_status" -ne 0 && "$adhoc_output" == *"contains ProvisionedDevices"* ]] || {
+  echo "FAIL: ad-hoc profile with ProvisionedDevices was accepted" >&2
+  exit 1
+}
+
+ent_profile="$nested_test_root/profiles/enterprise.mobileprovision"
+ent_sha1="$(create_test_profile "$ent_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "cert" "group.com.zerodelta.gradus" "false" "false" "true")"
+set +e
+ent_output="$(validate_profile "$ent_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$ent_sha1" "group.com.zerodelta.gradus" 2>&1)"
+ent_status=$?
+set -e
+[[ "$ent_status" -ne 0 && "$ent_output" == *"Enterprise distribution"* ]] || {
+  echo "FAIL: enterprise profile was accepted" >&2
+  exit 1
+}
+
+# 7. Expired profile
+exp_profile="$nested_test_root/profiles/expired.mobileprovision"
+exp_sha1="$(create_test_profile "$exp_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "cert" "group.com.zerodelta.gradus" "false" "false" "false" "true")"
+set +e
+exp_output="$(validate_profile "$exp_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "$exp_sha1" "group.com.zerodelta.gradus" 2>&1)"
+exp_status=$?
+set -e
+[[ "$exp_status" -ne 0 && "$exp_output" == *"expired"* ]] || {
+  echo "FAIL: expired profile was accepted" >&2
+  exit 1
+}
+
+# Profile resolution tests
+profiles_dir="$nested_test_root/managed_profiles"
+mkdir -p "$profiles_dir"
+app_named_profile="$profiles_dir/gradus-ios-app-store.provisionprofile"
+widget_named_profile="$profiles_dir/gradus-widget-app-store.provisionprofile"
+app_named_sha1="$(create_test_profile "$app_named_profile" "com.zerodelta.gradus.ios" "4CJ49V6QHW" "app_named")"
+create_test_profile "$widget_named_profile" "com.zerodelta.gradus.ios.widget" "4CJ49V6QHW" "widget_named" >/dev/null
+
+resolved_app="$(GRADUS_PROVISIONING_PROFILES_DIR="$profiles_dir" resolve_provisioning_profile "com.zerodelta.gradus.ios")"
+[[ "$resolved_app" == "$app_named_profile" ]] || {
+  echo "FAIL: resolve_provisioning_profile failed to locate app profile" >&2
+  exit 1
+}
+resolved_widget="$(GRADUS_PROVISIONING_PROFILES_DIR="$profiles_dir" resolve_provisioning_profile "com.zerodelta.gradus.ios.widget")"
+[[ "$resolved_widget" == "$widget_named_profile" ]] || {
+  echo "FAIL: resolve_provisioning_profile failed to locate widget profile" >&2
+  exit 1
+}
+
+# Mock archive creation helper
+create_mock_archive() {
+  local root="$1" app_version="${2:-1.9.0}" app_build="${3:-12}" ext_version="${4:-1.9.0}" ext_build="${5:-12}"
+  local ext_name="${6:-GradusWidget.appex}" extra_ext="${7:-}"
+
+  local app_dir="$root/Products/Applications/GradusiOS.app"
+  local plugins_dir="$app_dir/PlugIns"
+  mkdir -p "$plugins_dir"
+
+  /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $app_version" "$app_dir/Info.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $app_version" "$app_dir/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $app_build" "$app_dir/Info.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $app_build" "$app_dir/Info.plist"
+
+  if [[ -n "$ext_name" && "$ext_name" != "NONE" ]]; then
+    local ext_dir="$plugins_dir/$ext_name"
+    mkdir -p "$ext_dir"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $ext_version" "$ext_dir/Info.plist" 2>/dev/null || \
+      /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ext_version" "$ext_dir/Info.plist"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $ext_build" "$ext_dir/Info.plist" 2>/dev/null || \
+      /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $ext_build" "$ext_dir/Info.plist"
+  fi
+
+  if [[ -n "$extra_ext" ]]; then
+    local extra_dir="$plugins_dir/$extra_ext"
+    mkdir -p "$extra_dir"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $ext_version" "$extra_dir/Info.plist" 2>/dev/null || \
+      /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ext_version" "$extra_dir/Info.plist"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $ext_build" "$extra_dir/Info.plist" 2>/dev/null || \
+      /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $ext_build" "$extra_dir/Info.plist"
+  fi
+}
+
+# Mock codesign setup
+mock_bin_dir="$nested_test_root/bin"
+mkdir -p "$mock_bin_dir"
+mock_codesign_log="$nested_test_root/codesign.log"
+
+cat >"$mock_bin_dir/codesign" <<'MOCK_CS'
+#!/usr/bin/env bash
+set -eu
+target="${@: -1}"
+if [[ -n "${MOCK_CODESIGN_LOG:-}" ]]; then
+  printf '%s\n' "$*" >> "$MOCK_CODESIGN_LOG"
+fi
+if [[ "$*" == *"-d --entitlements"* ]]; then
+  if [[ "$target" == *"GradusWidget.appex"* ]]; then
+    if [[ "${MOCK_EXTENSION_LEAK_CLOUDKIT:-0}" == "1" ]]; then
+      cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.application-groups</key>
+  <array><string>group.com.zerodelta.gradus</string></array>
+  <key>com.apple.developer.icloud-services</key>
+  <array><string>CloudKit</string></array>
+</dict>
+</plist>
+EOF
+      exit 0
+    elif [[ "${MOCK_EXTENSION_LEAK_APS:-0}" == "1" ]]; then
+      cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.application-groups</key>
+  <array><string>group.com.zerodelta.gradus</string></array>
+  <key>aps-environment</key>
+  <string>production</string>
+</dict>
+</plist>
+EOF
+      exit 0
+    elif [[ "${MOCK_EXTENSION_WRONG_APP_GROUP:-0}" == "1" ]]; then
+      cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.application-groups</key>
+  <array><string>group.wrong</string></array>
+</dict>
+</plist>
+EOF
+      exit 0
+    else
+      cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.application-groups</key>
+  <array><string>group.com.zerodelta.gradus</string></array>
+</dict>
+</plist>
+EOF
+      exit 0
+    fi
+  else
+    cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.application-groups</key>
+  <array><string>group.com.zerodelta.gradus</string></array>
+</dict>
+</plist>
+EOF
+    exit 0
+  fi
+fi
+exit 0
+MOCK_CS
+chmod +x "$mock_bin_dir/codesign"
+
+orig_path="$PATH"
+export PATH="$mock_bin_dir:$orig_path"
+export MOCK_CODESIGN_LOG="$mock_codesign_log"
+
+# 8. Missing extension fixture
+missing_ext_archive="$nested_test_root/archive_no_ext"
+create_mock_archive "$missing_ext_archive" 1.9.0 12 1.9.0 12 "NONE"
+set +e
+missing_ext_output="$(repackage_and_sign_ios_candidate "$missing_ext_archive" "$nested_test_root/pkg_no_ext" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+missing_ext_status=$?
+set -e
+[[ "$missing_ext_status" -ne 0 && "$missing_ext_output" == *"GradusWidget.appex is missing from PlugIns"* ]] || {
+  echo "FAIL: archive missing GradusWidget.appex was accepted" >&2
+  exit 1
+}
+
+# 9. Wrong extension fixture
+wrong_ext_archive="$nested_test_root/archive_wrong_ext"
+create_mock_archive "$wrong_ext_archive" 1.9.0 12 1.9.0 12 "WrongExtension.appex"
+set +e
+wrong_ext_output="$(repackage_and_sign_ios_candidate "$wrong_ext_archive" "$nested_test_root/pkg_wrong_ext" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+wrong_ext_status=$?
+set -e
+[[ "$wrong_ext_status" -ne 0 && "$wrong_ext_output" == *"GradusWidget.appex is missing from PlugIns"* ]] || {
+  echo "FAIL: archive with wrong extension name was accepted" >&2
+  exit 1
+}
+
+# 10. Multiple extensions fixture
+multi_ext_archive="$nested_test_root/archive_multi_ext"
+create_mock_archive "$multi_ext_archive" 1.9.0 12 1.9.0 12 "GradusWidget.appex" "ExtraWidget.appex"
+set +e
+multi_ext_output="$(repackage_and_sign_ios_candidate "$multi_ext_archive" "$nested_test_root/pkg_multi_ext" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+multi_ext_status=$?
+set -e
+[[ "$multi_ext_status" -ne 0 && "$multi_ext_output" == *"expected exactly 1 .appex"* ]] || {
+  echo "FAIL: archive with multiple extensions was accepted" >&2
+  exit 1
+}
+
+# 11. Extension CloudKit/APS leakage fixtures
+valid_archive="$nested_test_root/archive_valid"
+create_mock_archive "$valid_archive" 1.9.0 12 1.9.0 12 "GradusWidget.appex"
+
+set +e
+leak_ck_output="$(MOCK_EXTENSION_LEAK_CLOUDKIT=1 repackage_and_sign_ios_candidate "$valid_archive" "$nested_test_root/pkg_leak_ck" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+leak_ck_status=$?
+set -e
+[[ "$leak_ck_status" -ne 0 && "$leak_ck_output" == *"extension leaked disallowed entitlement"* ]] || {
+  echo "FAIL: extension CloudKit leakage was accepted" >&2
+  exit 1
+}
+
+set +e
+leak_aps_output="$(MOCK_EXTENSION_LEAK_APS=1 repackage_and_sign_ios_candidate "$valid_archive" "$nested_test_root/pkg_leak_aps" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+leak_aps_status=$?
+set -e
+[[ "$leak_aps_status" -ne 0 && "$leak_aps_output" == *"extension leaked disallowed entitlement"* ]] || {
+  echo "FAIL: extension APS leakage was accepted" >&2
+  exit 1
+}
+
+# 12. Version / build drift fixtures
+drift_ver_archive="$nested_test_root/archive_drift_ver"
+create_mock_archive "$drift_ver_archive" 1.9.0 12 1.8.0 12 "GradusWidget.appex"
+set +e
+drift_ver_output="$(repackage_and_sign_ios_candidate "$drift_ver_archive" "$nested_test_root/pkg_drift_ver" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+drift_ver_status=$?
+set -e
+[[ "$drift_ver_status" -ne 0 && "$drift_ver_output" == *"CFBundleShortVersionString"* ]] || {
+  echo "FAIL: extension marketing version drift was accepted" >&2
+  exit 1
+}
+
+drift_bld_archive="$nested_test_root/archive_drift_bld"
+create_mock_archive "$drift_bld_archive" 1.9.0 12 1.9.0 11 "GradusWidget.appex"
+set +e
+drift_bld_output="$(repackage_and_sign_ios_candidate "$drift_bld_archive" "$nested_test_root/pkg_drift_bld" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12" 2>&1)"
+drift_bld_status=$?
+set -e
+[[ "$drift_bld_status" -ne 0 && "$drift_bld_output" == *"CFBundleVersion"* ]] || {
+  echo "FAIL: extension build number drift was accepted" >&2
+  exit 1
+}
+
+# Project.yml marketing version parity check
+project_drift_yaml="$nested_test_root/project_drift.yml"
+cat >"$project_drift_yaml" <<'YAML'
+targets:
+  GradusMac:
+    settings:
+      base:
+        MARKETING_VERSION: "1.9.0"
+  GradusiOS:
+    settings:
+      base:
+        MARKETING_VERSION: "1.9.0"
+  GradusWidget:
+    settings:
+      base:
+        MARKETING_VERSION: "1.8.0"
+YAML
+set +e
+project_drift_output="$(validate_common_marketing_version "$project_drift_yaml" 2>&1)"
+project_drift_status=$?
+set -e
+[[ "$project_drift_status" -ne 0 && "$project_drift_output" == *"Mac, iOS, and Widget marketing versions must match"* ]] || {
+  echo "FAIL: project.yml with drifted widget marketing version was accepted" >&2
+  exit 1
+}
+
+# 13. Signing order & valid nested output
+: > "$mock_codesign_log"
+valid_pkg_dir="$nested_test_root/pkg_valid"
+repackage_and_sign_ios_candidate "$valid_archive" "$valid_pkg_dir" \
+  "$app_named_profile" "$widget_named_profile" "$app_named_sha1" "Production" "1.9.0" "12"
+
+# Verify embedded profile placement
+[[ -f "$valid_pkg_dir/Payload/GradusiOS.app/embedded.mobileprovision" ]] || {
+  echo "FAIL: app profile was not embedded" >&2
+  exit 1
+}
+[[ -f "$valid_pkg_dir/Payload/GradusiOS.app/PlugIns/GradusWidget.appex/embedded.mobileprovision" ]] || {
+  echo "FAIL: widget profile was not embedded" >&2
+  exit 1
+}
+cmp -s "$valid_pkg_dir/Payload/GradusiOS.app/embedded.mobileprovision" "$app_named_profile" || {
+  echo "FAIL: embedded app profile does not match source profile" >&2
+  exit 1
+}
+cmp -s "$valid_pkg_dir/Payload/GradusiOS.app/PlugIns/GradusWidget.appex/embedded.mobileprovision" "$widget_named_profile" || {
+  echo "FAIL: embedded widget profile does not match source profile" >&2
+  exit 1
+}
+
+# Verify derived entitlements
+assert_required_entitlement "$valid_pkg_dir/widget-entitlements.plist" get-task-allow false
+assert_required_app_group "$valid_pkg_dir/widget-entitlements.plist" "group.com.zerodelta.gradus"
+assert_no_disallowed_extension_entitlements "$valid_pkg_dir/widget-entitlements.plist"
+
+assert_required_entitlement "$valid_pkg_dir/entitlements.plist" get-task-allow false
+assert_required_entitlement "$valid_pkg_dir/entitlements.plist" aps-environment production
+assert_required_entitlement "$valid_pkg_dir/entitlements.plist" "com.apple.developer.icloud-container-environment" Production
+assert_required_app_group "$valid_pkg_dir/entitlements.plist" "group.com.zerodelta.gradus"
+
+# Verify signing order: extension FIRST, main app LAST
+widget_sign_line="$(grep -n -- '--sign.*GradusWidget.appex' "$mock_codesign_log" | cut -d: -f1 | head -n 1)"
+app_sign_line="$(grep -n -- '--sign.*GradusiOS.app' "$mock_codesign_log" | grep -v 'GradusWidget' | cut -d: -f1 | head -n 1)"
+[[ -n "$widget_sign_line" && -n "$app_sign_line" && "$widget_sign_line" -lt "$app_sign_line" ]] || {
+  echo "FAIL: codesign signing order must sign extension first and app last" >&2
+  exit 1
+}
+
+export PATH="$orig_path"
+unset MOCK_CODESIGN_LOG
 
 echo "archive-upload-ios.sh HOME fallback and credential guard passed"

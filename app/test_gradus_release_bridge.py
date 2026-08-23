@@ -7,12 +7,16 @@ import hashlib
 import importlib.util
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1714,6 +1718,577 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
         self.assertIn('"${GRADUS_RELEASE_BRIDGE_ACTIVE:-0}" != "1"', entrypoint)
         self.assertEqual(operations["upload"]["mode"], "credential")
         self.assertNotIn("release_prepare_bridge.py", " ".join(operations["upload"]["arguments"]))
+
+
+class ReleasePrepareBridgeArtifactInspectionTests(unittest.TestCase):
+    """Hermetic tests for artifact inspection, nested widget facts, and schema proofs."""
+
+    @staticmethod
+    def _create_mock_ipa(
+        ipa_path: Path,
+        *,
+        app_bundle_id: str = "com.zerodelta.gradus.ios",
+        app_version: str = "1.8.2",
+        app_build: str = "21",
+        include_plugins: bool = True,
+        appex_names: Sequence[str] = ("GradusWidget.appex",),
+        widget_bundle_id: str = "com.zerodelta.gradus.ios.widget",
+        widget_version: str = "1.8.2",
+        widget_build: str = "21",
+        include_main_profile: bool = True,
+        include_widget_profile: bool = True,
+        main_profile_content: bytes = b"main-mobileprovision-der-bytes-1",
+        widget_profile_content: bytes = b"widget-mobileprovision-der-bytes-2",
+        corrupt_main_info: bool = False,
+        corrupt_widget_info: bool = False,
+    ) -> None:
+        ipa_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(ipa_path, "w") as archive:
+            if corrupt_main_info:
+                archive.writestr("Payload/GradusiOS.app/Info.plist", b"invalid-plist-bytes")
+            else:
+                main_info = {
+                    "CFBundleIdentifier": app_bundle_id,
+                    "CFBundleShortVersionString": app_version,
+                    "CFBundleVersion": app_build,
+                }
+                archive.writestr("Payload/GradusiOS.app/Info.plist", plistlib.dumps(main_info))
+
+            if include_main_profile:
+                archive.writestr(
+                    "Payload/GradusiOS.app/embedded.mobileprovision", main_profile_content
+                )
+
+            if include_plugins:
+                for appex in appex_names:
+                    if corrupt_widget_info:
+                        archive.writestr(
+                            f"Payload/GradusiOS.app/PlugIns/{appex}/Info.plist",
+                            b"invalid-plist-bytes",
+                        )
+                    else:
+                        w_info = {
+                            "CFBundleIdentifier": widget_bundle_id,
+                            "CFBundleShortVersionString": widget_version,
+                            "CFBundleVersion": widget_build,
+                        }
+                        archive.writestr(
+                            f"Payload/GradusiOS.app/PlugIns/{appex}/Info.plist",
+                            plistlib.dumps(w_info),
+                        )
+
+                    if include_widget_profile:
+                        archive.writestr(
+                            f"Payload/GradusiOS.app/PlugIns/{appex}/embedded.mobileprovision",
+                            widget_profile_content,
+                        )
+
+    @staticmethod
+    def _make_mock_runner(
+        *,
+        main_profile_plist: Mapping[str, Any] | None = None,
+        widget_profile_plist: Mapping[str, Any] | None = None,
+        main_signed_entitlements: Mapping[str, Any] | None = None,
+        widget_signed_entitlements: Mapping[str, Any] | None = None,
+        codesign_verify_fail_widget: bool = False,
+        codesign_verify_fail_main: bool = False,
+        missing_main_cert: bool = False,
+        missing_widget_cert: bool = False,
+        main_cert_bytes: bytes = b"cert-main-leaf-0",
+        widget_cert_bytes: bytes = b"cert-widget-leaf-0",
+    ):
+        default_main_profile = {
+            "Entitlements": {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.developer.icloud-container-environment": "Production",
+                "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                "get-task-allow": False,
+            }
+        }
+        default_widget_profile = {
+            "Entitlements": {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                "get-task-allow": False,
+            }
+        }
+        default_main_entitlements = {
+            "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios",
+            "com.apple.developer.team-identifier": "4CJ49V6QHW",
+            "com.apple.developer.icloud-container-environment": "Production",
+            "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+            "get-task-allow": False,
+        }
+        default_widget_entitlements = {
+            "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+            "com.apple.developer.team-identifier": "4CJ49V6QHW",
+            "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+            "get-task-allow": False,
+        }
+
+        m_prof = default_main_profile if main_profile_plist is None else main_profile_plist
+        w_prof = default_widget_profile if widget_profile_plist is None else widget_profile_plist
+        m_ent = (
+            default_main_entitlements
+            if main_signed_entitlements is None
+            else main_signed_entitlements
+        )
+        w_ent = (
+            default_widget_entitlements
+            if widget_signed_entitlements is None
+            else widget_signed_entitlements
+        )
+
+        def runner(
+            argv: Sequence[str], *, capture_output: bool = False
+        ) -> subprocess.CompletedProcess[bytes]:
+            cmd = list(argv)
+            if cmd[0] == "/usr/bin/ditto":
+                ipa_zip = Path(cmd[3])
+                dest_dir = Path(cmd[4])
+                with zipfile.ZipFile(ipa_zip, "r") as z:
+                    z.extractall(dest_dir)
+                return subprocess.CompletedProcess(cmd, 0)
+
+            if cmd[0] == "/usr/bin/openssl" and "smime" in cmd:
+                in_path = cmd[cmd.index("-in") + 1]
+                if "GradusWidget.appex" in in_path:
+                    raw = plistlib.dumps(w_prof) if isinstance(w_prof, Mapping) else w_prof
+                else:
+                    raw = plistlib.dumps(m_prof) if isinstance(m_prof, Mapping) else m_prof
+                return subprocess.CompletedProcess(cmd, 0, stdout=raw)
+
+            if cmd[0] == "/usr/bin/codesign" and "--verify" in cmd:
+                target = cmd[-1]
+                if "GradusWidget.appex" in target and codesign_verify_fail_widget:
+                    raise PREPARE.BridgeError("artifact-inspection-failed")
+                if "GradusWidget.appex" not in target and codesign_verify_fail_main:
+                    raise PREPARE.BridgeError("artifact-inspection-failed")
+                return subprocess.CompletedProcess(cmd, 0)
+
+            if cmd[0] == "/usr/bin/codesign" and "--entitlements" in cmd:
+                target = cmd[-1]
+                if "GradusWidget.appex" in target:
+                    raw = plistlib.dumps(w_ent) if isinstance(w_ent, Mapping) else w_ent
+                else:
+                    raw = plistlib.dumps(m_ent) if isinstance(m_ent, Mapping) else m_ent
+                return subprocess.CompletedProcess(cmd, 0, stdout=raw)
+
+            if cmd[0] == "/usr/bin/codesign" and any(
+                arg.startswith("--extract-certificates=") for arg in cmd
+            ):
+                prefix_arg = [arg for arg in cmd if arg.startswith("--extract-certificates=")][0]
+                prefix = prefix_arg.split("=", 1)[1]
+                target = cmd[-1]
+                if "GradusWidget.appex" in target:
+                    if not missing_widget_cert:
+                        Path(f"{prefix}0").write_bytes(widget_cert_bytes)
+                else:
+                    if not missing_main_cert:
+                        Path(f"{prefix}0").write_bytes(main_cert_bytes)
+                return subprocess.CompletedProcess(cmd, 0)
+
+            return subprocess.CompletedProcess(cmd, 0)
+
+        return runner
+
+    def _fixture(self, temporary: str) -> tuple[PREPARE.CandidateContext, PREPARE.PreparedArtifact]:
+        root = Path(temporary)
+        common = root / "git-common"
+        candidate = "1.8.2-21"
+        manifest = (
+            common / "release-state" / "gradus-ios" / "candidates" / candidate / "manifest.json"
+        )
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            json.dumps(
+                {
+                    "formatVersion": 2,
+                    "immutable": True,
+                    "candidateId": candidate,
+                    "productIdentifier": "gradus-ios",
+                    "sourceSnapshot": {"sha256": "a" * 64},
+                    "release": {
+                        "marketingVersion": "1.8.2",
+                        "buildNumber": "21",
+                        "frozen": True,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        context = PREPARE.load_context(manifest, git_common_dir=common)
+        ipa_path = root / "GradusiOS.ipa"
+        self._create_mock_ipa(ipa_path)
+        digest = hashlib.sha256(ipa_path.read_bytes()).hexdigest()
+        artifact = PREPARE.PreparedArtifact(ipa_path, digest)
+        return context, artifact
+
+    def test_valid_nested_artifact_inspection_and_proof_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                inspection = PREPARE.inspect_artifact(artifact, context)
+
+            self.assertEqual(len(inspection.metadata_sha256), 64)
+            self.assertEqual(
+                inspection.embedded_profile_sha256,
+                hashlib.sha256(b"main-mobileprovision-der-bytes-1").hexdigest(),
+            )
+            self.assertEqual(
+                inspection.signing_certificate_sha256,
+                hashlib.sha256(b"cert-main-leaf-0").hexdigest(),
+            )
+            self.assertEqual(
+                inspection.widget_embedded_profile_sha256,
+                hashlib.sha256(b"widget-mobileprovision-der-bytes-2").hexdigest(),
+            )
+            self.assertEqual(
+                inspection.widget_signing_certificate_sha256,
+                hashlib.sha256(b"cert-widget-leaf-0").hexdigest(),
+            )
+
+            proof = PREPARE.build_proof("artifact-verify", context, artifact, inspection=inspection)
+            self.assertEqual(proof["operationClass"], "artifactVerify")
+            self.assertEqual(proof["metadataSha256"], inspection.metadata_sha256)
+            self.assertEqual(proof["cloudKitEnvironment"], "Production")
+            self.assertEqual(proof["configuration"], "Production")
+            self.assertTrue(proof["signed"])
+            self.assertEqual(proof["strictSignatureResult"], "passed")
+            self.assertEqual(proof["uploadValidationResult"], "passed")
+
+    def test_missing_plugins_directory_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(artifact.ipa_path, include_plugins=False)
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_empty_plugins_directory_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(artifact.ipa_path, include_plugins=True, appex_names=())
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_extra_extension_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(
+                artifact.ipa_path,
+                include_plugins=True,
+                appex_names=("GradusWidget.appex", "ExtraWidget.appex"),
+            )
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_wrong_extension_bundle_name_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(
+                artifact.ipa_path,
+                include_plugins=True,
+                appex_names=("OtherWidget.appex",),
+            )
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_wrong_widget_bundle_identifier_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(artifact.ipa_path, widget_bundle_id="com.other.widget")
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_widget_version_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(artifact.ipa_path, widget_version="1.8.1")
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_widget_build_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(artifact.ipa_path, widget_build="20")
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_missing_widget_embedded_profile_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(artifact.ipa_path, include_widget_profile=False)
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_profile_swap_identical_mobileprovision_bytes_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(
+                artifact.ipa_path,
+                main_profile_content=b"shared-profile-bytes",
+                widget_profile_content=b"shared-profile-bytes",
+            )
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_profile_swap_mismatched_application_identifiers_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            swapped_main = {
+                "Entitlements": {
+                    "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                    "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                    "com.apple.developer.icloud-container-environment": "Production",
+                    "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                    "get-task-allow": False,
+                }
+            }
+            swapped_widget = {
+                "Entitlements": {
+                    "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios",
+                    "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                    "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                    "get-task-allow": False,
+                }
+            }
+            runner = self._make_mock_runner(
+                main_profile_plist=swapped_main,
+                widget_profile_plist=swapped_widget,
+            )
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_absent_app_group_in_main_signed_entitlements_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_main_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.developer.icloud-container-environment": "Production",
+                "com.apple.security.application-groups": [],
+                "get-task-allow": False,
+            }
+            runner = self._make_mock_runner(main_signed_entitlements=bad_main_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_absent_app_group_in_widget_signed_entitlements_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_widget_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.security.application-groups": [],
+                "get-task-allow": False,
+            }
+            runner = self._make_mock_runner(widget_signed_entitlements=bad_widget_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_absent_app_group_in_main_profile_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_main_profile = {
+                "Entitlements": {
+                    "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios",
+                    "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                    "com.apple.developer.icloud-container-environment": "Production",
+                    "com.apple.security.application-groups": [],
+                    "get-task-allow": False,
+                }
+            }
+            runner = self._make_mock_runner(main_profile_plist=bad_main_profile)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_absent_app_group_in_widget_profile_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_widget_profile = {
+                "Entitlements": {
+                    "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                    "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                    "com.apple.security.application-groups": [],
+                    "get-task-allow": False,
+                }
+            }
+            runner = self._make_mock_runner(widget_profile_plist=bad_widget_profile)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_mismatched_app_group_in_widget_entitlements_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_widget_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.security.application-groups": ["group.com.other.group"],
+                "get-task-allow": False,
+            }
+            runner = self._make_mock_runner(widget_signed_entitlements=bad_widget_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_extension_cloudkit_leakage_in_signed_entitlements_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            leaked_widget_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                "com.apple.developer.icloud-container-environment": "Production",
+                "get-task-allow": False,
+            }
+            runner = self._make_mock_runner(widget_signed_entitlements=leaked_widget_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_extension_cloudkit_leakage_in_profile_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            leaked_widget_profile = {
+                "Entitlements": {
+                    "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                    "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                    "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                    "com.apple.developer.icloud-services": ["CloudKit"],
+                    "get-task-allow": False,
+                }
+            }
+            runner = self._make_mock_runner(widget_profile_plist=leaked_widget_profile)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_extension_aps_leakage_in_signed_entitlements_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            leaked_widget_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                "aps-environment": "production",
+                "get-task-allow": False,
+            }
+            runner = self._make_mock_runner(widget_signed_entitlements=leaked_widget_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_extension_aps_leakage_in_profile_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            leaked_widget_profile = {
+                "Entitlements": {
+                    "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                    "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                    "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                    "com.apple.developer.aps-environment": "production",
+                    "get-task-allow": False,
+                }
+            }
+            runner = self._make_mock_runner(widget_profile_plist=leaked_widget_profile)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_invalid_widget_codesign_signature_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            runner = self._make_mock_runner(codesign_verify_fail_widget=True)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_missing_widget_signing_certificate_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            runner = self._make_mock_runner(missing_widget_cert=True)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_widget_get_task_allow_true_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_widget_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios.widget",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                "get-task-allow": True,
+            }
+            runner = self._make_mock_runner(widget_signed_entitlements=bad_widget_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_main_app_cloudkit_production_preservation_fails_on_development(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_main_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.developer.icloud-container-environment": "Development",
+                "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                "get-task-allow": False,
+            }
+            runner = self._make_mock_runner(main_signed_entitlements=bad_main_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_main_app_signed_entitlements_get_task_allow_true_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            bad_main_entitlements = {
+                "application-identifier": "4CJ49V6QHW.com.zerodelta.gradus.ios",
+                "com.apple.developer.team-identifier": "4CJ49V6QHW",
+                "com.apple.developer.icloud-container-environment": "Production",
+                "com.apple.security.application-groups": ["group.com.zerodelta.gradus"],
+                "get-task-allow": True,
+            }
+            runner = self._make_mock_runner(main_signed_entitlements=bad_main_entitlements)
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
+
+    def test_corrupt_widget_info_plist_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, artifact = self._fixture(temporary)
+            self._create_mock_ipa(artifact.ipa_path, corrupt_widget_info=True)
+            runner = self._make_mock_runner()
+            with patch.object(PREPARE, "_run_checked", side_effect=runner):
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.inspect_artifact(artifact, context)
 
 
 if __name__ == "__main__":
