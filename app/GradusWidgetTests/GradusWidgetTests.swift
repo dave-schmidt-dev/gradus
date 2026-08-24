@@ -5,9 +5,12 @@ import SnapshotTesting
 import SwiftUI
 import Testing
 import UIKit
+import XCTest
 
 private let widgetNow = Date(timeIntervalSince1970: 1_787_483_600)
 private let widgetTimeZone = TimeZone(identifier: "America/New_York")!
+private final class GradusWidgetTestsBundleToken {}
+
 /// Opt in only while intentionally refreshing these baselines:
 /// OTHER_SWIFT_FLAGS='$(inherited) -D WIDGET_SNAPSHOT_RECORD'
 private let recordWidgetSnapshots: SnapshotTestingConfiguration.Record = {
@@ -38,6 +41,76 @@ private func widgetSnapshot(
             resetDate: resetDate
         ) : nil
     )
+}
+
+private func defaultGradusWidgetTestsBundleResourceURL() -> URL? {
+    let bundle = Bundle(for: GradusWidgetTestsBundleToken.self)
+    return bundle.resourceURL ?? bundle.bundleURL
+}
+
+private func gradusWidgetSnapshotDirectory(
+    file: StaticString = #filePath,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    bundleResourceURL: URL? = defaultGradusWidgetTestsBundleResourceURL()
+) -> URL {
+    if environment["CI_XCODE_CLOUD"]?.uppercased() == "TRUE", let bundleResourceURL {
+        return bundleResourceURL
+    }
+    let fileURL = URL(fileURLWithPath: file.description)
+    let testFileName = fileURL.deletingPathExtension().lastPathComponent
+    return fileURL
+        .deletingLastPathComponent()
+        .appendingPathComponent("__Snapshots__", isDirectory: true)
+        .appendingPathComponent(testFileName, isDirectory: true)
+}
+
+private func assertWidgetSnapshot<Value>(
+    of value: @autoclosure () throws -> Value,
+    as snapshotting: Snapshotting<Value, some Any>,
+    named name: String? = nil,
+    record: SnapshotTestingConfiguration.Record? = nil,
+    timeout: TimeInterval = 5,
+    fileID: StaticString = #fileID,
+    file: StaticString = #filePath,
+    testName: String = #function,
+    line: UInt = #line,
+    column: UInt = #column
+) {
+    let directory = gradusWidgetSnapshotDirectory(file: file)
+    let failure: String?
+    do {
+        failure = try verifySnapshot(
+            of: value(),
+            as: snapshotting,
+            named: name,
+            record: record,
+            snapshotDirectory: directory.path,
+            timeout: timeout,
+            fileID: fileID,
+            file: file,
+            testName: testName,
+            line: line,
+            column: column
+        )
+    } catch {
+        failure = error.localizedDescription
+    }
+
+    guard let failure else { return }
+
+    if Test.current != nil {
+        Issue.record(
+            Comment(rawValue: failure),
+            sourceLocation: SourceLocation(
+                fileID: fileID.description,
+                filePath: file.description,
+                line: Int(line),
+                column: Int(column)
+            )
+        )
+    } else {
+        XCTFail(failure, file: file, line: line)
+    }
 }
 
 private func widgetView(style: UIUserInterfaceStyle) -> some View {
@@ -241,7 +314,7 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
 
 @MainActor
 @Test func gradusSmallWidgetCurrentLight() {
-    assertSnapshot(
+    assertWidgetSnapshot(
         of: widgetView(style: .light),
         as: .image(
             layout: .fixed(width: 170, height: 170),
@@ -254,7 +327,7 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
 
 @MainActor
 @Test func gradusSmallWidgetCurrentDark() {
-    assertSnapshot(
+    assertWidgetSnapshot(
         of: widgetView(style: .dark),
         as: .image(
             layout: .fixed(width: 170, height: 170),
@@ -263,4 +336,22 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
         record: recordWidgetSnapshots,
         testName: "gradusSmallWidgetCurrentDark"
     )
+}
+
+@Test func widgetSnapshotDirectoryUsesBundleRootWhenRunningInXcodeCloud() {
+    let selected = gradusWidgetSnapshotDirectory(
+        file: #filePath,
+        environment: ["CI_XCODE_CLOUD": "TRUE"],
+        bundleResourceURL: URL(fileURLWithPath: "/tmp/GradusWidgetTests.bundle", isDirectory: true)
+    )
+    #expect(selected.path == "/tmp/GradusWidgetTests.bundle")
+}
+
+@Test func widgetSnapshotDirectoryUsesSourceRelativeSnapshotsWhenNotInCloud() {
+    let selected = gradusWidgetSnapshotDirectory(
+        file: #filePath,
+        environment: [:]
+    )
+    let testFileName = URL(fileURLWithPath: #filePath.description).deletingPathExtension().lastPathComponent
+    #expect(selected.path.hasSuffix("/__Snapshots__/\(testFileName)"))
 }
