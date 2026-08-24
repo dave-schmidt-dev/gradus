@@ -106,8 +106,9 @@ public struct DensityMetrics: Equatable, Sendable {
     // MARK: row
 
     public let rowHeight: CGFloat
-    /// The usage bar's thickness. Scales with the row so a taller row does not
-    /// read as a thin line marooned in whitespace.
+    /// The usage bar's thickness. Kept at 12pt so the iOS rail stays visually
+    /// consistent across density while row height still scales its surrounding
+    /// spacing.
     public let barHeight: CGFloat
     /// Between the four columns of a `WindowRow`.
     public let columnGap: CGFloat
@@ -211,7 +212,7 @@ public struct DensityMetrics: Equatable, Sendable {
         cornerRadius: 12,
         titleFont: .headline,
         rowHeight: 22,
-        barHeight: 4,
+        barHeight: 12,
         columnGap: 8,
         labelWidth: 78,
         percentWidth: 40,
@@ -243,7 +244,7 @@ public struct DensityMetrics: Equatable, Sendable {
         cornerRadius: 14,
         titleFont: .headline,
         rowHeight: 30,
-        barHeight: 6,
+        barHeight: 12,
         columnGap: 8,
         labelWidth: 86,
         percentWidth: 44,
@@ -279,7 +280,7 @@ public struct DensityMetrics: Equatable, Sendable {
         cornerRadius: 16,
         titleFont: .title3.weight(.semibold),
         rowHeight: 40,
-        barHeight: 8,
+        barHeight: 12,
         columnGap: 10,
         labelWidth: 98,
         percentWidth: 50,

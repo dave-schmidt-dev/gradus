@@ -9,8 +9,8 @@ struct UsageBar: View {
     private static let markerWidth: CGFloat = 3
     /// The marker overhangs the bar by this much at each end, which is what
     /// makes it readable as a rule across the bar rather than a segment of it.
-    /// Held constant as the bar thickens so every density reads the same; the
-    /// Mac keeps the same idea in `MenuContentView`'s
+    /// Held constant as the rail stays fixed at 12pt on iOS so every density
+    /// reads the same; the Mac keeps the same idea in `MenuContentView`'s
     /// `max(0, (markerHeight - barHeight) / 2)`.
     ///
     /// Only the *horizontal* geometry is shared between platforms
@@ -22,11 +22,11 @@ struct UsageBar: View {
     let percentLeft: Double
     let paceDelta: Double?
     let color: Color
-    /// Defaulted to 1.6.0's literal so callers that predate the density axis
-    /// render unchanged.
+    /// Defaulted to the shared iOS rail baseline so callers that omit the
+    /// parameter keep 12pt rails.
     let height: CGFloat
 
-    init(window: ProviderWindow, color: Color? = nil, height: CGFloat = 4) {
+    init(window: ProviderWindow, color: Color? = nil, height: CGFloat = 12) {
         percentLeft = window.percentLeft
         paceDelta = window.paceDelta
         self.color = color ?? SignalColor.forWindow(window)
@@ -49,7 +49,8 @@ struct UsageBar: View {
                 Capsule()
                     .fill(color)
                     .frame(width: fillWidth)
-
+            }
+            .overlay(alignment: .leading) {
                 if let markerPosition = Self.markerPosition(
                     percentLeft: percentLeft, paceDelta: paceDelta
                 ) {

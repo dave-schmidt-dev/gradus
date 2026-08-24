@@ -9,24 +9,28 @@ import UIKit
 
 private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 
-/// Selecting `.compact` must reproduce 1.6.0 exactly, so that adding the
-/// density axis is not itself a visual change for anyone who never opens the
-/// setting.
+/// Compact keeps the shipped layout measurements except for the intentionally
+/// uniform 12pt usage rail.
 ///
 /// The literals are spelled out rather than compared against the views'
 /// constants, because the views now *read* these — asserting they match would
 /// only prove `a == a`. These numbers come from the pre-density source: the
 /// three column widths and 22pt row from `WindowRow`, the 12pt padding and
-/// corner radius from `ProviderDensityCard`, the 4pt bar from `UsageBar`, and
-/// the 320pt minimum from `DashboardContent.columns`.
-@Test func compactDensityReproducesTheShippedGeometry() {
+/// corner radius from `ProviderDensityCard`, and the 320pt minimum from
+/// `DashboardContent.columns`. The rail assertions pin the requested 12pt
+/// cross-density override separately.
+@Test func compactDensityPinsShippedGeometryAndUniformRail() {
     let compact = DensityMetrics.compact
+    let standard = DensityMetrics.standard
+    let large = DensityMetrics.large
     #expect(compact.labelWidth == 78)
     #expect(compact.percentWidth == 40)
     #expect(compact.resetWidth == 104)
     #expect(compact.columnGap == 8)
     #expect(compact.rowHeight == 22)
-    #expect(compact.barHeight == 4)
+    #expect(compact.barHeight == 12)
+    #expect(standard.barHeight == 12)
+    #expect(large.barHeight == 12)
     #expect(compact.cardPadding == 12)
     #expect(compact.titleGap == 6)
     #expect(compact.rowGap == 2)
@@ -130,7 +134,9 @@ private func rowContentContainsLabel(id: String, label: String) -> Bool {
 
     for (smaller, bigger) in zip(ordered, ordered.dropFirst()) {
         #expect(bigger.rowHeight > smaller.rowHeight)
-        #expect(bigger.barHeight > smaller.barHeight)
+        // Rail thickness is intentionally fixed at 12pt across iOS density
+        // rungs.
+        #expect(bigger.barHeight == smaller.barHeight)
         #expect(bigger.cardPadding > smaller.cardPadding)
         #expect(bigger.rowGap > smaller.rowGap)
         #expect(bigger.cardGap > smaller.cardGap)
