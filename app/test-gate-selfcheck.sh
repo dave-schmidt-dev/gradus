@@ -128,7 +128,7 @@ snapshot_test_names="$(awk '
     has_image_assertion = 0
     next
   }
-  /assertSnapshot\(/ { has_image_assertion = 1 }
+  /assertIOSSnapshot\(/ { has_image_assertion = 1 }
   END { if (name != "" && has_image_assertion) print name }
 ' "$SCRIPT_DIR/GradusiOSTests/DensityLayoutSnapshotTests.swift")"
 snapshot_test_count="$(printf '%s\n' "$snapshot_test_names" | sed '/^$/d' | wc -l | tr -d ' ')"

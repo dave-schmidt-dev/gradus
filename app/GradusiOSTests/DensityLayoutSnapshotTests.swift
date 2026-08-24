@@ -17,7 +17,7 @@ import Testing
 // Fixtures and helpers shared by these tests live in
 // DensityLayoutSnapshotFixtures.swift, split out to keep this file under
 // SwiftLint's file_length limit. Every `@Test func` here that calls
-// `assertSnapshot` must stay in this file: test-gate.sh's self-check parses
+// `assertIOSSnapshot` must stay in this file: test-gate.sh's self-check parses
 // this exact filename to derive the canonical density image snapshot
 // selectors it validates against `DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS`.
 
