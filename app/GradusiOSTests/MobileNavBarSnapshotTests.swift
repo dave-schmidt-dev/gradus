@@ -11,7 +11,7 @@ import Testing
     let view = MobileNavBar(title: "Gradus") {
         IconButton(Icon.settings) {}
     }
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .light))
     )
@@ -22,7 +22,7 @@ import Testing
     let view = MobileNavBar(title: "Gradus") {
         IconButton(Icon.settings) {}
     }
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 390, height: 56), traits: UITraitCollection(userInterfaceStyle: .dark))
     )

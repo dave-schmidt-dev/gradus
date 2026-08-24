@@ -161,7 +161,7 @@ private let settingsSnapshotHeight: CGFloat = 1150
 @Test func settingsViewNotificationsOnLight() {
     let viewModel = makeViewModel(notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(
             layout: .fixed(width: 390, height: settingsSnapshotHeight),
@@ -175,7 +175,7 @@ private let settingsSnapshotHeight: CGFloat = 1150
 @Test func settingsViewNotificationsOnDark() {
     let viewModel = makeViewModel(notificationsEnabled: true)
     let view = SettingsView(dashboardViewModel: viewModel)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(
             layout: .fixed(width: 390, height: settingsSnapshotHeight),
@@ -189,7 +189,7 @@ private let settingsSnapshotHeight: CGFloat = 1150
 @Test func settingsViewNotificationsOffLight() {
     let viewModel = makeViewModel(notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(
             layout: .fixed(width: 390, height: settingsSnapshotHeight),
@@ -203,7 +203,7 @@ private let settingsSnapshotHeight: CGFloat = 1150
 @Test func settingsViewNotificationsOffDark() {
     let viewModel = makeViewModel(notificationsEnabled: false)
     let view = SettingsView(dashboardViewModel: viewModel)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(
             layout: .fixed(width: 390, height: settingsSnapshotHeight),
@@ -224,7 +224,7 @@ private let settingsSnapshotHeight: CGFloat = 1150
     await viewModel.refreshNotificationAuthorization()
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(
             layout: .fixed(width: 390, height: settingsSnapshotHeight),
@@ -240,7 +240,7 @@ private let settingsSnapshotHeight: CGFloat = 1150
     await viewModel.refreshNotificationAuthorization()
     #expect(viewModel.notificationsSuppressedBySystem)
     let view = SettingsView(dashboardViewModel: viewModel)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(
             layout: .fixed(width: 390, height: settingsSnapshotHeight),

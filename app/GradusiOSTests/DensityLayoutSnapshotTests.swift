@@ -71,7 +71,7 @@ import Testing
 /// windows are on screen at once, which is the whole point of Option B.
 @MainActor
 @Test func densePadPortraitLight() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
@@ -84,7 +84,7 @@ import Testing
 
 @MainActor
 @Test func densePadPortraitDark() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
@@ -100,7 +100,7 @@ import Testing
 /// wasted horizontal space this layout exists to remove.
 @MainActor
 @Test func densePadLandscapeDark() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(),
         as: .image(
             layout: .fixed(width: 1194, height: 834),
@@ -143,7 +143,7 @@ import Testing
 
 @MainActor
 @Test func densityStandardPadPortraitLight() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(density: .standard),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
@@ -156,7 +156,7 @@ import Testing
 
 @MainActor
 @Test func densityLargePadPortraitLight() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
@@ -185,7 +185,7 @@ import Testing
 /// tracked in TASKS; the test's job is that the next change to it is visible.
 @MainActor
 @Test func densityLargePadPortraitExtraExtraExtraLarge() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
@@ -208,7 +208,7 @@ import Testing
 /// feature, and the fix would get scoped to the wrong place.
 @MainActor
 @Test func densityCompactPadPortraitExtraExtraExtraLarge() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(density: .compact),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
@@ -232,7 +232,7 @@ import Testing
 /// question — 98 + 50 + 130 of columns would leave the bar nothing on a phone.
 @MainActor
 @Test func densityLargePhoneDark() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: DashboardContent(
             viewModel: makeViewModel(), now: densityLayoutFixedNow,
             layout: .denseSingleColumn, density: .large
@@ -251,7 +251,7 @@ import Testing
 /// whole `100%` instead of clipping the final digit.
 @MainActor
 @Test func densityCompactPhoneAccessibility1() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: DashboardContent(
             viewModel: makeViewModel(), now: densityLayoutFixedNow,
             layout: .denseSingleColumn, density: .compact
@@ -269,7 +269,7 @@ import Testing
 
 @MainActor
 @Test func densityCompactPhoneAccessibility5() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: DashboardContent(
             viewModel: makeViewModel(), now: densityLayoutFixedNow,
             layout: .denseSingleColumn, density: .compact
@@ -287,7 +287,7 @@ import Testing
 
 @MainActor
 @Test func densityLargePadPortraitAccessibility1() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),
@@ -302,7 +302,7 @@ import Testing
 
 @MainActor
 @Test func densityLargePadPortraitAccessibility5() {
-    assertSnapshot(
+    assertIOSSnapshot(
         of: denseDashboard(density: .large),
         as: .image(
             layout: .fixed(width: 834, height: 1194),

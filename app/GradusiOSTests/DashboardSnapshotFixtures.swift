@@ -1,7 +1,80 @@
 @testable import GradusiOS
 import GradusKit
 import SnapshotTesting
+import Testing
 import XCTest
+
+private final class GradusiOSTestsBundleToken {}
+
+func defaultGradusiOSTestsBundleResourceURL() -> URL? {
+    let bundle = Bundle(for: GradusiOSTestsBundleToken.self)
+    return bundle.resourceURL ?? bundle.bundleURL
+}
+
+func iosSnapshotDirectory(
+    file: StaticString = #filePath,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    bundleResourceURL: URL? = defaultGradusiOSTestsBundleResourceURL()
+) -> URL {
+    if environment["CI_XCODE_CLOUD"]?.uppercased() == "TRUE", let bundleResourceURL {
+        return bundleResourceURL
+    }
+    let fileURL = URL(fileURLWithPath: file.description)
+    let testFileName = fileURL.deletingPathExtension().lastPathComponent
+    return fileURL
+        .deletingLastPathComponent()
+        .appendingPathComponent("__Snapshots__", isDirectory: true)
+        .appendingPathComponent(testFileName, isDirectory: true)
+}
+
+func assertIOSSnapshot<Value, Format>(
+    of value: @autoclosure () throws -> Value,
+    as snapshotting: Snapshotting<Value, Format>,
+    named name: String? = nil,
+    record: SnapshotTestingConfiguration.Record? = nil,
+    timeout: TimeInterval = 5,
+    fileID: StaticString = #fileID,
+    file: StaticString = #filePath,
+    testName: String = #function,
+    line: UInt = #line,
+    column: UInt = #column
+) {
+    let directory = iosSnapshotDirectory(file: file)
+    let failure: String?
+    do {
+        failure = try verifySnapshot(
+            of: value(),
+            as: snapshotting,
+            named: name,
+            record: record,
+            snapshotDirectory: directory.path,
+            timeout: timeout,
+            fileID: fileID,
+            file: file,
+            testName: testName,
+            line: line,
+            column: column
+        )
+    } catch {
+        failure = error.localizedDescription
+    }
+
+    guard let failure else { return }
+
+    if Test.current != nil {
+        Issue.record(
+            Comment(rawValue: failure),
+            sourceLocation: SourceLocation(
+                fileID: fileID.description,
+                filePath: file.description,
+                line: Int(line),
+                column: Int(column)
+            )
+        )
+    } else {
+        XCTFail(failure, file: file, line: line)
+    }
+}
 
 // Shared fixtures and helpers for the DashboardSnapshotTests suite, split
 // across this file, DashboardSnapshotTests.swift,

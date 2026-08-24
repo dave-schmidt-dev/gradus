@@ -235,3 +235,22 @@ private func rowContentContainsLabel(id: String, label: String) -> Bool {
     let noReset = WindowRow(window: window("weekly", 47, reset: nil), now: fixedNow)
     #expect(noReset.spokenLabel == "Weekly, 47 percent remaining, pace unavailable")
 }
+
+@Test func cloudSnapshotDirectoryUsesBundleRoot() {
+    let bundleRoot = URL(fileURLWithPath: "/tmp/GradusiOSTests.bundle", isDirectory: true)
+    let selected = iosSnapshotDirectory(
+        file: #filePath,
+        environment: ["CI_XCODE_CLOUD": "TRUE"],
+        bundleResourceURL: bundleRoot
+    )
+    #expect(selected == bundleRoot)
+}
+
+@Test func localSnapshotDirectoryPreservesSourceLayout() {
+    let selected = iosSnapshotDirectory(
+        file: #filePath,
+        environment: [:]
+    )
+    let testFileName = URL(fileURLWithPath: #filePath.description).deletingPathExtension().lastPathComponent
+    #expect(selected.path.hasSuffix("/__Snapshots__/\(testFileName)"))
+}

@@ -72,7 +72,7 @@ private func erroredProvider() -> ProviderStatus {
 @MainActor
 @Test func providerDetailRendersAllWindowsLight() {
     let view = ProviderDetailView(provider: multiWindowProvider(), now: fixedNow)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .light)),
         record: providerDetailSnapshotRecording
@@ -93,7 +93,7 @@ private func erroredProvider() -> ProviderStatus {
 @MainActor
 @Test func providerDetailRendersAllWindowsDark() {
     let view = ProviderDetailView(provider: multiWindowProvider(), now: fixedNow)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 390, height: 620), traits: UITraitCollection(userInterfaceStyle: .dark)),
         record: providerDetailSnapshotRecording
@@ -103,7 +103,7 @@ private func erroredProvider() -> ProviderStatus {
 @MainActor
 @Test func providerDetailRendersErrorStateLight() {
     let view = ProviderDetailView(provider: erroredProvider(), now: fixedNow)
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 390, height: 360), traits: UITraitCollection(userInterfaceStyle: .light)),
         record: providerDetailSnapshotRecording
