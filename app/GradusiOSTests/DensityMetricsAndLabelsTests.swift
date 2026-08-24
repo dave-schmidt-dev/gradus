@@ -58,7 +58,7 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
     // from a separate unscaled minimum.
     #expect(compact.exhaustedLineGap == 2)
     #expect(compact.exhaustedGap == 8)
-    #expect(compact.exhaustedRowHeight == 52)
+    #expect(compact.exhaustedRowHeight == 58)
     #expect(compact.exhaustedCornerRadius == 10)
 }
 

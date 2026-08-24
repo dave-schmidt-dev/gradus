@@ -225,7 +225,7 @@ public struct DensityMetrics: Equatable, Sendable {
         exhaustedResetFont: .caption,
         exhaustedLineGap: 2,
         exhaustedGap: 8,
-        exhaustedRowHeight: 52,
+        exhaustedRowHeight: 58,
         exhaustedCornerRadius: 10,
         gridMinimum: 320
     )
