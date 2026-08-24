@@ -56,10 +56,10 @@ processing evidence.
 
 - Add the test to the correct Xcode target or Python test runner in the same
   change as the feature.
-- Ensure the test is discovered by `app/test-gate.sh`; an unregistered test
-  file is not coverage.
-- Run the targeted test while developing, then run the full cross-platform
-  gate before release.
+- Ensure the test is included in the required Xcode Cloud app checks; an
+  unregistered test file is not coverage.
+- Run focused non-Xcode tests where applicable, then require both Xcode Cloud
+  app checks to pass on the exact release head.
 - Cover both success and meaningful failure/empty states for new sync or
   provider behavior.
 - A manual-only check is an exception, not a substitute. Use one only when
@@ -69,7 +69,8 @@ processing evidence.
 
 Gradus currently uses Swift Testing/XCTest for logic, XCUITest for iOS user
 flows, and swift-snapshot-testing for visual regression. `app/test-gate.sh`
-is the authoritative local gate. It runs, in order:
+remains an attended diagnostic mirror, not a push or release prerequisite. It
+runs, in order:
 
 1. the hermetic notarization and iOS-upload script tests (including inside-out
    nested signing, separate App Store profile verification, and version/build parity),
@@ -117,9 +118,15 @@ product but never its test targets, and XcodeGen cannot add them to a scheme's
 `test:` block since they are not project targets. Without step 2 the package's
 tests — the reconciliation core both apps import — do not run at all.
 
-The `pre-push` hook invokes `bash app/test-gate.sh` with no filename narrowing
-and propagates its exit status. This keeps the full cross-platform gate, rather
-than a subset of Python tests, authoritative for pushes.
+Pushes rely on required Xcode Cloud checks for app validation. Local hooks are
+kept free of app automation, so they stay focused on fast lint and formatting
+checks. App-specific evidence is collected by the required Xcode Cloud checks
+after push.
+
+iOS snapshot baselines are canonical to the Xcode Cloud default runtime. Refresh
+them only from an exact result-bundle artifact downloaded through the repository
+helper, after reviewing every rendered image. The replacement is not accepted
+until the same required Xcode Cloud action reruns green against the new files.
 
 ## Cross-language rules: shared truth tables
 

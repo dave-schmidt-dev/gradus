@@ -196,6 +196,10 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
     #expect(entry.state == .placeholder)
 }
 
+@Test func widgetRailHeightIsUniformTwelvePoints() {
+    #expect(GradusSmallWidgetView.railHeight == 12)
+}
+
 @Test func resetFormattingHandlesFractionalSecondDates() {
     let fractionalDate = Date(timeIntervalSince1970: 1_788_010_800.456)
     let calendar = Calendar(identifier: .gregorian)

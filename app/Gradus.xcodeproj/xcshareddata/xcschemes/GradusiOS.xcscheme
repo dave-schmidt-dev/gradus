@@ -61,6 +61,17 @@
                ReferencedContainer = "container:Gradus.xcodeproj">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5013E9D968BCDFE9D6558CFF"
+               BuildableName = "GradusWidgetTests.xctest"
+               BlueprintName = "GradusWidgetTests"
+               ReferencedContainer = "container:Gradus.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
       <CommandLineArguments>
       </CommandLineArguments>
