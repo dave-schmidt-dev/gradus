@@ -102,7 +102,7 @@
         "inputs": ["READINESS_MANIFEST", "HOME", "PATH", "PYTHONPATH", "USER", "LOGNAME"],
         "literals": {"RELEASE_CONFIGURATION": "Production"}
       },
-      "proofSchema": "release.proof.local-gate.v1",
+      "proofSchema": "release.proof.local-gate.v2",
       "dependencies": ["readiness"],
       "timeoutSeconds": 1800,
       "statusEvents": {
@@ -120,7 +120,7 @@
       "argv": ["python3", "app/release_stage_readiness.py"],
       "workingDirectory": ".",
       "environment": {"inherit": false, "inputs": ["READINESS_MANIFEST"], "literals": {}},
-      "proofSchema": "release.proof.readiness.v1",
+      "proofSchema": "release.proof.readiness.v2",
       "dependencies": ["source-snapshot"],
       "timeoutSeconds": 120,
       "statusEvents": {"started": "readiness:started", "heartbeat": "readiness:heartbeat", "succeeded": "readiness:succeeded", "failed": "readiness:failed", "blocked": "readiness:blocked"}
@@ -349,7 +349,9 @@
     "app/GradusiOS",
     "app/Shared",
     "app/GradusKit",
-    "app/project.yml"
+    "app/project.yml",
+    "app/release_cloud_gate.py",
+    "app/release_stage_readiness.py"
   ],
   "nonSourcePaths": [
     "app/GradusKit/Tests",

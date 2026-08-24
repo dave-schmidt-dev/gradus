@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -78,20 +78,61 @@ def _manifest_binding(manifest_path: Path) -> tuple[bytes, str, str]:
     return raw, candidate_id, source_digest
 
 
-def build_proof(manifest_path: Path, *, now: datetime | None = None) -> dict[str, Any]:
-    """Build a short-lived proof bound to one immutable candidate manifest."""
+PROOF_VERSION = "2.0.0"
+CONTRACT_REVISION = "2.0.0"
+READINESS_PROOF_SCHEMA = "release.proof.readiness.v2"
+LOCAL_GATE_PROOF_SCHEMA = "release.proof.local-gate.v2"
+
+
+def execution_closure(
+    proof_schema: str,
+    configuration: str = "",
+    *,
+    contract_revision: str = CONTRACT_REVISION,
+) -> str:
+    """Compute the deterministic SHA-256 execution-closure discriminator."""
+
+    if not isinstance(proof_schema, str) or not proof_schema:
+        raise ValueError("invalid-proof-schema")
+    if not isinstance(configuration, str):
+        raise ValueError("invalid-configuration")
+    if not isinstance(contract_revision, str) or not contract_revision:
+        raise ValueError("invalid-contract-revision")
+    payload = b"\0".join(
+        (
+            proof_schema.encode("utf-8"),
+            configuration.encode("utf-8"),
+            contract_revision.encode("utf-8"),
+        )
+    )
+    return hashlib.sha256(payload).hexdigest()
+
+
+def build_proof(
+    manifest_path: Path,
+    *,
+    configuration: str = "",
+    now: datetime | None = None,
+    contract_revision: str = CONTRACT_REVISION,
+) -> dict[str, Any]:
+    """Build a typed v2 proof bound to one immutable candidate manifest."""
 
     raw, candidate_id, source_digest = _manifest_binding(manifest_path)
-    issued = now or datetime.now(timezone.utc)
-    expires = issued + timedelta(hours=6)
+    observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    closure = execution_closure(
+        READINESS_PROOF_SCHEMA,
+        configuration,
+        contract_revision=contract_revision,
+    )
     return {
-        "proofVersion": "1.0.0",
+        "proofVersion": PROOF_VERSION,
+        "proofSchema": READINESS_PROOF_SCHEMA,
         "operationClass": "readiness",
         "candidateId": candidate_id,
         "sourceDigest": source_digest,
         "result": "passed",
-        "issuedAt": issued.isoformat().replace("+00:00", "Z"),
-        "expiresAt": expires.isoformat().replace("+00:00", "Z"),
+        "observedAt": observed.isoformat().replace("+00:00", "Z"),
+        "environmentClosureSha256": closure,
         "evidenceSha256": hashlib.sha256(raw).hexdigest(),
     }
 
@@ -101,33 +142,38 @@ def build_local_gate_proof(
     *,
     configuration: str,
     now: datetime | None = None,
+    contract_revision: str = CONTRACT_REVISION,
 ) -> dict[str, Any]:
     """Build the authoritative local-gate proof after every gate leg passed."""
 
     raw, candidate_id, source_digest = _manifest_binding(manifest_path)
     if not configuration or any(character.isspace() for character in configuration):
         raise ValueError("local-gate-configuration-invalid")
-    issued = now or datetime.now(timezone.utc)
-    expires = issued + timedelta(hours=6)
+    observed = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    closure = execution_closure(
+        LOCAL_GATE_PROOF_SCHEMA,
+        configuration,
+        contract_revision=contract_revision,
+    )
     evidence = b"\0".join(
         (
-            b"release.proof.local-gate.v1",
+            LOCAL_GATE_PROOF_SCHEMA.encode("utf-8"),
             raw,
             configuration.encode("utf-8"),
             b"authoritative",
         )
     )
     return {
-        "proofVersion": "1.0.0",
-        "proofSchema": "release.proof.local-gate.v1",
+        "proofVersion": PROOF_VERSION,
+        "proofSchema": LOCAL_GATE_PROOF_SCHEMA,
         "operationClass": "localGate",
         "candidateId": candidate_id,
         "sourceDigest": source_digest,
         "result": "passed",
-        "issuedAt": issued.isoformat().replace("+00:00", "Z"),
-        "expiresAt": expires.isoformat().replace("+00:00", "Z"),
+        "observedAt": observed.isoformat().replace("+00:00", "Z"),
         "configuration": configuration,
         "scope": "authoritative",
+        "environmentClosureSha256": closure,
         "evidenceSha256": hashlib.sha256(evidence).hexdigest(),
     }
 
@@ -168,13 +214,17 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(__file__).resolve().parent.parent
     try:
         manifest_path = resolve_canonical_manifest(value, root)
+        configuration = os.environ.get("RELEASE_CONFIGURATION", "")
         if local_gate:
             proof = build_local_gate_proof(
                 manifest_path,
-                configuration=os.environ.get("RELEASE_CONFIGURATION", ""),
+                configuration=configuration,
             )
         else:
-            proof = build_proof(manifest_path)
+            proof = build_proof(
+                manifest_path,
+                configuration=configuration,
+            )
         candidate_id = proof["candidateId"]
         proof_name = "local-gate.json" if local_gate else "readiness.json"
         destination = root / ".release-state" / "evidence" / candidate_id / proof_name

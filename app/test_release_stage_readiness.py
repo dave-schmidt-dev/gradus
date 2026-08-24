@@ -10,15 +10,25 @@ from pathlib import Path
 
 try:
     from app.release_stage_readiness import (
+        CONTRACT_REVISION,
+        LOCAL_GATE_PROOF_SCHEMA,
+        PROOF_VERSION,
+        READINESS_PROOF_SCHEMA,
         build_local_gate_proof,
         build_proof,
+        execution_closure,
         resolve_canonical_manifest,
         write_proof,
     )
 except ModuleNotFoundError:  # Direct pytest execution from app/.
     from release_stage_readiness import (
+        CONTRACT_REVISION,
+        LOCAL_GATE_PROOF_SCHEMA,
+        PROOF_VERSION,
+        READINESS_PROOF_SCHEMA,
         build_local_gate_proof,
         build_proof,
+        execution_closure,
         resolve_canonical_manifest,
         write_proof,
     )
@@ -39,15 +49,19 @@ def test_build_proof_binds_candidate_source_and_manifest_bytes() -> None:
         proof = build_proof(manifest, now=datetime(2026, 8, 18, 3, 0, tzinfo=timezone.utc))
 
         assert proof == {
-            "proofVersion": "1.0.0",
+            "proofVersion": PROOF_VERSION,
+            "proofSchema": READINESS_PROOF_SCHEMA,
             "operationClass": "readiness",
             "candidateId": "1.8.0-20",
             "sourceDigest": "a" * 64,
             "result": "passed",
-            "issuedAt": "2026-08-18T03:00:00Z",
-            "expiresAt": "2026-08-18T09:00:00Z",
+            "observedAt": "2026-08-18T03:00:00Z",
+            "environmentClosureSha256": execution_closure(READINESS_PROOF_SCHEMA, ""),
             "evidenceSha256": hashlib.sha256(raw).hexdigest(),
         }
+        assert len(proof["environmentClosureSha256"]) == 64
+        assert "expiresAt" not in proof
+        assert "issuedAt" not in proof
 
 
 def test_build_proof_rejects_missing_source_binding() -> None:
@@ -94,20 +108,20 @@ def test_build_local_gate_proof_is_typed_and_candidate_source_bound() -> None:
         )
 
         assert proof == {
-            "proofVersion": "1.0.0",
-            "proofSchema": "release.proof.local-gate.v1",
+            "proofVersion": PROOF_VERSION,
+            "proofSchema": LOCAL_GATE_PROOF_SCHEMA,
             "operationClass": "localGate",
             "candidateId": "1.8.1-21",
             "sourceDigest": "b" * 64,
             "result": "passed",
-            "issuedAt": "2026-08-19T12:00:00Z",
-            "expiresAt": "2026-08-19T18:00:00Z",
+            "observedAt": "2026-08-19T12:00:00Z",
             "configuration": "Production",
             "scope": "authoritative",
+            "environmentClosureSha256": execution_closure(LOCAL_GATE_PROOF_SCHEMA, "Production"),
             "evidenceSha256": hashlib.sha256(
                 b"\0".join(
                     (
-                        b"release.proof.local-gate.v1",
+                        LOCAL_GATE_PROOF_SCHEMA.encode("utf-8"),
                         raw,
                         b"Production",
                         b"authoritative",
@@ -115,6 +129,38 @@ def test_build_local_gate_proof_is_typed_and_candidate_source_bound() -> None:
                 )
             ).hexdigest(),
         }
+        assert len(proof["environmentClosureSha256"]) == 64
+        assert "expiresAt" not in proof
+        assert "issuedAt" not in proof
+
+
+def test_execution_closure_is_stable_and_configuration_bound() -> None:
+    closure_prod = execution_closure(LOCAL_GATE_PROOF_SCHEMA, "Production")
+    closure_prod_repeat = execution_closure(LOCAL_GATE_PROOF_SCHEMA, "Production")
+    closure_debug = execution_closure(LOCAL_GATE_PROOF_SCHEMA, "Debug")
+    closure_readiness = execution_closure(READINESS_PROOF_SCHEMA, "")
+    closure_custom_rev = execution_closure(
+        LOCAL_GATE_PROOF_SCHEMA, "Production", contract_revision="custom-rev"
+    )
+
+    assert closure_prod == closure_prod_repeat
+    assert len(closure_prod) == 64
+    assert all(c in "0123456789abcdef" for c in closure_prod)
+
+    assert closure_prod != closure_debug
+    assert closure_prod != closure_readiness
+    assert closure_prod != closure_custom_rev
+
+    expected_prod = hashlib.sha256(
+        b"\0".join(
+            (
+                LOCAL_GATE_PROOF_SCHEMA.encode("utf-8"),
+                b"Production",
+                CONTRACT_REVISION.encode("utf-8"),
+            )
+        )
+    ).hexdigest()
+    assert closure_prod == expected_prod
 
 
 def test_gate_emits_candidate_proof_only_after_all_counting_legs_pass() -> None:

@@ -470,6 +470,10 @@ release until a dedicated distribution workflow is confirmed and the adapter
 records source-bound workflow, build-run, archive, and TestFlight receipts.
 `app/release-status` remains the safe read-only status command.
 
+New candidates' readiness and local-gate evidence is content-bound rather than
+time-bound: source or proof-contract drift invalidates it; elapsed time alone
+does not.
+
 The compatibility entry points are:
 
 - `app/release-testflight` — the paused local implementation; `--prepare-only`
