@@ -31,8 +31,60 @@ case "${1:-}" in
       echo "release-testflight: Git common directory is unavailable" >&2
       exit 4
     }
-    prepared="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight \
-      --adapter "$ADAPTER" --repository "$ROOT" --successor-correction)" || {
+    routing="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -c '
+import re, sys
+from pathlib import Path
+from release_tools.iterative_release import read_candidate_ledger_v2
+from release_tools.product_state import ProductState
+
+try:
+    state = ProductState.for_repository(
+        Path(sys.argv[1]), "gradus-ios", non_git_home=".release-state"
+    )
+    pointer = state.home / "active-candidate.json"
+    if pointer.is_symlink() or (pointer.exists() and not pointer.is_file()):
+        raise ValueError("active-candidate-corrupt")
+    active = state._active()
+except Exception as exc:
+    print(f"release-testflight: canonical release state is invalid: {exc}", file=sys.stderr)
+    sys.exit(3)
+
+if active is None:
+    print("CORRECTION")
+    sys.exit(0)
+
+candidate = active.get("candidateId")
+if not isinstance(candidate, str) or not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", candidate):
+    print("release-testflight: active candidate pointer missing or invalid candidateId", file=sys.stderr)
+    sys.exit(3)
+
+uploaded_transitions = {"uploadAttemptStarted", "uploaded", "internalTestFlightReceipted"}
+try:
+    candidate_directory = state.candidates_directory / candidate
+    ledger = candidate_directory / "transitions.jsonl"
+    if candidate_directory.is_symlink() or (
+        candidate_directory.exists() and not candidate_directory.is_dir()
+    ):
+        raise ValueError("candidate-directory-invalid")
+    if ledger.is_symlink() or (ledger.exists() and not ledger.is_file()):
+        raise ValueError("candidate-ledger-unreadable")
+    records = read_candidate_ledger_v2(candidate_directory)
+except Exception as exc:
+    print(f"release-testflight: canonical transitions ledger is invalid: {exc}", file=sys.stderr)
+    sys.exit(3)
+
+if any(record.get("transition") in uploaded_transitions for record in records):
+    print("FRESH")
+else:
+    print("CORRECTION")
+' "$ROOT")" || exit $?
+
+    prepare_args=(--adapter "$ADAPTER" --repository "$ROOT")
+    if [[ "$routing" == "CORRECTION" ]]; then
+      prepare_args+=(--successor-correction)
+    fi
+
+    prepared="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight "${prepare_args[@]}")" || {
       status=$?
       printf '%s\n' "$prepared"
       exit "$status"
