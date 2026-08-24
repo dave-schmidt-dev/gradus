@@ -338,7 +338,14 @@ def test_git_tree_source_digest_rejects_oversized_archive(tmp_path: Path, monkey
         )
 
 
-@pytest.mark.parametrize("payload", [b"not-a-tar", archive_bytes("../escape")])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not-a-tar",
+        archive_bytes("../escape"),
+        archive_bytes("./app/source.swift"),
+    ],
+)
 def test_git_tree_source_digest_rejects_unsafe_archive(
     tmp_path: Path, monkeypatch, payload: bytes
 ) -> None:
@@ -357,6 +364,20 @@ def test_git_tree_source_digest_rejects_unsafe_archive(
             tmp_path,
             lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=payload),
         )
+
+
+def test_extract_git_archive_rejects_escaping_symlink(tmp_path: Path) -> None:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:") as archive:
+        member = tarfile.TarInfo("app/escape")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "../../outside"
+        archive.addfile(member)
+    output.seek(0)
+
+    with tarfile.open(fileobj=output, mode="r:") as archive:
+        with pytest.raises(gate.CloudGateError, match="git-tree-archive-invalid"):
+            gate._extract_git_archive(archive, tmp_path)
 
 
 def test_main_rejects_github_failure_without_proof(tmp_path: Path) -> None:
