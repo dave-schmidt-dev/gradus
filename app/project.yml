@@ -453,6 +453,7 @@ schemes:
       targets:
         - GradusiOSTests
         - GradusiOSUITests
+        - GradusWidgetTests
 
   GradusWidget:
     build:

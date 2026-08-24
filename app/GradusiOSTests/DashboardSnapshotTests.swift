@@ -14,7 +14,7 @@ import XCTest
 // `@testable import GradusiOS` type-checks there but fails at link time.
 //
 // The suite is split across four files to stay under SwiftLint's
-// file_length limit. Every test that calls `assertSnapshot` stays in this
+// file_length limit. Every test that calls `assertIOSSnapshot` stays in this
 // file: swift-snapshot-testing resolves each test's `__Snapshots__` baseline
 // directory from the physical source file of the call site, not the
 // enclosing type, so moving an image assertion to a different file would
@@ -66,7 +66,7 @@ final class DashboardSnapshotTests: XCTestCase {
         let viewModel = makeViewModel(providers: providers)
         XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
         let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
-        assertSnapshot(
+        assertIOSSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .light)),
             record: dashboardSnapshotRecording,
@@ -81,7 +81,7 @@ final class DashboardSnapshotTests: XCTestCase {
         let viewModel = makeViewModel(providers: providers)
         XCTAssertEqual(viewModel.heroProvider?.providerName, "cursor")
         let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
-        assertSnapshot(
+        assertIOSSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 852), traits: UITraitCollection(userInterfaceStyle: .dark)),
             record: dashboardSnapshotRecording,
@@ -105,7 +105,7 @@ final class DashboardSnapshotTests: XCTestCase {
         XCTAssertTrue(levels.contains(.red))
         let viewModel = makeViewModel(providers: providers)
         let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
-        assertSnapshot(
+        assertIOSSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 400), traits: UITraitCollection(userInterfaceStyle: .light)),
             record: dashboardSnapshotRecording,
@@ -142,7 +142,7 @@ final class DashboardSnapshotTests: XCTestCase {
         )
         let viewModel = makeViewModel(providers: providers)
         let view = DashboardContent(viewModel: viewModel, now: dashboardSnapshotFixedNow, layout: .denseSingleColumn)
-        assertSnapshot(
+        assertIOSSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 393, height: 520), traits: UITraitCollection(userInterfaceStyle: .light)),
             record: dashboardSnapshotRecording,
@@ -251,7 +251,7 @@ final class DashboardSnapshotTests: XCTestCase {
             exhaustedProvider(named: "copilot")
         ])
 
-        assertSnapshot(
+        assertIOSSnapshot(
             of: DashboardContent(
                 viewModel: viewModel,
                 now: dashboardSnapshotFixedNow,
@@ -263,7 +263,7 @@ final class DashboardSnapshotTests: XCTestCase {
             testName: "exhaustedCompactCellsPhone"
         )
 
-        assertSnapshot(
+        assertIOSSnapshot(
             of: DashboardContent(
                 viewModel: viewModel,
                 now: dashboardSnapshotFixedNow,
@@ -316,7 +316,7 @@ final class DashboardSnapshotTests: XCTestCase {
         ]
         for fixture in snapshots {
             let viewModel = makeViewModel(providers: providers)
-            assertSnapshot(
+            assertIOSSnapshot(
                 of: SampleDataDashboard(
                     viewModel: viewModel,
                     now: dashboardSnapshotFixedNow,
@@ -336,7 +336,7 @@ final class DashboardSnapshotTests: XCTestCase {
     @MainActor
     func testEmptyStateNotSignedIn() {
         let view = EmptyStateView(state: .notSignedIn)
-        assertSnapshot(
+        assertIOSSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 390, height: 400)),
             record: dashboardSnapshotRecording,
@@ -347,7 +347,7 @@ final class DashboardSnapshotTests: XCTestCase {
     @MainActor
     func testEmptyStateSyncDisabled() {
         let view = EmptyStateView(state: .syncDisabled)
-        assertSnapshot(
+        assertIOSSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 390, height: 400)),
             record: dashboardSnapshotRecording,
@@ -358,7 +358,7 @@ final class DashboardSnapshotTests: XCTestCase {
     @MainActor
     func testEmptyStateWaitingForFirstPublish() {
         let view = EmptyStateView(state: .waitingForFirstPublish)
-        assertSnapshot(
+        assertIOSSnapshot(
             of: view,
             as: .image(layout: .fixed(width: 390, height: 400)),
             record: dashboardSnapshotRecording,

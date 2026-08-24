@@ -6,10 +6,9 @@ import Testing
 @MainActor
 @Test func containerUnavailableFiresDiagnosticAndReturnsNil() {
     var recorded: [WidgetSnapshotPublisher.Diagnostic] = []
-    let customFileManager = FileManager()
     let publisher = WidgetSnapshotPublisher.live(
-        fileManager: customFileManager,
-        diagnosticHandler: { recorded.append($0) }
+        diagnosticHandler: { recorded.append($0) },
+        appGroupContainerLookup: { _ in nil }
     )
     #expect(publisher == nil)
     #expect(recorded == [.containerUnavailable])

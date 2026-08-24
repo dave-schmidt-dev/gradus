@@ -379,23 +379,26 @@ redline across the TUI, Mac, and iOS surfaces.
 - The expected-pace marker is defined once per concern: `expectedRemaining()` in GradusKit says *where* it goes, and `markerOffset(fraction:barWidth:markerWidth:)` beside it says how that maps to a leading-edge offset. Both apps call both. The offset moved into the kit after the two drifted — iOS clamped the marker inside its bar and the Mac did not, so a Mac window at 0% or 100% drew half a marker hanging off the end. Its colour is shared the same way, as `SignalColor.paceMarker` (`#005FD7`, matching the TUI's `bar.marker`) — deliberately outside the four-tier ramp, because the marker is a reference line rather than a signal level, and blue is the one hue no tier uses. Only the marker's *size* stays per-app, because the two bars are different heights. The TUI shares the colour but not the shape: it draws the marker as one whole cell of the bar's own fill glyph rather than a thin line. That is a constraint of the character grid, not a style choice — a thin stroke there has to change glyph to move within a cell, which changes its width, and can never ink as much of its cell as the fill does, so the terminal background shows through around it. The Swift bars position a real rectangle at a continuous offset and have neither problem.
 - Sync is opt-in per device (off by default) and independent per device — pairing two devices doesn't couple them beyond both reading the same published snapshot.
 
-Build/test (requires Xcode + `xcodegen`, pinned version in `app/.xcode-version`):
+Cloud validation:
 
 ```bash
-cd app
-bash test-gate.sh   # runs GradusMac, GradusiOS, and GradusWidget tests; disposable per-run simulators via the shared gate lib
+git push
+gh pr checks --watch
 ```
 
-The Xcode Cloud workflow `Gradus macOS UI Trial` runs the shared
-`GradusMacCloud` scheme as a manual branch build for each pull-request head
-and is the sole `GradusMacUITests` owner and required macOS UI status. Start it
-in App Store Connect after a PR update, then retain the passing build against
-that exact head. Its hosted
-runner derives checked-out source and snapshot roots from `CI_WORKSPACE_PATH`;
-it never asks a local Mac for Automation Mode. Build 1 passed 10/10 tests in
-two minutes. `app/Gradus.xcodeproj` is generated from `project.yml`, but shared
+The required Xcode Cloud workflows `Gradus macOS UI Trial` and `Gradus iOS
+Snapshot Trial` validate each pull-request head after push. Their hosted runners
+derive checked-out source and snapshot roots from `CI_WORKSPACE_PATH`; they never
+ask a local Mac for Automation Mode. `app/Gradus.xcodeproj` is generated from
+`project.yml`, but shared
 project/workspace/scheme files are committed so Cloud can build a fresh clone;
 per-user Xcode state remains ignored.
+
+Xcode Cloud result bundles can be retrieved without browser automation through
+the existing `gradus-app-store-connect` BWS consumer. `allocate_identity.py`
+supports metadata-only `--list-result-bundles` and exact `--ci-artifact-id`
+selection; downloads keep the ASC bearer token off Apple's presigned artifact
+URL and write atomically with bounded stderr progress.
 
 ### App icons
 
@@ -479,10 +482,10 @@ release routes. A prepared upload rechecks the checkout revision and clean
 status against its candidate record before any upload work, and source drift
 fails closed.
 
-The central fleet audit reports Gradus as adopted. The pre-push hook runs
-`bash app/test-gate.sh`; the local gate owns every counted iOS and non-UI leg,
-while the required Xcode Cloud PR status is the sole `GradusMacUITests` owner.
-Local gate results remain separate from candidate-bound canary evidence.
+The central fleet audit reports Gradus as adopted. Pushes trigger required Xcode
+Cloud checks for app validation; local hooks stay lightweight and do not run Xcode
+app automation. Cloud check results remain separate from candidate-bound canary
+evidence.
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
 its release summary and test-focus text into App Store Connect's “What to
@@ -643,9 +646,9 @@ Decision gates follow the G/A/R autonomy contract: `~/.agent/prompts/_shared/gar
 
 ### Git hooks (enforcement)
 
-The local hooks and required Xcode Cloud PR status form the primary gate. Cloud
-owns `GradusMacUITests` without needing local Automation Mode; the hook retains
-every local iOS UI and non-UI counted leg.
+The local hooks and required Xcode Cloud PR status form the primary gate. Pushes
+trigger required Xcode Cloud checks for app validation; local hooks keep only
+lightweight, non-app automation checks.
 Python hooks run through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
 tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
 enforced by `scripts/check-static-tool-versions.sh`.
@@ -653,7 +656,7 @@ enforced by `scripts/check-static-tool-versions.sh`.
 One-time bootstrap after cloning:
 
 ```bash
-uv run pre-commit install   # installs both pre-commit and pre-push hooks
+uv run pre-commit install   # installs pre-commit hooks
 ```
 
 - **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files,
@@ -667,9 +670,8 @@ uv run pre-commit install   # installs both pre-commit and pre-push hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **pre-push**: `bash app/test-gate.sh` runs every local iOS UI and non-UI
-  counted leg. The required Xcode Cloud status is the sole `GradusMacUITests`
-  runner.
+- **local only**: `pre-commit` hooks run fast Python/Swift checks and do not
+  run Xcode app automation.
 
 Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
 `.swiftformat`, Swift source scope and generated directory exclusions in
@@ -684,7 +686,7 @@ Project docs:
 - **HISTORY.md** — change log for every session (features, bugs, regressions)
 - **TASKS.md** — backlog and in-progress work
 - **pyproject.toml** — dependencies (`ruff`, `pytest`, `pre-commit`) and tool config
-- **.pre-commit-config.yaml** — local pre-commit/pre-push hook definitions
+- **.pre-commit-config.yaml** — local pre-commit hook definitions
 - **scripts/check-static-tool-versions.sh** — fail-closed static-tool version gate
 - **.swiftformat** — SwiftFormat version/policy configuration for changed files
 - **.swiftlint.yml** / **.swiftlint-baseline.json** — Swift source scope and

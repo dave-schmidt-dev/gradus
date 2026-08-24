@@ -35,7 +35,7 @@ import UIKit
 @MainActor
 @Test func iconButtonSnapshotLight() {
     let view = IconButton(Icon.settings) {}
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 44, height: 44), traits: UITraitCollection(userInterfaceStyle: .light))
     )
@@ -44,7 +44,7 @@ import UIKit
 @MainActor
 @Test func iconButtonSnapshotDark() {
     let view = IconButton(Icon.settings) {}
-    assertSnapshot(
+    assertIOSSnapshot(
         of: view,
         as: .image(layout: .fixed(width: 44, height: 44), traits: UITraitCollection(userInterfaceStyle: .dark))
     )

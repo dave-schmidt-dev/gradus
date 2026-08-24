@@ -45,23 +45,32 @@ final class WidgetSnapshotPublisher {
 
     static func live(
         fileManager: FileManager = .default,
-        diagnosticHandler: ((Diagnostic) -> Void)? = nil
+        diagnosticHandler: ((Diagnostic) -> Void)? = nil,
+        appGroupContainerLookup: ((String) -> URL?)? = nil
     ) -> WidgetSnapshotPublisher? {
         live(
             fileManager: fileManager,
             timelineReloader: SystemWidgetTimelineReloader(),
-            diagnosticHandler: diagnosticHandler
+            diagnosticHandler: diagnosticHandler,
+            appGroupContainerLookup: appGroupContainerLookup
         )
     }
 
     static func live(
         fileManager: FileManager,
         timelineReloader: any WidgetTimelineReloading,
-        diagnosticHandler: ((Diagnostic) -> Void)? = nil
+        diagnosticHandler: ((Diagnostic) -> Void)? = nil,
+        appGroupContainerLookup: ((String) -> URL?)? = nil
     ) -> WidgetSnapshotPublisher? {
-        guard let directory = fileManager.containerURL(
-            forSecurityApplicationGroupIdentifier: appGroupIdentifier
-        ) else {
+        let directory: URL?
+        if let appGroupContainerLookup {
+            directory = appGroupContainerLookup(appGroupIdentifier)
+        } else {
+            directory = fileManager.containerURL(
+                forSecurityApplicationGroupIdentifier: appGroupIdentifier
+            )
+        }
+        guard let directory else {
             recordDiagnostic(.containerUnavailable, handler: diagnosticHandler)
             return nil
         }

@@ -1,12 +1,12 @@
-# Local git hooks — this project has NO CI; these hooks are the enforcement.
-# Split: pre-commit runs fast checks (lint + format), pre-push runs the
-# authoritative cross-platform gate.
+# Local git hooks — this project keeps local enforcement lightweight and fast.
+# pre-commit runs fast checks (lint + format). Required Xcode Cloud checks run
+# after push for app validation.
 # Python hooks use the project's `uv run` tools. SwiftLint, SwiftFormat, and
 # ShellCheck are PATH tools whose exact required versions are fail-closed by
 # `scripts/check-static-tool-versions.sh`.
 #
 # One-time bootstrap after clone:  uv run pre-commit install
-default_install_hook_types: [pre-commit, pre-push]
+default_install_hook_types: [pre-commit]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -18,7 +18,6 @@ repos:
 
   - repo: local
     hooks:
-      # ---- fast checks: pre-commit ----
       - id: static-tool-versions
         name: static tool versions
         entry: scripts/check-static-tool-versions.sh
@@ -70,13 +69,3 @@ repos:
         exclude: ^monitor$
         require_serial: true
         stages: [pre-commit]
-
-      # ---- heavier gate: pre-push (user opted in; overrides the global
-      #      "no heavy suite in a pre-push hook" default for this project) ----
-      - id: test-gate
-        name: Gradus authoritative test gate
-        entry: bash app/test-gate.sh
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]

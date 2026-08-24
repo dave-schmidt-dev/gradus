@@ -3,6 +3,7 @@ import SwiftUI
 import WidgetKit
 
 public struct GradusSmallWidgetView: View {
+    static let railHeight: CGFloat = 12
     private let entry: GradusWidgetEntry
     private let syncAgeOverride: String?
     @Environment(\.calendar) private var calendar
@@ -50,10 +51,10 @@ public struct GradusSmallWidgetView: View {
                 .font(.headline)
             RoundedRectangle(cornerRadius: 3)
                 .fill(.secondary.opacity(0.22))
-                .frame(width: 86, height: 12)
+                .frame(width: 86, height: Self.railHeight)
             RoundedRectangle(cornerRadius: 3)
                 .fill(.secondary.opacity(0.16))
-                .frame(height: 6)
+                .frame(height: Self.railHeight)
             Spacer(minLength: 0)
             Text("synced <1m ago")
                 .font(.caption2)
@@ -146,7 +147,7 @@ public struct GradusSmallWidgetView: View {
                     .frame(width: geometry.size.width * max(0, min(1, percentLeft / 100)))
             }
         }
-        .frame(height: 5)
+        .frame(height: Self.railHeight)
         .accessibilityHidden(true)
     }
 }
