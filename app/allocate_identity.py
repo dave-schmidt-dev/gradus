@@ -22,6 +22,11 @@ from typing import Any
 from urllib.parse import quote
 
 from _asc_api import API_BASE, ASCClient, ASCError, make_token_provider
+from xcode_cloud_artifact import (
+    ArtifactDownloadError,
+    download_ci_build_action_result_bundle,
+    list_result_bundle_metadata,
+)
 
 PRODUCT = "gradus-ios"
 BUNDLE_ID = "com.zerodelta.gradus.ios"
@@ -261,29 +266,112 @@ def write_proof(path: Path, proof: Mapping[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="allocate_identity")
-    parser.add_argument("--product", choices=(PRODUCT,), required=True)
+    parser.add_argument("--product", choices=(PRODUCT,), required=False)
+    parser.add_argument(
+        "--ci-build-action-id",
+        "--ci-build-action",
+        "--build-action-id",
+        "--build-action",
+        "--action-id",
+        dest="ci_build_action_id",
+        required=False,
+        help="Xcode Cloud CI build action UUID",
+    )
+    parser.add_argument(
+        "--output-dir",
+        "--output-directory",
+        "--output",
+        "-o",
+        dest="output_dir",
+        required=False,
+        help="Explicit output directory for downloaded artifact",
+    )
+    parser.add_argument("--ci-artifact-id", help="Exact RESULT_BUNDLE artifact ID")
+    parser.add_argument(
+        "--list-result-bundles",
+        action="store_true",
+        help="Print safe RESULT_BUNDLE metadata without download URLs",
+    )
     args = parser.parse_args(argv)
-    try:
-        project_root = Path.cwd()
-        proof = make_proof(
-            ASCClient(make_token_provider()),
-            product=args.product,
-            marketing_version=read_marketing_version(project_root / "app" / "project.yml"),
+
+    if args.product and (
+        args.ci_build_action_id
+        or args.output_dir
+        or args.ci_artifact_id
+        or args.list_result_bundles
+    ):
+        print(
+            "FAIL: cannot combine --product with artifact download options",
+            file=sys.stderr,
         )
-        write_proof(project_root / EVIDENCE_PATH, proof)
-    except ASCError as exc:
-        # Emit only the typed transport classification.  The broker boundary
-        # needs an actionable failure code, never an ASC response body or
-        # credential-bearing diagnostic.
-        print(f"FAIL: identity allocation failed ({exc.outcome.error_class})", file=sys.stderr)
         return 1
-    except IdentityAllocationError as exc:
-        print(f"FAIL: identity allocation failed ({exc})", file=sys.stderr)
-        return 1
-    except (OSError, ValueError):
-        print("FAIL: identity allocation failed", file=sys.stderr)
-        return 1
-    return 0
+
+    if args.product is not None:
+        try:
+            project_root = Path.cwd()
+            proof = make_proof(
+                ASCClient(make_token_provider()),
+                product=args.product,
+                marketing_version=read_marketing_version(project_root / "app" / "project.yml"),
+            )
+            write_proof(project_root / EVIDENCE_PATH, proof)
+        except ASCError as exc:
+            # Emit only the typed transport classification.  The broker boundary
+            # needs an actionable failure code, never an ASC response body or
+            # credential-bearing diagnostic.
+            print(f"FAIL: identity allocation failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: identity allocation failed ({exc})", file=sys.stderr)
+            return 1
+        except (OSError, ValueError):
+            print("FAIL: identity allocation failed", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.ci_build_action_id is not None and args.list_result_bundles:
+        if args.output_dir is not None or args.ci_artifact_id is not None:
+            print("FAIL: listing result bundles does not accept download options", file=sys.stderr)
+            return 1
+        try:
+            metadata = list_result_bundle_metadata(
+                ASCClient(make_token_provider()), args.ci_build_action_id
+            )
+            print(json.dumps(metadata, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: artifact listing failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except ArtifactDownloadError as exc:
+            print(f"FAIL: artifact listing failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.ci_build_action_id is not None and args.output_dir is not None:
+        try:
+            client = ASCClient(make_token_provider())
+            destination = download_ci_build_action_result_bundle(
+                client,
+                action_id=args.ci_build_action_id,
+                output_dir=Path(args.output_dir),
+                artifact_id=args.ci_artifact_id,
+            )
+            print(str(destination))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: artifact download failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except ArtifactDownloadError as exc:
+            print(f"FAIL: artifact download failed ({exc})", file=sys.stderr)
+            return 1
+        except (OSError, ValueError):
+            print("FAIL: artifact download failed", file=sys.stderr)
+            return 1
+
+    print(
+        "FAIL: either --product, --list-result-bundles with an action ID, or an action ID with --output-dir is required",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":

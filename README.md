@@ -397,6 +397,12 @@ two minutes. `app/Gradus.xcodeproj` is generated from `project.yml`, but shared
 project/workspace/scheme files are committed so Cloud can build a fresh clone;
 per-user Xcode state remains ignored.
 
+Xcode Cloud result bundles can be retrieved without browser automation through
+the existing `gradus-app-store-connect` BWS consumer. `allocate_identity.py`
+supports metadata-only `--list-result-bundles` and exact `--ci-artifact-id`
+selection; downloads keep the ASC bearer token off Apple's presigned artifact
+URL and write atomically with bounded stderr progress.
+
 ### App icons
 
 The two platforms need **different artwork for the same design**, and the Mac
