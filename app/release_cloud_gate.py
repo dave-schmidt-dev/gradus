@@ -150,7 +150,7 @@ def _check_state(runner: Callable[..., Any], revision: str) -> tuple[set[str], s
         raise CloudGateError("source-revision-invalid")
     value = _github_json(
         runner,
-        f"repos/{REPOSITORY}/commits/{revision}/check-runs?filter=all&per_page=100",
+        f"repos/{REPOSITORY}/commits/{revision}/check-runs?filter=latest&per_page=100",
         label="github-checks",
     )
     runs = value.get("check_runs")

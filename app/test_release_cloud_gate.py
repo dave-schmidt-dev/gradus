@@ -71,11 +71,15 @@ def endpoint(revision: str, suffix: str = "") -> str:
     return f"repos/{gate.REPOSITORY}/commits/{revision}{suffix}"
 
 
+def checks_endpoint(revision: str) -> str:
+    return endpoint(revision, "/check-runs?filter=latest&per_page=100")
+
+
 def test_exact_head_checks_are_accepted() -> None:
     runner = Runner(
         {
             endpoint(HEAD): commit(HEAD),
-            endpoint(HEAD, "/check-runs?filter=all&per_page=100"): checks(HEAD),
+            checks_endpoint(HEAD): checks(HEAD),
         }
     )
     assert gate.select_evidence_revision(runner, HEAD) == HEAD
@@ -85,11 +89,9 @@ def test_identical_tree_merge_second_parent_is_accepted() -> None:
     runner = Runner(
         {
             endpoint(HEAD): commit(HEAD, parents=[FIRST_PARENT, TESTED_PARENT]),
-            endpoint(HEAD, "/check-runs?filter=all&per_page=100"): checks(
-                HEAD, [gate.REQUIRED_CHECKS[1]]
-            ),
+            checks_endpoint(HEAD): checks(HEAD, [gate.REQUIRED_CHECKS[1]]),
             endpoint(TESTED_PARENT): commit(TESTED_PARENT),
-            endpoint(TESTED_PARENT, "/check-runs?filter=all&per_page=100"): checks(TESTED_PARENT),
+            checks_endpoint(TESTED_PARENT): checks(TESTED_PARENT),
         }
     )
     assert gate.select_evidence_revision(runner, HEAD) == TESTED_PARENT
@@ -109,7 +111,7 @@ def test_identical_tree_merge_second_parent_is_accepted() -> None:
 def test_ineligible_parent_fallback_fails(head_commit, parent_commit, message) -> None:
     responses = {
         endpoint(HEAD): head_commit,
-        endpoint(HEAD, "/check-runs?filter=all&per_page=100"): checks(HEAD, []),
+        checks_endpoint(HEAD): checks(HEAD, []),
     }
     if parent_commit is not None:
         responses[endpoint(TESTED_PARENT)] = parent_commit
@@ -134,7 +136,7 @@ def test_invalid_required_check_evidence_fails(mutate, message) -> None:
     runner = Runner(
         {
             endpoint(HEAD): commit(HEAD),
-            endpoint(HEAD, "/check-runs?filter=all&per_page=100"): payload,
+            checks_endpoint(HEAD): payload,
         }
     )
     with pytest.raises(gate.CloudGateError, match=message):
@@ -153,7 +155,7 @@ def test_malformed_check_response_fails(payload) -> None:
     runner = Runner(
         {
             endpoint(HEAD): commit(HEAD),
-            endpoint(HEAD, "/check-runs?filter=all&per_page=100"): payload,
+            checks_endpoint(HEAD): payload,
         }
     )
     with pytest.raises(gate.CloudGateError, match="github-checks-invalid"):
@@ -194,7 +196,7 @@ def test_main_emits_proof_only_after_cloud_success(tmp_path: Path) -> None:
     runner = Runner(
         {
             endpoint(HEAD): commit(HEAD),
-            endpoint(HEAD, "/check-runs?filter=all&per_page=100"): checks(HEAD),
+            checks_endpoint(HEAD): checks(HEAD),
         }
     )
     result, proof_calls, output = run_main(tmp_path, runner)
@@ -393,7 +395,7 @@ def test_main_rejects_proof_writer_failure(tmp_path: Path) -> None:
     runner = Runner(
         {
             endpoint(HEAD): commit(HEAD),
-            endpoint(HEAD, "/check-runs?filter=all&per_page=100"): checks(HEAD),
+            checks_endpoint(HEAD): checks(HEAD),
         }
     )
     result, proof_calls, output = run_main(tmp_path, runner, proof_result=4)
