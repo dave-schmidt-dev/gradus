@@ -30,7 +30,7 @@ class GradusAdapterTests(unittest.TestCase):
         self.assertEqual(loaded.product["productKey"], "gradus-ios")
         report = audit_conformance(adapter_path=ADAPTER, plan_path=PLAN, repository_root=ROOT)
         self.assertEqual(report["status"], "passed", report)
-        self.assertEqual(report["adoptionStatus"], "adoption-authorized")
+        self.assertEqual(report["adoptionStatus"], "real-tool-canary-required")
         descriptor_digest = hashlib.sha256(BROKER_REQUEST.read_bytes()).hexdigest()
         self.assertEqual(
             document["registeredConsumers"][0]["evidence"]["descriptorSha256"],
@@ -42,8 +42,10 @@ class GradusAdapterTests(unittest.TestCase):
     ) -> None:
         document = json.loads(ADAPTER.read_text(encoding="utf-8"))
         plan = json.loads(PLAN.read_text(encoding="utf-8"))
-        self.assertIn("bash", document["operations"][2]["argv"])
-        self.assertIn("app/test-gate.sh", document["operations"][2]["argv"])
+        self.assertEqual(
+            document["operations"][2]["argv"],
+            ["python3", "app/release_cloud_gate.py"],
+        )
         evidence_paths = {entry["name"]: entry["path"] for entry in document["evidencePaths"]}
         self.assertEqual(
             evidence_paths["allocate-identity-proof"],
@@ -153,7 +155,7 @@ class GradusAdapterTests(unittest.TestCase):
 
         self.assertEqual(
             operations["localGate"]["environment"]["inputs"],
-            ["READINESS_MANIFEST", "HOME", "PATH", "USER", "LOGNAME"],
+            ["READINESS_MANIFEST", "HOME", "PATH", "PYTHONPATH", "USER", "LOGNAME"],
         )
 
     def test_typed_proof_fixture_has_every_workflow_field_and_binding(self) -> None:

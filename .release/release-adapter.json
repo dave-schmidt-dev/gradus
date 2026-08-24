@@ -32,6 +32,11 @@
       "source": "caller"
     },
     {
+      "name": "PYTHONPATH",
+      "required": true,
+      "source": "caller"
+    },
+    {
       "name": "USER",
       "required": true,
       "source": "caller"
@@ -90,11 +95,11 @@
       "id": "local-gate",
       "class": "localGate",
       "mode": "nonCredential",
-      "argv": ["bash", "app/test-gate.sh"],
+      "argv": ["python3", "app/release_cloud_gate.py"],
       "workingDirectory": ".",
       "environment": {
         "inherit": false,
-        "inputs": ["READINESS_MANIFEST", "HOME", "PATH", "USER", "LOGNAME"],
+        "inputs": ["READINESS_MANIFEST", "HOME", "PATH", "PYTHONPATH", "USER", "LOGNAME"],
         "literals": {"RELEASE_CONFIGURATION": "Production"}
       },
       "proofSchema": "release.proof.local-gate.v1",
@@ -347,7 +352,8 @@
     "app/project.yml"
   ],
   "nonSourcePaths": [
-    "app/GradusKit/Tests"
+    "app/GradusKit/Tests",
+    "app/GradusKit/.swiftpm"
   ],
   "localSmoke": false
 }
