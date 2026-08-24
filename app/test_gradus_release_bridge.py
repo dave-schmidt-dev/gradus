@@ -72,11 +72,66 @@ class BridgeTests(unittest.TestCase):
         release_tools = base / "apple_developer" / "release_tools"
         release_tools.mkdir(parents=True)
         (release_tools / "__init__.py").write_text("", encoding="utf-8")
+        (release_tools / "product_state.py").write_text(
+            "import hashlib, json, os\n"
+            "from pathlib import Path\n"
+            "def canonical(value):\n"
+            "    return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()\n"
+            "class ProductState:\n"
+            "    def __init__(self, home): self.home = Path(home)\n"
+            "    @classmethod\n"
+            "    def for_repository(cls, repository, product, non_git_home=None):\n"
+            "        return cls(Path(os.environ['WRAPPER_COMMON_DIR']) / 'release-state' / product)\n"
+            "    @property\n"
+            "    def candidates_directory(self): return self.home / 'candidates'\n"
+            "    def _active(self):\n"
+            "        path = self.home / 'active-candidate.json'\n"
+            "        if not path.exists(): return None\n"
+            "        if not path.is_file(): raise ValueError('active-candidate-corrupt')\n"
+            "        value = json.loads(path.read_text())\n"
+            "        body = dict(value) if isinstance(value, dict) else {}\n"
+            "        declared = body.pop('pointerSha256', None)\n"
+            "        if value.get('formatVersion') != 2 or hashlib.sha256(canonical(body)).hexdigest() != declared:\n"
+            "            raise ValueError('active-candidate-corrupt')\n"
+            "        return value\n",
+            encoding="utf-8",
+        )
+        (release_tools / "iterative_release.py").write_text(
+            "import hashlib, json\n"
+            "from pathlib import Path\n"
+            "def canonical(value):\n"
+            "    return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()\n"
+            "def read_candidate_ledger_v2(candidate_directory):\n"
+            "    directory = Path(candidate_directory)\n"
+            "    ledger = directory / 'transitions.jsonl'\n"
+            "    if not ledger.exists(): return []\n"
+            "    if not ledger.is_file(): raise ValueError('candidate-ledger-unreadable')\n"
+            "    records, previous, failure_attempt = [], '0' * 64, 0\n"
+            "    for sequence, line in enumerate(ledger.read_text().splitlines(), 1):\n"
+            "        record = json.loads(line)\n"
+            "        if not line or not isinstance(record, dict) or record.get('formatVersion') != 2 or record.get('sequence') != sequence:\n"
+            "            raise ValueError('candidate-ledger-sequence-invalid')\n"
+            "        if record.get('candidateId') != directory.name or record.get('previousHash') != previous:\n"
+            "            raise ValueError('candidate-ledger-chain-invalid')\n"
+            "        declared = record.get('recordHash')\n"
+            "        body = dict(record); body.pop('recordHash', None)\n"
+            "        if not isinstance(declared, str) or hashlib.sha256(canonical(body)).hexdigest() != declared:\n"
+            "            raise ValueError('candidate-ledger-hash-invalid')\n"
+            "        if record.get('transition') == 'failed':\n"
+            "            failure_attempt += 1\n"
+            "            if record.get('attempt') != failure_attempt: raise ValueError('candidate-failure-attempt-invalid')\n"
+            "        records.append(record); previous = declared\n"
+            "    return records\n",
+            encoding="utf-8",
+        )
         (release_tools / "__main__.py").write_text(
             "import json\n"
             "import os\n"
             "import sys\n"
             "from pathlib import Path\n"
+            "invocations = Path(__file__).with_name('invocations.jsonl')\n"
+            "with open(invocations, 'a', encoding='utf-8') as f:\n"
+            "    f.write(json.dumps(sys.argv) + '\\n')\n"
             "Path(__file__).with_name('invoked.json').write_text(\n"
             "    json.dumps(sys.argv), encoding='utf-8'\n"
             ")\n"
@@ -84,7 +139,8 @@ class BridgeTests(unittest.TestCase):
             "    os.environ.get('READINESS_MANIFEST', ''), encoding='utf-8'\n"
             ")\n"
             "if 'testflight' in sys.argv and '--upload' not in sys.argv:\n"
-            "    print(json.dumps({'candidateId': '1.8.1-21'}))\n",
+            "    candidate_id = '1.8.1-21' if '--successor-correction' in sys.argv else '1.8.2-22'\n"
+            "    print(json.dumps({'candidateId': candidate_id}))\n",
             encoding="utf-8",
         )
 
@@ -101,6 +157,49 @@ class BridgeTests(unittest.TestCase):
         )
         git.chmod(0o755)
         return checkout, common_dir, bin_dir
+
+    @staticmethod
+    def _canonical_bytes(value: dict) -> bytes:
+        return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+
+    @classmethod
+    def _write_active_pointer(cls, common_dir: Path, candidate: str) -> Path:
+        pointer = common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        value = {
+            "candidateId": candidate,
+            "formatVersion": 2,
+            "releaseTrain": candidate.rsplit("-", 1)[0],
+        }
+        value["pointerSha256"] = hashlib.sha256(cls._canonical_bytes(value)).hexdigest()
+        pointer.write_bytes(cls._canonical_bytes(value) + b"\n")
+        return pointer
+
+    @classmethod
+    def _write_v2_ledger(cls, candidate_dir: Path, transitions: list[dict]) -> Path:
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        ledger = candidate_dir / "transitions.jsonl"
+        previous = "0" * 64
+        failed_attempt = 0
+        records: list[bytes] = []
+        for sequence, transition in enumerate(transitions, 1):
+            value = {
+                "candidateId": candidate_dir.name,
+                "details": {},
+                "formatVersion": 2,
+                "previousHash": previous,
+                "recordedAt": "2026-08-23T00:00:00Z",
+                "sequence": sequence,
+                **transition,
+            }
+            if value["transition"] == "failed":
+                failed_attempt += 1
+                value["attempt"] = failed_attempt
+            value["recordHash"] = hashlib.sha256(cls._canonical_bytes(value)).hexdigest()
+            records.append(cls._canonical_bytes(value))
+            previous = value["recordHash"]
+        ledger.write_bytes(b"\n".join(records) + (b"\n" if records else b""))
+        return ledger
 
     @staticmethod
     def _run_release_upload(
@@ -250,6 +349,340 @@ class BridgeTests(unittest.TestCase):
             self.assertFalse(
                 (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
             )
+
+    def test_prepare_uploaded_active_candidate_allocates_fresh_candidate_without_successor_correction(
+        self,
+    ) -> None:
+        for transition_name in ("uploadAttemptStarted", "uploaded", "internalTestFlightReceipted"):
+            with (
+                self.subTest(transition=transition_name),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+                self._write_active_pointer(common_dir, "1.8.1-21")
+                candidate_dir = (
+                    common_dir / "release-state" / "gradus-ios" / "candidates" / "1.8.1-21"
+                )
+                self._write_v2_ledger(
+                    candidate_dir,
+                    [{"transition": "sourceFrozen"}, {"transition": transition_name}],
+                )
+
+                fresh_manifest = (
+                    common_dir
+                    / "release-state"
+                    / "gradus-ios"
+                    / "candidates"
+                    / "1.8.2-22"
+                    / "manifest.json"
+                )
+                fresh_manifest.parent.mkdir(parents=True)
+                fresh_manifest.write_text("{}", encoding="utf-8")
+
+                result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+                invocations_file = (
+                    checkout.parent / "apple_developer" / "release_tools" / "invocations.jsonl"
+                )
+                invocations = [
+                    json.loads(line)
+                    for line in invocations_file.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual(len(invocations), 2)
+
+                prep_call = invocations[0]
+                self.assertIn("testflight", prep_call)
+                self.assertNotIn("--successor-correction", prep_call)
+
+                stage_call = invocations[1]
+                self.assertIn("stage", stage_call)
+                self.assertEqual(stage_call[stage_call.index("--candidate") + 1], "1.8.2-22")
+
+                supplied_manifest = (
+                    checkout.parent / "apple_developer" / "release_tools" / "readiness-manifest.txt"
+                ).read_text()
+                self.assertEqual(supplied_manifest, str(fresh_manifest))
+
+    def test_prepare_preupload_active_candidate_retains_successor_correction(self) -> None:
+        for transitions in (
+            [],
+            [{"transition": "draft"}],
+            [{"transition": "sourceFrozen"}, {"transition": "staged"}],
+            [{"transition": "sourceFrozen"}, {"transition": "validationFailed"}],
+            [{"transition": "sourceFrozen"}, {"transition": "failed"}],
+            [{"transition": "failed", "detail": "uploaded"}],
+        ):
+            with self.subTest(transitions=transitions), tempfile.TemporaryDirectory() as temporary:
+                checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+                self._write_active_pointer(common_dir, "1.8.1-21")
+
+                if transitions:
+                    candidate_dir = (
+                        common_dir / "release-state" / "gradus-ios" / "candidates" / "1.8.1-21"
+                    )
+                    self._write_v2_ledger(candidate_dir, transitions)
+
+                canonical_manifest = (
+                    common_dir
+                    / "release-state"
+                    / "gradus-ios"
+                    / "candidates"
+                    / "1.8.1-21"
+                    / "manifest.json"
+                )
+                canonical_manifest.parent.mkdir(parents=True, exist_ok=True)
+                canonical_manifest.write_text("{}", encoding="utf-8")
+
+                result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+                invocations_file = (
+                    checkout.parent / "apple_developer" / "release_tools" / "invocations.jsonl"
+                )
+                invocations = [
+                    json.loads(line)
+                    for line in invocations_file.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                self.assertEqual(len(invocations), 2)
+
+                prep_call = invocations[0]
+                self.assertIn("testflight", prep_call)
+                self.assertIn("--successor-correction", prep_call)
+
+                stage_call = invocations[1]
+                self.assertIn("stage", stage_call)
+                self.assertEqual(stage_call[stage_call.index("--candidate") + 1], "1.8.1-21")
+
+                supplied_manifest = (
+                    checkout.parent / "apple_developer" / "release_tools" / "readiness-manifest.txt"
+                ).read_text()
+                self.assertEqual(supplied_manifest, str(canonical_manifest))
+
+    def test_prepare_malformed_canonical_pointer_stops_before_release_tools(self) -> None:
+        malformed_pointers = [
+            ("bad_json", "{not valid json"),
+            ("not_dict", '["1.8.1-21"]'),
+            ("missing_candidate_id", '{"otherField": "val"}'),
+            ("empty_candidate_id", '{"candidateId": ""}'),
+            ("numeric_candidate_id", '{"candidateId": 123}'),
+            ("invalid_candidate_id", '{"candidateId": "../escape/danger"}'),
+            (
+                "invalid_pointer_hash",
+                json.dumps(
+                    {
+                        "candidateId": "1.8.1-21",
+                        "formatVersion": 2,
+                        "pointerSha256": "0" * 64,
+                        "releaseTrain": "1.8.1",
+                    }
+                ),
+            ),
+        ]
+        for label, content in malformed_pointers:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+                canonical_pointer = (
+                    common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+                )
+                canonical_pointer.parent.mkdir(parents=True)
+                canonical_pointer.write_text(content, encoding="utf-8")
+
+                result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "release-testflight: canonical release state is invalid", result.stderr
+                )
+                self.assertFalse(
+                    (
+                        checkout.parent / "apple_developer" / "release_tools" / "invoked.json"
+                    ).exists()
+                )
+
+        with self.subTest(case="symlink_pointer"), tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            target = common_dir / "target.json"
+            target.write_text('{"candidateId": "1.8.1-21"}', encoding="utf-8")
+            canonical_pointer = (
+                common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+            )
+            canonical_pointer.parent.mkdir(parents=True)
+            canonical_pointer.symlink_to(target)
+
+            result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("canonical release state is invalid", result.stderr)
+            self.assertFalse(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
+            )
+
+    def test_prepare_malformed_canonical_transitions_stops_before_release_tools(self) -> None:
+        malformed_ledgers = [
+            ("bad_json_line", '{"transition": "staged"}\n{invalid json line\n'),
+            ("invalid_entry_type", '{"transition": "staged"}\n12345\n'),
+            ("null_entry", '{"transition": "staged"}\nnull\n'),
+            ("missing_transition", '{"transition": "staged"}\n{"detail": "uploaded"}\n'),
+        ]
+        for label, content in malformed_ledgers:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+                self._write_active_pointer(common_dir, "1.8.1-21")
+
+                transitions_path = (
+                    common_dir
+                    / "release-state"
+                    / "gradus-ios"
+                    / "candidates"
+                    / "1.8.1-21"
+                    / "transitions.jsonl"
+                )
+                transitions_path.parent.mkdir(parents=True)
+                transitions_path.write_text(content, encoding="utf-8")
+
+                result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("transitions ledger", result.stderr)
+                self.assertFalse(
+                    (
+                        checkout.parent / "apple_developer" / "release_tools" / "invoked.json"
+                    ).exists()
+                )
+
+        with self.subTest(case="symlink_transitions"), tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            self._write_active_pointer(common_dir, "1.8.1-21")
+
+            target_transitions = common_dir / "target_transitions.jsonl"
+            target_transitions.write_text('{"transition": "uploaded"}\n', encoding="utf-8")
+
+            transitions_path = (
+                common_dir
+                / "release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.8.1-21"
+                / "transitions.jsonl"
+            )
+            transitions_path.parent.mkdir(parents=True)
+            transitions_path.symlink_to(target_transitions)
+
+            result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("canonical transitions ledger is invalid", result.stderr)
+            self.assertFalse(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
+            )
+
+    def test_prepare_tampered_v2_ledger_stops_before_release_tools(self) -> None:
+        for tamper in (
+            "blank-line",
+            "candidate-mismatch",
+            "sequence-mismatch",
+            "hash-mismatch",
+            "previous-hash-mismatch",
+        ):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as temporary:
+                checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+                self._write_active_pointer(common_dir, "1.8.1-21")
+                candidate_dir = (
+                    common_dir / "release-state" / "gradus-ios" / "candidates" / "1.8.1-21"
+                )
+                ledger = self._write_v2_ledger(
+                    candidate_dir,
+                    [{"transition": "sourceFrozen"}, {"transition": "uploaded"}],
+                )
+                records = [json.loads(line) for line in ledger.read_text().splitlines()]
+
+                if tamper == "blank-line":
+                    ledger.write_text(ledger.read_text() + "\n", encoding="utf-8")
+                else:
+                    index = 1 if tamper == "previous-hash-mismatch" else 0
+                    if tamper == "candidate-mismatch":
+                        records[index]["candidateId"] = "1.8.1-999"
+                    elif tamper == "sequence-mismatch":
+                        records[index]["sequence"] = 2
+                    elif tamper == "hash-mismatch":
+                        records[index]["recordHash"] = "0" * 64
+                    else:
+                        records[index]["previousHash"] = "1" * 64
+                    if tamper != "hash-mismatch":
+                        body = dict(records[index])
+                        body.pop("recordHash")
+                        records[index]["recordHash"] = hashlib.sha256(
+                            self._canonical_bytes(body)
+                        ).hexdigest()
+                    ledger.write_text(
+                        "\n".join(json.dumps(record) for record in records) + "\n",
+                        encoding="utf-8",
+                    )
+
+                result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("canonical transitions ledger is invalid", result.stderr)
+                self.assertFalse(
+                    (
+                        checkout.parent / "apple_developer" / "release_tools" / "invoked.json"
+                    ).exists()
+                )
+
+    def test_prepare_ignores_project_local_pointer_and_inspects_only_git_common(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            local_pointer = checkout / ".release-state" / "gradus-ios" / "active-candidate.json"
+            local_pointer.parent.mkdir(parents=True)
+            local_pointer.write_text('{"candidateId": "1.8.0-20"}', encoding="utf-8")
+            local_transitions = (
+                checkout
+                / ".release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.8.0-20"
+                / "transitions.jsonl"
+            )
+            local_transitions.parent.mkdir(parents=True)
+            local_transitions.write_text('{"transition": "uploaded"}\n', encoding="utf-8")
+
+            self._write_active_pointer(common_dir, "1.8.1-21")
+            canonical_candidate_dir = (
+                common_dir / "release-state" / "gradus-ios" / "candidates" / "1.8.1-21"
+            )
+            self._write_v2_ledger(canonical_candidate_dir, [{"transition": "staged"}])
+            canonical_manifest = (
+                common_dir
+                / "release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.8.1-21"
+                / "manifest.json"
+            )
+            canonical_manifest.parent.mkdir(parents=True, exist_ok=True)
+            canonical_manifest.write_text("{}", encoding="utf-8")
+
+            result = self._run_release_prepare(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            invocations_file = (
+                checkout.parent / "apple_developer" / "release_tools" / "invocations.jsonl"
+            )
+            invocations = [
+                json.loads(line)
+                for line in invocations_file.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(len(invocations), 2)
+            prep_call = invocations[0]
+            self.assertIn("--successor-correction", prep_call)
+            stage_call = invocations[1]
+            self.assertEqual(stage_call[stage_call.index("--candidate") + 1], "1.8.1-21")
 
     def test_parser_is_closed_and_rejects_shell_candidate(self) -> None:
         with self.assertRaises(ValueError):
