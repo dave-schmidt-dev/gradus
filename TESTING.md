@@ -36,16 +36,19 @@ candidate status. The legacy `archive-upload-ios.sh` and `testflight-setup*`
 entry points remain readable and runnable only as compatibility implementation
 pieces; the candidate-bound bridge canary is now authorized.
 
-`app/release-testflight --prepare-only` composes central `testflight` identity
-freeze with the central `stage` command. `stage` admits only readiness, local
-gate, production build, archive, signing, and artifact verification classes;
-upload and every post-upload operation are excluded by contract.
+`app/release-testflight --prepare-only` currently composes central `testflight`
+identity freeze with a local production build, archive, signing, and artifact
+verification stage. That behavior is retained only for compatibility and is
+not an approved current release route. GradusiOS production archive, signing,
+and upload must move to a source-bound Xcode Cloud distribution workflow before
+another TestFlight attempt. The required PR checks prove app validation only;
+they are not distribution workflows or upload evidence.
 
-Profile 2.0 is adopted for the verified candidate. The current canary result is
-`adoption-authorized`; the fixed wrappers route through the central CLI and
-remain fail-closed until the reviewed walkthrough and explicit upload handoff
-are present. Local adapter and fixture checks do not replace upload, processing,
-device, or user-visible TestFlight evidence.
+Profile 2.0 adoption was proven historically for candidate
+`gradus-ios-18-a4acb3118b78faff`. Its `adoption-authorized` canary does not
+authorize candidate 1.9.0-24 or override the current cloud-only pause. The fixed
+wrappers remain fail-closed, and local adapter or fixture checks do not replace
+cloud archive/upload, processing, device, or user-visible TestFlight evidence.
 
 `app/test_walkthrough.py` additionally proves that the dated release-owner
 walkthrough is bound to the candidate's source revision, project/artifact

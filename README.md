@@ -4,13 +4,14 @@ The 2026-08-10 reliability/accessibility/parity reconciliation is recorded in
 the dated Gradus plan under the local `.plans/gradus/` workspace; its live
 queue mapping and explicit future exclusions remain in `TASKS.md`.
 
-The latest internal TestFlight build is **1.8.0 (20)**. The next candidate path
-is limited to preparation, upload, processing/compliance, and assignment to an
-existing attended internal group. App Store submission is planned but not yet
-authorized; the publication roadmap and evidence gates are in
-`RELEASE_CHECKLIST.md`, and the live queue is in `TASKS.md`. The active internal
-TestFlight plan and execution queue are recorded in
-`/Users/dave/Documents/Projects/.plans/gradus/internal-testflight-candidate-migration-2026-08-09-tasks.md`.
+The latest confirmed internal TestFlight build remains **1.8.0 (20)**.
+Candidate **1.9.0-24** reached readiness only: its local preparation attempts
+failed before archive creation, signing, artifact verification, or upload, so
+Apple never received it. Future iOS releases are cloud-only. The current local
+archive/sign implementation is paused until the release adapter is bound to a
+confirmed Xcode Cloud distribution workflow. App Store submission remains
+separately gated; the publication roadmap is in `RELEASE_CHECKLIST.md`, and the
+live queue is in `TASKS.md`.
 
 The release owner must review a dated, candidate-current walkthrough before the
 TestFlight trigger. `python3 -m release_candidate.walkthrough` binds that
@@ -459,28 +460,40 @@ Release versioning follows [`VERSIONING.md`](VERSIONING.md): use
 `MAJOR.MINOR.PATCH` for product releases, and keep Apple's build number as a
 separate upload counter. A new TestFlight build is reserved for a completed,
 gate-green release candidate or a release-blocking correction; small
-non-blocking tweaks are batched into the next patch release. The two public
-entry points are:
+non-blocking tweaks are batched into the next patch release.
 
-- `app/release-testflight` — `--prepare-only` freezes the identity/source, then
-  runs the explicit pre-upload stage through signed-artifact verification;
-  `--upload` is the separate reviewed publication boundary.
+**Current cloud-only policy:** Xcode Cloud must perform the production archive,
+signing, and upload. The required `Gradus macOS UI Trial` and `Gradus iOS
+Snapshot Trial` workflows validate source but are not distribution workflows.
+Do not run `app/release-testflight --prepare-only` or `--upload` for a new iOS
+release until a dedicated distribution workflow is confirmed and the adapter
+records source-bound workflow, build-run, archive, and TestFlight receipts.
+`app/release-status` remains the safe read-only status command.
+
+New candidates' readiness and local-gate evidence is content-bound rather than
+time-bound: source or proof-contract drift invalidates it; elapsed time alone
+does not.
+
+The compatibility entry points are:
+
+- `app/release-testflight` — the paused local implementation; `--prepare-only`
+  still performs local production archive/sign work and `--upload` remains a
+  separate publication boundary.
 - `app/release-status` — read the current local candidate status.
 
-Profile 2.0 is adopted for the verified Gradus candidate
+Profile 2.0 adoption was proven historically for candidate
 `gradus-ios-18-a4acb3118b78faff`. The candidate-bound bridge canary returned
 `adoption-authorized` after broker identity lookup, Xcode signing verification,
-and App Store Connect reconciliation. This authorizes the typed bridge and
-resume path; it does not authorize an upload without the reviewed walkthrough
-and explicit owner handoff. The legacy scripts remain rollback-compatible
-implementation pieces, not a second public trigger.
+and App Store Connect reconciliation. That result does not authorize candidate
+1.9.0-24 or substitute for the pending cloud-distribution binding. The legacy
+scripts remain rollback-compatible implementation pieces, not an approved
+current release route.
 
 The legacy `archive-upload-ios.sh`, `testflight-setup.py`, and
-`testflight-setup-safe.sh` entry points remain available for compatibility
-until that adoption result is recorded; they are not additional public
-release routes. A prepared upload rechecks the checkout revision and clean
-status against its candidate record before any upload work, and source drift
-fails closed.
+`testflight-setup-safe.sh` entry points remain available for compatibility;
+they are not additional public release routes. A prepared upload rechecks the
+checkout revision and clean status against its candidate record before any
+upload work, and source drift fails closed.
 
 The central fleet audit reports Gradus as adopted. Pushes trigger required Xcode
 Cloud checks for app validation; local hooks stay lightweight and do not run Xcode

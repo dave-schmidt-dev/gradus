@@ -165,11 +165,15 @@ class GradusAdapterTests(unittest.TestCase):
         source = "a" * 64
         artifact = "b" * 64
         uploaded = "gradus-ios-build-18"
-        common = {"proofVersion": "1.0.0", "result": "passed"}
         for operation in document["operations"]:
             operation_class = operation["class"]
             required = schemas[operation["proofSchema"]]["required"]
-            proof = dict(common, operationClass=operation_class)
+            proof_version = "2.0.0" if operation["proofSchema"].endswith(".v2") else "1.0.0"
+            proof = {
+                "proofVersion": proof_version,
+                "result": "passed",
+                "operationClass": operation_class,
+            }
             values = {
                 "candidateId": candidate,
                 "sourceDigest": source,
@@ -190,6 +194,7 @@ class GradusAdapterTests(unittest.TestCase):
                 "groupIdentifierHash": "1" * 64,
                 "lane": "standard",
                 "observedAt": "2026-08-12T00:00:00Z",
+                "environmentClosureSha256": "4" * 64,
                 "issuedAt": "2026-08-12T00:00:00Z",
                 "expiresAt": "2026-08-13T00:00:00Z",
                 "deliveryReceiptSha256": "2" * 64,
