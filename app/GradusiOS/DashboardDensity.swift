@@ -257,7 +257,7 @@ public struct DensityMetrics: Equatable, Sendable {
         exhaustedResetFont: .footnote,
         exhaustedLineGap: 4,
         exhaustedGap: 10,
-        exhaustedRowHeight: 60,
+        exhaustedRowHeight: 66,
         exhaustedCornerRadius: 12,
         gridMinimum: 360
     )
@@ -293,7 +293,7 @@ public struct DensityMetrics: Equatable, Sendable {
         exhaustedResetFont: .subheadline,
         exhaustedLineGap: 6,
         exhaustedGap: 12,
-        exhaustedRowHeight: 70,
+        exhaustedRowHeight: 76,
         exhaustedCornerRadius: 14,
         gridMinimum: 460
     )
