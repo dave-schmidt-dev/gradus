@@ -7,6 +7,8 @@ import io
 import json
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -243,6 +245,59 @@ def current_source_digest(root: Path) -> str:
     return _valid_source_digest(observation.source_digest)
 
 
+def _extract_git_archive(archive: tarfile.TarFile, destination: Path) -> None:
+    """Extract a validated Git tar without relying on newer tarfile filters."""
+
+    members: list[tuple[tarfile.TarInfo, PurePosixPath]] = []
+    names: set[str] = set()
+    symlinks: set[str] = set()
+    for member in archive.getmembers():
+        relative = PurePosixPath(member.name)
+        normalized = relative.as_posix()
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or not normalized
+            or normalized == "."
+            or normalized != member.name.rstrip("/")
+            or normalized in names
+            or not (member.isdir() or member.isfile() or member.issym())
+        ):
+            raise CloudGateError("git-tree-archive-invalid")
+        names.add(normalized)
+        if member.issym():
+            link = PurePosixPath(member.linkname)
+            if (
+                not member.linkname
+                or link.is_absolute()
+                or ".." in link.parts
+                or "\x00" in member.linkname
+            ):
+                raise CloudGateError("git-tree-archive-invalid")
+            symlinks.add(normalized)
+        members.append((member, relative))
+
+    for _, relative in members:
+        if any(parent.as_posix() in symlinks for parent in relative.parents):
+            raise CloudGateError("git-tree-archive-invalid")
+
+    for member, relative in members:
+        target = destination.joinpath(*relative.parts)
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if member.issym():
+            target.symlink_to(member.linkname)
+            continue
+        source = archive.extractfile(member)
+        if source is None:
+            raise CloudGateError("git-tree-archive-invalid")
+        with source, target.open("xb") as output:
+            shutil.copyfileobj(source, output)
+        target.chmod(0o755 if member.mode & stat.S_IXUSR else 0o644)
+
+
 def git_tree_source_digest(root: Path, runner: Callable[..., Any]) -> str:
     """Recompute the central snapshot from only the checked Git HEAD tree."""
 
@@ -274,15 +329,7 @@ def git_tree_source_digest(root: Path, runner: Callable[..., Any]) -> str:
         with tempfile.TemporaryDirectory(prefix="gradus-release-tree.") as temporary:
             destination = Path(temporary)
             with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
-                for member in tar.getmembers():
-                    relative = PurePosixPath(member.name)
-                    if (
-                        relative.is_absolute()
-                        or ".." in relative.parts
-                        or not (member.isdir() or member.isfile() or member.issym())
-                    ):
-                        raise CloudGateError("git-tree-archive-invalid")
-                tar.extractall(destination, filter="data")
+                _extract_git_archive(tar, destination)
             observation = create_source_digest(
                 destination,
                 declared_paths=adapter.source_paths or None,
