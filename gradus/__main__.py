@@ -100,19 +100,6 @@ CLAUDE_MIN_PROBE_INTERVAL_SECONDS = 600
 # Back off for an hour instead of retrying every normal Claude interval.
 CLAUDE_RATE_LIMIT_BACKOFF_SECONDS = 3600
 
-# Every consumer-visible provider is refreshed on each producer cycle. Stable
-# short offsets spread request starts inside that one cycle without making any
-# observation old enough to approach the iOS 180-second freshness boundary.
-PROVIDER_REFRESH_START_OFFSETS_SECONDS: dict[str, float] = {
-    "Codex": 0.0,
-    "Antigravity": 5.0,
-    "Copilot": 10.0,
-    "Cursor": 15.0,
-    "OpenCode Go": 20.0,
-    "Vibe": 25.0,
-    "Claude": 30.0,
-}
-
 
 class _CanonicalProviderDeferred:
     """Project one prior canonical entry without probing its provider."""
@@ -196,11 +183,6 @@ def _provider_next_probe_at(
         else CLAUDE_MIN_PROBE_INTERVAL_SECONDS
     )
     return parsed + timedelta(seconds=interval)
-
-
-def _provider_start_delay(name: str) -> float:
-    """Return the stable intra-refresh start offset for one provider."""
-    return PROVIDER_REFRESH_START_OFFSETS_SECONDS.get(name, 0.0)
 
 
 def _schedule_refresh_providers(
@@ -625,12 +607,9 @@ def collect_snapshots(
     debug: bool,
     *,
     on_start: Callable[[str], None] | None = None,
-    on_scheduled: Callable[[str, float], None] | None = None,
     on_complete: Callable[[ProviderSnapshot], None] | None = None,
     on_waiting: Callable[[int], None] | None = None,
     safe_errors: bool = False,
-    start_delays: Mapping[str, float] | None = None,
-    sleeper: Callable[[float], None] | None = None,
 ) -> list[ProviderSnapshot]:
     snapshots: list[ProviderSnapshot] = []
     workers: list[tuple[str, object]] = [
@@ -655,30 +634,17 @@ def collect_snapshots(
 
     executor = ThreadPoolExecutor(max_workers=max(1, len(workers)))
     try:
-        sleep = time.sleep if sleeper is None else sleeper
 
-        def fetch_one(
-            name: str, provider: object, delay: float, deferred: bool
-        ) -> ProviderSnapshot:
+        def fetch_one(name: str, provider: object) -> ProviderSnapshot:
             if isinstance(provider, _CanonicalProviderDeferred):
                 return provider.fetch()
-            if delay > 0:
-                sleep(delay)
-            if on_start is not None and not deferred:
+            if on_start is not None:
                 on_start(name)
             return fetch_provider_snapshot(name, provider, debug)
 
-        worker_plans: list[tuple[str, object, float, bool]] = []
-        for name, provider in workers:
-            deferred = isinstance(provider, _CanonicalProviderDeferred)
-            delay = start_delays.get(name, 0.0) if start_delays is not None else 0.0
-            if on_scheduled is not None and not deferred:
-                on_scheduled(name, delay)
-            worker_plans.append((name, provider, delay, deferred))
-
         future_map = {}
-        for name, provider, delay, deferred in worker_plans:
-            future_map[executor.submit(fetch_one, name, provider, delay, deferred)] = name
+        for name, provider in workers:
+            future_map[executor.submit(fetch_one, name, provider)] = name
 
         def consume(future: object) -> None:
             """Consume one completed future without exposing provider errors."""
@@ -1026,19 +992,13 @@ def _refresh_snapshot_once(
             safe_name = name if name in _PROVIDER_REGISTRY else "provider"
             _refresh_progress(f"provider {safe_name} started")
 
-        def provider_scheduled(name: str, delay: float) -> None:
-            safe_name = name if name in _PROVIDER_REGISTRY else "provider"
-            _refresh_progress(f"provider {safe_name} scheduled in {delay:.2f}s")
-
         snapshots = collect_snapshots(
             providers,
             debug,
             on_start=provider_start,
-            on_scheduled=provider_scheduled,
             on_complete=provider_complete,
             on_waiting=lambda pending: _refresh_progress(f"waiting for {pending} provider(s)"),
             safe_errors=True,
-            start_delays={name: _provider_start_delay(name) for name, _ in providers},
         )
         v1_ok, v2_ok, history_ok = _write_snapshot_versions(
             snapshots,

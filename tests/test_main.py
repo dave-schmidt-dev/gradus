@@ -38,7 +38,6 @@ from gradus.__main__ import (
     _merge_with_previous,
     _notify_warning,
     _provider_next_probe_at,
-    _provider_start_delay,
     _refresh_snapshot_once,
     _release_refresh_snapshot_lock,
     _resolve_log_path,
@@ -1556,30 +1555,14 @@ class TestProviderRefreshSchedule(unittest.TestCase):
             ],
         }
 
-    def test_start_offsets_are_stable_staggered_and_below_ios_staleness(self) -> None:
+    def test_every_consumer_visible_provider_is_due_on_each_cycle(self) -> None:
         names = ("Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe")
-        expected = {
-            "Codex": 0.0,
-            "Antigravity": 5.0,
-            "Copilot": 10.0,
-            "Cursor": 15.0,
-            "OpenCode Go": 20.0,
-            "Vibe": 25.0,
-        }
-        first = {name: _provider_start_delay(name) for name in names}
-        second = {name: _provider_start_delay(name) for name in reversed(names)}
-
-        self.assertEqual(first, second)
-        self.assertEqual(first, expected)
-        self.assertEqual(len(set(first.values())), len(first))
-        self.assertLess(max(first.values()), 180)
         for name in names:
             self.assertEqual(_provider_next_probe_at(self._payload(), name, self.BASE), self.BASE)
 
-    def test_staggered_collect_uses_stable_delays_without_real_sleeping(self) -> None:
+    def test_collect_probes_every_worker_and_reports_each_start(self) -> None:
         names = ("Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe")
-        scheduled: list[tuple[str, float]] = []
-        slept: list[float] = []
+        started: list[str] = []
         probed: list[str] = []
 
         def fake_fetch(name: str, _provider: object, _debug: bool) -> ProviderSnapshot:
@@ -1587,20 +1570,15 @@ class TestProviderRefreshSchedule(unittest.TestCase):
             return ProviderSnapshot(name=name, ok=True, source="api", data={})
 
         with patch("gradus.__main__.fetch_provider_snapshot", side_effect=fake_fetch):
-            collect_snapshots(
+            snapshots = collect_snapshots(
                 [(name, MagicMock()) for name in names],
                 False,
-                on_scheduled=lambda name, delay: scheduled.append((name, delay)),
-                start_delays={name: _provider_start_delay(name) for name in names},
-                sleeper=slept.append,
+                on_start=started.append,
             )
 
-        self.assertEqual(scheduled, [(name, _provider_start_delay(name)) for name in names])
         self.assertCountEqual(probed, names)
-        self.assertCountEqual(
-            slept,
-            [_provider_start_delay(name) for name in names if _provider_start_delay(name) > 0],
-        )
+        self.assertCountEqual(started, names)
+        self.assertEqual([snapshot.name for snapshot in snapshots], sorted(names))
 
     def test_manual_sub_120s_refresh_probes_synthetic_primaries_fresh(self) -> None:
         providers = [("Codex", MagicMock()), ("Antigravity", MagicMock())]
@@ -1795,7 +1773,6 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             self.assertEqual(len(snapshots), 1)
             self.assertEqual(snapshots[0].source, "api")
             status = stderr.getvalue()
-            self.assertIn("refresh: provider OpenCode Go scheduled in 20.00s", status)
             self.assertIn("refresh: provider OpenCode Go started", status)
             self.assertIn("refresh: provider OpenCode Go complete", status)
             self.assertIn("refresh: completed", status)
@@ -1882,10 +1859,10 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             status = stderr.getvalue()
             self.assertIn("refresh: provider Codex started", status)
             self.assertIn("refresh: provider Antigravity started", status)
-            self.assertLess(
-                status.index("refresh: provider Codex complete"),
-                status.index("refresh: provider Antigravity complete"),
-            )
+            # Probes now start together, so completion order is scheduler-dependent.
+            # INV-8 requires each provider's progress to be visible, not ordered.
+            self.assertIn("refresh: provider Codex complete", status)
+            self.assertIn("refresh: provider Antigravity complete", status)
             self.assertIn("refresh: schema-v1 persisted", status)
             self.assertIn("refresh: schema-v2 persisted", status)
             self.assertIn("refresh: completed", status)
