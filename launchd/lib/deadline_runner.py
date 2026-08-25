@@ -19,8 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Callable, List, Optional, Sequence, Tuple
-
+from collections.abc import Callable, Sequence
 
 TIMEOUT_EXIT = 124
 DEFAULT_GRACE = 2.0
@@ -35,7 +34,7 @@ class RunnerArguments(Exception):
 
 def _diagnostic(message: str) -> None:
     # Keep all messages fixed-format and free of argv, paths, and child data.
-    sys.stderr.write("deadline-runner: %s\n" % message)
+    sys.stderr.write(f"deadline-runner: {message}\n")
     sys.stderr.flush()
 
 
@@ -43,9 +42,9 @@ def _positive_seconds(raw: str, option: str) -> float:
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        raise RunnerArguments("invalid %s" % option)
+        raise RunnerArguments(f"invalid {option}")
     if not math.isfinite(value) or value <= 0:
-        raise RunnerArguments("invalid %s" % option)
+        raise RunnerArguments(f"invalid {option}")
     return value
 
 
@@ -55,7 +54,9 @@ def _category(raw: str) -> str:
     return raw
 
 
-def _parse(argv: Sequence[str]) -> Tuple[float, float, float, str, Optional[str], Optional[str], Optional[str], List[str]]:
+def _parse(
+    argv: Sequence[str],
+) -> tuple[float, float, float, str, str | None, str | None, str | None, list[str]]:
     """Parse options before the required ``--`` argv delimiter."""
     try:
         delimiter = list(argv).index("--")
@@ -67,13 +68,13 @@ def _parse(argv: Sequence[str]) -> Tuple[float, float, float, str, Optional[str]
     if not child or any(not isinstance(arg, str) for arg in child) or not child[0]:
         raise RunnerArguments("missing child argv")
 
-    deadline: Optional[float] = None
+    deadline: float | None = None
     grace = DEFAULT_GRACE
     cleanup = DEFAULT_CLEANUP
     category = "child"
-    state_dir: Optional[str] = None
-    state_file: Optional[str] = None
-    stderr_file: Optional[str] = None
+    state_dir: str | None = None
+    state_file: str | None = None
+    stderr_file: str | None = None
 
     aliases = {
         "--deadline": "deadline",
@@ -134,7 +135,7 @@ def _default_state_dir() -> str:
     return os.path.join(tempfile.gettempdir(), "launchd-deadline-runner")
 
 
-def _safe_state_dir(path: str) -> Optional[str]:
+def _safe_state_dir(path: str) -> str | None:
     try:
         os.makedirs(path, mode=0o700, exist_ok=True)
         if not os.path.isdir(path):
@@ -160,7 +161,7 @@ def _pid_group_alive(pgid: int) -> bool:
     return True
 
 
-def _valid_record(record: object) -> Optional[Tuple[int, int, str]]:
+def _valid_record(record: object) -> tuple[int, int, str] | None:
     if not isinstance(record, dict):
         return None
     pid = record.get("pid")
@@ -180,7 +181,7 @@ def _valid_record(record: object) -> Optional[Tuple[int, int, str]]:
     return pid, pgid, category
 
 
-def _read_record(path: str) -> Optional[Tuple[int, int, str]]:
+def _read_record(path: str) -> tuple[int, int, str] | None:
     try:
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
@@ -198,14 +199,18 @@ def _check_conflicts(state_dir: str) -> bool:
     except OSError:
         return True
     for entry in entries:
-        if not entry.is_file(follow_symlinks=False) or not entry.name.startswith("cleanup-") or not entry.name.endswith(".json"):
+        if (
+            not entry.is_file(follow_symlinks=False)
+            or not entry.name.startswith("cleanup-")
+            or not entry.name.endswith(".json")
+        ):
             continue
         record = _read_record(entry.path)
         if record is None:
             continue
         _, pgid, category = record
         if _pid_group_alive(pgid):
-            _diagnostic("cleanup-conflict category=%s" % category)
+            _diagnostic(f"cleanup-conflict category={category}")
             return True
         try:
             os.unlink(entry.path)
@@ -214,7 +219,9 @@ def _check_conflicts(state_dir: str) -> bool:
     return False
 
 
-def _write_cleanup_record(state_dir: Optional[str], state_file: Optional[str], pid: int, pgid: int, category: str) -> bool:
+def _write_cleanup_record(
+    state_dir: str | None, state_file: str | None, pid: int, pgid: int, category: str
+) -> bool:
     location = state_file
     if location is None:
         if state_dir is None:
@@ -223,7 +230,7 @@ def _write_cleanup_record(state_dir: Optional[str], state_file: Optional[str], p
         if state_dir is None:
             return False
         # The name is opaque and contains only the safe numeric identifiers.
-        location = os.path.join(state_dir, "cleanup-%d-%d.json" % (pid, pgid))
+        location = os.path.join(state_dir, f"cleanup-{pid:d}-{pgid:d}.json")
     else:
         parent = os.path.dirname(location) or "."
         if _safe_state_dir(parent) is None:
@@ -312,7 +319,7 @@ def _wait_bounded(
     group_alive: Callable[[int], bool] = _pid_group_alive,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
-) -> Tuple[Optional[int], bool, int]:
+) -> tuple[int | None, bool, int]:
     """Poll direct child and group for at most ``seconds``; never wait()."""
     end = clock() + seconds
     while True:
@@ -336,7 +343,9 @@ def run(
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
-    deadline, grace, cleanup, category, requested_state_dir, state_file, stderr_file, child = _parse(argv)
+    deadline, grace, cleanup, category, requested_state_dir, state_file, stderr_file, child = (
+        _parse(argv)
+    )
     state_dir = requested_state_dir
     if state_dir is not None:
         state_dir = _safe_state_dir(state_dir)
@@ -353,7 +362,7 @@ def run(
         # its parent (which may contain unrelated application state).
         record = _read_record(state_file) if os.path.exists(state_file) else None
         if record is not None and group_alive(record[1]):
-            _diagnostic("cleanup-conflict category=%s" % record[2])
+            _diagnostic(f"cleanup-conflict category={record[2]}")
             return TIMEOUT_EXIT
         if record is not None:
             try:
@@ -381,14 +390,14 @@ def run(
     except (OSError, ValueError, TypeError):
         if stderr_file is not None:
             stderr_target.close()  # type: ignore[attr-defined]
-        _diagnostic("launch-failed category=%s" % category)
+        _diagnostic(f"launch-failed category={category}")
         return 127
 
     pid = int(getattr(process, "pid", 0))
     if pid <= 1:
         if stderr_file is not None:
             stderr_target.close()  # type: ignore[attr-defined]
-        _diagnostic("launch-failed category=%s" % category)
+        _diagnostic(f"launch-failed category={category}")
         return 127
     try:
         pgid = os.getpgid(pid)
@@ -401,7 +410,14 @@ def run(
     started = clock()
     stderr_count = 0
     returncode, group_left, stderr_count = _wait_bounded(
-        process, pgid, deadline, stderr_count, group_must_exit=True, group_alive=group_alive, clock=clock, sleeper=sleeper
+        process,
+        pgid,
+        deadline,
+        stderr_count,
+        group_must_exit=True,
+        group_alive=group_alive,
+        clock=clock,
+        sleeper=sleeper,
     )
     if returncode is not None and not group_left:
         if stderr_file is not None:
@@ -413,21 +429,36 @@ def run(
     # finite poll window.  No wait()/communicate() call is allowed here.
     kill_group(pgid, signal.SIGTERM)
     returncode, group_left, stderr_count = _wait_bounded(
-        process, pgid, grace, stderr_count, group_must_exit=True, group_alive=group_alive, clock=clock, sleeper=sleeper
+        process,
+        pgid,
+        grace,
+        stderr_count,
+        group_must_exit=True,
+        group_alive=group_alive,
+        clock=clock,
+        sleeper=sleeper,
     )
     if returncode is None or group_left:
         kill_group(pgid, signal.SIGKILL)
         returncode, group_left, stderr_count = _wait_bounded(
-            process, pgid, cleanup, stderr_count, group_must_exit=True, group_alive=group_alive, clock=clock, sleeper=sleeper
+            process,
+            pgid,
+            cleanup,
+            stderr_count,
+            group_must_exit=True,
+            group_alive=group_alive,
+            clock=clock,
+            sleeper=sleeper,
         )
 
     if returncode is None or group_left or group_alive(pgid):
         _write_cleanup_record(state_dir, state_file, pid, pgid, category)
         if stderr_file is not None:
             stderr_target.close()  # type: ignore[attr-defined]
+        cleanup_state = "unconfirmed-cleanup" if group_left or returncode is None else "confirmed"
         _diagnostic(
-            "timeout category=%s pid=%d pgid=%d cleanup=%s stderr-bytes=%d"
-            % (category, pid, pgid, "unconfirmed-cleanup" if group_left or returncode is None else "confirmed", stderr_count)
+            f"timeout category={category} pid={pid:d} pgid={pgid:d} "
+            f"cleanup={cleanup_state} stderr-bytes={stderr_count:d}"
         )
         return TIMEOUT_EXIT
 
@@ -440,14 +471,17 @@ def run(
         return returncode
     if stderr_file is not None:
         stderr_target.close()  # type: ignore[attr-defined]
-    _diagnostic("timeout category=%s pid=%d pgid=%d cleanup=confirmed stderr-bytes=%d" % (category, pid, pgid, stderr_count))
+    _diagnostic(
+        f"timeout category={category} pid={pid:d} pgid={pgid:d} "
+        f"cleanup=confirmed stderr-bytes={stderr_count:d}"
+    )
     return TIMEOUT_EXIT
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     try:
         return run(list(sys.argv[1:] if argv is None else argv))
-    except RunnerArguments as exc:
+    except RunnerArguments:
         # Do not print the exception: option values can contain paths or other
         # caller data.  The fixed category is enough for launchd diagnostics.
         _diagnostic("invalid-arguments")
