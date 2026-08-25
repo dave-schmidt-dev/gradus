@@ -169,6 +169,11 @@ def _provider_next_probe_at(
     entry = _canonical_entry(payload, name)
     if entry is None:
         return now
+    # This is a builder-synthesized absence marker, not an attempted Claude
+    # probe. Never let a scoped snapshot write turn it into a 10-minute
+    # cooldown that hides a newly re-enabled Claude provider.
+    if entry.get("error") == "provider not enabled":
+        return now
     # This field is advanced only by a real probe.  A cooldown projection is
     # carried through the next payload unchanged, so the 120s producer tick
     # cannot defer Claude forever by moving the top-level snapshot timestamp.
