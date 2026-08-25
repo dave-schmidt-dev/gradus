@@ -1668,11 +1668,17 @@ class TestProviderRefreshSchedule(unittest.TestCase):
     def test_claude_cooldown_and_rate_limit_backoff_are_preserved(self) -> None:
         normal = self._payload()
         limited = self._payload(claude_error="HTTP 429 rate limited")
+        synthetic_disabled = self._payload(claude_error="provider not enabled")
 
         self.assertEqual(
             _provider_next_probe_at(normal, "Claude", self.BASE),
             self.BASE + timedelta(seconds=600),
         )
+        self.assertEqual(
+            _provider_next_probe_at(synthetic_disabled, "Claude", self.BASE),
+            self.BASE,
+        )
+        self.assertTrue(_claude_probe_is_due(synthetic_disabled, self.BASE))
         self.assertFalse(_claude_probe_is_due(normal, self.BASE + timedelta(seconds=599)))
         self.assertTrue(_claude_probe_is_due(normal, self.BASE + timedelta(seconds=600)))
         self.assertEqual(
@@ -2639,6 +2645,12 @@ class TestRefreshHealthVerifier(unittest.TestCase):
                 with self.assertRaises(SystemExit) as ctx:
                     parse_args()
                 self.assertEqual(ctx.exception.code, 2)
+
+    def test_scoped_refresh_snapshot_is_rejected(self) -> None:
+        with patch("sys.argv", ["gradus", "--refresh-snapshot", "--providers", "Claude"]):
+            with self.assertRaises(SystemExit) as ctx:
+                parse_args()
+        self.assertEqual(ctx.exception.code, 2)
 
     def test_history_cli_accepts_repeatable_timestamps_and_filters(self) -> None:
         with patch(

@@ -186,15 +186,45 @@ class OpenCodeGoProvider:
         html = self._fetch_page(self._SUBSCRIPTION_ROUTE_TEMPLATE.format(workspace_id=workspace_id))
 
         def _extract_usage(name: str) -> dict[str, Any] | None:
-            m = re.search(
-                rf"{name}:\$R\[\d+\]=\{{status:\"([^\"]+)\",resetInSec:(\d+),usagePercent:(\d+)\}}",
-                html,
+            start = re.search(rf"(?<![\w$]){re.escape(name)}:\$R\[\d+\]=\{{", html)
+            if not start:
+                return None
+
+            depth = 0
+            quote: str | None = None
+            escaped = False
+            end = None
+            for index, char in enumerate(html[start.end() - 1 :], start.end() - 1):
+                if quote:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == quote:
+                        quote = None
+                elif char in ('"', "'"):
+                    quote = char
+                elif char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = index
+                        break
+            if end is None:
+                return None
+
+            m = re.fullmatch(
+                r'status:"([^\"]+)",resetInSec:(\d+),usagePercent:'
+                r"((?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:,.*)?",
+                html[start.end() : end],
+                flags=re.DOTALL,
             )
             if m:
                 return {
                     "status": m.group(1),
                     "resetInSec": int(m.group(2)),
-                    "usagePercent": int(m.group(3)),
+                    "usagePercent": float(m.group(3)),
                 }
             return None
 
