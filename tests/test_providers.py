@@ -3025,6 +3025,37 @@ class OpenCodeGoProviderTests(unittest.TestCase):
         self.assertIsInstance(status.weekly_percent_left, float)
         self.assertIsInstance(status.monthly_percent_left, float)
 
+    def test_subscription_usage_accepts_appended_fields(self) -> None:
+        provider = self._provider()
+        subscription_html = (
+            'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:25,'
+            'limit:{amount:100},updatedAt:"2026-08-25T00:00:00Z"}'
+        )
+        with patch.object(provider, "_fetch_page", side_effect=[subscription_html, ""]):
+            subscription = provider._fetch_subscription("wrk_a")
+
+        self.assertEqual(
+            subscription,
+            {
+                "rollingUsage": {"status": "ok", "resetInSec": 100, "usagePercent": 25.0},
+                "weeklyUsage": None,
+                "monthlyUsage": None,
+                "zen_credit": None,
+            },
+        )
+
+    def test_subscription_usage_rejects_malformed_required_fields(self) -> None:
+        provider = self._provider()
+        malformed = (
+            "rollingUsage:$R[1]={resetInSec:100,usagePercent:25,extra:true}",
+            'rollingUsage:$R[1]={status:"ok",usagePercent:25,extra:true}',
+            'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:unknown,extra:true}',
+            'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:25,extra:true',
+        )
+        for html in malformed:
+            with self.subTest(html=html), patch.object(provider, "_fetch_page", return_value=html):
+                self.assertIsNone(provider._fetch_subscription("wrk_a"))
+
     def test_subscribed_workspace_is_remembered(self) -> None:
         provider = self._provider()
         with (
