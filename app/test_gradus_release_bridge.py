@@ -1968,8 +1968,8 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
                             "productKey": "gradus-ios",
                             "requestedMarketingVersion": "1.8.2",
                             "allocatedBuildNumber": 22,
-                            "remoteHighestMarketingVersion": "1.8.2",
-                            "remoteHighestBuildNumber": 21,
+                            "remoteHighestMarketingVersion": "1.8.1",
+                            "remoteHighestBuildNumber": 20,
                             "observedAt": "2026-08-21T15:02:30Z",
                             "result": "allocated",
                         },
@@ -1999,7 +1999,8 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
                 ).read_text()
             )
             self.assertEqual((proof["marketingVersion"], proof["buildNumber"]), ("1.8.2", 22))
-            self.assertEqual(proof["remoteHighestBuildNumber"], 21)
+            self.assertEqual(proof["remoteHighestBuildNumber"], 20)
+            self.assertEqual(proof["remoteHighestMarketingVersion"], "1.8.1")
 
     def test_failed_preupload_successor_rejects_identity_allocation_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

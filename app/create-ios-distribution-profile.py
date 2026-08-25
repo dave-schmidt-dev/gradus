@@ -30,11 +30,19 @@ def main() -> int:
         "--confirm-human", action="store_true", help="required attended confirmation"
     )
     parser.add_argument("--bundle-id", default=BUNDLE_ID)
+    parser.add_argument("--profile-name", default=PROFILE_NAME)
+    parser.add_argument("--profile-filename", default=PROFILE_FILENAME)
     args = parser.parse_args()
     if not args.confirm_human:
         parser.error(
             "profile renewal is human-only; pass --confirm-human from an attended terminal"
         )
+    if (
+        not args.profile_name.strip()
+        or Path(args.profile_filename).name != args.profile_filename
+        or not args.profile_filename.endswith(".provisionprofile")
+    ):
+        parser.error("profile name and local provisioning-profile filename are invalid")
     client = ASCClient(make_token_provider())
     apps = client.request("GET", f"/apps?filter[bundleId]={args.bundle_id}") or {}
     data = apps.get("data", [])
@@ -55,7 +63,7 @@ def main() -> int:
         )
     existing = client.request("GET", f"/bundleIds/{bundle_id_resource}/profiles") or {}
     for profile in existing.get("data", []):
-        if profile.get("attributes", {}).get("name") == PROFILE_NAME:
+        if profile.get("attributes", {}).get("name") == args.profile_name:
             raise SystemExit(
                 "DEFERRED: existing Gradus profile renewal requires explicit operator review"
             )
@@ -65,7 +73,7 @@ def main() -> int:
         {
             "data": {
                 "type": "profiles",
-                "attributes": {"name": PROFILE_NAME, "profileType": "IOS_APP_STORE"},
+                "attributes": {"name": args.profile_name, "profileType": "IOS_APP_STORE"},
                 "relationships": {
                     "bundleId": {"data": {"type": "bundleIds", "id": bundle_id_resource}},
                     "certificates": {"data": [{"type": "certificates", "id": certs[0]["id"]}]},
@@ -78,7 +86,7 @@ def main() -> int:
     if not isinstance(content, str):
         raise SystemExit("FAIL: profile response did not contain profile content")
     PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-    destination = PROFILES_DIR / PROFILE_FILENAME
+    destination = PROFILES_DIR / args.profile_filename
     destination.write_bytes(base64.b64decode(content))
     print(f"Profile renewed: {destination}")
     return 0

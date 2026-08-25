@@ -49,9 +49,11 @@ def test_build_proof_binds_candidate_source_and_manifest_bytes() -> None:
         proof = build_proof(manifest, now=datetime(2026, 8, 18, 3, 0, tzinfo=timezone.utc))
 
         assert proof == {
+            "formatVersion": 2,
             "proofVersion": PROOF_VERSION,
             "proofSchema": READINESS_PROOF_SCHEMA,
             "operationClass": "readiness",
+            "requirement": "readiness",
             "candidateId": "1.8.0-20",
             "sourceDigest": "a" * 64,
             "result": "passed",

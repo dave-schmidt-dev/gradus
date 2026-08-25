@@ -125,9 +125,11 @@ def build_proof(
         contract_revision=contract_revision,
     )
     return {
+        "formatVersion": 2,
         "proofVersion": PROOF_VERSION,
         "proofSchema": READINESS_PROOF_SCHEMA,
         "operationClass": "readiness",
+        "requirement": "readiness",
         "candidateId": candidate_id,
         "sourceDigest": source_digest,
         "result": "passed",

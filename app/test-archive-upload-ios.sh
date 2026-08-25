@@ -94,6 +94,11 @@ set -e
   echo "FAIL: dirty Git checkout did not fail closed" >&2
   exit 1
 }
+bridge_dirty_revision="$(GRADUS_RELEASE_BRIDGE_ACTIVE=1 snapshot_source_revision "$clean_git_source")"
+[[ "$bridge_dirty_revision" == "$clean_revision" ]] || {
+  echo "FAIL: bridge-managed source revision did not rely on its central source binding" >&2
+  exit 1
+}
 set +e
 dirty_injected_output="$(GRADUS_SOURCE_REVISION=fixture-revision snapshot_source_revision "$clean_git_source" 2>&1)"
 dirty_injected_status=$?
@@ -343,7 +348,7 @@ grep -Fq 'PROVISIONING_PROFILE_SPECIFIER: "Gradus Mac Developer ID (API-created)
   echo "FAIL: GradusMac Release archive does not pin its Developer ID profile" >&2
   exit 1
 }
-grep -Fq 'PROVISIONING_PROFILE_SPECIFIER: "Gradus iOS App Store (API-created)"' "$SCRIPT_DIR/project.yml" || {
+grep -Fq 'PROVISIONING_PROFILE_SPECIFIER: "Gradus iOS App Store App Group (API-created)"' "$SCRIPT_DIR/project.yml" || {
   echo "FAIL: GradusiOS Release archive does not pin its App Store profile" >&2
   exit 1
 }
@@ -431,6 +436,25 @@ allocation_digest_before="$(sha256_file "$allocation_record")"
 allocation_metadata_retry="$(consume_identity_allocation_proof "$allocation_proof" "$allocation_record" 1.6.7 '')"
 [[ "$allocation_metadata_retry" == "$allocation_metadata" && "$(sha256_file "$allocation_record")" == "$allocation_digest_before" ]] || {
   echo "FAIL: consuming the same identity proof allocated a second identity" >&2
+  exit 1
+}
+correction_proof="$allocation_root/.release-state/evidence/1.6.7-45/allocate-identity.json"
+correction_record="$allocation_root/.release-state/allocated-ios-correction.json"
+mkdir -p "$(dirname "$correction_proof")"
+cat >"$correction_proof" <<'JSON'
+{"buildNumber":45,"marketingVersion":"1.6.7","observedAt":"2026-08-13T12:00:00Z","operationClass":"identityAllocation","productKey":"gradus-ios","proofVersion":"1.0.0","remoteHighestBuildNumber":42,"remoteHighestMarketingVersion":"1.6.7","responseSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","result":"passed"}
+JSON
+correction_metadata="$(GRADUS_RELEASE_BRIDGE_ACTIVE=1 consume_identity_allocation_proof "$correction_proof" "$correction_record" 1.6.7 1.6.7-45)"
+[[ "$correction_metadata" == *$'build\t45'* && "$correction_metadata" == *$'candidateId\t1.6.7-45'* ]] || {
+  echo "FAIL: central failed-preupload correction proof was refused" >&2
+  exit 1
+}
+set +e
+unbound_correction_output="$(consume_identity_allocation_proof "$correction_proof" "$allocation_root/unbound-correction.json" 1.6.7 1.6.7-45 2>&1)"
+unbound_correction_status=$?
+set -e
+[[ "$unbound_correction_status" -ne 0 && "$unbound_correction_output" == *"mismatched or malformed"* ]] || {
+  echo "FAIL: unbound failed-preupload correction proof was accepted" >&2
   exit 1
 }
 printf '%s\n' '{"operationClass":"identityAllocation"}' >"$allocation_root/malformed.json"

@@ -261,10 +261,11 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
             or allocation.get("productKey") != PRODUCT
             or allocation.get("requestedMarketingVersion") != context.marketing_version
             or allocation.get("allocatedBuildNumber") != context.build_number
-            or allocation.get("remoteHighestBuildNumber") != context.build_number - 1
+            or isinstance(allocation.get("remoteHighestBuildNumber"), bool)
+            or not isinstance(allocation.get("remoteHighestBuildNumber"), int)
+            or allocation.get("remoteHighestBuildNumber") >= context.build_number
             or not isinstance(allocation.get("remoteHighestMarketingVersion"), str)
             or _SEMVER.fullmatch(allocation["remoteHighestMarketingVersion"]) is None
-            or allocation.get("remoteHighestMarketingVersion") != context.marketing_version
             or allocation.get("result") != "allocated"
             or not isinstance(allocation.get("observedAt"), str)
         ):
@@ -277,7 +278,7 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
             "marketingVersion": context.marketing_version,
             "buildNumber": context.build_number,
             "remoteHighestMarketingVersion": allocation["remoteHighestMarketingVersion"],
-            "remoteHighestBuildNumber": context.build_number - 1,
+            "remoteHighestBuildNumber": allocation["remoteHighestBuildNumber"],
             "observedAt": allocation["observedAt"],
             "responseSha256": _canonical_digest(central),
         }
@@ -389,7 +390,9 @@ def reconcile_assigned_candidate(root: Path, context: CandidateContext) -> str |
             )
             or (
                 proof.get("buildNumber") == context.build_number
-                and proof.get("remoteHighestBuildNumber") == context.build_number - 1
+                and isinstance(proof.get("remoteHighestBuildNumber"), int)
+                and proof.get("remoteHighestBuildNumber") < context.build_number
+                and proof.get("remoteHighestBuildNumber") >= legacy_build
                 and context.build_number > legacy_build
             )
         )

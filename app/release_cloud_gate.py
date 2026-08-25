@@ -378,15 +378,6 @@ def main(
         stderr.flush()
         if git_source_digest_resolver(root, runner) != candidate_proof["sourceDigest"]:
             raise CloudGateError("checked-tree-source-mismatch")
-        if _git(
-            runner,
-            root,
-            "status",
-            "--porcelain=v1",
-            "--untracked-files=all",
-            allow_empty=True,
-        ):
-            raise CloudGateError("tracked-source-dirty")
         head = _git(runner, root, "rev-parse", "HEAD")
         if not _SHA.fullmatch(head):
             raise CloudGateError("source-revision-invalid")

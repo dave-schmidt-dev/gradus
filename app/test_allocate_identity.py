@@ -1,16 +1,31 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 import pytest
+from _asc_api import ASCOutcome, PermanentASCError
 from allocate_identity import (
     IdentityAllocationError,
     _remote_semver,
+    assign_build_to_internal_group,
+    create_internal_testflight_workflow,
+    ensure_ios_app_group_distribution_profile,
+    ensure_widget_distribution_profile,
+    find_ios_testflight_build,
+    inspect_testflight_build_app,
+    list_ci_builds,
+    list_cloud_product_metadata,
+    list_product_workflow_metadata,
+    list_workflow_build_runs,
     list_workflow_metadata,
     main,
     make_proof,
+    read_build_run_status,
     read_marketing_version,
+    read_workflow_template,
+    start_internal_testflight_build,
     write_proof,
 )
 
@@ -23,6 +38,19 @@ class FixtureClient:
     def request(self, method, path):
         assert method == "GET"
         self.paths.append(path)
+        return next(self.responses)
+
+
+class MutationFixtureClient(FixtureClient):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.methods = []
+        self.bodies = []
+
+    def request(self, method, path, body=None, *, idempotent=None):
+        self.methods.append(method)
+        self.paths.append(path)
+        self.bodies.append(body)
         return next(self.responses)
 
 
@@ -71,7 +99,7 @@ def _responses():
 def _workflow_responses():
     return [
         {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
-        {"data": {"type": "ciProducts", "id": "product-1"}},
+        {"data": [{"type": "ciProducts", "id": "product-1"}]},
         {
             "data": [
                 {
@@ -96,6 +124,20 @@ def _workflow_responses():
             ],
             "links": {"next": None},
         },
+    ]
+
+
+def _cloud_product_responses():
+    return [
+        {
+            "data": [
+                {
+                    "type": "ciProducts",
+                    "id": "product-1",
+                    "attributes": {"name": "GradusMac", "productType": "APP"},
+                }
+            ]
+        }
     ]
 
 
@@ -184,6 +226,113 @@ def test_identity_cli_remains_backward_compatible(
     assert proof["buildNumber"] == 8
 
 
+def test_widget_profile_creation_uses_the_fixed_extension_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = "cHJvZmlsZQ=="
+    client = MutationFixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "bundleIds",
+                        "id": "widget-bundle",
+                        "attributes": {"identifier": "com.zerodelta.gradus.ios.widget"},
+                    }
+                ]
+            },
+            {
+                "data": {
+                    "type": "bundleIds",
+                    "id": "widget-bundle",
+                    "attributes": {"identifier": "com.zerodelta.gradus.ios.widget"},
+                }
+            },
+            {
+                "data": [
+                    {"type": "certificates", "id": "certificate-other"},
+                    {"type": "certificates", "id": "certificate-1"},
+                ]
+            },
+            {"data": {"attributes": {"certificateContent": "b3RoZXI="}}},
+            {
+                "data": {
+                    "attributes": {"certificateContent": "Y2VydGlmaWNhdGUtZm9yLWdyYWR1cy1maXh0dXJl"}
+                }
+            },
+            {"data": []},
+            {"data": {"attributes": {"profileContent": content}}},
+        ]
+    )
+    monkeypatch.setattr(
+        "allocate_identity.DISTRIBUTION_CERTIFICATE_SHA1",
+        hashlib.sha1(b"certificate-for-gradus-fixture").hexdigest().upper(),
+    )
+
+    receipt = ensure_widget_distribution_profile(client, tmp_path)
+
+    assert receipt == {
+        "bundleId": "com.zerodelta.gradus.ios.widget",
+        "created": True,
+        "profileFilename": "gradus-widget-app-store.provisionprofile",
+    }
+    assert (tmp_path / receipt["profileFilename"]).read_bytes() == b"profile"
+    assert client.methods == ["GET", "GET", "GET", "GET", "GET", "GET", "POST"]
+    assert client.paths[-1] == "/profiles"
+    assert client.bodies[-1]["data"]["relationships"]["bundleId"]["data"] == {
+        "type": "bundleIds",
+        "id": "widget-bundle",
+    }
+
+
+def test_ios_app_group_profile_replaces_only_the_named_main_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = MutationFixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "bundleIds",
+                        "id": "ios-bundle",
+                    }
+                ]
+            },
+            {
+                "data": {
+                    "type": "bundleIds",
+                    "id": "ios-bundle",
+                    "attributes": {"identifier": "com.zerodelta.gradus.ios"},
+                }
+            },
+            {"data": [{"type": "certificates", "id": "certificate-1"}]},
+            {
+                "data": {
+                    "attributes": {"certificateContent": "Y2VydGlmaWNhdGUtZm9yLWdyYWR1cy1maXh0dXJl"}
+                }
+            },
+            {"data": []},
+            {"data": {"attributes": {"profileContent": "cHJvZmlsZQ=="}}},
+        ]
+    )
+    monkeypatch.setattr(
+        "allocate_identity.DISTRIBUTION_CERTIFICATE_SHA1",
+        hashlib.sha1(b"certificate-for-gradus-fixture").hexdigest().upper(),
+    )
+
+    receipt = ensure_ios_app_group_distribution_profile(client, tmp_path)
+
+    assert receipt == {
+        "bundleId": "com.zerodelta.gradus.ios",
+        "created": True,
+        "profileFilename": "gradus-ios-app-store.provisionprofile",
+    }
+    assert (tmp_path / receipt["profileFilename"]).read_bytes() == b"profile"
+    assert client.bodies[-1]["data"]["attributes"]["name"] == (
+        "Gradus iOS App Store App Group (API-created)"
+    )
+
+
 def test_list_workflows_resolves_fixed_app_and_emits_allowlisted_metadata(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -205,7 +354,7 @@ def test_list_workflows_resolves_fixed_app_and_emits_allowlisted_metadata(
     ]
     assert client.paths == [
         "/apps?filter[bundleId]=com.zerodelta.gradus.ios",
-        "/apps/app-1/ciProduct",
+        "/ciProducts?filter[app]=app-1&fields[ciProducts]=app&limit=200",
         "/ciProducts/product-1/workflows?fields[ciWorkflows]=name,isEnabled,manualBranchStartCondition,manualTagStartCondition,manualPullRequestStartCondition,actions&limit=200",
     ]
 
@@ -231,6 +380,358 @@ def test_list_workflows_resolves_fixed_app_and_emits_allowlisted_metadata(
     ]
 
 
+def test_list_cloud_products_emits_allowlisted_metadata(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = FixtureClient(_cloud_product_responses())
+    assert list_cloud_product_metadata(client) == [
+        {"id": "product-1", "name": "GradusMac", "productType": "APP"}
+    ]
+    assert client.paths == ["/ciProducts?fields[ciProducts]=name,productType&limit=200"]
+
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient", lambda provider: FixtureClient(_cloud_product_responses())
+    )
+    assert main(["--list-cloud-products"]) == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {"id": "product-1", "name": "GradusMac", "productType": "APP"}
+    ]
+
+
+def test_list_product_workflows_uses_explicit_inventory_product(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    responses = _workflow_responses()[2:]
+    client = FixtureClient(responses)
+    assert list_product_workflow_metadata(client, "product-1")[0]["id"] == "workflow-1"
+    assert client.paths == [
+        "/ciProducts/product-1/workflows?fields[ciWorkflows]=name,isEnabled,manualBranchStartCondition,manualTagStartCondition,manualPullRequestStartCondition,actions&limit=200"
+    ]
+
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient", lambda provider: FixtureClient(_workflow_responses()[2:])
+    )
+    assert main(["--list-product-workflows", "product-1"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["id"] == "workflow-1"
+
+
+def test_read_workflow_template_emits_only_sibling_configuration(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    response = {
+        "data": {
+            "type": "ciWorkflows",
+            "attributes": {"containerFilePath": "app/Gradus.xcodeproj", "clean": False},
+            "relationships": {
+                "repository": {"data": {"type": "scmRepositories", "id": "repo-1"}},
+                "xcodeVersion": {"data": {"type": "ciXcodeVersions", "id": "xcode-1"}},
+                "macOsVersion": {"data": {"type": "ciMacOsVersions", "id": "macos-1"}},
+            },
+        }
+    }
+    expected = {
+        "containerFilePath": "app/Gradus.xcodeproj",
+        "clean": False,
+        "repositoryId": "repo-1",
+        "xcodeVersionId": "xcode-1",
+        "macOsVersionId": "macos-1",
+    }
+    client = FixtureClient([response])
+    assert read_workflow_template(client, "workflow-1") == expected
+    assert client.paths == [
+        "/ciWorkflows/workflow-1?fields[ciWorkflows]=containerFilePath,clean,repository,xcodeVersion,macOsVersion&include=repository,xcodeVersion,macOsVersion"
+    ]
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr("allocate_identity.ASCClient", lambda provider: FixtureClient([response]))
+    assert main(["--read-workflow-template", "workflow-1"]) == 0
+    assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_create_internal_testflight_workflow_is_manual_clean_locked_and_idempotent() -> None:
+    product_id = "product-1"
+    template_id = "workflow-1"
+    client = MutationFixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "ciWorkflows",
+                        "id": template_id,
+                        "attributes": {
+                            "name": "Gradus iOS Snapshot Trial",
+                            "isEnabled": True,
+                            "manualBranchStartCondition": None,
+                            "manualTagStartCondition": None,
+                            "manualPullRequestStartCondition": None,
+                            "actions": [],
+                        },
+                    }
+                ]
+            },
+            {
+                "data": {
+                    "type": "ciWorkflows",
+                    "attributes": {"containerFilePath": "app/Gradus.xcodeproj", "clean": True},
+                    "relationships": {
+                        "repository": {"data": {"type": "scmRepositories", "id": "repo-1"}},
+                        "xcodeVersion": {"data": {"type": "ciXcodeVersions", "id": "xcode-1"}},
+                        "macOsVersion": {"data": {"type": "ciMacOsVersions", "id": "macos-1"}},
+                    },
+                }
+            },
+            {
+                "data": {
+                    "type": "ciWorkflows",
+                    "id": "workflow-new",
+                    "attributes": {"name": "Gradus iOS Internal TestFlight"},
+                }
+            },
+        ]
+    )
+    assert create_internal_testflight_workflow(
+        client, product_id=product_id, template_workflow_id=template_id
+    ) == {
+        "workflowId": "workflow-new",
+        "name": "Gradus iOS Internal TestFlight",
+        "branch": "main",
+        "platform": "IOS",
+        "distributionAudience": "INTERNAL_ONLY",
+    }
+    assert client.paths[-1] == "/ciWorkflows"
+    assert client.methods[-1] == "POST"
+    attributes = client.bodies[-1]["data"]["attributes"]
+    assert (
+        attributes["branchStartCondition"] is None if "branchStartCondition" in attributes else True
+    )
+    assert attributes["manualBranchStartCondition"]["source"]["patterns"] == [
+        {"pattern": "main", "isPrefix": False}
+    ]
+    assert attributes["actions"] == [
+        {
+            "name": "Archive iOS",
+            "actionType": "ARCHIVE",
+            "scheme": "GradusiOS",
+            "platform": "IOS",
+            "isRequiredToPass": True,
+            "buildDistributionAudience": "INTERNAL_ONLY",
+        }
+    ]
+
+
+def test_start_internal_testflight_build_checks_contract_before_posting() -> None:
+    workflow_id = "workflow-1"
+    client = MutationFixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "ciWorkflows",
+                        "id": workflow_id,
+                        "attributes": {
+                            "name": "Gradus iOS Internal TestFlight",
+                            "isEnabled": True,
+                            "manualBranchStartCondition": {"source": {"patterns": []}},
+                            "manualTagStartCondition": None,
+                            "manualPullRequestStartCondition": None,
+                            "actions": [
+                                {
+                                    "actionType": "ARCHIVE",
+                                    "platform": "IOS",
+                                    "scheme": "GradusiOS",
+                                    "buildDistributionAudience": "INTERNAL_ONLY",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            },
+            {
+                "data": {
+                    "type": "ciBuildRuns",
+                    "id": "run-1",
+                    "attributes": {"executionProgress": "PENDING"},
+                }
+            },
+        ]
+    )
+    assert start_internal_testflight_build(
+        client, product_id="product-1", workflow_id=workflow_id
+    ) == {"buildRunId": "run-1", "executionProgress": "PENDING", "workflowId": workflow_id}
+    assert client.methods == ["GET", "POST"]
+    assert client.paths[-1] == "/ciBuildRuns"
+    assert client.bodies[-1] == {
+        "data": {
+            "type": "ciBuildRuns",
+            "attributes": {"clean": True},
+            "relationships": {"workflow": {"data": {"type": "ciWorkflows", "id": workflow_id}}},
+        }
+    }
+
+
+def test_read_build_run_status_outputs_only_delivery_state() -> None:
+    client = FixtureClient(
+        [
+            {
+                "data": {
+                    "type": "ciBuildRuns",
+                    "attributes": {"executionProgress": "RUNNING", "completionStatus": None},
+                }
+            }
+        ]
+    )
+    assert read_build_run_status(client, "run-1") == {
+        "buildRunId": "run-1",
+        "executionProgress": "RUNNING",
+        "completionStatus": None,
+    }
+
+
+def test_list_workflow_build_runs_outputs_only_state() -> None:
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "id": "run-1",
+                        "attributes": {"executionProgress": "PENDING", "completionStatus": None},
+                    }
+                ]
+            }
+        ]
+    )
+    assert list_workflow_build_runs(client, "workflow-1") == [
+        {"buildRunId": "run-1", "executionProgress": "PENDING", "completionStatus": None}
+    ]
+
+
+def test_list_ci_builds_outputs_only_testflight_state() -> None:
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "id": "build-1",
+                        "attributes": {
+                            "version": "25",
+                            "processingState": "PROCESSING",
+                            "buildAudienceType": "INTERNAL_ONLY",
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+    assert list_ci_builds(client, "run-1") == [
+        {
+            "buildId": "build-1",
+            "buildNumber": "25",
+            "processingState": "PROCESSING",
+            "distributionAudience": "INTERNAL_ONLY",
+        }
+    ]
+
+
+def test_find_ios_testflight_build_binds_the_number_to_the_fixed_app() -> None:
+    client = FixtureClient(
+        [
+            {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+            {
+                "data": [
+                    {
+                        "id": "build-39",
+                        "attributes": {
+                            "version": "39",
+                            "processingState": "VALID",
+                            "buildAudienceType": "INTERNAL_ONLY",
+                        },
+                    }
+                ]
+            },
+        ]
+    )
+    assert find_ios_testflight_build(client, "39") == [
+        {
+            "buildId": "build-39",
+            "buildNumber": "39",
+            "processingState": "VALID",
+            "distributionAudience": "INTERNAL_ONLY",
+        }
+    ]
+
+
+def test_inspect_testflight_build_app_returns_only_fixed_app_membership() -> None:
+    client = FixtureClient(
+        [
+            {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+            {"data": {"id": "app-2", "attributes": {"bundleId": "com.zerodelta.gradus"}}},
+        ]
+    )
+    assert inspect_testflight_build_app(client, "build-39") == {
+        "buildAppPresent": True,
+        "belongsToGradusiOS": False,
+        "bundleId": "com.zerodelta.gradus",
+    }
+
+
+def test_assign_build_to_internal_group_reads_before_adding() -> None:
+    client = MutationFixtureClient(
+        [
+            {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+            {
+                "data": [
+                    {
+                        "type": "betaGroups",
+                        "id": "group-1",
+                        "attributes": {"isInternalGroup": True, "hasAccessToAllBuilds": False},
+                    }
+                ]
+            },
+            {"data": []},
+            None,
+        ]
+    )
+    assert assign_build_to_internal_group(client, build_id="build-1", group_id="group-1") == {
+        "buildId": "build-1",
+        "assignment": "assigned",
+    }
+    assert client.methods == ["GET", "GET", "GET", "POST"]
+    assert client.paths[-1] == "/betaGroups/group-1/relationships/builds"
+    assert client.bodies[-1] == {"data": [{"type": "builds", "id": "build-1"}]}
+
+
+def test_assign_build_to_internal_group_skips_relationship_mutation_for_all_builds_group() -> None:
+    client = MutationFixtureClient(
+        [
+            {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+            {
+                "data": [
+                    {
+                        "type": "betaGroups",
+                        "id": "group-1",
+                        "attributes": {"isInternalGroup": True, "hasAccessToAllBuilds": True},
+                    }
+                ]
+            },
+        ]
+    )
+    assert assign_build_to_internal_group(client, build_id="build-1", group_id="group-1") == {
+        "buildId": "build-1",
+        "assignment": "allBuildsAccess",
+    }
+    assert client.methods == ["GET", "GET"]
+
+
+def test_assign_build_to_internal_group_reports_the_denied_phase_without_response_content() -> None:
+    class DeniedClient:
+        def request(self, *_args, **_kwargs):
+            raise PermanentASCError(ASCOutcome(None, "http_403", False, 403))
+
+    with pytest.raises(IdentityAllocationError, match="testflight-assignment-app-lookup-http_403"):
+        assign_build_to_internal_group(DeniedClient(), build_id="build-1", group_id="group-1")
+
+
 def test_list_workflows_fails_closed_on_ambiguous_or_malformed_responses() -> None:
     duplicate = _workflow_responses()
     duplicate[2]["data"].append(duplicate[2]["data"][0])
@@ -243,7 +744,7 @@ def test_list_workflows_fails_closed_on_ambiguous_or_malformed_responses() -> No
         list_workflow_metadata(FixtureClient(malformed))
 
     malformed_pagination = _workflow_responses()
-    del malformed_pagination[2]["links"]
+    malformed_pagination[2]["links"] = []
     with pytest.raises(IdentityAllocationError, match="workflow-pagination-invalid"):
         list_workflow_metadata(FixtureClient(malformed_pagination))
 

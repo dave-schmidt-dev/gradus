@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -142,6 +143,7 @@ class ASCOutcome:
     error_class: str
     retryable: bool
     http_status: int | None
+    diagnostic_code: str | None = None
 
     def receipt_fields(self) -> dict[str, str | bool | int | None]:
         return {
@@ -190,10 +192,30 @@ def _redacted_request_id(headers: Mapping[str, str] | None) -> str | None:
     return "req_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def _http_error(status: int, headers: Mapping[str, str] | None = None) -> ASCError:
+_DIAGNOSTIC_CODE = re.compile(r"^[A-Z0-9._-]{1,128}$")
+
+
+def _diagnostic_code(body: bytes) -> str | None:
+    """Allowlist the stable ASC error code without retaining its response body."""
+
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return None
+    errors = payload.get("errors") if isinstance(payload, Mapping) else None
+    first = errors[0] if isinstance(errors, list) and errors else None
+    code = first.get("code") if isinstance(first, Mapping) else None
+    return code if isinstance(code, str) and _DIAGNOSTIC_CODE.fullmatch(code) else None
+
+
+def _http_error(
+    status: int, headers: Mapping[str, str] | None = None, body: bytes = b""
+) -> ASCError:
     retryable = status in RETRYABLE_HTTP_STATUSES or 500 <= status <= 599
     error_class = f"http_{status}" if 400 <= status <= 599 else "unexpected_status"
-    outcome = ASCOutcome(_redacted_request_id(headers), error_class, retryable, status)
+    outcome = ASCOutcome(
+        _redacted_request_id(headers), error_class, retryable, status, _diagnostic_code(body)
+    )
     return RetryableASCError(outcome) if retryable else PermanentASCError(outcome)
 
 
@@ -251,10 +273,10 @@ class ASCClient:
             try:
                 response = self._transport(request, self._timeout_seconds)
                 if not 200 <= response.status <= 299:
-                    raise _http_error(response.status, response.headers)
+                    raise _http_error(response.status, response.headers, response.body)
                 return parse_response(response)
             except urllib.error.HTTPError as error:
-                failure = _http_error(error.code, error.headers)
+                failure = _http_error(error.code, error.headers, error.read())
             except TimeoutError:
                 failure = _transport_error("timeout", timeout=True)
             except urllib.error.URLError:

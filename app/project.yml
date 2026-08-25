@@ -181,7 +181,7 @@ targets:
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "Apple Distribution"
-          PROVISIONING_PROFILE_SPECIFIER: "Gradus iOS App Store (API-created)"
+          PROVISIONING_PROFILE_SPECIFIER: "Gradus iOS App Store App Group (API-created)"
     # Background Modes > Remote notifications (T4.1/T4.2): required for the
     # silent content-available push (zone-sync subscription) to wake the
     # app. `INFOPLIST_KEY_UIBackgroundModes` (both scalar and array form)

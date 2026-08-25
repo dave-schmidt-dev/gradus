@@ -214,13 +214,20 @@ def test_main_emits_proof_only_after_cloud_success(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("dirty", [" M app/file.swift\n", "?? app/new-source.swift\n"])
-def test_main_rejects_dirty_source_before_github_or_proof(tmp_path: Path, dirty: str) -> None:
-    runner = Runner({}, dirty=dirty)
+def test_main_allows_dirty_unscoped_files_when_source_digests_match(
+    tmp_path: Path, dirty: str
+) -> None:
+    runner = Runner(
+        {
+            endpoint(HEAD): commit(HEAD),
+            checks_endpoint(HEAD): checks(HEAD),
+        },
+        dirty=dirty,
+    )
     result, proof_calls, output = run_main(tmp_path, runner)
-    assert result == 4
-    assert proof_calls == []
-    assert "tracked-source-dirty" in output
-    assert not any(call[:2] == ["gh", "api"] for call in runner.calls)
+    assert result == 0
+    assert proof_calls == [["--local-gate"]]
+    assert "tracked-source-dirty" not in output
 
 
 def test_main_rejects_candidate_source_mismatch_before_github_or_proof(tmp_path: Path) -> None:

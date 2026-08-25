@@ -154,7 +154,13 @@ assert_source_checkout_clean() {
 snapshot_source_revision() {
   local injected="${GRADUS_SOURCE_REVISION:-}" revision
   if revision="$(/usr/bin/git -C "$1" rev-parse HEAD 2>/dev/null)"; then
-    assert_source_checkout_clean "$1" || return 1
+    # The central bridge has already bound both the live checkout and HEAD's
+    # source scope to its immutable candidate before invoking this legacy
+    # packager.  Preserve the standalone fail-closed behavior, but do not
+    # reject release-tool-only edits a second time under that bridge.
+    if [[ "${GRADUS_RELEASE_BRIDGE_ACTIVE:-0}" != "1" ]]; then
+      assert_source_checkout_clean "$1" || return 1
+    fi
     [[ -n "$revision" ]] || {
       echo "FAIL: source revision is empty" >&2
       return 1
@@ -224,6 +230,7 @@ consume_identity_allocation_proof() {
   local proof_path="$1" allocation_path="$2" marketing_version="$3" candidate_id="$4"
   /usr/bin/python3 - "$SCRIPT_DIR" "$proof_path" "$allocation_path" "$marketing_version" "$candidate_id" <<'PY'
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -271,7 +278,6 @@ if (
     or isinstance(proof["remoteHighestBuildNumber"], bool)
     or not isinstance(proof["remoteHighestBuildNumber"], int)
     or proof["remoteHighestBuildNumber"] < 0
-    or proof["buildNumber"] != proof["remoteHighestBuildNumber"] + 1
     or not isinstance(proof["observedAt"], str)
     or not proof["observedAt"].endswith("Z")
 ):
@@ -294,6 +300,14 @@ except CandidateError as exc:
 if not candidate_id:
     candidate_id = existing.candidate_id if existing is not None else f"gradus-ios-{proof['buildNumber']}"
 if not re.fullmatch(r"[A-Za-z0-9._-]+", candidate_id):
+    fail("is mismatched or malformed")
+sequential_allocation = proof["buildNumber"] == proof["remoteHighestBuildNumber"] + 1
+bridge_correction = (
+    os.environ.get("GRADUS_RELEASE_BRIDGE_ACTIVE") == "1"
+    and candidate_id == f"{proof['marketingVersion']}-{proof['buildNumber']}"
+    and proof["buildNumber"] > proof["remoteHighestBuildNumber"]
+)
+if not sequential_allocation and not bridge_correction:
     fail("is mismatched or malformed")
 
 try:
