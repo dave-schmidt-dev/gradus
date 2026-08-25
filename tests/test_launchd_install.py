@@ -154,12 +154,15 @@ exit 64
                 "GRADUS_TEST_VERIFY_EXIT": str(verify_exit),
                 "GRADUS_TEST_PYTHON_SLEEP": python_sleep,
                 "GRADUS_TEST_PRINT_MODE": print_mode,
-                # The shell timeout loop uses Bash's integer SECONDS counter.
-                # Keep the hermetic clock integral while still making each
-                # installer run short enough for the unit suite.
+                # The shell timeout loop uses Bash's integer SECONDS counter,
+                # so the durations it compares stay integral. The progress
+                # quantum is only ever passed to `sleep`, so it can be
+                # fractional -- that is what keeps each installer run short.
+                # GRADUS_VERIFY_PHASE_OFFSET is deliberately left unset so the
+                # assertions below still prove it defaults to this value.
                 "GRADUS_VERIFY_DURATION": "1",
                 "GRADUS_HEALTH_INTERVAL": "1",
-                "GRADUS_PROGRESS_INTERVAL": "1",
+                "GRADUS_PROGRESS_INTERVAL": "0.1",
             }
         )
         return environment
@@ -213,10 +216,10 @@ exit 64
         )
 
     def test_install_reports_progress_while_the_health_check_runs(self) -> None:
-        result = self._run(python_sleep="1.1")
+        result = self._run(python_sleep="0.5")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("observed RunAtLoad snapshot metadata advance", result.stderr)
-        self.assertIn("waiting 1s after RunAtLoad before health verification", result.stderr)
+        self.assertIn("waiting 0.1s after RunAtLoad before health verification", result.stderr)
         self.assertIn("verifying refresh health for 1s is still running", result.stderr)
 
     def test_wrapper_uses_only_the_installed_credential_bridge(self) -> None:
