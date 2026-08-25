@@ -1992,7 +1992,22 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
                 replacement,
                 git_common_dir=replacement.parents[4],
             )
+            stale_allocation = {
+                "candidateId": "1.8.2-21",
+                "state": "allocated-but-unfrozen",
+                "marketingVersion": "1.8.2",
+                "build": 21,
+                "allocatedAt": "2026-08-21T14:00:00Z",
+            }
+            (root / ".release-state" / "allocated-ios.json").write_text(
+                json.dumps(stale_allocation), encoding="utf-8"
+            )
             self.assertEqual(PREPARE.reconcile_assigned_candidate(root, successor), "gradus-ios-20")
+            archived = (
+                root / ".release-state" / "failed-preupload" / "1.8.2-21" / "allocated-ios.json"
+            )
+            self.assertEqual(json.loads(archived.read_text()), stale_allocation)
+            self.assertFalse((root / ".release-state" / "allocated-ios.json").exists())
             proof = json.loads(
                 (
                     root / ".release-state" / "evidence" / "1.8.2-22" / "allocate-identity.json"

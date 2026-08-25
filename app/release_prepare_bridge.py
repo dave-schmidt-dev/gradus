@@ -304,6 +304,64 @@ def _allocation_matches(
     )
 
 
+def _authorized_failed_preupload_predecessor(context: CandidateContext) -> str | None:
+    """Return the central, digest-bound predecessor eligible for local archival."""
+
+    if context.identity_allocation_proof_sha256 is None:
+        return None
+    central_bytes, central = _load_json_bytes(
+        context.manifest_path.parent / "identity-allocation.json"
+    )
+    if hashlib.sha256(central_bytes).hexdigest() != context.identity_allocation_proof_sha256:
+        raise BridgeError("identity-proof-central-mismatch")
+    authorization = central.get("reuseAuthorization")
+    predecessor = (
+        authorization.get("priorCandidateId") if isinstance(authorization, Mapping) else None
+    )
+    if (
+        not isinstance(authorization, Mapping)
+        or authorization.get("kind") != "failed-preupload-correction"
+        or not isinstance(predecessor, str)
+        or _CANDIDATE.fullmatch(predecessor) is None
+    ):
+        return None
+    return predecessor
+
+
+def _archive_authorized_unfrozen_predecessor(
+    root: Path,
+    allocation_path: Path,
+    allocation: Mapping[str, Any],
+    *,
+    predecessor: str,
+) -> bool:
+    """Archive only the central-authorized, never-frozen predecessor allocation."""
+
+    version = allocation.get("marketingVersion")
+    build = allocation.get("build")
+    if (
+        allocation.get("candidateId") != predecessor
+        or allocation.get("state") != "allocated-but-unfrozen"
+        or not isinstance(version, str)
+        or _SEMVER.fullmatch(version) is None
+        or isinstance(build, bool)
+        or not isinstance(build, int)
+        or predecessor != f"{version}-{build}"
+        or not isinstance(allocation.get("allocatedAt"), str)
+        or not allocation["allocatedAt"]
+    ):
+        return False
+    destination = root / ".release-state" / "failed-preupload" / predecessor / "allocated-ios.json"
+    if destination.exists():
+        if destination.is_symlink() or destination.read_bytes() != allocation_path.read_bytes():
+            raise BridgeError("failed-preupload-allocation-archive-mismatch")
+        allocation_path.unlink()
+        return True
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.replace(allocation_path, destination)
+    return True
+
+
 def _finalize_staged_allocations(root: Path) -> None:
     staging_root = root / ".release-state" / ".rollover"
     if not staging_root.is_dir() or staging_root.is_symlink():
@@ -413,6 +471,16 @@ def reconcile_assigned_candidate(root: Path, context: CandidateContext) -> str |
             version=context.marketing_version,
             build=context.build_number,
         )
+        if not old_matches and not current_matches:
+            predecessor = _authorized_failed_preupload_predecessor(context)
+            if predecessor is None or not _archive_authorized_unfrozen_predecessor(
+                root,
+                allocation_path,
+                allocation,
+                predecessor=predecessor,
+            ):
+                raise BridgeError("active-allocation-mismatch")
+            return legacy_id
     if staged.exists():
         staged_allocation = _load_json(staged)
         if not _allocation_matches(
