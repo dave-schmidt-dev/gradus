@@ -2646,6 +2646,12 @@ class TestRefreshHealthVerifier(unittest.TestCase):
                     parse_args()
                 self.assertEqual(ctx.exception.code, 2)
 
+    def test_scoped_refresh_snapshot_is_rejected(self) -> None:
+        with patch("sys.argv", ["gradus", "--refresh-snapshot", "--providers", "Claude"]):
+            with self.assertRaises(SystemExit) as ctx:
+                parse_args()
+        self.assertEqual(ctx.exception.code, 2)
+
     def test_history_cli_accepts_repeatable_timestamps_and_filters(self) -> None:
         with patch(
             "sys.argv",

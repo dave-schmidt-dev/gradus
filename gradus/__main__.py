@@ -537,6 +537,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.refresh_snapshot and (args.once or args.json):
         parser.error("argument --refresh-snapshot: not allowed with --once or --json")
+    if args.refresh_snapshot and args.providers:
+        parser.error("argument --providers: not allowed with --refresh-snapshot")
     if args.verify_refresh_health:
         conflicts = [
             flag
