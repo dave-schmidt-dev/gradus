@@ -349,9 +349,7 @@
     "app/GradusiOS",
     "app/Shared",
     "app/GradusKit",
-    "app/project.yml",
-    "app/release_cloud_gate.py",
-    "app/release_stage_readiness.py"
+    "app/project.yml"
   ],
   "nonSourcePaths": [
     "app/GradusKit/Tests",

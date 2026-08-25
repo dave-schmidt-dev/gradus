@@ -122,6 +122,145 @@ def _one_app(client: ASCClient) -> str:
     return app_id
 
 
+def _one_ci_product(client: ASCClient, app_id: str) -> str:
+    """Resolve the Xcode Cloud product that belongs to one fixed app."""
+
+    payload = client.request("GET", f"/apps/{quote(app_id, safe='')}/ciProduct")
+    if not isinstance(payload, Mapping):
+        raise IdentityAllocationError("ci-product-response-invalid")
+    product = payload.get("data")
+    if product is None:
+        raise IdentityAllocationError("ci-product-missing")
+    if not isinstance(product, Mapping):
+        raise IdentityAllocationError("ci-product-response-invalid")
+    product_id = product.get("id")
+    if product.get("type") != "ciProducts" or not isinstance(product_id, str) or not product_id:
+        raise IdentityAllocationError("ci-product-response-invalid")
+    return product_id
+
+
+def _workflow_next_path(value: Any) -> str | None:
+    """Validate a workflow-list pagination link before issuing it."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise IdentityAllocationError("workflow-pagination-invalid")
+    if value.startswith("/v1/") or value.startswith(f"{API_BASE}/"):
+        return value
+    raise IdentityAllocationError("workflow-pagination-invalid")
+
+
+def _manual_start_present(attributes: Mapping[str, Any]) -> bool:
+    """Return whether any supported manual-start condition is configured."""
+
+    present = False
+    for name in (
+        "manualBranchStartCondition",
+        "manualTagStartCondition",
+        "manualPullRequestStartCondition",
+    ):
+        condition = attributes.get(name)
+        if condition is None:
+            continue
+        if not isinstance(condition, Mapping):
+            raise IdentityAllocationError("workflow-manual-start-invalid")
+        present = True
+    return present
+
+
+def _archive_actions(attributes: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Extract only the allowlisted fields from archive workflow actions."""
+
+    actions = attributes.get("actions")
+    if not isinstance(actions, list):
+        raise IdentityAllocationError("workflow-actions-invalid")
+    archive_actions: list[dict[str, str]] = []
+    for action in actions:
+        if not isinstance(action, Mapping):
+            raise IdentityAllocationError("workflow-actions-invalid")
+        action_type = action.get("actionType")
+        if not isinstance(action_type, str):
+            raise IdentityAllocationError("workflow-actions-invalid")
+        if action_type != "ARCHIVE":
+            continue
+        platform = action.get("platform")
+        scheme = action.get("scheme")
+        audience = action.get("buildDistributionAudience")
+        if (
+            not isinstance(platform, str)
+            or not platform
+            or not isinstance(scheme, str)
+            or not scheme
+            or not isinstance(audience, str)
+            or not audience
+        ):
+            raise IdentityAllocationError("workflow-archive-action-invalid")
+        archive_actions.append(
+            {
+                "platform": platform,
+                "scheme": scheme,
+                "distributionAudience": audience,
+            }
+        )
+    return archive_actions
+
+
+def list_workflow_metadata(client: ASCClient) -> list[dict[str, Any]]:
+    """List allowlisted workflow metadata for the fixed Gradus iOS app only."""
+
+    app_id = _one_app(client)
+    product_id = _one_ci_product(client, app_id)
+    path = (
+        f"/ciProducts/{quote(product_id, safe='')}/workflows?"
+        "fields[ciWorkflows]="
+        "name,isEnabled,manualBranchStartCondition,manualTagStartCondition,"
+        "manualPullRequestStartCondition,actions&limit=200"
+    )
+    seen_paths: set[str] = set()
+    workflow_ids: set[str] = set()
+    workflows: list[dict[str, Any]] = []
+    while path is not None:
+        if path in seen_paths:
+            raise IdentityAllocationError("workflow-pagination-ambiguous")
+        seen_paths.add(path)
+        payload = client.request("GET", path)
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+            raise IdentityAllocationError("workflow-response-invalid")
+        for workflow in payload["data"]:
+            if not isinstance(workflow, Mapping):
+                raise IdentityAllocationError("workflow-response-invalid")
+            workflow_id = workflow.get("id")
+            attributes = workflow.get("attributes")
+            if (
+                workflow.get("type") != "ciWorkflows"
+                or not isinstance(workflow_id, str)
+                or not workflow_id
+                or workflow_id in workflow_ids
+                or not isinstance(attributes, Mapping)
+            ):
+                raise IdentityAllocationError("workflow-response-ambiguous")
+            name = attributes.get("name")
+            enabled = attributes.get("isEnabled")
+            if not isinstance(name, str) or not name or not isinstance(enabled, bool):
+                raise IdentityAllocationError("workflow-response-invalid")
+            workflow_ids.add(workflow_id)
+            workflows.append(
+                {
+                    "id": workflow_id,
+                    "name": name,
+                    "isEnabled": enabled,
+                    "hasManualStart": _manual_start_present(attributes),
+                    "archiveActions": _archive_actions(attributes),
+                }
+            )
+        links = payload.get("links")
+        if not isinstance(links, Mapping) or "next" not in links:
+            raise IdentityAllocationError("workflow-pagination-invalid")
+        path = _workflow_next_path(links["next"])
+    return workflows
+
+
 def _next_path(value: Any) -> str | None:
     if value is None:
         return None
@@ -292,6 +431,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print safe RESULT_BUNDLE metadata without download URLs",
     )
+    parser.add_argument(
+        "--list-workflows",
+        action="store_true",
+        help="Print allowlisted Xcode Cloud workflow metadata for the fixed Gradus iOS app",
+    )
     args = parser.parse_args(argv)
 
     if args.product and (
@@ -299,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.output_dir
         or args.ci_artifact_id
         or args.list_result_bundles
+        or args.list_workflows
     ):
         print(
             "FAIL: cannot combine --product with artifact download options",
@@ -328,6 +473,26 @@ def main(argv: list[str] | None = None) -> int:
             print("FAIL: identity allocation failed", file=sys.stderr)
             return 1
         return 0
+
+    if args.list_workflows:
+        if (
+            args.ci_build_action_id
+            or args.output_dir
+            or args.ci_artifact_id
+            or args.list_result_bundles
+        ):
+            print("FAIL: workflow listing does not accept artifact options", file=sys.stderr)
+            return 1
+        try:
+            metadata = list_workflow_metadata(ASCClient(make_token_provider()))
+            print(json.dumps(metadata, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: workflow listing failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: workflow listing failed ({exc})", file=sys.stderr)
+            return 1
 
     if args.ci_build_action_id is not None and args.list_result_bundles:
         if args.output_dir is not None or args.ci_artifact_id is not None:
@@ -368,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     print(
-        "FAIL: either --product, --list-result-bundles with an action ID, or an action ID with --output-dir is required",
+        "FAIL: --product, --list-workflows, --list-result-bundles with an action ID, or an action ID with --output-dir is required",
         file=sys.stderr,
     )
     return 1

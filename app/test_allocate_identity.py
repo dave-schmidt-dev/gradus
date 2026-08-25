@@ -7,6 +7,7 @@ import pytest
 from allocate_identity import (
     IdentityAllocationError,
     _remote_semver,
+    list_workflow_metadata,
     main,
     make_proof,
     read_marketing_version,
@@ -61,6 +62,37 @@ def _responses():
                     "id": "pre-166",
                     "attributes": {"version": "1.6.6", "platform": "IOS"},
                 },
+            ],
+            "links": {"next": None},
+        },
+    ]
+
+
+def _workflow_responses():
+    return [
+        {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+        {"data": {"type": "ciProducts", "id": "product-1"}},
+        {
+            "data": [
+                {
+                    "type": "ciWorkflows",
+                    "id": "workflow-1",
+                    "attributes": {
+                        "name": "Release",
+                        "isEnabled": True,
+                        "manualBranchStartCondition": {"branch": "main"},
+                        "manualTagStartCondition": None,
+                        "actions": [
+                            {"actionType": "TEST", "platform": "IOS"},
+                            {
+                                "actionType": "ARCHIVE",
+                                "platform": "IOS",
+                                "scheme": "GradusiOS",
+                                "buildDistributionAudience": "APP_STORE_ELIGIBLE",
+                            },
+                        ],
+                    },
+                }
             ],
             "links": {"next": None},
         },
@@ -150,6 +182,70 @@ def test_identity_cli_remains_backward_compatible(
     assert proof["productKey"] == "gradus-ios"
     assert proof["marketingVersion"] == "1.6.7"
     assert proof["buildNumber"] == 8
+
+
+def test_list_workflows_resolves_fixed_app_and_emits_allowlisted_metadata(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = FixtureClient(_workflow_responses())
+    assert list_workflow_metadata(client) == [
+        {
+            "id": "workflow-1",
+            "name": "Release",
+            "isEnabled": True,
+            "hasManualStart": True,
+            "archiveActions": [
+                {
+                    "platform": "IOS",
+                    "scheme": "GradusiOS",
+                    "distributionAudience": "APP_STORE_ELIGIBLE",
+                }
+            ],
+        }
+    ]
+    assert client.paths == [
+        "/apps?filter[bundleId]=com.zerodelta.gradus.ios",
+        "/apps/app-1/ciProduct",
+        "/ciProducts/product-1/workflows?fields[ciWorkflows]=name,isEnabled,manualBranchStartCondition,manualTagStartCondition,manualPullRequestStartCondition,actions&limit=200",
+    ]
+
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient", lambda provider: FixtureClient(_workflow_responses())
+    )
+    assert main(["--list-workflows"]) == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {
+            "archiveActions": [
+                {
+                    "distributionAudience": "APP_STORE_ELIGIBLE",
+                    "platform": "IOS",
+                    "scheme": "GradusiOS",
+                }
+            ],
+            "hasManualStart": True,
+            "id": "workflow-1",
+            "isEnabled": True,
+            "name": "Release",
+        }
+    ]
+
+
+def test_list_workflows_fails_closed_on_ambiguous_or_malformed_responses() -> None:
+    duplicate = _workflow_responses()
+    duplicate[2]["data"].append(duplicate[2]["data"][0])
+    with pytest.raises(IdentityAllocationError, match="workflow-response-ambiguous"):
+        list_workflow_metadata(FixtureClient(duplicate))
+
+    malformed = _workflow_responses()
+    malformed[2]["data"][0]["attributes"]["actions"][1]["scheme"] = ""
+    with pytest.raises(IdentityAllocationError, match="workflow-archive-action-invalid"):
+        list_workflow_metadata(FixtureClient(malformed))
+
+    malformed_pagination = _workflow_responses()
+    del malformed_pagination[2]["links"]
+    with pytest.raises(IdentityAllocationError, match="workflow-pagination-invalid"):
+        list_workflow_metadata(FixtureClient(malformed_pagination))
 
 
 def test_cli_artifact_download_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
