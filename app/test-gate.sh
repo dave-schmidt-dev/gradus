@@ -476,9 +476,14 @@ gate_unregister_bundles() {
   local bundle
   [[ -n "$derived_data_dir" && -d "$derived_data_dir" ]] || return 0
   [[ -x "$LSREGISTER" ]] || return 0
+  # Prune the index store, which is the only large subtree here and holds no
+  # bundles, then take every `.app` at any depth -- including helpers nested
+  # inside a test runner, which LaunchServices records as their own entries.
+  # A depth cap would be shorter and would silently miss whatever sat deeper.
   while IFS= read -r bundle; do
     "$LSREGISTER" -u "$bundle" >/dev/null 2>&1 || true
-  done < <(find "$derived_data_dir" -maxdepth 6 -type d -name "*.app" 2>/dev/null)
+  done < <(find "$derived_data_dir" -type d -name Index.noindex -prune -o \
+    -type d -name "*.app" -print 2>/dev/null)
 }
 
 # This gate's own EXIT trap only handles state it owns directly (the
