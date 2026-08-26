@@ -17,11 +17,11 @@ import Testing
 struct SyncTimestampTests {
     private func withScratchDefaults(_ name: String, _ body: (UserDefaults) -> Void) {
         let suite = "com.zerodelta.gradus.mac.tests.\(name)"
-        guard let defaults = UserDefaults(suiteName: suite) else {
+        guard let defaults = scratchDefaults(suite) else {
             Issue.record("could not create scratch defaults suite \(suite)")
             return
         }
-        defer { defaults.removePersistentDomain(forName: suite) }
+        defer { removeScratchDefaultsSuite(suite, using: defaults) }
         body(defaults)
     }
 
@@ -101,9 +101,9 @@ struct SyncTimestampTests {
 }
 
 @Test func requiredICloudMigrationMatchesIOSForLegacyAndFreshStores() throws {
-    let falseSuite = "com.zerodelta.gradus.mac.tests.required-icloud-false-\(UUID().uuidString)"
-    let falseDefaults = try #require(UserDefaults(suiteName: falseSuite))
-    defer { falseDefaults.removePersistentDomain(forName: falseSuite) }
+    let falseSuite = "com.zerodelta.gradus.mac.tests.required-icloud-false"
+    let falseDefaults = try #require(scratchDefaults(falseSuite))
+    defer { removeScratchDefaultsSuite(falseSuite, using: falseDefaults) }
     falseDefaults.set(false, forKey: PublisherViewModel.syncEnabledKey)
     #expect(
         RequiredICloudMigration.migrate(defaults: falseDefaults, legacyKey: PublisherViewModel.syncEnabledKey)
@@ -111,18 +111,18 @@ struct SyncTimestampTests {
     )
     #expect(falseDefaults.object(forKey: PublisherViewModel.syncEnabledKey) == nil)
 
-    let trueSuite = "com.zerodelta.gradus.mac.tests.required-icloud-true-\(UUID().uuidString)"
-    let trueDefaults = try #require(UserDefaults(suiteName: trueSuite))
-    defer { trueDefaults.removePersistentDomain(forName: trueSuite) }
+    let trueSuite = "com.zerodelta.gradus.mac.tests.required-icloud-true"
+    let trueDefaults = try #require(scratchDefaults(trueSuite))
+    defer { removeScratchDefaultsSuite(trueSuite, using: trueDefaults) }
     trueDefaults.set(true, forKey: PublisherViewModel.syncEnabledKey)
     #expect(
         RequiredICloudMigration.migrate(defaults: trueDefaults, legacyKey: PublisherViewModel.syncEnabledKey)
             == .confirmed
     )
 
-    let freshSuite = "com.zerodelta.gradus.mac.tests.required-icloud-fresh-\(UUID().uuidString)"
-    let freshDefaults = try #require(UserDefaults(suiteName: freshSuite))
-    defer { freshDefaults.removePersistentDomain(forName: freshSuite) }
+    let freshSuite = "com.zerodelta.gradus.mac.tests.required-icloud-fresh"
+    let freshDefaults = try #require(scratchDefaults(freshSuite))
+    defer { removeScratchDefaultsSuite(freshSuite, using: freshDefaults) }
     #expect(
         RequiredICloudMigration.migrate(defaults: freshDefaults, legacyKey: PublisherViewModel.syncEnabledKey)
             == .confirmed
@@ -130,9 +130,9 @@ struct SyncTimestampTests {
 }
 
 @Test func requiredICloudMigrationNewModeWinsAndInterruptedWriteReruns() throws {
-    let suite = "com.zerodelta.gradus.mac.tests.required-icloud-both-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let suite = "com.zerodelta.gradus.mac.tests.required-icloud-both"
+    let defaults = try #require(scratchDefaults(suite))
+    defer { removeScratchDefaultsSuite(suite, using: defaults) }
     defaults.set(true, forKey: PublisherViewModel.syncEnabledKey)
     defaults.set(RequiredICloudMode.awaitingConfirmation.rawValue, forKey: RequiredICloudMigration.modeKey)
     #expect(
@@ -140,9 +140,9 @@ struct SyncTimestampTests {
             == .awaitingConfirmation
     )
 
-    let interruptedSuite = "com.zerodelta.gradus.mac.tests.required-icloud-interrupted-\(UUID().uuidString)"
-    let interrupted = try #require(UserDefaults(suiteName: interruptedSuite))
-    defer { interrupted.removePersistentDomain(forName: interruptedSuite) }
+    let interruptedSuite = "com.zerodelta.gradus.mac.tests.required-icloud-interrupted"
+    let interrupted = try #require(scratchDefaults(interruptedSuite))
+    defer { removeScratchDefaultsSuite(interruptedSuite, using: interrupted) }
     interrupted.set(false, forKey: PublisherViewModel.syncEnabledKey)
     #expect(
         RequiredICloudMigration.migrate(
@@ -160,9 +160,9 @@ struct SyncTimestampTests {
 }
 
 @Test @MainActor func requiredICloudModeConfirmsAndSurvivesRelaunch() throws {
-    let suite = "com.zerodelta.gradus.mac.tests.required-icloud-relaunch-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let suite = "com.zerodelta.gradus.mac.tests.required-icloud-relaunch"
+    let defaults = try #require(scratchDefaults(suite))
+    defer { removeScratchDefaultsSuite(suite, using: defaults) }
     defaults.set(false, forKey: PublisherViewModel.syncEnabledKey)
 
     let awaiting = PublisherViewModel(defaults: defaults)

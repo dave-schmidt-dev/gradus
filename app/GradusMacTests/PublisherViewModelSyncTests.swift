@@ -10,8 +10,8 @@ import Testing
     // app's own preference domain. Isolating the store keeps a test from
     // writing state the real menu then reports as fact.
     let suite = "com.zerodelta.gradus.mac.tests.cloudSyncFailure"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = try #require(scratchDefaults(suite))
+    defer { removeScratchDefaultsSuite(suite, using: defaults) }
 
     let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = true
@@ -32,8 +32,8 @@ import Testing
     // the store removes the whole class instead of adding a second key to a
     // list someone has to remember to extend.
     let suite = "com.zerodelta.gradus.mac.tests.staleCloudSync"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = try #require(scratchDefaults(suite))
+    defer { removeScratchDefaultsSuite(suite, using: defaults) }
 
     let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = true
@@ -56,8 +56,8 @@ import Testing
     // app's own preference domain. Isolating the store keeps a test from
     // writing state the real menu then reports as fact.
     let suite = "com.zerodelta.gradus.mac.tests.syncDisabled"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let defaults = try #require(scratchDefaults(suite))
+    defer { removeScratchDefaultsSuite(suite, using: defaults) }
 
     let viewModel = PublisherViewModel(defaults: defaults)
     viewModel.syncEnabled = false

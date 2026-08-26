@@ -17,11 +17,11 @@ import Testing
 struct DisplayPreferenceTests {
     private func withScratchDefaults(_ name: String, _ body: (UserDefaults) -> Void) {
         let suite = "com.zerodelta.gradus.mac.tests.display.\(name)"
-        guard let defaults = UserDefaults(suiteName: suite) else {
+        guard let defaults = scratchDefaults(suite) else {
             Issue.record("could not create scratch defaults suite \(suite)")
             return
         }
-        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        defer { removeScratchDefaultsSuite(suite, using: defaults) }
         body(defaults)
     }
 
@@ -172,17 +172,21 @@ struct DisplayPreferenceTests {
 @MainActor
 @Suite("Settings window")
 struct SettingsWindowTests {
-    private func scratchViewModel() -> PublisherViewModel {
-        PublisherViewModel(
-            defaults: UserDefaults(suiteName: "com.zerodelta.gradus.mac.tests.settingswindow")!
-        )
+    private func makeScratchSuite() -> String {
+        "com.zerodelta.gradus.mac.tests.settingswindow"
+    }
+
+    private func scratchViewModel(suite: String) -> PublisherViewModel {
+        PublisherViewModel(defaults: scratchDefaults(suite)!)
     }
 
     @Test func settingsProducesAWindowTheAppOwnsAndCanActuallyBeReadIn() {
         SettingsWindow.resetForTesting()
         defer { SettingsWindow.resetForTesting() }
 
-        let window = SettingsWindow.makeWindow(viewModel: scratchViewModel())
+        let suite = makeScratchSuite()
+        defer { removeScratchDefaultsSuite(suite) }
+        let window = SettingsWindow.makeWindow(viewModel: scratchViewModel(suite: suite))
 
         // The assertion the old `Settings` scene could never have passed: an
         // `NSWindow` exists and the app owns it.
@@ -199,7 +203,9 @@ struct SettingsWindowTests {
     @Test func repeatedRequestsReuseTheSameWindow() {
         SettingsWindow.resetForTesting()
         defer { SettingsWindow.resetForTesting() }
-        let viewModel = scratchViewModel()
+        let suite = makeScratchSuite()
+        defer { removeScratchDefaultsSuite(suite) }
+        let viewModel = scratchViewModel(suite: suite)
 
         let first = SettingsWindow.makeWindow(viewModel: viewModel)
         let second = SettingsWindow.makeWindow(viewModel: viewModel)
@@ -221,7 +227,9 @@ struct SettingsWindowTests {
     @Test func aClosedWindowIsKeptAroundToBeReopened() {
         SettingsWindow.resetForTesting()
         defer { SettingsWindow.resetForTesting() }
-        let viewModel = scratchViewModel()
+        let suite = makeScratchSuite()
+        defer { removeScratchDefaultsSuite(suite) }
+        let viewModel = scratchViewModel(suite: suite)
 
         let first = SettingsWindow.makeWindow(viewModel: viewModel)
         #expect(!first.isReleasedWhenClosed)

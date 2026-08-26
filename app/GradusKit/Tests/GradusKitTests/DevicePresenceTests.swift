@@ -61,7 +61,9 @@ private let presenceZone = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName,
 }
 
 @Test func installationIDIsStableInAppContainerAndGeneratedOnce() throws {
-    let defaults = try #require(UserDefaults(suiteName: "presence-id-\(UUID().uuidString)"))
+    let suite = "com.zerodelta.gradus.kit.tests.presence-id"
+    let defaults = try #require(scratchDefaults(suite))
+    defer { removeScratchDefaultsSuite(suite, using: defaults) }
     let generated = LockBox()
     let store = DevicePresenceInstallationStore(defaults: defaults) {
         generated.value += 1
