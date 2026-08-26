@@ -251,6 +251,52 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("bws-run", prepare_branch)
         self.assertNotIn("bws-get", prepare_branch)
 
+    def test_wrappers_do_not_run_release_tools_on_system_python(self) -> None:
+        """`/usr/bin/python3` is 3.9; `release_tools` declares >= 3.11."""
+        for name in ("release-status", "release-testflight"):
+            with self.subTest(wrapper=name):
+                wrapper = (ROOT / "app" / name).read_text(encoding="utf-8")
+                self.assertNotIn('/usr/bin/python3" -m release_tools', wrapper)
+                self.assertNotIn("/usr/bin/python3 -m release_tools", wrapper)
+                self.assertIn("release_python()", wrapper)
+                self.assertIn('PYTHON_BIN="$(release_python)"', wrapper)
+
+    def test_release_python_resolves_an_interpreter_release_tools_can_run(self) -> None:
+        """The resolver must return a real >= 3.11 interpreter, not just claim to."""
+        wrapper = (ROOT / "app" / "release-status").read_text(encoding="utf-8")
+        body = wrapper.split("release_python() {", 1)[1].split("\n}\n", 1)[0]
+        resolved = subprocess.run(
+            ["bash", "-c", f"set -euo pipefail\nrelease_python() {{{body}\n}}\nrelease_python"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        reported = subprocess.run(
+            [
+                resolved.stdout.strip(),
+                "-c",
+                "import sys; print('%d.%d' % sys.version_info[:2])",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        major, minor = (int(part) for part in reported.stdout.strip().split("."))
+
+        self.assertGreaterEqual((major, minor), (3, 11))
+
+    def test_both_wrappers_share_one_interpreter_resolver(self) -> None:
+        """A resolver that drifts between the two entry points is worse than none."""
+        bodies = [
+            (ROOT / "app" / name)
+            .read_text(encoding="utf-8")
+            .split("release_python() {", 1)[1]
+            .split("\n}\n", 1)[0]
+            for name in ("release-status", "release-testflight")
+        ]
+
+        self.assertEqual(bodies[0], bodies[1])
+
     def test_prepare_only_uses_git_common_readiness_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
