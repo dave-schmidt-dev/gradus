@@ -27,6 +27,12 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# Two release-tooling suites predate the `test_*.py` convention and were
+# collected by nothing: `app/testflight-setup-tests.py` (run only by
+# `app/test-gate.sh`) and `app/test-testflight-assign.py` (run by nothing at
+# all). Widen collection rather than rename them, so the pre-push gate is the
+# whole Python suite and not the subset that happens to match one glob.
+python_files = ["test_*.py", "*-tests.py", "test-*.py"]
 
 [tool.ruff]
 line-length = 100
