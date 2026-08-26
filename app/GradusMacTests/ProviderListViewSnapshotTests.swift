@@ -243,6 +243,46 @@ private func fixtureDataProviders() -> [ProviderEntry] {
     assertStagedSnapshot(of: image, as: .image(precision: 0.999))
 }
 
+/// The same ramp on the dark panel, which is how the menu is most often seen.
+///
+/// Every other baseline in this file renders light, and the two appearances are
+/// not interchangeable: `ProgressBar` draws its track as
+/// `Color.secondary.opacity(0.25)`, which composites to a light gray over a
+/// white panel and to a *dark* gray over this one. A fill's contrast against
+/// its own track is therefore a different quantity in each, and a bar that
+/// reads clearly in one can lose the ability to show its fraction in the other.
+/// Nothing was gating the appearance the menu is actually used in.
+@MainActor
+@Test func providerListViewRendersEveryRampLevelOnTheDarkPanel() {
+    let viewModel = PublisherViewModel()
+    viewModel.apply(
+        SnapshotPayload(
+            schemaVersion: 2,
+            updatedAt: "2026-08-02T18:00:00Z",
+            providers: [
+                rampProvider("Healthy", percentLeft: 85, paceDelta: 0.10),
+                rampProvider("Drifting", percentLeft: 55, paceDelta: -0.06),
+                rampProvider("Behind", percentLeft: 35, paceDelta: -0.18),
+                rampProvider("Burning", percentLeft: 20, paceDelta: -0.35),
+                rampProvider("Slow Burn", percentLeft: 19, paceDelta: nil)
+            ]
+        )
+    )
+
+    // Approximates the popover's dark material. A literal rather than
+    // `NSColor.windowBackgroundColor`, which resolves through `NSAppearance`
+    // and would not follow the SwiftUI `colorScheme` forced below.
+    let panel = Color(hex: 0x2E2E30)
+    let image = snapshotImage(
+        ProviderListView(providers: viewModel.providers, now: fixedNow)
+            .frame(width: 256, height: 300, alignment: .top)
+            .background(panel)
+            .environment(\.colorScheme, .dark),
+        size: CGSize(width: 256, height: 300)
+    )
+    assertStagedSnapshot(of: image, as: .image(precision: 0.999))
+}
+
 /// Single-window provider for the ramp baseline. `resetISO` is always present
 /// so the warning rows render a complete metadata line and the image is about
 /// color rather than about which labels happen to be missing.

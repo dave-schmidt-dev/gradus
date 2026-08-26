@@ -166,7 +166,7 @@ private struct ProviderRow: View {
                 Spacer(minLength: 4)
                 Text(percentDisplay(window.percentLeft))
                     .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(SignalColor.forWindow(window))
+                    .foregroundStyle(MenuSignalPalette.color(for: window))
             }
 
             ProgressBar(
@@ -175,7 +175,7 @@ private struct ProviderRow: View {
                     percentLeft: window.percentLeft,
                     paceDelta: window.paceDelta
                 ),
-                tint: SignalColor.forWindow(window)
+                tint: MenuSignalPalette.color(for: window)
             )
             .frame(height: density.barHeight)
 
@@ -269,12 +269,13 @@ private struct MenuWindowRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(ProviderWindowLabel.label(for: window.id))
                     .font(density.metadataFont.weight(.medium))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
                 Text(percentDisplay(window.percentLeft))
                     .font(.subheadline.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(SignalColor.forWindow(window))
+                    .foregroundStyle(MenuSignalPalette.color(for: window))
             }
 
             ProgressBar(
@@ -283,7 +284,7 @@ private struct MenuWindowRow: View {
                     percentLeft: window.percentLeft,
                     paceDelta: window.paceDelta
                 ),
-                tint: SignalColor.forWindow(window)
+                tint: MenuSignalPalette.color(for: window)
             )
             .frame(height: density.barHeight)
 

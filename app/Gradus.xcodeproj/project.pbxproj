@@ -104,6 +104,7 @@
 		7B7C8918DE6C8D87BABABCEB /* settingsViewNotificationsOffLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 023357791F1E7BBE45066A54 /* settingsViewNotificationsOffLight.1.png */; };
 		7D89BC4B330E2CDEA939D028 /* T17SeamGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FF4BA2596FEC5DCC8EC7395 /* T17SeamGate.swift */; };
 		7F772E2FA6A54AEB8914620F /* BridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C65739F0A1AD5EF5B8322F3E /* BridgeTests.swift */; };
+		836BBED46BFD814301C4A221 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 6C34AE581013767B89C84A00 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png */; };
 		8800FEB029B6DC87DCEF5154 /* MenuContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B4B649C134BEDB24E6F577C /* MenuContentView.swift */; };
 		88C8C9343FE8013A26314410 /* CardLayoutSolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CD2A7EEE9BC5667647B000A /* CardLayoutSolver.swift */; };
 		894195E650F9C984B8E2AF1F /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 773E313969E9D2D0B3851CF3 /* DashboardViewModel.swift */; };
@@ -155,6 +156,7 @@
 		B908870DAC60601BE4F8F13F /* UsageBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A99A71D9657EB01A6253C253 /* UsageBar.swift */; };
 		B9264C402BDA8314FD374E7C /* DashboardViewModelSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 321DD904CC11A718C6D6931C /* DashboardViewModelSyncTests.swift */; };
 		BA20CF540AF52BD7E807B60F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 48E0B2155A2C5FFEF4AC001A /* PrivacyInfo.xcprivacy */; };
+		BB2F936207A8E2DBF74122EE /* MenuSignalPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01E503CFACE6B4E2EBDA00A9 /* MenuSignalPalette.swift */; };
 		BC0EEAB37BF868ED6C6D1907 /* NotificationAuthorizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A243A4032EE2931153022DB /* NotificationAuthorizationTests.swift */; };
 		BD4AEAFB82732A00898AF589 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = E9A89EB3708A9F91A6839FF7 /* Localizable.strings */; };
 		BD68006E61A0BF0CF8B91BE3 /* DashboardSnapshotFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3356F25C38F5AEAF81AE2AF1 /* DashboardSnapshotFixtures.swift */; };
@@ -306,6 +308,7 @@
 /* Begin PBXFileReference section */
 		00241A1600CB85B81015297B /* ProviderWindowLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderWindowLabel.swift; sourceTree = "<group>"; };
 		007AB014431BC4CBAE324BBA /* ProviderRetryAccessibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderRetryAccessibilityTests.swift; sourceTree = "<group>"; };
+		01E503CFACE6B4E2EBDA00A9 /* MenuSignalPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuSignalPalette.swift; sourceTree = "<group>"; };
 		023357791F1E7BBE45066A54 /* settingsViewNotificationsOffLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = settingsViewNotificationsOffLight.1.png; sourceTree = "<group>"; };
 		03541F7DB1003A01A6A8EB3A /* DevicePresenceLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePresenceLifecycle.swift; sourceTree = "<group>"; };
 		05B69B97EBCF3C9EBB816E6E /* settingsViewNotificationsOnDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = settingsViewNotificationsOnDark.1.png; sourceTree = "<group>"; };
@@ -397,6 +400,7 @@
 		66B9E953E93EBE65901BE779 /* DashboardViewModel+Presentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardViewModel+Presentation.swift"; sourceTree = "<group>"; };
 		6823FF052589D70CBF925382 /* GradusWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusWidget.swift; sourceTree = "<group>"; };
 		6B270DAE848461522EEA974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		6C34AE581013767B89C84A00 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png; sourceTree = "<group>"; };
 		6CD2A7EEE9BC5667647B000A /* CardLayoutSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardLayoutSolver.swift; sourceTree = "<group>"; };
 		6D527542E168FE738F064F7F /* GradusiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GradusiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6ED6FF507C14BCA7CBE51FB6 /* PublisherViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublisherViewModel.swift; sourceTree = "<group>"; };
@@ -843,6 +847,7 @@
 				4B4B649C134BEDB24E6F577C /* MenuContentView.swift */,
 				C2078278DBAC2797D26F5DD9 /* MenuDensity.swift */,
 				80F4C794354A1E33E39E3540 /* MenuProviderList.swift */,
+				01E503CFACE6B4E2EBDA00A9 /* MenuSignalPalette.swift */,
 				4BF5027D499DAC87FB21D789 /* ProgressBar.swift */,
 				CB856A4F5C7351FABBCA9E85 /* ProviderAttention.swift */,
 				5651685B644BA9B4B6BF4E75 /* ProviderEntry+Ranking.swift */,
@@ -1035,6 +1040,7 @@
 			children = (
 				E9C45956EB90B261C6A0920A /* providerListViewRendersEmptyState.1.png */,
 				A1E6989D7780540EB690F60F /* providerListViewRendersEveryRampLevel.1.png */,
+				6C34AE581013767B89C84A00 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png */,
 				D304181716737E8F5FEECFDE /* providerListViewRendersFromFixtureData.1.png */,
 			);
 			path = ProviderListViewSnapshotTests;
@@ -1459,6 +1465,7 @@
 				CA065544B5629D290F4C5CF9 /* menuOverflowPreservesReadableRows.1.png in Resources */,
 				46F2DF11651DF8AF4F64C741 /* providerListViewRendersEmptyState.1.png in Resources */,
 				D1A2EE156D6B374DA300AD1B /* providerListViewRendersEveryRampLevel.1.png in Resources */,
+				836BBED46BFD814301C4A221 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png in Resources */,
 				C97E8B6367C64AD126B0C593 /* providerListViewRendersFromFixtureData.1.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1537,6 +1544,7 @@
 				8800FEB029B6DC87DCEF5154 /* MenuContentView.swift in Sources */,
 				337C995580C073926A545027 /* MenuDensity.swift in Sources */,
 				B2EC61C9A2D6331BD1E95F13 /* MenuProviderList.swift in Sources */,
+				BB2F936207A8E2DBF74122EE /* MenuSignalPalette.swift in Sources */,
 				729E09ACC01C909CC005CB6F /* ProgressBar.swift in Sources */,
 				CA9CA0F6BD544F60C7CA979D /* ProviderAttention.swift in Sources */,
 				22D222356DEB3E1E10794117 /* ProviderEntry+Ranking.swift in Sources */,
