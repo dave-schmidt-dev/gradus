@@ -465,6 +465,22 @@ defaults write com.apple.CrashReporter DialogType none
 # fails before that point -- `rm -rf ""` is a safe no-op, never `rm -rf` of cwd.
 derived_data_dir=""
 
+readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+# `rm -rf` on DerivedData does not unregister what LaunchServices already
+# recorded: every gate run built `GradusMac.app` under a fresh temp path,
+# xcodebuild registered it, and the entry outlived the directory. By
+# 2026-08-26 that had accumulated 404 dead Gradus bundles, all named
+# `GradusMac`, all `com.zerodelta.gradus.mac.dev`. Unregister before deleting.
+gate_unregister_bundles() {
+  local bundle
+  [[ -n "$derived_data_dir" && -d "$derived_data_dir" ]] || return 0
+  [[ -x "$LSREGISTER" ]] || return 0
+  while IFS= read -r bundle; do
+    "$LSREGISTER" -u "$bundle" >/dev/null 2>&1 || true
+  done < <(find "$derived_data_dir" -maxdepth 6 -type d -name "*.app" 2>/dev/null)
+}
+
 # This gate's own EXIT trap only handles state it owns directly (the
 # CrashReporter dialog override and DerivedData). It is set BEFORE sourcing
 # the shared simctl gate lib below, on purpose: the lib's
@@ -479,6 +495,7 @@ trap '
   else
     defaults write com.apple.CrashReporter DialogType "$prior_dialog_type"
   fi
+  gate_unregister_bundles
   rm -rf "$derived_data_dir"
 ' EXIT
 

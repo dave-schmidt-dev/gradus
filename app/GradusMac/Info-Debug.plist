@@ -4,6 +4,15 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<!-- Debug sets LSUIElement NO (below) so XCUITest can drive a real window,
+	     which also makes this build a regular app that Spotlight ranks above
+	     the installed LSUIElement one. With both bundles named "GradusMac" a
+	     Finder search for "gradus" opened whichever Xcode had built last, and
+	     the Debug build's separate bundle id gives it separate, empty defaults,
+	     so it presented as a working Gradus with no data. A distinct display
+	     name keeps the two tellable apart at a glance. -->
+	<key>CFBundleDisplayName</key>
+	<string>Gradus (Dev)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
