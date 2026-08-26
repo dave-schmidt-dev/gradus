@@ -1,12 +1,13 @@
 # Local git hooks — this project keeps local enforcement lightweight and fast.
-# pre-commit runs fast checks (lint + format). Required Xcode Cloud checks run
-# after push for app validation.
+# pre-commit runs fast checks (lint + format); pre-push runs the Python suite.
+# Required Xcode Cloud checks run after push for app validation, and no Xcode
+# app automation runs locally at either stage.
 # Python hooks use the project's `uv run` tools. SwiftLint, SwiftFormat, and
 # ShellCheck are PATH tools whose exact required versions are fail-closed by
 # `scripts/check-static-tool-versions.sh`.
 #
 # One-time bootstrap after clone:  uv run pre-commit install
-default_install_hook_types: [pre-commit]
+default_install_hook_types: [pre-commit, pre-push]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -69,3 +70,18 @@ repos:
         exclude: ^monitor$
         require_serial: true
         stages: [pre-commit]
+
+      # ---- pre-push ----
+      # `467227f` moved app validation to Xcode Cloud and dropped the pre-push
+      # app gate, which left the Python suite gated by nothing: the required
+      # cloud checks cover the two Swift contexts only. This restores the Python
+      # leg alone. The simulator legs belong to the cloud now, and a local
+      # `xcodebuild` Mac test host is what hung a push for 600s on 2026-08-18.
+      - id: pytest
+        name: pytest (Python suite)
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true
+        stages: [pre-push]

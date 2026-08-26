@@ -668,7 +668,7 @@ enforced by `scripts/check-static-tool-versions.sh`.
 One-time bootstrap after cloning:
 
 ```bash
-uv run pre-commit install   # installs pre-commit hooks
+uv run pre-commit install   # installs the pre-commit and pre-push hooks
 ```
 
 - **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files,
@@ -682,8 +682,14 @@ uv run pre-commit install   # installs pre-commit hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **local only**: `pre-commit` hooks run fast Python/Swift checks and do not
-  run Xcode app automation.
+- **pre-push** (~40s): the whole Python suite via `uv run pytest -q`. `467227f`
+  moved app validation to Xcode Cloud and removed the previous pre-push app
+  gate, which left the Python producer suite gated by nothing; this restores
+  that one leg. The hook is `always_run` with `pass_filenames: false`, so a push
+  containing no Python change still runs it.
+- **local only**: hooks run fast Python/Swift lint at commit and the Python test
+  suite at push. Neither stage runs Xcode app automation; the simulator and
+  device legs stay in the required cloud checks.
 
 Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
 `.swiftformat`, Swift source scope and generated directory exclusions in

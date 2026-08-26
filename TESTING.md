@@ -122,8 +122,9 @@ product but never its test targets, and XcodeGen cannot add them to a scheme's
 tests — the reconciliation core both apps import — do not run at all.
 
 Pushes rely on required Xcode Cloud checks for app validation. Local hooks are
-kept free of app automation, so they stay focused on fast lint and formatting
-checks. App-specific evidence is collected by the required Xcode Cloud checks
+kept free of app automation: pre-commit runs fast lint and formatting checks,
+and pre-push runs the whole Python suite (`uv run pytest -q`, ~40s).
+App-specific evidence is collected by the required Xcode Cloud checks
 after push.
 
 iOS snapshot baselines are canonical to the Xcode Cloud default runtime. Refresh
