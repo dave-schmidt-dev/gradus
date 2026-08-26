@@ -27,9 +27,9 @@ func iosSnapshotDirectory(
         .appendingPathComponent(testFileName, isDirectory: true)
 }
 
-func assertIOSSnapshot<Value, Format>(
+func assertIOSSnapshot<Value>(
     of value: @autoclosure () throws -> Value,
-    as snapshotting: Snapshotting<Value, Format>,
+    as snapshotting: Snapshotting<Value, some Any>,
     named name: String? = nil,
     record: SnapshotTestingConfiguration.Record? = nil,
     timeout: TimeInterval = 5,
@@ -161,11 +161,13 @@ func bundledSampleProviders() throws -> [ProviderStatus] {
 }
 
 @MainActor
-func makeViewModel(providers: [ProviderStatus], showExhausted: Bool = true) -> DashboardViewModel {
+func makeViewModel(
+    providers: [ProviderStatus], showExhausted: Bool = true, test: String = #function
+) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
     let cache = FileLocalCacheStore(directory: directory)
-    let defaults = UserDefaults(suiteName: "gradus-dashboard-snapshots-\(UUID().uuidString)")!
+    let defaults = scratchDefaults("dashboard-snapshots", test)!
     defaults.set(showExhausted, forKey: DashboardViewModel.showExhaustedKey)
     try? cache.saveCachedStatuses(providers, syncedAt: dashboardSnapshotFixedNow)
     return DashboardViewModel(cache: cache, userDefaults: defaults)
@@ -296,4 +298,60 @@ func paceDivergentProviders() -> [ProviderStatus] {
             publishedAt: dashboardSnapshotFixedNow
         )
     ]
+}
+
+// MARK: - Scratch preference suites
+
+// Lives here because this target has no dedicated test-support file and the
+// project uses no synchronized groups, so adding one means hand-editing four
+// places in `project.pbxproj`. Everything in a target shares a module, so both
+// functions below are visible to every test file regardless.
+
+/// Empties a scratch `UserDefaults` suite, and best-effort removes its file.
+///
+/// Deleting the file is best effort and nothing may depend on it: cfprefsd owns
+/// the domain and flushes its cached copy on its own schedule, so a file removed
+/// at the end of a run can reappear seconds later. The guarantee is that the
+/// domain holds no keys.
+func removeScratchDefaultsSuite(_ suite: String) {
+    UserDefaults.standard.removePersistentDomain(forName: suite)
+    CFPreferencesAppSynchronize(suite as CFString)
+    let fileManager = FileManager.default
+    for library in fileManager.urls(for: .libraryDirectory, in: .userDomainMask) {
+        let plist = library
+            .appendingPathComponent("Preferences", isDirectory: true)
+            .appendingPathComponent("\(suite).plist")
+        try? fileManager.removeItem(at: plist)
+    }
+}
+
+/// A scratch suite named for the test that asked for it, cleared before use.
+///
+/// `test` defaults to `#function`, and default arguments are evaluated at the
+/// call site, so every test gets its own stable suite without having to name
+/// one. That replaces the UUID these fixtures used to interpolate: a UUID
+/// isolates but leaves the suite unnameable afterwards, so each run stranded a
+/// preference file nothing would ever reuse or remove -- 24,009 of them, 6.3M,
+/// had collected across the simulator containers by 2026-08-26. Clearing on
+/// entry supplies the isolation the UUID was there for, and bounds the total at
+/// one file per test rather than one per test per run.
+///
+/// A fixture calling this on a test's behalf must thread `#function` through
+/// rather than let it default, or every test routed through that fixture shares
+/// one suite and they race.
+func scratchDefaults(_ label: String, _ test: String = #function) -> UserDefaults? {
+    scratchDefaults(named: scratchSuiteName(label, test))
+}
+
+/// The suite name `scratchDefaults(_:_:)` would use. For a test that needs the
+/// name itself, typically to tear the suite down in a `defer`.
+func scratchSuiteName(_ label: String, _ test: String = #function) -> String {
+    let scope = test.filter { $0.isLetter || $0.isNumber }
+    return "gradus-tests.\(label).\(scope)"
+}
+
+/// As above, for a suite name already in hand.
+func scratchDefaults(named suite: String) -> UserDefaults? {
+    removeScratchDefaultsSuite(suite)
+    return UserDefaults(suiteName: suite)
 }

@@ -42,16 +42,18 @@ func makeStatus(_ name: String, isWarning: Bool = false) -> ProviderStatus {
 /// files in this target each declare their own file-private
 /// `isolatedDefaults()` fixture; this one must stay distinct now that it's
 /// visible module-wide.
-func syncIsolatedDefaults() -> UserDefaults {
-    UserDefaults(suiteName: "gradus-sync-tests-\(UUID().uuidString)")!
+func syncIsolatedDefaults(_ test: String = #function) -> UserDefaults {
+    scratchDefaults("sync", test)!
 }
 
 @MainActor
 func makeViewModel(
     cache: LocalCacheStore, fetcher: ZoneChangesFetcher,
     warningNotificationScheduler: WarningNotificationScheduling? = nil,
-    userDefaults: UserDefaults = syncIsolatedDefaults()
+    userDefaults: UserDefaults? = nil,
+    test: String = #function
 ) -> DashboardViewModel {
+    let userDefaults = userDefaults ?? syncIsolatedDefaults(test)
     if userDefaults.object(forKey: DashboardViewModel.syncEnabledKey) == nil {
         userDefaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
     }

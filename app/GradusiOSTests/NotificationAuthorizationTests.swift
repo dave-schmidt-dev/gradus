@@ -11,8 +11,8 @@ import UserNotifications
 // dropped by the system. Nothing in the app read the authorization state at all,
 // so there was no value a test could have asserted against.
 
-private func authorizationDefaults() -> UserDefaults {
-    UserDefaults(suiteName: "gradus-notification-authorization-\(UUID().uuidString)")!
+private func authorizationDefaults(_ test: String = #function) -> UserDefaults {
+    scratchDefaults("notification-authorization", test)!
 }
 
 private func authorizationCache() -> FileLocalCacheStore {

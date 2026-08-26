@@ -48,8 +48,9 @@ extension DashboardSnapshotTests {
         let liveDirectory = root.appendingPathComponent("Live", isDirectory: true)
         let sampleDirectory = SampleDataMode.storageDirectory(baseDirectory: root)
         let liveCache = FileLocalCacheStore(directory: liveDirectory)
-        let defaultsName = "gradus-sample-session-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        let defaultsName = scratchSuiteName("sample-session")
+        let defaults = try XCTUnwrap(scratchDefaults(named: defaultsName))
+        defer { removeScratchDefaultsSuite(defaultsName) }
         let liveStatus = dashboardSampleProviders()[0]
         try liveCache.saveCachedStatuses([liveStatus], syncedAt: dashboardSnapshotFixedNow)
 

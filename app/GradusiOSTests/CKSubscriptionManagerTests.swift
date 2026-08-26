@@ -45,8 +45,8 @@ private struct RetryableSubscriptionError: Error {}
 /// A fresh suite per call, matching `DashboardViewModelSyncTests.swift`'s
 /// `isolatedDefaults()` -- `.standard` is shared process-wide and these
 /// tests persist `notificationsEnabled`/`syncEnabled`.
-private func isolatedDefaults() -> UserDefaults {
-    UserDefaults(suiteName: "gradus-subscription-manager-tests-\(UUID().uuidString)")!
+private func isolatedDefaults(_ test: String = #function) -> UserDefaults {
+    scratchDefaults("subscription-manager", test)!
 }
 
 private func tempCache() -> FileLocalCacheStore {

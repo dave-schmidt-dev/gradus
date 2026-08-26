@@ -126,9 +126,10 @@ func makePublisherViewModel(
     publisher: WidgetSnapshotPublisher,
     fetcher: CloudFetcher? = nil,
     zoneChangesFetcher: ZoneChangesFetcher? = nil,
-    accountStatus: CKAccountStatus = .available
+    accountStatus: CKAccountStatus = .available,
+    test: String = #function
 ) -> DashboardViewModel {
-    let defaults = syncIsolatedDefaults()
+    let defaults = syncIsolatedDefaults(test)
     defaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
     return DashboardViewModel(
         cache: cache,

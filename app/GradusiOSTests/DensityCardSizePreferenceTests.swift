@@ -17,8 +17,9 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 @Test func densityPersistsPerDeviceAndDefaultsToCompact() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-pref-\(UUID().uuidString)", isDirectory: true)
-    let suite = "gradus-density-pref-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
+    let suite = scratchSuiteName("density-pref")
+    let defaults = try #require(scratchDefaults(named: suite))
+    defer { removeScratchDefaultsSuite(suite) }
 
     // Unset defaults to Auto. The selected count is resolved only from the
     // live container and Dynamic Type environment, not provider data.
@@ -49,7 +50,7 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 @Test func legacyColumnPreferenceMigratesAfterGeometryIsKnown() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-migration-\(UUID().uuidString)", isDirectory: true)
-    let defaults = try #require(UserDefaults(suiteName: "gradus-density-migration-\(UUID().uuidString)"))
+    let defaults = try #require(scratchDefaults("density-migration"))
 
     // Build 12 stored a direct column count. Before geometry is available the
     // new model stays on Auto rather than briefly treating that number as a
@@ -74,7 +75,7 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 @Test func legacyColumnPreferenceDoesNotRemigrateAfterOneColumnGeometry() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-migration-one-column-\(UUID().uuidString)", isDirectory: true)
-    let defaults = try #require(UserDefaults(suiteName: "gradus-density-migration-one-column-\(UUID().uuidString)"))
+    let defaults = try #require(scratchDefaults("density-migration-one-column"))
     defaults.set(3, forKey: DashboardViewModel.cardColumnPreferenceKey)
 
     let viewModel = DashboardViewModel(
@@ -131,7 +132,7 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 @Test func oneColumnGeometryForcesAutomaticCardSize() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-one-column-size-\(UUID().uuidString)", isDirectory: true)
-    let defaults = try #require(UserDefaults(suiteName: "gradus-one-column-size-\(UUID().uuidString)"))
+    let defaults = try #require(scratchDefaults("one-column-size"))
     let viewModel = DashboardViewModel(
         cache: FileLocalCacheStore(directory: directory), userDefaults: defaults
     )
@@ -152,10 +153,10 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 @Test func automaticCardSizeDisablesManualSlider() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-card-size-binding-\(UUID().uuidString)", isDirectory: true)
-    let suite = "gradus-card-size-binding-\(UUID().uuidString)"
+    let suite = scratchSuiteName("card-size-binding")
     let viewModel = try DashboardViewModel(
         cache: FileLocalCacheStore(directory: directory),
-        userDefaults: #require(UserDefaults(suiteName: suite))
+        userDefaults: #require(scratchDefaults(named: suite))
     )
     viewModel.setAvailableCardColumns(4)
     let settings = SettingsView(dashboardViewModel: viewModel)

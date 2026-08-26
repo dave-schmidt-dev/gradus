@@ -116,11 +116,11 @@ func densitySnapshotTraits(
 }
 
 @MainActor
-func makeViewModel() -> DashboardViewModel {
+func makeViewModel(test: String = #function) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-snap-\(UUID().uuidString)", isDirectory: true)
     let cache = FileLocalCacheStore(directory: directory)
-    let defaults = UserDefaults(suiteName: "gradus-density-snap-\(UUID().uuidString)")!
+    let defaults = scratchDefaults("density-snap", test)!
     defaults.set(true, forKey: DashboardViewModel.showExhaustedKey)
     defaults.set(pinnedCardColumnPreference, forKey: DashboardViewModel.cardColumnPreferenceKey)
     let providers = fullProviderSet()
@@ -139,8 +139,8 @@ func makeViewModel() -> DashboardViewModel {
 }
 
 @MainActor
-func denseDashboard(density: DashboardDensity? = nil) -> some View {
+func denseDashboard(density: DashboardDensity? = nil, test: String = #function) -> some View {
     DashboardContent(
-        viewModel: makeViewModel(), now: densityLayoutFixedNow, layout: .denseGrid, density: density
+        viewModel: makeViewModel(test: test), now: densityLayoutFixedNow, layout: .denseGrid, density: density
     )
 }

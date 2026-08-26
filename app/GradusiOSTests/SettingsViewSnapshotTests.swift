@@ -26,8 +26,8 @@ private let settingsSnapshotRecording: SnapshotTestingConfiguration.Record = {
 /// A fresh suite per call, matching `DashboardViewModelSyncTests.swift`'s
 /// `isolatedDefaults()` -- `notificationsEnabled` persists to `UserDefaults`,
 /// and `.standard` is shared process-wide.
-private func isolatedDefaults() -> UserDefaults {
-    UserDefaults(suiteName: "gradus-settings-snapshot-tests-\(UUID().uuidString)")!
+private func isolatedDefaults(_ test: String = #function) -> UserDefaults {
+    scratchDefaults("settings-snapshot", test)!
 }
 
 private func sampleProviders() -> [ProviderStatus] {
@@ -77,7 +77,8 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
 
 @MainActor
 private func makeViewModel(
-    notificationsEnabled: Bool, systemAuthorization: NotificationAuthorization? = nil
+    notificationsEnabled: Bool, systemAuthorization: NotificationAuthorization? = nil,
+    test: String = #function
 ) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-settings-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
@@ -86,7 +87,7 @@ private func makeViewModel(
     #expect(providers.contains { $0.ok && !$0.windows.isEmpty })
     #expect(providers.contains { !$0.ok && $0.windows.isEmpty })
     try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
-    let defaults = isolatedDefaults()
+    let defaults = isolatedDefaults(test)
     defaults.set(notificationsEnabled, forKey: DashboardViewModel.notificationsEnabledKey)
     return DashboardViewModel(
         cache: cache,

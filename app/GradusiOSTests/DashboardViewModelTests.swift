@@ -4,8 +4,8 @@ import Foundation
 import GradusKit
 import Testing
 
-private func dashboardPreferenceDefaults() -> UserDefaults {
-    UserDefaults(suiteName: "gradus-dashboard-preferences-\(UUID().uuidString)")!
+private func dashboardPreferenceDefaults(_ test: String = #function) -> UserDefaults {
+    scratchDefaults("dashboard-preferences", test)!
 }
 
 private func dashboardPreferenceCache() -> FileLocalCacheStore {
@@ -19,9 +19,9 @@ private func dashboardPreferenceCache() -> FileLocalCacheStore {
 private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
 
 @Test func requiredICloudMigrationPreservesLegacyPresenceAndPrecedence() throws {
-    let suite = "gradus-required-icloud-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let suite = scratchSuiteName("required-icloud")
+    let defaults = try #require(scratchDefaults(named: suite))
+    defer { removeScratchDefaultsSuite(suite) }
     defaults.set(false, forKey: DashboardViewModel.syncEnabledKey)
     #expect(
         RequiredICloudMigration.migrate(defaults: defaults, legacyKey: DashboardViewModel.syncEnabledKey)
@@ -29,9 +29,9 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
     )
     #expect(defaults.object(forKey: DashboardViewModel.syncEnabledKey) == nil)
 
-    let trueSuite = "gradus-required-icloud-true-\(UUID().uuidString)"
-    let trueDefaults = try #require(UserDefaults(suiteName: trueSuite))
-    defer { trueDefaults.removePersistentDomain(forName: trueSuite) }
+    let trueSuite = scratchSuiteName("required-icloud-true")
+    let trueDefaults = try #require(scratchDefaults(named: trueSuite))
+    defer { removeScratchDefaultsSuite(trueSuite) }
     trueDefaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
     #expect(
         RequiredICloudMigration.migrate(defaults: trueDefaults, legacyKey: DashboardViewModel.syncEnabledKey)
@@ -47,17 +47,17 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
 }
 
 @Test func requiredICloudMigrationFreshAndInterruptedWritesAreDeterministic() throws {
-    let freshSuite = "gradus-required-icloud-fresh-\(UUID().uuidString)"
-    let fresh = try #require(UserDefaults(suiteName: freshSuite))
-    defer { fresh.removePersistentDomain(forName: freshSuite) }
+    let freshSuite = scratchSuiteName("required-icloud-fresh")
+    let fresh = try #require(scratchDefaults(named: freshSuite))
+    defer { removeScratchDefaultsSuite(freshSuite) }
     #expect(
         RequiredICloudMigration.migrate(defaults: fresh, legacyKey: DashboardViewModel.syncEnabledKey)
             == .confirmed
     )
 
-    let interruptedSuite = "gradus-required-icloud-interrupted-\(UUID().uuidString)"
-    let interrupted = try #require(UserDefaults(suiteName: interruptedSuite))
-    defer { interrupted.removePersistentDomain(forName: interruptedSuite) }
+    let interruptedSuite = scratchSuiteName("required-icloud-interrupted")
+    let interrupted = try #require(scratchDefaults(named: interruptedSuite))
+    defer { removeScratchDefaultsSuite(interruptedSuite) }
     interrupted.set(false, forKey: DashboardViewModel.syncEnabledKey)
     let interruptedMode = RequiredICloudMigration.migrate(
         defaults: interrupted,
@@ -76,9 +76,9 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
 
 @MainActor
 @Test func requiredICloudModeConfirmsAndSurvivesRelaunch() throws {
-    let suite = "gradus-required-icloud-relaunch-\(UUID().uuidString)"
-    let defaults = try #require(UserDefaults(suiteName: suite))
-    defer { defaults.removePersistentDomain(forName: suite) }
+    let suite = scratchSuiteName("required-icloud-relaunch")
+    let defaults = try #require(scratchDefaults(named: suite))
+    defer { removeScratchDefaultsSuite(suite) }
     let cache = dashboardPreferenceCache()
     defaults.set(false, forKey: DashboardViewModel.syncEnabledKey)
 

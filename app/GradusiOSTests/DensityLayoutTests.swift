@@ -39,11 +39,11 @@ func provider(
 }
 
 @MainActor
-func makeDensityViewModel(providers: [ProviderStatus]) -> DashboardViewModel {
+func makeDensityViewModel(providers: [ProviderStatus], test: String = #function) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-density-tests-\(UUID().uuidString)", isDirectory: true)
     let cache = FileLocalCacheStore(directory: directory)
-    let defaults = UserDefaults(suiteName: "gradus-density-\(UUID().uuidString)")!
+    let defaults = scratchDefaults("density", test)!
     defaults.set(true, forKey: DashboardViewModel.showExhaustedKey)
     try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
     return DashboardViewModel(cache: cache, userDefaults: defaults)
