@@ -335,13 +335,13 @@ private func assertRowBalancedFramesMatchMeasuredContent(
 @Test func iPhoneAndIPadSemanticSnapshotsHaveExactWindowParity() {
     let providers = fullProviderSet()
     let iPhone = DashboardContent(
-        viewModel: makeDensityViewModel(providers: providers),
+        viewModel: makeDensityViewModel(providers: providers, test: "\(#function).iPhone"),
         now: fixedNow,
         layout: .denseSingleColumn,
         density: .standard
     )
     let iPad = DashboardContent(
-        viewModel: makeDensityViewModel(providers: providers),
+        viewModel: makeDensityViewModel(providers: providers, test: "\(#function).iPad"),
         now: fixedNow,
         layout: .denseGrid,
         density: .standard

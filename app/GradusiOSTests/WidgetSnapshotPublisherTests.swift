@@ -63,10 +63,13 @@ import Testing
             newToken: Data([1])
         )
     ])
+    // A second suite: the first view model is still live, and the fixture
+    // clears the domain it is handed on the way in.
     let deltaViewModel = makePublisherViewModel(
         cache: cache,
         publisher: publisher,
-        zoneChangesFetcher: deltaFetcher
+        zoneChangesFetcher: deltaFetcher,
+        test: "\(#function).delta"
     )
     deltaViewModel.updateAccountStatus(.available)
     await deltaViewModel.handleRemoteNotification()
@@ -95,10 +98,12 @@ import Testing
     #expect(failedStore.snapshot == nil)
     #expect(failedReloader.reloadCount == 0)
 
+    // A second suite: `failingViewModel` is still live above.
     let fetchFailureViewModel = makePublisherViewModel(
         cache: PublisherCacheStore(),
         publisher: failedPublisher,
-        fetcher: StaticPublisherFetcher(result: .failure(.expected))
+        fetcher: StaticPublisherFetcher(result: .failure(.expected)),
+        test: "\(#function).fetchFailure"
     )
     fetchFailureViewModel.updateAccountStatus(.available)
     #expect(await !fetchFailureViewModel.sync())
@@ -162,9 +167,11 @@ import Testing
         store: accountStore,
         timelineReloader: accountReloader
     )
+    // A second suite: `zoneViewModel` is still live above.
     let accountViewModel = makePublisherViewModel(
         cache: PublisherCacheStore(statuses: [cached], syncedAt: syncedAt),
-        publisher: accountPublisher
+        publisher: accountPublisher,
+        test: "\(#function).account"
     )
     accountViewModel.updateAccountStatus(.noAccount)
     #expect(accountStore.snapshot == nil)

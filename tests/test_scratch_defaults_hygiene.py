@@ -282,3 +282,96 @@ def test_no_default_argument_swallows_a_scope(target: Path) -> None:
         "so these name the suite after the fixture rather than the test:\n  "
         + "\n  ".join(offenders)
     )
+
+
+def _arguments(call: str) -> list[str]:
+    """Split a call's argument text on its top-level commas."""
+    inner, depth, current, arguments = call[1:-1], 0, "", []
+    for character in inner:
+        if character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth -= 1
+        if character == "," and depth == 0:
+            arguments.append(current.strip())
+            current = ""
+        else:
+            current += character
+    if current.strip():
+        arguments.append(current.strip())
+    return arguments
+
+
+PARAMETER = re.compile(r"^\s*(?:(\w+|_)\s+)?(\w+)\s*:")
+
+
+def _scope_argument(call: str, parameters, scopes: set) -> str:
+    """The argument that decides which suite this call gets, or "" for the default.
+
+    `scratchDefaults`/`scratchSuiteName` take the whole name, so every argument
+    counts. A fixture instead has one scope parameter, and only what is passed
+    there matters: two calls differing in any other argument still land in the
+    same suite, which is exactly how the shared-suite bug stayed hidden.
+    """
+    arguments = _arguments(call)
+    if parameters is None:
+        return " ".join(arguments)
+    for index, parameter in enumerate(parameters):
+        names = PARAMETER.match(parameter)
+        if not names or names.group(2) not in scopes:
+            continue
+        label = names.group(1) or names.group(2)
+        if label != "_":
+            for argument in arguments:
+                if argument.startswith(f"{label}:"):
+                    return argument
+        elif index < len(arguments):
+            return arguments[index]
+    return ""
+
+
+@pytest.mark.parametrize("target", TEST_TARGETS, ids=lambda path: path.name)
+def test_a_test_never_takes_the_same_suite_twice(target: Path) -> None:
+    """Two calls in one test must not both fall back to the same scope.
+
+    A test's `#function` is one value, so a fixture called twice hands back the
+    same suite -- and the helper clears it on entry, so the second call wipes
+    the domain the first object is still using. The UUID scheme this replaced
+    gave the two calls separate suites, so the hazard is new; the leftover files
+    cannot show it, because two calls sharing a suite leave exactly one plist.
+    """
+    functions, reaching = _reaching(target)
+    if reaching <= set(SCRATCH_API):
+        pytest.skip(f"{target.name} creates no scratch suites")
+
+    signatures = {
+        callee: (None if callee in SCRATCH_API else _arguments(signature))
+        for _, callee, signature, _, _ in functions
+        if callee in reaching
+    }
+    scope_names = {
+        callee: set(SCOPE_PARAM.findall(signature))
+        for _, callee, signature, _, _ in functions
+        if callee in reaching
+    }
+
+    offenders = []
+    for path, name, _, body, is_test in functions:
+        if not is_test:
+            continue
+        for callee in sorted(reaching):
+            used = [
+                _scope_argument(call, signatures.get(callee), scope_names.get(callee, set()))
+                for match in re.finditer(rf"\b{callee}\s*\(", body)
+                for call, _ in [_balanced(body, match.end() - 1, "(", ")")]
+            ]
+            repeated = {scope for scope in used if used.count(scope) > 1}
+            if repeated:
+                worst = max(used.count(scope) for scope in repeated)
+                offenders.append(f"{path.name}:{name}() calls {callee}() {worst}x on one scope")
+
+    assert not offenders, (
+        "each of these takes the same cleared suite more than once in a single "
+        "test, so the later call erases state the earlier object still holds. "
+        'Pass a distinct scope, e.g. `test: "\\(#function).delta"`:\n  ' + "\n  ".join(offenders)
+    )

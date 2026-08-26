@@ -90,7 +90,7 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let suppressed = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .denied),
-        userDefaults: authorizationDefaults()
+        userDefaults: authorizationDefaults("\(#function).suppressed")
     )
     await suppressed.setNotificationsEnabled(true)
     await suppressed.refreshNotificationAuthorization()
@@ -101,7 +101,7 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let optedOut = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .denied),
-        userDefaults: authorizationDefaults()
+        userDefaults: authorizationDefaults("\(#function).optedOut")
     )
     await optedOut.setNotificationsEnabled(false)
     await optedOut.refreshNotificationAuthorization()
@@ -111,7 +111,7 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
     let working = DashboardViewModel(
         cache: authorizationCache(),
         notificationAuthorizationSource: StubAuthorizationSource(authorization: .authorized),
-        userDefaults: authorizationDefaults()
+        userDefaults: authorizationDefaults("\(#function).working")
     )
     await working.setNotificationsEnabled(true)
     await working.refreshNotificationAuthorization()
