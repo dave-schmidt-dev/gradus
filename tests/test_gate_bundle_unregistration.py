@@ -38,7 +38,7 @@ def _function_source() -> str:
     return match.group(0)
 
 
-def _run_against(derived_data_dir: Path, recorder: Path) -> str:
+def _run_against(derived_data_dir: Path | str, recorder: Path) -> str:
     """Run the extracted function with a fake lsregister; return what it logged."""
     log = recorder.parent / "calls.log"
     recorder.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> {log}\n')
@@ -104,7 +104,15 @@ def test_nothing_outside_derived_data_is_touched(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("directory", ["", "absent"])
 def test_an_unset_or_missing_directory_is_a_silent_no_op(tmp_path: Path, directory: str) -> None:
-    """The trap fires even when the run died before the build; it must not fail."""
-    target = tmp_path / directory if directory else Path()
+    """The trap fires even when the run died before the build; it must not fail.
+
+    The unset case passes a bare empty string rather than `Path()`, which
+    stringifies to `"."`. That distinction is the whole test: `"."` is a real
+    directory, so the guard admitted it and `find` swept the current working
+    directory -- the repository -- for bundles. It passed only because a
+    checkout does not normally contain one, and broke the first time
+    `install-mac-local.sh` left its archive and export under `app/build`.
+    """
+    target = str(tmp_path / directory) if directory else ""
 
     assert _run_against(target, tmp_path / "lsregister") == ""
