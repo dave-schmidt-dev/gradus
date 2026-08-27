@@ -3,9 +3,18 @@ import GradusKit
 
 enum IOSProviderRetryAccessibility {
     static let retryingLabel = "Antigravity refresh retrying; values may be stale"
+    static let copilotRetryLabel = "Copilot probe timed out; showing cached values"
     static let reauthenticationLabel = "Antigravity authentication required; run agy to re-authenticate"
     static let claudeRateLimitedLabel = "Claude rate limited; cached values may be stale"
     static let failedRequestLabel = "Unable to refresh provider data"
+
+    /// Markers a provider's probe publishes to say "this failure is expected and
+    /// the values below are the last good reading."  Matched by exact equality
+    /// against the same-named constants in `gradus/snapshot.py`, and pinned by
+    /// `tests/test_swift_carry_marker_parity.py` -- reworded on one side alone,
+    /// the Copilot marker painted a red row whose own text read "showing cached
+    /// values" for two commits before anything noticed.
+    static let carryLabels: Set<String> = [retryingLabel, copilotRetryLabel]
 
     private static let httpStatusPatterns = [
         #"(?i)\bHTTP(?:/\d(?:\.\d)?)?\s+[45]\d{2}\b"#,
@@ -39,18 +48,23 @@ enum IOSProviderRetryAccessibility {
         if isClaudeRateLimited(provider) {
             return claudeRateLimitedLabel
         }
-        guard provider.providerName == "Antigravity", !provider.ok else { return nil }
-        if provider.errorMessage == retryingLabel {
-            return retryingLabel
+        guard !provider.ok else { return nil }
+        if let error = provider.errorMessage, carryLabels.contains(error) {
+            return error
         }
+        guard provider.providerName == "Antigravity" else { return nil }
         guard let error = provider.errorMessage?.lowercased(),
               error.contains("session expired") || error.contains("re-authenticate") || error.contains("run `agy`")
         else { return nil }
         return reauthenticationLabel
     }
 
+    /// True when the provider published one of `carryLabels`.  Named for
+    /// Antigravity's auth grace, the first such marker; Copilot's timeout carry
+    /// says the same thing to a reader and earns the same quiet treatment.
     static func isRetrying(_ provider: ProviderStatus) -> Bool {
-        label(for: provider) == retryingLabel
+        guard let label = label(for: provider) else { return false }
+        return carryLabels.contains(label)
     }
 
     static func isClaudeRateLimited(_ provider: ProviderStatus) -> Bool {

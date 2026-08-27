@@ -617,7 +617,7 @@ class HistoryReadCostTests(unittest.TestCase):
 
 class AuthFailureJournalTests(unittest.TestCase):
     def _append_auth_failure(self, history_dir: Path, when: datetime) -> None:
-        error = "Antigravity refresh retrying; values may be stale"
+        error = snapshot_module.ANTIGRAVITY_AUTH_RETRY_MESSAGE
         payload = _payload(when, [_entry("Antigravity", when, ok=False, error=error)])
         probe = ProviderSnapshot(
             name="Antigravity",
@@ -684,7 +684,7 @@ class AuthFailureJournalTests(unittest.TestCase):
                             "Antigravity",
                             when,
                             ok=False,
-                            error="Antigravity refresh retrying; values may be stale",
+                            error=snapshot_module.ANTIGRAVITY_AUTH_RETRY_MESSAGE,
                         )
                     ],
                 )
@@ -692,7 +692,7 @@ class AuthFailureJournalTests(unittest.TestCase):
                     name="Antigravity",
                     ok=False,
                     source="api",
-                    error="Antigravity refresh retrying; values may be stale",
+                    error=snapshot_module.ANTIGRAVITY_AUTH_RETRY_MESSAGE,
                     debug_detail="auth_failure",
                 )
                 self.assertTrue(HistoryStore(history_dir).append(payload, [probe], now=when))

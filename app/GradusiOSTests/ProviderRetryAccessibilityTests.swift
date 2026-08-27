@@ -139,4 +139,44 @@ struct ProviderRetryAccessibilityTests {
         #expect(!noCachedWindows.rankingIsOK)
         #expect(noCachedWindows.rankingNeedsAttention(localThreshold: 30))
     }
+
+    /// Regression for the 2026-08-27 divergence: Python renamed Copilot's
+    /// timeout message so its own retention window could find it, and this
+    /// surface -- still matching only Antigravity's marker -- ranked the row
+    /// as needing attention while printing "showing cached values" in red.
+    @Test func copilotTimeoutCarryIsQuietLikeTheAntigravityGrace() {
+        let carried = provider(name: "Copilot", error: IOSProviderRetryAccessibility.copilotRetryLabel)
+        #expect(IOSProviderRetryAccessibility.isRetrying(carried))
+        #expect(IOSProviderRetryAccessibility.isCarriedFailure(carried))
+        #expect(IOSProviderRetryAccessibility.displayLabel(for: carried) == nil)
+        #expect(carried.rankingIsOK)
+        #expect(!carried.rankingNeedsAttention(localThreshold: 30))
+    }
+
+    /// The carry is a *published marker*, not a topic. A bare timeout string --
+    /// what every other provider still emits -- keeps its red row, and a
+    /// near-miss reword must not be quietly forgiven by a substring match.
+    @Test func onlyTheExactPublishedCopilotMarkerEarnsTheCarry() {
+        for wording in [
+            "Copilot probe timed out",
+            "copilot probe timed out; showing cached values",
+            "Copilot probe timed out; showing cached values (stale)"
+        ] {
+            let nearMiss = provider(name: "Copilot", error: wording)
+            #expect(!IOSProviderRetryAccessibility.isRetrying(nearMiss))
+            #expect(!IOSProviderRetryAccessibility.isCarriedFailure(nearMiss))
+            #expect(IOSProviderRetryAccessibility.displayLabel(for: nearMiss) == wording)
+            #expect(!nearMiss.rankingIsOK)
+        }
+    }
+
+    /// Carrying a marker with nothing retained is not a reason to claim health:
+    /// `rankingIsOK` requires actual windows, so an empty carry stays out of
+    /// the healthy tier even though its text is styled as calm.
+    @Test func aCopilotCarryWithNothingRetainedIsNotRankedHealthy() {
+        let empty = provider(name: "Copilot", error: IOSProviderRetryAccessibility.copilotRetryLabel, windows: [])
+        #expect(IOSProviderRetryAccessibility.isRetrying(empty))
+        #expect(!IOSProviderRetryAccessibility.isCarriedFailure(empty))
+        #expect(!empty.rankingIsOK)
+    }
 }
