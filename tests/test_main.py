@@ -3038,8 +3038,8 @@ class CanonicalAuthGraceRetentionTests(unittest.TestCase):
             ],
         }
 
-    def _entry(self, name: str, error: str) -> ProviderSnapshot:
-        snapshots, _ = _canonical_snapshots(self._payload(name, error))
+    def _entry(self, name: str, error: str, *, for_display: bool = True) -> ProviderSnapshot:
+        snapshots, _ = _canonical_snapshots(self._payload(name, error), for_display=for_display)
         assert snapshots is not None
         return next(snapshot for snapshot in snapshots if snapshot.name == name)
 
@@ -3079,6 +3079,35 @@ class CanonicalAuthGraceRetentionTests(unittest.TestCase):
             (graced.ok, graced.source, graced.cached_since is not None),
             (transient.ok, transient.source, transient.cached_since is not None),
         )
+
+    def test_machine_contract_does_not_promote_a_graced_provider(self) -> None:
+        """CR-6 fail-closed survives at the reader, not just at the writer.
+
+        `--json` is the machine contract the review-plugin router consumes.
+        Promoting a graced entry there would tell a router `ok: true` about a
+        provider whose credential is actively failing, so it would route work
+        to it and fail deterministically.  The display promotion is why this
+        distinction had to exist at all; the default is the safe one so a new
+        caller opts in rather than out.
+        """
+        snapshot = self._entry("Antigravity", ANTIGRAVITY_AUTH_RETRY_MESSAGE, for_display=False)
+
+        self.assertFalse(snapshot.ok)
+        self.assertIsNone(snapshot.cached_since)
+
+    def test_transient_promotion_is_unchanged_on_both_surfaces(self) -> None:
+        """The gate is scoped to auth grace and does not touch existing behaviour.
+
+        A carried *transient* failure was promoted on every surface before this
+        change, including `--json`.  Narrowing that would be a separate
+        decision about a different failure meaning -- "could not reach it", not
+        "the credential is bad" -- so it is pinned here rather than altered.
+        """
+        for for_display in (True, False):
+            with self.subTest(for_display=for_display):
+                snapshot = self._entry("Codex", "provider probe timed out", for_display=for_display)
+                self.assertTrue(snapshot.ok)
+                self.assertIsNotNone(snapshot.cached_since)
 
 
 if __name__ == "__main__":
