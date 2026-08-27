@@ -2425,7 +2425,13 @@ class TestCredentialAwareRefresh(unittest.TestCase):
         self.assertEqual(plist["Label"], "local.gradus-snapshot")
         self.assertTrue(plist["RunAtLoad"])
         self.assertEqual(plist["StartInterval"], 120)
-        self.assertEqual(plist["ProcessType"], "Background")
+        # Standard, not Background: `Background` applies Darwin's aggressive
+        # I/O throttle, and this job is a 120s-cadence network refresher whose
+        # tightest bound is Copilot's 10s `gh auth token` subprocess. Measured
+        # 2026-08-27, every Copilot probe timeout landed during a load episode
+        # (57/71/40/39 against a 1.92 median). The sibling flight recorder omits
+        # the key for the same reason. Do not flip this back without evidence.
+        self.assertEqual(plist["ProcessType"], "Standard")
         self.assertEqual(plist["ProgramArguments"], ["__GRADUS_WRAPPER_PATH__"])
         self.assertEqual(plist["StandardOutPath"], "__GRADUS_STDOUT_PATH__")
         self.assertEqual(plist["StandardErrorPath"], "__GRADUS_STDERR_PATH__")

@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from gradus import snapshot as snap
@@ -1867,6 +1868,46 @@ class TestAntigravityAuthGrace(unittest.TestCase):
             direct["error"], "Antigravity session expired: run `agy` to re-authenticate"
         )
         self.assertEqual(direct["windows"], [])
+
+
+class TestRetainedFailureMessage(unittest.TestCase):
+    """The message published while retained values are being served."""
+
+    def test_copilot_timeout_is_substituted_and_stays_transient(self) -> None:
+        """The substitution must not quietly reclassify the tick.
+
+        `_is_transient_probe_error` matches on literal markers, so a
+        replacement message that drops "timed out" would flip the tick for
+        `history.py` and `__main__.py` while looking correct here. That is the
+        exact gap `ANTIGRAVITY_AUTH_RETRY_MESSAGE` has -- it matches no marker
+        -- which is why this asserts the property rather than the string.
+        """
+        message = snap._retained_failure_message(
+            "Copilot", "provider probe timed out", auth_grace=False
+        )
+
+        self.assertEqual(message, snap.COPILOT_PROBE_RETRY_MESSAGE)
+        self.assertTrue(snap._is_transient_probe_error(SimpleNamespace(ok=False, error=message)))
+
+    def test_substitution_is_name_gated_and_timeout_gated(self) -> None:
+        """Only Copilot timeouts substitute; everything else passes through."""
+        cases = (
+            ("Copilot", "Copilot auth failed: run `gh auth login`"),
+            ("Claude", "provider probe timed out"),
+            ("Antigravity", "provider probe timed out"),
+        )
+        for name, error in cases:
+            with self.subTest(name=name, error=error):
+                self.assertEqual(
+                    snap._retained_failure_message(name, error, auth_grace=False), error
+                )
+
+    def test_auth_grace_still_wins(self) -> None:
+        """The Antigravity auth-grace path is unchanged by the new branch."""
+        self.assertEqual(
+            snap._retained_failure_message("Copilot", "provider probe timed out", auth_grace=True),
+            snap.ANTIGRAVITY_AUTH_RETRY_MESSAGE,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

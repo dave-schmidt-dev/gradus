@@ -13,6 +13,7 @@ import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from gradus import providers
@@ -570,11 +571,26 @@ class CopilotHttpProviderTests(unittest.TestCase):
         )
         copilot = next(entry for entry in payload["providers"] if entry["name"] == "Copilot")
         self.assertFalse(copilot["ok"])
-        self.assertEqual(copilot["error"], "provider probe timed out")
+        # Retained values publish the substituted message, not the raw probe
+        # error: the reading beside it is good, and "provider probe timed out"
+        # carries no remedy CR-6 could be protecting. Still `ok: false` so
+        # routers keep failing closed, and still transient so the tick does not
+        # get reclassified downstream.
+        self.assertEqual(copilot["error"], snapshot_module.COPILOT_PROBE_RETRY_MESSAGE)
+        self.assertTrue(
+            _is_transient_probe_error(SimpleNamespace(ok=False, error=copilot["error"]))
+        )
         self.assertEqual(copilot["windows"][0]["percent_left"], 82)
 
     def test_token_fallback_timeout_stops_retaining_prior_at_stale_boundary(self) -> None:
-        """Retention is strict: age 299s carries, age 300s expires."""
+        """Retention is strict, and the Copilot timeout window is the long one.
+
+        The boundary is `COPILOT_TIMEOUT_RETENTION_SECONDS`, not the 300s
+        default: a loaded machine starves the 10s `gh auth token` cap for a
+        median of ~794s (measured 2026-08-27), so the default expired
+        mid-episode and blanked a monthly counter that had not moved. The old
+        300s case is kept below to prove it now *carries* rather than expires.
+        """
         provider = self._make_provider()
         timeout = subprocess.TimeoutExpired(["gh", "auth", "token"], timeout=10)
         with (
@@ -585,7 +601,8 @@ class CopilotHttpProviderTests(unittest.TestCase):
             current = fetch_provider_snapshot("Copilot", provider, debug=False)
 
         observed_at = datetime(2026, 1, 1, 12, 0, 0)
-        for age in (299, 300):
+        boundary = snapshot_module.COPILOT_TIMEOUT_RETENTION_SECONDS
+        for age in (299, 300, boundary - 1, boundary):
             with self.subTest(age=age):
                 prior = snapshot_module.build_snapshot_payload(
                     [
@@ -605,10 +622,13 @@ class CopilotHttpProviderTests(unittest.TestCase):
                     entry for entry in payload["providers"] if entry["name"] == "Copilot"
                 )
                 self.assertFalse(copilot["ok"])
-                self.assertEqual(copilot["error"], "provider probe timed out")
-                if age < snapshot_module.STALE_THRESHOLD_SECONDS:
+                if age < boundary:
+                    self.assertEqual(copilot["error"], snapshot_module.COPILOT_PROBE_RETRY_MESSAGE)
                     self.assertEqual(copilot["windows"][0]["percent_left"], 82)
                 else:
+                    # Past the window there is nothing to show, so the raw
+                    # probe error is the honest thing to publish.
+                    self.assertEqual(copilot["error"], "provider probe timed out")
                     self.assertEqual(copilot["windows"], [])
                     self.assertIsNone(copilot["observed_at"])
 

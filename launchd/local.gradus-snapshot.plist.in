@@ -13,7 +13,7 @@
 	<key>StartInterval</key>
 	<integer>120</integer>
 	<key>ProcessType</key>
-	<string>Background</string>
+	<string>Standard</string>
 	<key>StandardOutPath</key>
 	<string>__GRADUS_STDOUT_PATH__</string>
 	<key>StandardErrorPath</key>
