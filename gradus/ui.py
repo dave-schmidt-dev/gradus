@@ -18,7 +18,7 @@ from rich.theme import Theme
 
 from .providers import ProviderSnapshot
 from .snapshot import (
-    ANTIGRAVITY_AUTH_RETRY_MESSAGE,
+    is_antigravity_auth_retry,
     normalized_warning_windows,
     pace_delta,
     percent_is_depleted,
@@ -961,7 +961,15 @@ def build_provider_panel(
         else:
             age_str = f"{age_sec // 3600}h"
         error = (snapshot.error or "").lower()
-        if base_name == "Claude" and (
+        if is_antigravity_auth_retry(snapshot.error):
+            # Reached only via the snapshot-reader path, where `carried_failure`
+            # now promotes a graced entry to ok/cached so its retained values
+            # render.  Without this branch the promotion would silently
+            # downgrade the label to a generic "offline", trading the panel's
+            # lost numbers for a lost reason.  Parallels the Claude rate-limit
+            # form directly below it.
+            title_text += f" [text.yellow](retrying; cached {age_str})[/]"
+        elif base_name == "Claude" and (
             "http 429" in error or "rate limited" in error or "rate-limit" in error
         ):
             title_text += f" [text.yellow](rate limited; cached {age_str})[/]"
@@ -969,7 +977,7 @@ def build_provider_panel(
             title_text += f" [text.yellow](offline {age_str})[/]"
 
     if not snapshot.ok:
-        if snapshot.error == ANTIGRAVITY_AUTH_RETRY_MESSAGE:
+        if is_antigravity_auth_retry(snapshot.error):
             body = Text.from_markup("[text.yellow]retrying[/] [text.muted]— values may be stale[/]")
             return Panel(
                 body,

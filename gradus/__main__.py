@@ -46,6 +46,7 @@ from .snapshot import (
     build_snapshot_payload,
     build_snapshot_v2_payload,
     is_antigravity_auth_failure,
+    is_antigravity_auth_retry,
     percent_is_valid,
     read_prior_snapshot,
     warning_membership,
@@ -218,8 +219,21 @@ def _schedule_refresh_providers(
     return scheduled
 
 
-def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datetime] | None:
-    """Hydrate primary provider views from one validated v2 payload."""
+def _canonical_snapshots(
+    payload: object, *, for_display: bool = False
+) -> tuple[list[ProviderSnapshot], datetime] | None:
+    """Hydrate primary provider views from one validated v2 payload.
+
+    Args:
+        payload: A validated schema-v2 snapshot document.
+        for_display: Whether the caller renders to a human.  Only a display
+            surface may promote an auth-graced entry to ``ok`` so its retained
+            values render; ``--json`` is a machine contract consumed by the
+            review-plugin router, and a router told ``ok: true`` about a
+            provider whose credential is actively failing would route work to
+            it and fail deterministically.  Defaults to the machine-safe value
+            so a new caller has to opt in to the looser reading.
+    """
     if not isinstance(payload, Mapping) or payload.get("schema_version") != 2:
         return None
     updated_at = _parse_aware_iso_timestamp(payload.get("updated_at"))
@@ -303,6 +317,19 @@ def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datet
             or any(not isinstance(window, Mapping) for window in windows)
         ):
             return False
+        if for_display and is_antigravity_auth_retry(error):
+            # The auth-grace marker carries no transient marker word, so
+            # `_is_transient_probe_error` rejects it.  The writer already ORs
+            # `auth_grace` alongside that same predicate when it decides to
+            # retain values (`snapshot._build_snapshot_payload`), so without
+            # this branch the reader discards values the writer deliberately
+            # kept -- and the grace window, whose entire purpose is to keep
+            # the last good reading visible while a refresh retries, showed
+            # no reading at all.  Named predicate ORed at the call site rather
+            # than a marker word smuggled into the message, matching
+            # `_is_headless_deferred_probe`: the message is a published
+            # contract that three other consumers match on exactly.
+            return True
         probe = ProviderSnapshot(
             name=str(entry.get("name", "")),
             ok=False,
@@ -358,8 +385,10 @@ def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datet
     return snapshots, updated_at
 
 
-def _read_canonical_snapshots() -> tuple[list[ProviderSnapshot], datetime] | None:
-    return _canonical_snapshots(read_prior_snapshot(SNAPSHOT_V2_PATH))
+def _read_canonical_snapshots(
+    *, for_display: bool = False
+) -> tuple[list[ProviderSnapshot], datetime] | None:
+    return _canonical_snapshots(read_prior_snapshot(SNAPSHOT_V2_PATH), for_display=for_display)
 
 
 def _snapshot_signature() -> tuple[int, int] | None:
@@ -377,11 +406,11 @@ def _canonical_or_refresh(
     debug: bool,
 ) -> tuple[list[ProviderSnapshot], datetime] | None:
     """Read the SOT, making one producer refresh when an interactive surface has none."""
-    current = _read_canonical_snapshots()
+    current = _read_canonical_snapshots(for_display=True)
     if current is not None:
         return current
     _refresh_snapshot_once(cwd, enabled_providers, debug)
-    return _read_canonical_snapshots()
+    return _read_canonical_snapshots(for_display=True)
 
 
 def _is_auth_error(snapshot: ProviderSnapshot) -> bool:
@@ -1094,10 +1123,7 @@ def _health_sample_reason(
     for entry in selected:
         assert isinstance(entry, Mapping)
         if entry.get("ok") is not True:
-            if (
-                entry.get("name") == "Antigravity"
-                and entry.get("error") == ANTIGRAVITY_AUTH_RETRY_MESSAGE
-            ):
+            if entry.get("name") == "Antigravity" and is_antigravity_auth_retry(entry.get("error")):
                 observed_at = _parse_health_timestamp(entry.get("observed_at"))
                 if observed_at is not None and observed_at <= updated_at:
                     return updated_at, "carried-auth"
@@ -1484,6 +1510,9 @@ def main() -> int:
     # single-flight producer above may perform authenticated probes.
     if getattr(args, "json", False):
         set_headless(True)
+        # No `for_display`: this is the machine contract the review-plugin
+        # router consumes, so an auth-graced provider must stay `ok: false`
+        # here even though the TUI shows its retained values.
         canonical = _read_canonical_snapshots()
         if canonical is None:
             sys.stdout.write(render_json([], datetime.now().astimezone()) + "\n")
@@ -1569,7 +1598,7 @@ def main() -> int:
                     refresh_now = False
                     fix_actions = _build_fix_actions(current)
                     while remaining > 0 and not quit_requested:
-                        watched = _read_canonical_snapshots()
+                        watched = _read_canonical_snapshots(for_display=True)
                         new_signature = _snapshot_signature()
                         if watched is not None and new_signature != snapshot_signature:
                             current, updated_at = watched
@@ -1654,7 +1683,7 @@ def main() -> int:
                                 time.sleep(0.12)
                         if not quit_requested:
                             refresh_future.result()
-                            watched = _read_canonical_snapshots()
+                            watched = _read_canonical_snapshots(for_display=True)
                             if watched is not None:
                                 current, updated_at = watched
                                 snapshot_signature = _snapshot_signature()

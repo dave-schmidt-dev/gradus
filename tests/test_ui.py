@@ -1857,6 +1857,30 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("98%", output)
         self.assertNotIn("auth error", output)
 
+    def test_graced_antigravity_shows_its_values_and_says_retrying(self) -> None:
+        """The promoted grace entry must keep both its numbers and its reason.
+
+        `carried_failure` now promotes a graced entry to ok/cached so the
+        reader stops discarding the values the writer retained.  That promotion
+        routes it past the `not snapshot.ok` retry panel below, so without a
+        title branch the card would silently relabel itself the generic
+        "offline" -- swapping the panel's missing numbers for a missing reason.
+        """
+        snap = ProviderSnapshot(
+            name="Antigravity",
+            ok=True,
+            source="snapshot (cached)",
+            data={"five_hour_percent_left": 62.0, "five_hour_reset": "Resets 9:22 AM"},
+            error=ANTIGRAVITY_AUTH_RETRY_MESSAGE,
+            cached_since=datetime(2026, 3, 14, 8, 8, 0),
+        )
+        output = _capture(build_provider_panel(snap, self.now, auth_fix_key="1"), width=70)
+        self.assertIn("retrying; cached 14m", output)
+        self.assertIn("62%", output)
+        self.assertNotIn("offline", output)
+        # Still no call to action: the grace window is the retry, not the user's job.
+        self.assertNotIn("auth error", output)
+
     def test_stale_panel_shows_yellow_message(self) -> None:
         snap = ProviderSnapshot(
             name="Claude",

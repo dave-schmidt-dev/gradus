@@ -35,6 +35,7 @@ from .snapshot import (
     _is_headless_deferred_probe,
     _is_transient_probe_error,
     _json_safe_value,
+    is_antigravity_auth_retry,
 )
 
 log = logging.getLogger(__name__)
@@ -277,8 +278,7 @@ def _probe_metadata(
     # debug slot while exposing only the neutral consumer marker. The marker is
     # also accepted for restart/replay fixtures where that slot is unavailable.
     if snapshot.debug_detail == "auth_failure" or (
-        snapshot.name == "Antigravity"
-        and snapshot.error == "Antigravity refresh retrying; values may be stale"
+        snapshot.name == "Antigravity" and is_antigravity_auth_retry(snapshot.error)
     ):
         return {"attempted": False, "reason": "auth_failure"}
     error = (snapshot.error or "").lower()
