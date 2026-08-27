@@ -56,9 +56,23 @@ RATE_LIMIT_RETENTION_SECONDS = 7200
 # but bucketless response is transient and must retain the last observation
 # through the next eligible probe instead of creating a five-minute blank gap.
 CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS = 1200
+# Copilot is the only provider whose token comes from a *subprocess*: with no
+# `oauth_token` in `~/.config/gh/hosts.yml` the token lives in the Keychain, so
+# every probe spawns `gh auth token` under a 10s cap.  That cap is the tightest
+# bound in the refresh, so a loaded machine starves it first and Copilot takes
+# the blame for what is actually whole-job slowness.  Measured 2026-08-27: load
+# episodes above 15 ran a 794s median and 1161s max against a 1.92 load median,
+# so the 300s default expires mid-episode and blanks a monthly counter that had
+# not changed.  Sized like the Claude window above, for the same reason -- keep
+# the last good reading visible across one realistic episode.
+COPILOT_TIMEOUT_RETENTION_SECONDS = 1200
 AUTH_GRACE_WINDOW_SECONDS = STALE_THRESHOLD_SECONDS
 AUTH_ESCALATION_WINDOW_SECONDS = 600
 ANTIGRAVITY_AUTH_RETRY_MESSAGE = "Antigravity refresh retrying; values may be stale"
+# Substituted while a Copilot timeout is serving retained values.  Keeps the
+# "timed out" marker deliberately: `_is_transient_probe_error` matches on it, so
+# dropping it would reclassify the tick for `history.py` and `__main__.py`.
+COPILOT_PROBE_RETRY_MESSAGE = "Copilot probe timed out; showing cached values"
 ANTIGRAVITY_AUTH_ERROR_MARKER = "Antigravity session expired"
 
 
@@ -1225,7 +1239,36 @@ def _retention_seconds(name: str, error: str | None) -> float:
         return RATE_LIMIT_RETENTION_SECONDS
     if name == "Claude" and "data not available yet" in lower:
         return CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS
+    if name == "Copilot" and "timed out" in lower:
+        return COPILOT_TIMEOUT_RETENTION_SECONDS
     return STALE_THRESHOLD_SECONDS
+
+
+def _retained_failure_message(name: str, error: str | None, *, auth_grace: bool) -> str | None:
+    """Return the error to publish while retained values are being served.
+
+    CR-6 keeps a retained entry at ``ok: false`` so routers fail closed, and
+    keeps the error so the provider-authored *remedy* is not swallowed.  A
+    generic timeout carries no remedy: it is ``_safe_probe_error``'s type
+    classification, not provider-authored, and it reads as "this number is
+    wrong" when the number beside it is a good reading that simply was not
+    re-confirmed.  Name-gated like `_retention_seconds`, whose branches are
+    per-provider for the same reason -- staleness means something different
+    against a monthly counter than against a five-hour window.
+
+    Args:
+        name: Provider name, used to scope the substitution.
+        error: The current failure's message.
+        auth_grace: Whether the Antigravity auth-grace path is active.
+
+    Returns:
+        The message to publish; the original ``error`` when nothing applies.
+    """
+    if auth_grace:
+        return ANTIGRAVITY_AUTH_RETRY_MESSAGE
+    if name == "Copilot" and isinstance(error, str) and "timed out" in error.lower():
+        return COPILOT_PROBE_RETRY_MESSAGE
+    return error
 
 
 def _failure_with_retained_values(retained_entry: Mapping[str, object], error: str | None) -> dict:
@@ -1361,7 +1404,7 @@ def _build_snapshot_payload(
             ):
                 entry = _failure_with_retained_values(
                     retained_entry,
-                    ANTIGRAVITY_AUTH_RETRY_MESSAGE if auth_grace else entry["error"],
+                    _retained_failure_message(entry_name, entry["error"], auth_grace=auth_grace),
                 )
                 # The retained values keep their original observation time,
                 # but this field records the real failed probe that produced
@@ -1493,7 +1536,7 @@ def _build_snapshot_payload(
             ):
                 entry = _failure_with_retained_values(
                     retained_entry,
-                    ANTIGRAVITY_AUTH_RETRY_MESSAGE if auth_grace else entry["error"],
+                    _retained_failure_message(name, entry["error"], auth_grace=auth_grace),
                 )
                 if getattr(snap, "source", None) != "snapshot":
                     entry["probe_attempted_at"] = updated_at_iso
