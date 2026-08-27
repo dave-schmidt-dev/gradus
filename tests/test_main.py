@@ -3006,5 +3006,80 @@ class EmitDebugDetailsTests(unittest.TestCase):
         self.assertNotIn("The read operation timed out", res.out)
 
 
+class CanonicalAuthGraceRetentionTests(unittest.TestCase):
+    """The snapshot reader must honour the values the writer retained.
+
+    `_build_snapshot_payload` ORs `auth_grace` alongside
+    `_is_transient_probe_error` when deciding to keep a failed provider's last
+    good windows, but the reader's `carried_failure` gate only consulted the
+    latter.  The grace marker carries no transient marker word, so the reader
+    threw away exactly what the writer had preserved -- and the grace window,
+    which exists so a reading stays visible while a refresh retries, displayed
+    no reading at all.
+    """
+
+    STAMP = NOW.replace(tzinfo=timezone.utc).isoformat()
+
+    def _payload(self, name: str, error: str) -> dict[str, object]:
+        """A failed entry that still carries values, the shape grace produces."""
+        return {
+            "schema_version": 2,
+            "updated_at": self.STAMP,
+            "providers": [
+                {
+                    "name": entry_name,
+                    "ok": entry_name != name,
+                    "error": error if entry_name == name else None,
+                    "windows": [{"label": "Monthly", "percent_left": 62.0}],
+                    "data": {"monthly_percent_left": 62.0},
+                    "observed_at": self.STAMP,
+                }
+                for entry_name in ("Antigravity", "Codex")
+            ],
+        }
+
+    def _entry(self, name: str, error: str) -> ProviderSnapshot:
+        snapshots, _ = _canonical_snapshots(self._payload(name, error))
+        assert snapshots is not None
+        return next(snapshot for snapshot in snapshots if snapshot.name == name)
+
+    def test_graced_entry_keeps_its_retained_values(self) -> None:
+        """The regression: grace published values the TUI then discarded."""
+        snapshot = self._entry("Antigravity", ANTIGRAVITY_AUTH_RETRY_MESSAGE)
+
+        self.assertIsNotNone(snapshot.cached_since)
+        self.assertEqual(snapshot.data, {"monthly_percent_left": 62.0})
+        # The error survives the promotion: `ui` still needs it to label the
+        # card "retrying" rather than a generic "offline".
+        self.assertEqual(snapshot.error, ANTIGRAVITY_AUTH_RETRY_MESSAGE)
+
+    def test_genuine_auth_failure_still_fails_closed(self) -> None:
+        """Scoped to the neutral marker, not to Antigravity failures at large.
+
+        This is the control that matters.  Widening the gate to "Antigravity
+        failed" would serve stale values through a real signed-out state and
+        hide the one error the user can actually act on.
+        """
+        for error in (
+            "Antigravity session expired: run `agy` to re-authenticate",
+            "not logged in",
+            "auth required: run `agy` to sign in",
+        ):
+            with self.subTest(error=error):
+                snapshot = self._entry("Antigravity", error)
+                self.assertFalse(snapshot.ok)
+                self.assertIsNone(snapshot.cached_since)
+
+    def test_grace_now_reads_like_any_other_retained_failure(self) -> None:
+        """Parity is the point: identical entry shape, identical treatment."""
+        graced = self._entry("Antigravity", ANTIGRAVITY_AUTH_RETRY_MESSAGE)
+        transient = self._entry("Codex", "provider probe timed out")
+
+        self.assertEqual(
+            (graced.ok, graced.source, graced.cached_since is not None),
+            (transient.ok, transient.source, transient.cached_since is not None),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

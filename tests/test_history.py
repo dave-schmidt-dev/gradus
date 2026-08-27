@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import gradus.history as history
+import gradus.snapshot as snapshot_module
 from gradus.history import (
     HISTORY_LOCK_NAME,
     HISTORY_SCHEMA_VERSION,
@@ -701,6 +702,38 @@ class AuthFailureJournalTests(unittest.TestCase):
             )
         finally:
             tmpdir.cleanup()
+
+
+class ProbeMetadataGraceMarkerTests(unittest.TestCase):
+    """History must classify a graced tick by the constant, not a copy of it.
+
+    `_probe_metadata` used to compare against a hand-copied duplicate of
+    `ANTIGRAVITY_AUTH_RETRY_MESSAGE`.  Classification was correct, so nothing
+    failed -- but rewording the constant would have silently reclassified every
+    graced tick from `auth_failure` to `other_failure`, corrupting the history
+    record with no test to catch it.  Patching the constant is what proves the
+    duplicate is gone: a literal comparison cannot follow it.
+    """
+
+    @staticmethod
+    def _classify(error: str) -> dict[str, object]:
+        snapshot = ProviderSnapshot(name="Antigravity", ok=False, source="api", error=error)
+        return history._probe_metadata(snapshot, {})
+
+    def test_grace_marker_classifies_as_auth_failure(self) -> None:
+        result = self._classify(snapshot_module.ANTIGRAVITY_AUTH_RETRY_MESSAGE)
+        self.assertEqual(result, {"attempted": False, "reason": "auth_failure"})
+
+    def test_classification_follows_a_reworded_constant(self) -> None:
+        """The regression guard: a duplicated literal cannot follow this."""
+        reworded = "Antigravity is refreshing"  # deliberately marker-free
+        with patch.object(snapshot_module, "ANTIGRAVITY_AUTH_RETRY_MESSAGE", reworded):
+            result = self._classify(reworded)
+        self.assertEqual(result, {"attempted": False, "reason": "auth_failure"})
+
+    def test_a_real_auth_error_is_still_auth_failure_not_grace(self) -> None:
+        result = self._classify("Antigravity session expired: run `agy` to re-authenticate")
+        self.assertEqual(result, {"attempted": False, "reason": "auth_failure"})
 
 
 if __name__ == "__main__":

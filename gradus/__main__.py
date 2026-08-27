@@ -46,6 +46,7 @@ from .snapshot import (
     build_snapshot_payload,
     build_snapshot_v2_payload,
     is_antigravity_auth_failure,
+    is_antigravity_auth_retry,
     percent_is_valid,
     read_prior_snapshot,
     warning_membership,
@@ -303,6 +304,19 @@ def _canonical_snapshots(payload: object) -> tuple[list[ProviderSnapshot], datet
             or any(not isinstance(window, Mapping) for window in windows)
         ):
             return False
+        if is_antigravity_auth_retry(error):
+            # The auth-grace marker carries no transient marker word, so
+            # `_is_transient_probe_error` rejects it.  The writer already ORs
+            # `auth_grace` alongside that same predicate when it decides to
+            # retain values (`snapshot._build_snapshot_payload`), so without
+            # this branch the reader discards values the writer deliberately
+            # kept -- and the grace window, whose entire purpose is to keep
+            # the last good reading visible while a refresh retries, showed
+            # no reading at all.  Named predicate ORed at the call site rather
+            # than a marker word smuggled into the message, matching
+            # `_is_headless_deferred_probe`: the message is a published
+            # contract that three other consumers match on exactly.
+            return True
         probe = ProviderSnapshot(
             name=str(entry.get("name", "")),
             ok=False,
@@ -1094,10 +1108,7 @@ def _health_sample_reason(
     for entry in selected:
         assert isinstance(entry, Mapping)
         if entry.get("ok") is not True:
-            if (
-                entry.get("name") == "Antigravity"
-                and entry.get("error") == ANTIGRAVITY_AUTH_RETRY_MESSAGE
-            ):
+            if entry.get("name") == "Antigravity" and is_antigravity_auth_retry(entry.get("error")):
                 observed_at = _parse_health_timestamp(entry.get("observed_at"))
                 if observed_at is not None and observed_at <= updated_at:
                     return updated_at, "carried-auth"
