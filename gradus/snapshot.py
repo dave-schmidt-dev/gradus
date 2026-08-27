@@ -56,15 +56,20 @@ RATE_LIMIT_RETENTION_SECONDS = 7200
 # but bucketless response is transient and must retain the last observation
 # through the next eligible probe instead of creating a five-minute blank gap.
 CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS = 1200
-# Copilot is the only provider whose token comes from a *subprocess*: with no
-# `oauth_token` in `~/.config/gh/hosts.yml` the token lives in the Keychain, so
-# every probe spawns `gh auth token` under a 10s cap.  That cap is the tightest
-# bound in the refresh, so a loaded machine starves it first and Copilot takes
-# the blame for what is actually whole-job slowness.  Measured 2026-08-27: load
-# episodes above 15 ran a 794s median and 1161s max against a 1.92 load median,
-# so the 300s default expires mid-episode and blanks a monthly counter that had
-# not changed.  Sized like the Claude window above, for the same reason -- keep
-# the last good reading visible across one realistic episode.
+# Applies to *any* Copilot timeout, not just the subprocess one.  The motivating
+# case is the subprocess: with no `oauth_token` in `~/.config/gh/hosts.yml` the
+# token lives in the Keychain, so every probe spawns `gh auth token` under a 10s
+# cap -- the tightest bound in the refresh, so a loaded machine starves it first
+# and Copilot takes the blame for what is actually whole-job slowness.  But
+# `_safe_probe_error` collapses `subprocess.TimeoutExpired` and a bare
+# `TimeoutError` (a urllib *read* timeout) into one identical string, so this
+# window cannot distinguish them and deliberately does not try: a network
+# timeout against a monthly counter is worth retaining for exactly the same
+# reason.  Measured 2026-08-27: load episodes above 15 ran a 794s median and
+# 1161s max against a 1.92 load median, so the 300s default expires mid-episode
+# and blanks a monthly counter that had not changed.  Sized like the Claude
+# window above, for the same reason -- keep the last good reading visible across
+# one realistic episode.
 COPILOT_TIMEOUT_RETENTION_SECONDS = 1200
 AUTH_GRACE_WINDOW_SECONDS = STALE_THRESHOLD_SECONDS
 AUTH_ESCALATION_WINDOW_SECONDS = 600
