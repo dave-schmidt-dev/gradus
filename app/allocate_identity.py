@@ -903,14 +903,14 @@ def _pre_release_version_id(item: Any) -> str | None:
     return identifier
 
 
-def _marketing_versions(included: Any) -> dict[str, str]:
+def _marketing_versions(included: Any) -> dict[str, dict[str, str]]:
     """Index the sideloaded preReleaseVersions by id so builds can name their train."""
 
     if included is None:
         return {}
     if not isinstance(included, list):
         raise IdentityAllocationError("build-response-invalid")
-    versions: dict[str, str] = {}
+    versions: dict[str, dict[str, str]] = {}
     for entry in included:
         if not isinstance(entry, Mapping) or entry.get("type") != "preReleaseVersions":
             continue
@@ -921,7 +921,13 @@ def _marketing_versions(included: Any) -> dict[str, str]:
             raise IdentityAllocationError("build-response-invalid")
         if not isinstance(version, str) or not version:
             raise IdentityAllocationError("build-response-invalid")
-        versions[identifier] = version
+        train = {"marketingVersion": version}
+        platform = attributes.get("platform") if isinstance(attributes, Mapping) else None
+        if platform is not None:
+            if not isinstance(platform, str) or not platform:
+                raise IdentityAllocationError("build-response-invalid")
+            train["platform"] = platform
+        versions[identifier] = train
     return versions
 
 
@@ -935,7 +941,7 @@ def find_ios_testflight_build(client: ASCClient, build_number: str) -> list[dict
         "GET",
         f"/builds?filter[app]={quote(app_id, safe='')}&filter[version]={quote(build_number, safe='')}&"
         "fields[builds]=version,processingState,buildAudienceType,preReleaseVersion&"
-        "include=preReleaseVersion&fields[preReleaseVersions]=version&limit=50",
+        "include=preReleaseVersion&fields[preReleaseVersions]=version,platform&limit=50",
     )
     if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
         raise IdentityAllocationError("build-response-invalid")
@@ -961,9 +967,45 @@ def find_ios_testflight_build(client: ASCClient, build_number: str) -> list[dict
         if pre_release is not None:
             if pre_release not in marketing:
                 raise IdentityAllocationError("build-response-invalid")
-            record["marketingVersion"] = marketing[pre_release]
+            record.update(marketing[pre_release])
         results.append(record)
     return results
+
+
+def list_build_run_actions(client: ASCClient, build_run_id: str) -> list[dict[str, str]]:
+    """List allowlisted per-action state for one Cloud run, newest field set only."""
+
+    if not isinstance(build_run_id, str) or not build_run_id:
+        raise IdentityAllocationError("build-run-id-invalid")
+    payload = client.request(
+        "GET",
+        f"/ciBuildRuns/{quote(build_run_id, safe='')}/actions?"
+        "fields[ciBuildActions]=name,actionType,executionProgress,completionStatus,"
+        "isRequiredToPass&limit=50",
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        raise IdentityAllocationError("build-run-actions-response-invalid")
+    actions: list[dict[str, str]] = []
+    for item in payload["data"]:
+        attributes = item.get("attributes") if isinstance(item, Mapping) else None
+        action_id = item.get("id") if isinstance(item, Mapping) else None
+        if not isinstance(attributes, Mapping) or not isinstance(action_id, str) or not action_id:
+            raise IdentityAllocationError("build-run-actions-response-invalid")
+        entry = {"actionId": action_id}
+        for key in ("name", "actionType", "executionProgress", "completionStatus"):
+            value = attributes.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value:
+                raise IdentityAllocationError("build-run-actions-response-invalid")
+            entry[key] = value
+        required = attributes.get("isRequiredToPass")
+        if required is not None:
+            if not isinstance(required, bool):
+                raise IdentityAllocationError("build-run-actions-response-invalid")
+            entry["isRequiredToPass"] = "true" if required else "false"
+        actions.append(entry)
+    return actions
 
 
 def read_testflight_build(client: ASCClient, build_id: str) -> dict[str, str]:
@@ -975,7 +1017,7 @@ def read_testflight_build(client: ASCClient, build_id: str) -> dict[str, str]:
         "GET",
         f"/builds/{quote(build_id, safe='')}?"
         "fields[builds]=version,processingState,buildAudienceType,uploadedDate,expired,"
-        "preReleaseVersion&include=preReleaseVersion&fields[preReleaseVersions]=version",
+        "preReleaseVersion&include=preReleaseVersion&fields[preReleaseVersions]=version,platform",
     )
     data = payload.get("data") if isinstance(payload, Mapping) else None
     attributes = data.get("attributes") if isinstance(data, Mapping) else None
@@ -1003,7 +1045,7 @@ def read_testflight_build(client: ASCClient, build_id: str) -> dict[str, str]:
     if pre_release is not None:
         if pre_release not in marketing:
             raise IdentityAllocationError("build-response-invalid")
-        record["marketingVersion"] = marketing[pre_release]
+        record.update(marketing[pre_release])
     return record
 
 
@@ -1363,6 +1405,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Resolve an iOS TestFlight build number through the fixed Gradus app",
     )
     parser.add_argument(
+        "--list-build-run-actions",
+        metavar="BUILD_RUN_ID",
+        help="Print safe per-action state for one Xcode Cloud build run",
+    )
+    parser.add_argument(
         "--read-testflight-build",
         metavar="BUILD_ID",
         help="Print safe state for one TestFlight build, whichever app owns it",
@@ -1397,6 +1444,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.list_ci_builds
         or args.find_ios_testflight_build
         or args.read_testflight_build
+        or args.list_build_run_actions
         or args.inspect_testflight_build_app
         or args.assign_internal_testflight_build
         or args.inspect_internal_testflight_build
@@ -1695,6 +1743,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except ASCError as exc:
             print(f"FAIL: build lookup failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+
+    if args.list_build_run_actions:
+        try:
+            rows = list_build_run_actions(
+                ASCClient(make_token_provider()), args.list_build_run_actions
+            )
+            print(json.dumps(rows, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(
+                f"FAIL: build-run action listing failed ({exc.outcome.error_class})",
+                file=sys.stderr,
+            )
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: build-run action listing failed ({exc})", file=sys.stderr)
             return 1
 
     if args.read_testflight_build:

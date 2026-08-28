@@ -15,6 +15,7 @@ from allocate_identity import (
     ensure_widget_distribution_profile,
     find_ios_testflight_build,
     inspect_testflight_build_app,
+    list_build_run_actions,
     list_ci_builds,
     list_cloud_product_metadata,
     list_product_workflow_metadata,
@@ -683,7 +684,7 @@ def test_find_ios_testflight_build_names_the_marketing_version_behind_the_number
                     {
                         "type": "preReleaseVersions",
                         "id": "train-190",
-                        "attributes": {"version": "1.9.0"},
+                        "attributes": {"version": "1.9.0", "platform": "IOS"},
                     }
                 ],
             },
@@ -696,6 +697,7 @@ def test_find_ios_testflight_build_names_the_marketing_version_behind_the_number
             "processingState": "VALID",
             "distributionAudience": "INTERNAL_ONLY",
             "marketingVersion": "1.9.0",
+            "platform": "IOS",
         }
     ]
 
@@ -744,7 +746,7 @@ def test_read_testflight_build_reports_upload_date_and_train() -> None:
                     {
                         "type": "preReleaseVersions",
                         "id": "train-190",
-                        "attributes": {"version": "1.9.0"},
+                        "attributes": {"version": "1.9.0", "platform": "IOS"},
                     }
                 ],
             }
@@ -758,6 +760,7 @@ def test_read_testflight_build_reports_upload_date_and_train() -> None:
         "uploadedDate": "2026-08-27T16:40:49-07:00",
         "expired": "false",
         "marketingVersion": "1.9.0",
+        "platform": "IOS",
     }
 
 
@@ -803,6 +806,46 @@ def test_read_testflight_build_alone_is_a_recognised_action(
         ),
     )
     assert main(["--read-testflight-build", "build-61"]) == 0
+
+
+def test_list_build_run_actions_reports_each_action_and_its_outcome() -> None:
+    """Binding a run to what it actually archived needs the per-action records."""
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "id": "action-1",
+                        "attributes": {
+                            "name": "Archive - iOS",
+                            "actionType": "ARCHIVE",
+                            "executionProgress": "COMPLETE",
+                            "completionStatus": "SUCCEEDED",
+                            "isRequiredToPass": True,
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+    assert list_build_run_actions(client, "run-1") == [
+        {
+            "actionId": "action-1",
+            "name": "Archive - iOS",
+            "actionType": "ARCHIVE",
+            "executionProgress": "COMPLETE",
+            "completionStatus": "SUCCEEDED",
+            "isRequiredToPass": "true",
+        }
+    ]
+
+
+def test_list_build_run_actions_rejects_a_mistyped_required_flag() -> None:
+    client = FixtureClient(
+        [{"data": [{"id": "action-1", "attributes": {"isRequiredToPass": "yes"}}]}]
+    )
+    with pytest.raises(IdentityAllocationError, match="build-run-actions-response-invalid"):
+        list_build_run_actions(client, "run-1")
 
 
 def test_inspect_testflight_build_app_returns_only_fixed_app_membership() -> None:
