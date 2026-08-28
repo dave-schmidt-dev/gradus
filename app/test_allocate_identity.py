@@ -30,6 +30,7 @@ from allocate_identity import (
     read_build_run_status,
     read_marketing_version,
     read_testflight_build,
+    read_validation_workflow_conditions,
     read_workflow_template,
     resolve_workflow_toolchain,
     set_workflow_enabled,
@@ -770,6 +771,128 @@ def test_start_validation_build_cli_dispatches_and_prints_only_receipt(
         == 0
     )
     assert json.loads(capsys.readouterr().out) == receipt
+
+
+@pytest.mark.parametrize("workflow_name", ["Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"])
+def test_read_validation_workflow_conditions_outputs_exact_safe_allowlist(
+    workflow_name: str,
+) -> None:
+    conditions = _validation_conditions(workflow_name)
+    conditions["data"]["attributes"]["unrelated"] = {"secret": "excluded"}
+    client = MutationFixtureClient([_validation_inventory(workflow_name), conditions])
+
+    assert read_validation_workflow_conditions(
+        client, product_id="product-1", workflow_id="workflow-1"
+    ) == {
+        "workflowId": "workflow-1",
+        "name": workflow_name,
+        "isEnabled": True,
+        "branchStartCondition": {"source": _main_branch_source()},
+        "tagStartCondition": None,
+        "pullRequestStartCondition": None,
+        "scheduledStartCondition": None,
+        "manualBranchStartCondition": None,
+        "manualTagStartCondition": None,
+        "manualPullRequestStartCondition": None,
+    }
+    assert client.methods == ["GET", "GET"]
+
+
+@pytest.mark.parametrize(
+    ("inventory", "error"),
+    [
+        (_validation_inventory(workflow_id="other"), "not-in-product"),
+        (_validation_inventory(name="Release"), "name-not-allowed"),
+    ],
+)
+def test_read_validation_workflow_conditions_rejects_unapproved_workflow(
+    inventory: dict, error: str
+) -> None:
+    client = MutationFixtureClient([inventory])
+
+    with pytest.raises(IdentityAllocationError, match=error):
+        read_validation_workflow_conditions(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )
+    assert client.methods == ["GET"]
+
+
+def test_read_validation_workflow_conditions_rejects_malformed_response() -> None:
+    client = MutationFixtureClient([_validation_inventory(), {"data": []}])
+
+    with pytest.raises(IdentityAllocationError, match="condition-response-invalid"):
+        read_validation_workflow_conditions(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )
+    assert client.methods == ["GET", "GET"]
+
+
+def test_read_validation_workflow_conditions_cli_dispatches_and_prints_only_receipt(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    receipt = {
+        "workflowId": "workflow-1",
+        "name": "Gradus macOS UI Trial",
+        "isEnabled": True,
+        "branchStartCondition": {"source": _main_branch_source()},
+        "tagStartCondition": None,
+        "pullRequestStartCondition": None,
+        "scheduledStartCondition": None,
+        "manualBranchStartCondition": None,
+        "manualTagStartCondition": None,
+        "manualPullRequestStartCondition": None,
+    }
+    calls = []
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr("allocate_identity.ASCClient", lambda provider: object())
+
+    def read(client, *, product_id, workflow_id):
+        calls.append((client, product_id, workflow_id))
+        return receipt
+
+    monkeypatch.setattr("allocate_identity.read_validation_workflow_conditions", read)
+
+    assert (
+        main(
+            [
+                "--read-validation-workflow-conditions",
+                "--ci-product-id",
+                "product-1",
+                "--workflow-id",
+                "workflow-1",
+            ]
+        )
+        == 0
+    )
+    assert calls == [(calls[0][0], "product-1", "workflow-1")]
+    assert json.loads(capsys.readouterr().out) == receipt
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--read-validation-workflow-conditions", "--workflow-id", "workflow-1"],
+        ["--read-validation-workflow-conditions", "--ci-product-id", "product-1"],
+        [
+            "--read-validation-workflow-conditions",
+            "--ci-product-id",
+            "product-1",
+            "--workflow-id",
+            "workflow-1",
+            "--ci-artifact-id",
+            "artifact-1",
+        ],
+    ],
+)
+def test_read_validation_workflow_conditions_cli_rejects_incompatible_options(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "allocate_identity.read_validation_workflow_conditions",
+        lambda *args, **kwargs: pytest.fail("condition read must not dispatch"),
+    )
+
+    assert main(argv) == 1
 
 
 @pytest.mark.parametrize("workflow_name", ["Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"])

@@ -850,6 +850,27 @@ def _validation_workflow_conditions(
     return attributes
 
 
+def read_validation_workflow_conditions(
+    client: ASCClient, *, product_id: str, workflow_id: str
+) -> dict[str, Any]:
+    """Read only the allowlisted start conditions of one validation workflow."""
+
+    workflows = list_product_workflow_metadata(client, product_id)
+    selected = next((workflow for workflow in workflows if workflow["id"] == workflow_id), None)
+    if selected is None:
+        raise IdentityAllocationError("validation-workflow-not-in-product")
+    name = selected["name"]
+    if name not in VALIDATION_WORKFLOW_NAMES:
+        raise IdentityAllocationError("validation-workflow-name-not-allowed")
+    attributes = _validation_workflow_conditions(client, workflow_id, name)
+    return {
+        "workflowId": workflow_id,
+        "name": name,
+        "isEnabled": attributes["isEnabled"],
+        **{key: attributes[key] for key in _WORKFLOW_START_CONDITION_KEYS},
+    }
+
+
 def _has_exact_main_source(condition: Any) -> bool:
     """Return whether a start condition contains only the fixed main-branch source."""
 
@@ -1710,6 +1731,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Disable and convert one fixed validation workflow to manual main starts",
     )
     parser.add_argument(
+        "--read-validation-workflow-conditions",
+        action="store_true",
+        help="Print only the start conditions of one fixed validation workflow",
+    )
+    parser.add_argument(
         "--workflow-id", help="Workflow ID returned by TestFlight workflow creation"
     )
     parser.add_argument(
@@ -1780,6 +1806,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.start_internal_testflight_build
         or args.start_validation_build
         or args.convert_validation_workflow_to_manual
+        or args.read_validation_workflow_conditions
         or args.build_run_status
         or args.list_workflow_build_runs
         or args.list_ci_builds
@@ -2074,6 +2101,42 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         except IdentityAllocationError as exc:
             print(f"FAIL: validation workflow conversion failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.read_validation_workflow_conditions:
+        if not args.ci_product_id or not args.workflow_id:
+            print(
+                "FAIL: validation workflow condition read requires product and workflow IDs",
+                file=sys.stderr,
+            )
+            return 1
+        if (
+            args.ci_build_action_id
+            or args.output_dir
+            or args.ci_artifact_id
+            or args.list_result_bundles
+        ):
+            print(
+                "FAIL: validation workflow condition read does not accept artifact options",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            conditions = read_validation_workflow_conditions(
+                ASCClient(make_token_provider()),
+                product_id=args.ci_product_id,
+                workflow_id=args.workflow_id,
+            )
+            print(json.dumps(conditions, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(
+                f"FAIL: validation workflow condition read failed ({exc.outcome.error_class})",
+                file=sys.stderr,
+            )
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: validation workflow condition read failed ({exc})", file=sys.stderr)
             return 1
 
     if args.build_run_status:

@@ -476,7 +476,9 @@ billable runs. The credential-brokered
 one-time fail-closed conversion from the former automatic `main` condition. The
 `--start-validation-build` mode can start only those two named, enabled
 workflows for one attended release. Disable them again after the runs are
-accepted. `app/release-status` remains the safe read-only status command.
+accepted. The read-only `--read-validation-workflow-conditions` diagnostic
+emits only those workflows' identity, enabled state, and seven start-condition
+fields. `app/release-status` remains the safe read-only status command.
 
 New candidates' readiness and local-gate evidence is content-bound rather than
 time-bound: source or proof-contract drift invalidates it; elapsed time alone
