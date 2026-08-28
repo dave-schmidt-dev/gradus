@@ -33,6 +33,7 @@ from allocate_identity import (
     resolve_workflow_toolchain,
     set_workflow_enabled,
     start_internal_testflight_build,
+    start_validation_build,
     write_proof,
 )
 
@@ -575,6 +576,151 @@ def test_start_internal_testflight_build_checks_contract_before_posting() -> Non
             "relationships": {"workflow": {"data": {"type": "ciWorkflows", "id": workflow_id}}},
         }
     }
+
+
+@pytest.mark.parametrize("workflow_name", ["Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"])
+def test_start_validation_build_accepts_only_fixed_enabled_names(workflow_name: str) -> None:
+    workflow_id = "workflow-1"
+    client = MutationFixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "ciWorkflows",
+                        "id": workflow_id,
+                        "attributes": {
+                            "name": workflow_name,
+                            "isEnabled": True,
+                            "manualBranchStartCondition": None,
+                            "manualTagStartCondition": None,
+                            "manualPullRequestStartCondition": None,
+                            "actions": [],
+                        },
+                    }
+                ]
+            },
+            {
+                "data": {
+                    "type": "ciBuildRuns",
+                    "id": "run-1",
+                    "attributes": {"executionProgress": "PENDING", "secret": "excluded"},
+                }
+            },
+        ]
+    )
+
+    assert start_validation_build(client, product_id="product-1", workflow_id=workflow_id) == {
+        "buildRunId": "run-1",
+        "executionProgress": "PENDING",
+        "workflowId": workflow_id,
+    }
+    assert client.methods == ["GET", "POST"]
+    assert client.paths[-1] == "/ciBuildRuns"
+    assert client.bodies[-1] == {
+        "data": {
+            "type": "ciBuildRuns",
+            "attributes": {"clean": True},
+            "relationships": {"workflow": {"data": {"type": "ciWorkflows", "id": workflow_id}}},
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("workflow_id", "listed_id", "name", "enabled", "error"),
+    [
+        ("unknown", "workflow-1", "Gradus macOS UI Trial", True, "not-in-product"),
+        (
+            "other-product-workflow",
+            "workflow-1",
+            "Gradus iOS Snapshot Trial",
+            True,
+            "not-in-product",
+        ),
+        ("workflow-1", "workflow-1", "Release", True, "name-not-allowed"),
+        ("workflow-1", "workflow-1", "Gradus macOS UI Trial", False, "disabled"),
+    ],
+)
+def test_start_validation_build_rejects_unapproved_workflows_before_post(
+    workflow_id: str, listed_id: str, name: str, enabled: bool, error: str
+) -> None:
+    client = MutationFixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "ciWorkflows",
+                        "id": listed_id,
+                        "attributes": {
+                            "name": name,
+                            "isEnabled": enabled,
+                            "manualBranchStartCondition": None,
+                            "manualTagStartCondition": None,
+                            "manualPullRequestStartCondition": None,
+                            "actions": [],
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+
+    with pytest.raises(IdentityAllocationError, match=error):
+        start_validation_build(client, product_id="product-1", workflow_id=workflow_id)
+    assert client.methods == ["GET"]
+
+
+def test_start_validation_build_rejects_malformed_response() -> None:
+    client = MutationFixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "ciWorkflows",
+                        "id": "workflow-1",
+                        "attributes": {
+                            "name": "Gradus iOS Snapshot Trial",
+                            "isEnabled": True,
+                            "manualBranchStartCondition": None,
+                            "manualTagStartCondition": None,
+                            "manualPullRequestStartCondition": None,
+                            "actions": [],
+                        },
+                    }
+                ]
+            },
+            {"data": {"type": "ciBuildRuns", "id": "run-1", "attributes": {}}},
+        ]
+    )
+
+    with pytest.raises(IdentityAllocationError, match="response-invalid"):
+        start_validation_build(client, product_id="product-1", workflow_id="workflow-1")
+
+
+def test_start_validation_build_cli_dispatches_and_prints_only_receipt(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    receipt = {
+        "buildRunId": "run-1",
+        "executionProgress": "PENDING",
+        "workflowId": "workflow-1",
+    }
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr("allocate_identity.ASCClient", lambda provider: object())
+    monkeypatch.setattr("allocate_identity.start_validation_build", lambda *args, **kwargs: receipt)
+
+    assert (
+        main(
+            [
+                "--start-validation-build",
+                "--ci-product-id",
+                "product-1",
+                "--workflow-id",
+                "workflow-1",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == receipt
 
 
 def test_read_build_run_status_outputs_only_delivery_state() -> None:

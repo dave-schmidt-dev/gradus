@@ -461,13 +461,20 @@ separate upload counter. A new TestFlight build is reserved for a completed,
 gate-green release candidate or a release-blocking correction; small
 non-blocking tweaks are batched into the next patch release.
 
-**Current cloud-only policy:** Xcode Cloud must perform the production archive,
-signing, and upload. The required `Gradus macOS UI Trial` and `Gradus iOS
-Snapshot Trial` workflows validate source but are not distribution workflows.
-Do not run `app/release-testflight --prepare-only` or `--upload` for a new iOS
-release until a dedicated distribution workflow is confirmed and the adapter
-records source-bound workflow, build-run, archive, and TestFlight receipts.
-`app/release-status` remains the safe read-only status command.
+**Current release policy:** Xcode Cloud performs the source-bound validation
+checks; the fixed `app/release-testflight` wrapper performs production archive,
+signing, upload, processing, and internal-tester assignment against the Gradus
+iOS App Store Connect record. Do not use the `Gradus iOS Internal TestFlight`
+Cloud workflow for delivery: the account's Cloud product is attached to the
+GradusMac app record, so its iOS builds cannot reach the Gradus AI beta group.
+
+The exact release commit must pass `Gradus macOS UI Trial` and `Gradus iOS
+Snapshot Trial` before candidate preparation. Those workflows remain disabled
+between releases to prevent automatic billable runs. The credential-brokered
+`allocate_identity.py --start-validation-build` mode can start only those two
+named, enabled workflows for one attended release. Disable them again after the
+runs are accepted. `app/release-status` remains the safe read-only status
+command.
 
 New candidates' readiness and local-gate evidence is content-bound rather than
 time-bound: source or proof-contract drift invalidates it; elapsed time alone
@@ -475,18 +482,17 @@ does not.
 
 The compatibility entry points are:
 
-- `app/release-testflight` — the paused local implementation; `--prepare-only`
-  still performs local production archive/sign work and `--upload` remains a
-  separate publication boundary.
+- `app/release-testflight` — the fixed release route; `--prepare-only` performs
+  local production archive/sign work and `--upload` remains a separate
+  publication boundary.
 - `app/release-status` — read the current local candidate status.
 
 Profile 2.0 adoption was proven historically for candidate
 `gradus-ios-18-a4acb3118b78faff`. The candidate-bound bridge canary returned
 `adoption-authorized` after broker identity lookup, Xcode signing verification,
-and App Store Connect reconciliation. That result does not authorize candidate
-1.9.0-24 or substitute for the pending cloud-distribution binding. The legacy
-scripts remain rollback-compatible implementation pieces, not an approved
-current release route.
+and App Store Connect reconciliation. That result is historical adoption
+evidence, not candidate-current release authority. The fixed wrapper derives
+current authorization and evidence for each successor candidate.
 
 The legacy `archive-upload-ios.sh`, `testflight-setup.py`, and
 `testflight-setup-safe.sh` entry points remain available for compatibility;

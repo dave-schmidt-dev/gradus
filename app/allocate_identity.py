@@ -39,6 +39,7 @@ IOS_APP_PROFILE_FILENAME = "gradus-ios-app-store.provisionprofile"
 DISTRIBUTION_CERTIFICATE_SHA1 = "FD247ACDEBCD05C725AE29B40218FB0F57807A2C"
 EVIDENCE_PATH = Path(".release-state/evidence/allocate-identity.json")
 TESTFLIGHT_WORKFLOW_NAME = "Gradus iOS Internal TestFlight"
+VALIDATION_WORKFLOW_NAMES = frozenset({"Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"})
 _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]*$")
 
@@ -738,6 +739,38 @@ def create_internal_testflight_workflow(
     }
 
 
+def _start_build_run(client: ASCClient, *, workflow_id: str, error_prefix: str) -> dict[str, str]:
+    """Start one prevalidated workflow and return only safe receipt fields."""
+
+    payload = client.request(
+        "POST",
+        "/ciBuildRuns",
+        {
+            "data": {
+                "type": "ciBuildRuns",
+                "attributes": {"clean": True},
+                "relationships": {"workflow": {"data": {"type": "ciWorkflows", "id": workflow_id}}},
+            }
+        },
+        idempotent=False,
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
+        raise IdentityAllocationError(f"{error_prefix}-build-start-response-invalid")
+    run = payload["data"]
+    run_id = run.get("id")
+    attributes = run.get("attributes")
+    progress = attributes.get("executionProgress") if isinstance(attributes, Mapping) else None
+    if (
+        run.get("type") != "ciBuildRuns"
+        or not isinstance(run_id, str)
+        or not run_id
+        or not isinstance(progress, str)
+        or not progress
+    ):
+        raise IdentityAllocationError(f"{error_prefix}-build-start-response-invalid")
+    return {"buildRunId": run_id, "executionProgress": progress, "workflowId": workflow_id}
+
+
 def start_internal_testflight_build(
     client: ASCClient, *, product_id: str, workflow_id: str
 ) -> dict[str, str]:
@@ -761,33 +794,23 @@ def start_internal_testflight_build(
         ]
     ):
         raise IdentityAllocationError("testflight-workflow-contract-mismatch")
-    payload = client.request(
-        "POST",
-        "/ciBuildRuns",
-        {
-            "data": {
-                "type": "ciBuildRuns",
-                "attributes": {"clean": True},
-                "relationships": {"workflow": {"data": {"type": "ciWorkflows", "id": workflow_id}}},
-            }
-        },
-        idempotent=False,
-    )
-    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
-        raise IdentityAllocationError("testflight-build-start-response-invalid")
-    run = payload["data"]
-    run_id = run.get("id")
-    attributes = run.get("attributes")
-    progress = attributes.get("executionProgress") if isinstance(attributes, Mapping) else None
-    if (
-        run.get("type") != "ciBuildRuns"
-        or not isinstance(run_id, str)
-        or not run_id
-        or not isinstance(progress, str)
-        or not progress
-    ):
-        raise IdentityAllocationError("testflight-build-start-response-invalid")
-    return {"buildRunId": run_id, "executionProgress": progress, "workflowId": workflow_id}
+    return _start_build_run(client, workflow_id=workflow_id, error_prefix="testflight")
+
+
+def start_validation_build(
+    client: ASCClient, *, product_id: str, workflow_id: str
+) -> dict[str, str]:
+    """Start one enabled, product-bound Gradus validation workflow."""
+
+    workflows = list_product_workflow_metadata(client, product_id)
+    selected = next((workflow for workflow in workflows if workflow["id"] == workflow_id), None)
+    if selected is None:
+        raise IdentityAllocationError("validation-workflow-not-in-product")
+    if selected["name"] not in VALIDATION_WORKFLOW_NAMES:
+        raise IdentityAllocationError("validation-workflow-name-not-allowed")
+    if not selected["isEnabled"]:
+        raise IdentityAllocationError("validation-workflow-disabled")
+    return _start_build_run(client, workflow_id=workflow_id, error_prefix="validation")
 
 
 def read_build_run_status(client: ASCClient, build_run_id: str) -> dict[str, str | None]:
@@ -1558,6 +1581,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Start the fixed manual internal-TestFlight workflow",
     )
     parser.add_argument(
+        "--start-validation-build",
+        action="store_true",
+        help="Start one fixed Gradus UI or snapshot validation workflow",
+    )
+    parser.add_argument(
         "--workflow-id", help="Workflow ID returned by TestFlight workflow creation"
     )
     parser.add_argument(
@@ -1626,6 +1654,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.resolve_workflow_toolchain
         or args.create_internal_testflight_workflow
         or args.start_internal_testflight_build
+        or args.start_validation_build
         or args.build_run_status
         or args.list_workflow_build_runs
         or args.list_ci_builds
@@ -1854,6 +1883,36 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         except IdentityAllocationError as exc:
             print(f"FAIL: TestFlight build start failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.start_validation_build:
+        if not args.ci_product_id or not args.workflow_id:
+            print("FAIL: validation build start requires product and workflow IDs", file=sys.stderr)
+            return 1
+        if (
+            args.ci_build_action_id
+            or args.output_dir
+            or args.ci_artifact_id
+            or args.list_result_bundles
+        ):
+            print("FAIL: validation build start does not accept artifact options", file=sys.stderr)
+            return 1
+        try:
+            receipt = start_validation_build(
+                ASCClient(make_token_provider()),
+                product_id=args.ci_product_id,
+                workflow_id=args.workflow_id,
+            )
+            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(
+                f"FAIL: validation build start failed ({exc.outcome.error_class})",
+                file=sys.stderr,
+            )
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: validation build start failed ({exc})", file=sys.stderr)
             return 1
 
     if args.build_run_status:
