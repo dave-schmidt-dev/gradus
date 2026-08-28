@@ -4,7 +4,9 @@ import XCTest
 final class WalkthroughCaptureXCUITests: XCTestCase {
     func testWalkthroughCapture() throws {
         let env = ProcessInfo.processInfo.environment
-        let route = try XCTUnwrap(env["GRADUS_WALKTHROUGH_FIXTURE"])
+        guard let route = env["GRADUS_WALKTHROUGH_FIXTURE"] else {
+            throw XCTSkip("Walkthrough capture environment is not configured")
+        }
         let marker = try XCTUnwrap(env["GRADUS_WALKTHROUGH_MARKER"])
         let destination = try XCTUnwrap(env["GRADUS_WALKTHROUGH_SCREENSHOT"])
         let app = XCUIApplication()

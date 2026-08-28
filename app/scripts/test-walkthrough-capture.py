@@ -69,6 +69,12 @@ class CaptureContractTests(unittest.TestCase):
         self.assertLess(self.swift.index(foreground), self.swift.index(marker))
         self.assertLess(self.swift.index(marker), self.swift.index(write))
 
+    def test_capture_harness_skips_outside_an_explicit_walkthrough_run(self) -> None:
+        self.assertIn('guard let route = env["GRADUS_WALKTHROUGH_FIXTURE"] else', self.swift)
+        self.assertIn(
+            'throw XCTSkip("Walkthrough capture environment is not configured")', self.swift
+        )
+
     def test_driver_is_disposable_dark_and_progress_visible(self) -> None:
         self.assertIn("simctl create", self.shell)
         self.assertIn("simctl delete", self.shell)
