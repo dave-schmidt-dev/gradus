@@ -972,6 +972,40 @@ def find_ios_testflight_build(client: ASCClient, build_number: str) -> list[dict
     return results
 
 
+def set_workflow_enabled(client: ASCClient, workflow_id: str, *, enabled: bool) -> dict[str, str]:
+    """Enable or disable one Cloud workflow, touching nothing else about it."""
+
+    if not isinstance(workflow_id, str) or not workflow_id:
+        raise IdentityAllocationError("workflow-id-invalid")
+    if not isinstance(enabled, bool):
+        raise IdentityAllocationError("workflow-enabled-invalid")
+    body = {
+        "data": {
+            "type": "ciWorkflows",
+            "id": workflow_id,
+            "attributes": {"isEnabled": enabled},
+        }
+    }
+    payload = client.request(
+        "PATCH", f"/ciWorkflows/{quote(workflow_id, safe='')}", body, idempotent=False
+    )
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    attributes = data.get("attributes") if isinstance(data, Mapping) else None
+    if not isinstance(data, Mapping) or not isinstance(attributes, Mapping):
+        raise IdentityAllocationError("workflow-update-response-invalid")
+    name = attributes.get("name")
+    observed = attributes.get("isEnabled")
+    if not isinstance(name, str) or not name or not isinstance(observed, bool):
+        raise IdentityAllocationError("workflow-update-response-invalid")
+    if observed != enabled:
+        raise IdentityAllocationError("workflow-update-not-applied")
+    return {
+        "workflowId": workflow_id,
+        "name": name,
+        "isEnabled": "true" if observed else "false",
+    }
+
+
 def list_build_run_actions(client: ASCClient, build_run_id: str) -> list[dict[str, str]]:
     """List allowlisted per-action state for one Cloud run, newest field set only."""
 
@@ -1405,6 +1439,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Resolve an iOS TestFlight build number through the fixed Gradus app",
     )
     parser.add_argument(
+        "--disable-workflow",
+        metavar="WORKFLOW_ID",
+        help="Stop one Xcode Cloud workflow from starting any further builds",
+    )
+    parser.add_argument(
+        "--enable-workflow",
+        metavar="WORKFLOW_ID",
+        help="Re-enable one Xcode Cloud workflow disabled by --disable-workflow",
+    )
+    parser.add_argument(
         "--list-build-run-actions",
         metavar="BUILD_RUN_ID",
         help="Print safe per-action state for one Xcode Cloud build run",
@@ -1445,6 +1489,8 @@ def main(argv: list[str] | None = None) -> int:
         or args.find_ios_testflight_build
         or args.read_testflight_build
         or args.list_build_run_actions
+        or args.disable_workflow
+        or args.enable_workflow
         or args.inspect_testflight_build_app
         or args.assign_internal_testflight_build
         or args.inspect_internal_testflight_build
@@ -1743,6 +1789,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except ASCError as exc:
             print(f"FAIL: build lookup failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+
+    if args.disable_workflow or args.enable_workflow:
+        if args.disable_workflow and args.enable_workflow:
+            print("FAIL: choose either --disable-workflow or --enable-workflow", file=sys.stderr)
+            return 1
+        enabled = bool(args.enable_workflow)
+        target = args.enable_workflow or args.disable_workflow
+        try:
+            updated = set_workflow_enabled(
+                ASCClient(make_token_provider()), target, enabled=enabled
+            )
+            print(json.dumps(updated, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: workflow update failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: workflow update failed ({exc})", file=sys.stderr)
             return 1
 
     if args.list_build_run_actions:

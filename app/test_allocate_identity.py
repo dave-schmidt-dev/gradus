@@ -28,6 +28,7 @@ from allocate_identity import (
     read_testflight_build,
     read_workflow_template,
     resolve_workflow_toolchain,
+    set_workflow_enabled,
     start_internal_testflight_build,
     write_proof,
 )
@@ -846,6 +847,51 @@ def test_list_build_run_actions_rejects_a_mistyped_required_flag() -> None:
     )
     with pytest.raises(IdentityAllocationError, match="build-run-actions-response-invalid"):
         list_build_run_actions(client, "run-1")
+
+
+def test_set_workflow_enabled_patches_only_the_enabled_flag() -> None:
+    """Disabling a workflow must not rewrite its actions, schedule or conditions."""
+    client = MutationFixtureClient(
+        [
+            {
+                "data": {
+                    "id": "workflow-1",
+                    "attributes": {"name": "Gradus iOS Snapshot Trial", "isEnabled": False},
+                }
+            }
+        ]
+    )
+    assert set_workflow_enabled(client, "workflow-1", enabled=False) == {
+        "workflowId": "workflow-1",
+        "name": "Gradus iOS Snapshot Trial",
+        "isEnabled": "false",
+    }
+    assert client.methods == ["PATCH"]
+    assert client.bodies == [
+        {
+            "data": {
+                "type": "ciWorkflows",
+                "id": "workflow-1",
+                "attributes": {"isEnabled": False},
+            }
+        }
+    ]
+
+
+def test_set_workflow_enabled_rejects_a_response_that_did_not_take() -> None:
+    """A workflow still enabled after a disable keeps spending money silently."""
+    client = MutationFixtureClient(
+        [{"data": {"id": "workflow-1", "attributes": {"name": "Trial", "isEnabled": True}}}]
+    )
+    with pytest.raises(IdentityAllocationError, match="workflow-update-not-applied"):
+        set_workflow_enabled(client, "workflow-1", enabled=False)
+
+
+def test_disable_and_enable_workflow_cannot_be_requested_together(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    assert main(["--disable-workflow", "workflow-1", "--enable-workflow", "workflow-1"]) == 1
 
 
 def test_inspect_testflight_build_app_returns_only_fixed_app_membership() -> None:
