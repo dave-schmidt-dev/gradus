@@ -199,6 +199,31 @@ def _validation_conditions(name="Gradus macOS UI Trial", **overrides):
     }
 
 
+def _live_validation_conditions(name):
+    if name == "Gradus macOS UI Trial":
+        return _validation_conditions(
+            name,
+            isEnabled=False,
+            branchStartCondition=None,
+            pullRequestStartCondition={
+                "autoCancel": True,
+                "destination": {"isAllMatch": True, "patterns": []},
+                "filesAndFoldersRule": None,
+                "source": {"isAllMatch": True, "patterns": []},
+            },
+        )
+    return _validation_conditions(
+        name,
+        isEnabled=False,
+        branchStartCondition={
+            "autoCancel": False,
+            "filesAndFoldersRule": None,
+            "source": {"isAllMatch": True, "patterns": []},
+        },
+        pullRequestStartCondition=None,
+    )
+
+
 def test_make_proof_reads_fixed_app_and_build_bindings_without_persisting_response(tmp_path):
     client = FixtureClient(_responses())
     proof = make_proof(
@@ -904,7 +929,7 @@ def test_convert_validation_workflow_to_manual_uses_exact_patch(workflow_name: s
         manualBranchStartCondition={"source": _main_branch_source()},
     )
     client = MutationFixtureClient(
-        [_validation_inventory(workflow_name), _validation_conditions(workflow_name), updated]
+        [_validation_inventory(workflow_name), _live_validation_conditions(workflow_name), updated]
     )
 
     assert convert_validation_workflow_to_manual(
@@ -923,6 +948,7 @@ def test_convert_validation_workflow_to_manual_uses_exact_patch(workflow_name: s
             "id": "workflow-1",
             "attributes": {
                 "branchStartCondition": None,
+                "pullRequestStartCondition": None,
                 "manualBranchStartCondition": {"source": _main_branch_source()},
                 "isEnabled": False,
             },
@@ -1041,6 +1067,85 @@ def test_convert_validation_workflow_to_manual_rejects_pre_patch_state(
 
 
 @pytest.mark.parametrize(
+    ("workflow_name", "shape_name"),
+    [
+        ("Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"),
+        ("Gradus iOS Snapshot Trial", "Gradus macOS UI Trial"),
+    ],
+)
+def test_convert_validation_workflow_to_manual_rejects_cross_name_live_shape(
+    workflow_name: str, shape_name: str
+) -> None:
+    conditions = _live_validation_conditions(shape_name)
+    conditions["data"]["attributes"]["name"] = workflow_name
+    client = MutationFixtureClient([_validation_inventory(workflow_name), conditions])
+
+    with pytest.raises(IdentityAllocationError, match="start-condition-mismatch"):
+        convert_validation_workflow_to_manual(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )
+    assert "PATCH" not in client.methods
+
+
+@pytest.mark.parametrize(
+    ("workflow_name", "variant"),
+    [
+        ("Gradus macOS UI Trial", "changed-value"),
+        ("Gradus macOS UI Trial", "extra-key"),
+        ("Gradus iOS Snapshot Trial", "changed-value"),
+        ("Gradus iOS Snapshot Trial", "extra-key"),
+    ],
+)
+def test_convert_validation_workflow_to_manual_rejects_live_shape_variants(
+    workflow_name: str, variant: str
+) -> None:
+    conditions = _live_validation_conditions(workflow_name)
+    attributes = conditions["data"]["attributes"]
+    condition_key = (
+        "pullRequestStartCondition"
+        if workflow_name == "Gradus macOS UI Trial"
+        else "branchStartCondition"
+    )
+    if variant == "changed-value":
+        attributes[condition_key]["autoCancel"] = not attributes[condition_key]["autoCancel"]
+    else:
+        attributes[condition_key]["unexpected"] = True
+    client = MutationFixtureClient([_validation_inventory(workflow_name), conditions])
+
+    with pytest.raises(IdentityAllocationError, match="start-condition-mismatch"):
+        convert_validation_workflow_to_manual(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )
+    assert "PATCH" not in client.methods
+
+
+@pytest.mark.parametrize(
+    "workflow_name",
+    ["Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"],
+)
+def test_convert_validation_workflow_to_manual_rejects_mixed_live_triggers(
+    workflow_name: str,
+) -> None:
+    conditions = _live_validation_conditions(workflow_name)
+    attributes = conditions["data"]["attributes"]
+    if workflow_name == "Gradus macOS UI Trial":
+        other = _live_validation_conditions("Gradus iOS Snapshot Trial")
+        attributes["branchStartCondition"] = other["data"]["attributes"]["branchStartCondition"]
+    else:
+        other = _live_validation_conditions("Gradus macOS UI Trial")
+        attributes["pullRequestStartCondition"] = other["data"]["attributes"][
+            "pullRequestStartCondition"
+        ]
+    client = MutationFixtureClient([_validation_inventory(workflow_name), conditions])
+
+    with pytest.raises(IdentityAllocationError, match="start-condition-mismatch"):
+        convert_validation_workflow_to_manual(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )
+    assert "PATCH" not in client.methods
+
+
+@pytest.mark.parametrize(
     "updated",
     [
         {"data": []},
@@ -1086,7 +1191,9 @@ def test_convert_validation_workflow_to_manual_rejects_pre_patch_state(
 def test_convert_validation_workflow_to_manual_rejects_unproven_patch_response(
     updated: dict,
 ) -> None:
-    client = MutationFixtureClient([_validation_inventory(), _validation_conditions(), updated])
+    client = MutationFixtureClient(
+        [_validation_inventory(), _live_validation_conditions("Gradus macOS UI Trial"), updated]
+    )
 
     with pytest.raises(IdentityAllocationError, match="conversion-response-invalid"):
         convert_validation_workflow_to_manual(

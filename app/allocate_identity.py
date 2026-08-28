@@ -44,6 +44,17 @@ _MAIN_BRANCH_SOURCE = {
     "isAllMatch": False,
     "patterns": [{"pattern": "main", "isPrefix": False}],
 }
+_MACOS_UI_TRIAL_PULL_REQUEST_CONDITION = {
+    "autoCancel": True,
+    "destination": {"isAllMatch": True, "patterns": []},
+    "filesAndFoldersRule": None,
+    "source": {"isAllMatch": True, "patterns": []},
+}
+_IOS_SNAPSHOT_TRIAL_BRANCH_CONDITION = {
+    "autoCancel": False,
+    "filesAndFoldersRule": None,
+    "source": {"isAllMatch": True, "patterns": []},
+}
 _WORKFLOW_START_CONDITION_KEYS = (
     "branchStartCondition",
     "tagStartCondition",
@@ -888,6 +899,34 @@ def _manual_validation_receipt(workflow_id: str, name: str) -> dict[str, str]:
     }
 
 
+def _has_exact_live_automatic_condition(name: str, attributes: Mapping[str, Any]) -> bool:
+    """Return whether one workflow has its exact name-specific live trigger shape."""
+
+    inactive_conditions = (
+        "tagStartCondition",
+        "scheduledStartCondition",
+        "manualBranchStartCondition",
+        "manualTagStartCondition",
+        "manualPullRequestStartCondition",
+    )
+    if attributes.get("isEnabled") is not False or any(
+        attributes.get(key) is not None for key in inactive_conditions
+    ):
+        return False
+    if name == "Gradus macOS UI Trial":
+        return (
+            attributes.get("branchStartCondition") is None
+            and attributes.get("pullRequestStartCondition")
+            == _MACOS_UI_TRIAL_PULL_REQUEST_CONDITION
+        )
+    if name == "Gradus iOS Snapshot Trial":
+        return (
+            attributes.get("branchStartCondition") == _IOS_SNAPSHOT_TRIAL_BRANCH_CONDITION
+            and attributes.get("pullRequestStartCondition") is None
+        )
+    return False
+
+
 def convert_validation_workflow_to_manual(
     client: ASCClient, *, product_id: str, workflow_id: str
 ) -> dict[str, str]:
@@ -901,25 +940,21 @@ def convert_validation_workflow_to_manual(
     if name not in VALIDATION_WORKFLOW_NAMES:
         raise IdentityAllocationError("validation-workflow-name-not-allowed")
     attributes = _validation_workflow_conditions(client, workflow_id, name)
-    other_conditions = (
+    inactive_manual_conditions = (
         "tagStartCondition",
-        "pullRequestStartCondition",
         "scheduledStartCondition",
         "manualTagStartCondition",
         "manualPullRequestStartCondition",
     )
-    if any(attributes.get(key) is not None for key in other_conditions):
-        raise IdentityAllocationError("validation-workflow-start-condition-mismatch")
-    automatic = (
-        _has_exact_main_source(attributes.get("branchStartCondition"))
-        and attributes.get("manualBranchStartCondition") is None
-    )
-    manual = attributes.get("branchStartCondition") is None and _has_exact_main_source(
-        attributes.get("manualBranchStartCondition")
+    manual = (
+        attributes.get("branchStartCondition") is None
+        and attributes.get("pullRequestStartCondition") is None
+        and _has_exact_main_source(attributes.get("manualBranchStartCondition"))
+        and all(attributes.get(key) is None for key in inactive_manual_conditions)
     )
     if manual and attributes["isEnabled"] is False:
         return _manual_validation_receipt(workflow_id, name)
-    if not automatic:
+    if not _has_exact_live_automatic_condition(name, attributes):
         raise IdentityAllocationError("validation-workflow-start-condition-mismatch")
     body = {
         "data": {
@@ -927,6 +962,7 @@ def convert_validation_workflow_to_manual(
             "id": workflow_id,
             "attributes": {
                 "branchStartCondition": None,
+                "pullRequestStartCondition": None,
                 "manualBranchStartCondition": {"source": _MAIN_BRANCH_SOURCE},
                 "isEnabled": False,
             },
@@ -946,8 +982,9 @@ def convert_validation_workflow_to_manual(
         or updated.get("isEnabled") is not False
         or any(key not in updated for key in _WORKFLOW_START_CONDITION_KEYS)
         or updated.get("branchStartCondition") is not None
+        or updated.get("pullRequestStartCondition") is not None
         or not _has_exact_main_source(updated.get("manualBranchStartCondition"))
-        or any(updated.get(key) is not None for key in other_conditions)
+        or any(updated.get(key) is not None for key in inactive_manual_conditions)
     ):
         raise IdentityAllocationError("validation-workflow-conversion-response-invalid")
     return _manual_validation_receipt(workflow_id, name)

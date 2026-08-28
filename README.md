@@ -473,10 +473,11 @@ Snapshot Trial` before candidate preparation. Those workflows use manual
 `main`-branch starts and remain disabled between releases to prevent automatic
 billable runs. The credential-brokered
 `allocate_identity.py --convert-validation-workflow-to-manual` mode performs the
-one-time fail-closed conversion from the former automatic `main` condition. The
-`--start-validation-build` mode can start only those two named, enabled
-workflows for one attended release. Disable them again after the runs are
-accepted. The read-only `--read-validation-workflow-conditions` diagnostic
+one-time fail-closed conversion from each workflow's exact name-specific
+automatic condition to manual `main`. The `--start-validation-build` mode can
+start only those two named, enabled workflows for one attended release. Disable
+them again after the runs are accepted. The read-only
+`--read-validation-workflow-conditions` diagnostic
 emits only those workflows' identity, enabled state, and seven start-condition
 fields. `app/release-status` remains the safe read-only status command.
 
