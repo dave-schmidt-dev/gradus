@@ -40,6 +40,19 @@ DISTRIBUTION_CERTIFICATE_SHA1 = "FD247ACDEBCD05C725AE29B40218FB0F57807A2C"
 EVIDENCE_PATH = Path(".release-state/evidence/allocate-identity.json")
 TESTFLIGHT_WORKFLOW_NAME = "Gradus iOS Internal TestFlight"
 VALIDATION_WORKFLOW_NAMES = frozenset({"Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"})
+_MAIN_BRANCH_SOURCE = {
+    "isAllMatch": False,
+    "patterns": [{"pattern": "main", "isPrefix": False}],
+}
+_WORKFLOW_START_CONDITION_KEYS = (
+    "branchStartCondition",
+    "tagStartCondition",
+    "pullRequestStartCondition",
+    "scheduledStartCondition",
+    "manualBranchStartCondition",
+    "manualTagStartCondition",
+    "manualPullRequestStartCondition",
+)
 _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]*$")
 
@@ -811,6 +824,112 @@ def start_validation_build(
     if not selected["isEnabled"]:
         raise IdentityAllocationError("validation-workflow-disabled")
     return _start_build_run(client, workflow_id=workflow_id, error_prefix="validation")
+
+
+def _validation_workflow_conditions(
+    client: ASCClient, workflow_id: str, expected_name: str
+) -> Mapping[str, Any]:
+    """Read and validate every start condition on one allowlisted workflow."""
+
+    payload = client.request(
+        "GET",
+        f"/ciWorkflows/{quote(workflow_id, safe='')}",
+    )
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    attributes = data.get("attributes") if isinstance(data, Mapping) else None
+    if (
+        not isinstance(data, Mapping)
+        or data.get("type") != "ciWorkflows"
+        or data.get("id") != workflow_id
+        or not isinstance(attributes, Mapping)
+        or attributes.get("name") != expected_name
+        or not isinstance(attributes.get("isEnabled"), bool)
+        or any(key not in attributes for key in _WORKFLOW_START_CONDITION_KEYS)
+    ):
+        raise IdentityAllocationError("validation-workflow-condition-response-invalid")
+    return attributes
+
+
+def _has_exact_main_source(condition: Any) -> bool:
+    """Return whether a start condition contains only the fixed main-branch source."""
+
+    return isinstance(condition, Mapping) and dict(condition) == {"source": _MAIN_BRANCH_SOURCE}
+
+
+def _manual_validation_receipt(workflow_id: str, name: str) -> dict[str, str]:
+    """Return the safe fixed receipt for a disabled manual validation workflow."""
+
+    return {
+        "workflowId": workflow_id,
+        "name": name,
+        "isEnabled": "false",
+        "startCondition": "manual-main",
+    }
+
+
+def convert_validation_workflow_to_manual(
+    client: ASCClient, *, product_id: str, workflow_id: str
+) -> dict[str, str]:
+    """Convert one allowlisted product workflow from automatic to manual main."""
+
+    workflows = list_product_workflow_metadata(client, product_id)
+    selected = next((workflow for workflow in workflows if workflow["id"] == workflow_id), None)
+    if selected is None:
+        raise IdentityAllocationError("validation-workflow-not-in-product")
+    name = selected["name"]
+    if name not in VALIDATION_WORKFLOW_NAMES:
+        raise IdentityAllocationError("validation-workflow-name-not-allowed")
+    attributes = _validation_workflow_conditions(client, workflow_id, name)
+    other_conditions = (
+        "tagStartCondition",
+        "pullRequestStartCondition",
+        "scheduledStartCondition",
+        "manualTagStartCondition",
+        "manualPullRequestStartCondition",
+    )
+    if any(attributes.get(key) is not None for key in other_conditions):
+        raise IdentityAllocationError("validation-workflow-start-condition-mismatch")
+    automatic = (
+        _has_exact_main_source(attributes.get("branchStartCondition"))
+        and attributes.get("manualBranchStartCondition") is None
+    )
+    manual = attributes.get("branchStartCondition") is None and _has_exact_main_source(
+        attributes.get("manualBranchStartCondition")
+    )
+    if manual and attributes["isEnabled"] is False:
+        return _manual_validation_receipt(workflow_id, name)
+    if not automatic:
+        raise IdentityAllocationError("validation-workflow-start-condition-mismatch")
+    body = {
+        "data": {
+            "type": "ciWorkflows",
+            "id": workflow_id,
+            "attributes": {
+                "branchStartCondition": None,
+                "manualBranchStartCondition": {"source": _MAIN_BRANCH_SOURCE},
+                "isEnabled": False,
+            },
+        }
+    }
+    payload = client.request(
+        "PATCH", f"/ciWorkflows/{quote(workflow_id, safe='')}", body, idempotent=False
+    )
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    updated = data.get("attributes") if isinstance(data, Mapping) else None
+    if (
+        not isinstance(data, Mapping)
+        or data.get("type") != "ciWorkflows"
+        or data.get("id") != workflow_id
+        or not isinstance(updated, Mapping)
+        or updated.get("name") != name
+        or updated.get("isEnabled") is not False
+        or any(key not in updated for key in _WORKFLOW_START_CONDITION_KEYS)
+        or updated.get("branchStartCondition") is not None
+        or not _has_exact_main_source(updated.get("manualBranchStartCondition"))
+        or any(updated.get(key) is not None for key in other_conditions)
+    ):
+        raise IdentityAllocationError("validation-workflow-conversion-response-invalid")
+    return _manual_validation_receipt(workflow_id, name)
 
 
 def read_build_run_status(client: ASCClient, build_run_id: str) -> dict[str, str | None]:
@@ -1586,6 +1705,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Start one fixed Gradus UI or snapshot validation workflow",
     )
     parser.add_argument(
+        "--convert-validation-workflow-to-manual",
+        action="store_true",
+        help="Disable and convert one fixed validation workflow to manual main starts",
+    )
+    parser.add_argument(
         "--workflow-id", help="Workflow ID returned by TestFlight workflow creation"
     )
     parser.add_argument(
@@ -1655,6 +1779,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.create_internal_testflight_workflow
         or args.start_internal_testflight_build
         or args.start_validation_build
+        or args.convert_validation_workflow_to_manual
         or args.build_run_status
         or args.list_workflow_build_runs
         or args.list_ci_builds
@@ -1913,6 +2038,42 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         except IdentityAllocationError as exc:
             print(f"FAIL: validation build start failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.convert_validation_workflow_to_manual:
+        if not args.ci_product_id or not args.workflow_id:
+            print(
+                "FAIL: validation workflow conversion requires product and workflow IDs",
+                file=sys.stderr,
+            )
+            return 1
+        if (
+            args.ci_build_action_id
+            or args.output_dir
+            or args.ci_artifact_id
+            or args.list_result_bundles
+        ):
+            print(
+                "FAIL: validation workflow conversion does not accept artifact options",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            receipt = convert_validation_workflow_to_manual(
+                ASCClient(make_token_provider()),
+                product_id=args.ci_product_id,
+                workflow_id=args.workflow_id,
+            )
+            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(
+                f"FAIL: validation workflow conversion failed ({exc.outcome.error_class})",
+                file=sys.stderr,
+            )
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: validation workflow conversion failed ({exc})", file=sys.stderr)
             return 1
 
     if args.build_run_status:

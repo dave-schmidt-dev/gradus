@@ -469,12 +469,14 @@ Cloud workflow for delivery: the account's Cloud product is attached to the
 GradusMac app record, so its iOS builds cannot reach the Gradus AI beta group.
 
 The exact release commit must pass `Gradus macOS UI Trial` and `Gradus iOS
-Snapshot Trial` before candidate preparation. Those workflows remain disabled
-between releases to prevent automatic billable runs. The credential-brokered
-`allocate_identity.py --start-validation-build` mode can start only those two
-named, enabled workflows for one attended release. Disable them again after the
-runs are accepted. `app/release-status` remains the safe read-only status
-command.
+Snapshot Trial` before candidate preparation. Those workflows use manual
+`main`-branch starts and remain disabled between releases to prevent automatic
+billable runs. The credential-brokered
+`allocate_identity.py --convert-validation-workflow-to-manual` mode performs the
+one-time fail-closed conversion from the former automatic `main` condition. The
+`--start-validation-build` mode can start only those two named, enabled
+workflows for one attended release. Disable them again after the runs are
+accepted. `app/release-status` remains the safe read-only status command.
 
 New candidates' readiness and local-gate evidence is content-bound rather than
 time-bound: source or proof-contract drift invalidates it; elapsed time alone

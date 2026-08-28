@@ -10,6 +10,7 @@ from allocate_identity import (
     IdentityAllocationError,
     _remote_semver,
     assign_build_to_internal_group,
+    convert_validation_workflow_to_manual,
     create_internal_testflight_workflow,
     ensure_ios_app_group_distribution_profile,
     ensure_widget_distribution_profile,
@@ -147,6 +148,54 @@ def _cloud_product_responses():
             ]
         }
     ]
+
+
+def _main_branch_source():
+    return {
+        "isAllMatch": False,
+        "patterns": [{"pattern": "main", "isPrefix": False}],
+    }
+
+
+def _validation_inventory(name="Gradus macOS UI Trial", workflow_id="workflow-1"):
+    return {
+        "data": [
+            {
+                "type": "ciWorkflows",
+                "id": workflow_id,
+                "attributes": {
+                    "name": name,
+                    "isEnabled": True,
+                    "manualBranchStartCondition": None,
+                    "manualTagStartCondition": None,
+                    "manualPullRequestStartCondition": None,
+                    "actions": [],
+                },
+            }
+        ]
+    }
+
+
+def _validation_conditions(name="Gradus macOS UI Trial", **overrides):
+    attributes = {
+        "name": name,
+        "isEnabled": True,
+        "branchStartCondition": {"source": _main_branch_source()},
+        "tagStartCondition": None,
+        "pullRequestStartCondition": None,
+        "scheduledStartCondition": None,
+        "manualBranchStartCondition": None,
+        "manualTagStartCondition": None,
+        "manualPullRequestStartCondition": None,
+    }
+    attributes.update(overrides)
+    return {
+        "data": {
+            "type": "ciWorkflows",
+            "id": "workflow-1",
+            "attributes": attributes,
+        }
+    }
 
 
 def test_make_proof_reads_fixed_app_and_build_bindings_without_persisting_response(tmp_path):
@@ -721,6 +770,258 @@ def test_start_validation_build_cli_dispatches_and_prints_only_receipt(
         == 0
     )
     assert json.loads(capsys.readouterr().out) == receipt
+
+
+@pytest.mark.parametrize("workflow_name", ["Gradus macOS UI Trial", "Gradus iOS Snapshot Trial"])
+def test_convert_validation_workflow_to_manual_uses_exact_patch(workflow_name: str) -> None:
+    updated = _validation_conditions(
+        workflow_name,
+        isEnabled=False,
+        branchStartCondition=None,
+        manualBranchStartCondition={"source": _main_branch_source()},
+    )
+    client = MutationFixtureClient(
+        [_validation_inventory(workflow_name), _validation_conditions(workflow_name), updated]
+    )
+
+    assert convert_validation_workflow_to_manual(
+        client, product_id="product-1", workflow_id="workflow-1"
+    ) == {
+        "workflowId": "workflow-1",
+        "name": workflow_name,
+        "isEnabled": "false",
+        "startCondition": "manual-main",
+    }
+    assert client.methods == ["GET", "GET", "PATCH"]
+    assert client.paths[-1] == "/ciWorkflows/workflow-1"
+    assert client.bodies[-1] == {
+        "data": {
+            "type": "ciWorkflows",
+            "id": "workflow-1",
+            "attributes": {
+                "branchStartCondition": None,
+                "manualBranchStartCondition": {"source": _main_branch_source()},
+                "isEnabled": False,
+            },
+        }
+    }
+
+
+def test_convert_validation_workflow_to_manual_is_idempotent_without_patch() -> None:
+    manual = _validation_conditions(
+        isEnabled=False,
+        branchStartCondition=None,
+        manualBranchStartCondition={"source": _main_branch_source()},
+    )
+    client = MutationFixtureClient([_validation_inventory(), manual])
+
+    assert (
+        convert_validation_workflow_to_manual(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )["startCondition"]
+        == "manual-main"
+    )
+    assert client.methods == ["GET", "GET"]
+
+
+@pytest.mark.parametrize(
+    ("inventory", "conditions", "error"),
+    [
+        (_validation_inventory(workflow_id="other"), None, "not-in-product"),
+        (_validation_inventory(name="Release"), None, "name-not-allowed"),
+        (
+            _validation_inventory(),
+            _validation_conditions(
+                branchStartCondition={
+                    "source": {
+                        "isAllMatch": False,
+                        "patterns": [{"pattern": "develop", "isPrefix": False}],
+                    }
+                }
+            ),
+            "start-condition-mismatch",
+        ),
+        (
+            _validation_inventory(),
+            _validation_conditions(tagStartCondition={"source": _main_branch_source()}),
+            "start-condition-mismatch",
+        ),
+        (
+            _validation_inventory(),
+            _validation_conditions(pullRequestStartCondition={"source": _main_branch_source()}),
+            "start-condition-mismatch",
+        ),
+        (
+            _validation_inventory(),
+            _validation_conditions(scheduledStartCondition={"schedule": "daily"}),
+            "start-condition-mismatch",
+        ),
+        (
+            _validation_inventory(),
+            _validation_conditions(
+                isEnabled=True,
+                branchStartCondition=None,
+                manualBranchStartCondition={"source": _main_branch_source()},
+            ),
+            "start-condition-mismatch",
+        ),
+        (
+            _validation_inventory(),
+            _validation_conditions(
+                branchStartCondition={"source": _main_branch_source()},
+                manualBranchStartCondition={"source": _main_branch_source()},
+            ),
+            "start-condition-mismatch",
+        ),
+        (
+            _validation_inventory(),
+            _validation_conditions(manualTagStartCondition={"source": _main_branch_source()}),
+            "start-condition-mismatch",
+        ),
+        (
+            _validation_inventory(),
+            _validation_conditions(
+                manualPullRequestStartCondition={"source": _main_branch_source()}
+            ),
+            "start-condition-mismatch",
+        ),
+        (_validation_inventory(), {"data": []}, "condition-response-invalid"),
+        (
+            _validation_inventory(),
+            {
+                "data": {
+                    "type": "ciWorkflows",
+                    "id": "workflow-1",
+                    "attributes": {
+                        "name": "Gradus macOS UI Trial",
+                        "isEnabled": True,
+                        "branchStartCondition": {"source": _main_branch_source()},
+                        "manualBranchStartCondition": None,
+                    },
+                }
+            },
+            "condition-response-invalid",
+        ),
+    ],
+)
+def test_convert_validation_workflow_to_manual_rejects_pre_patch_state(
+    inventory: dict, conditions: dict | None, error: str
+) -> None:
+    responses = [inventory] if conditions is None else [inventory, conditions]
+    client = MutationFixtureClient(responses)
+
+    with pytest.raises(IdentityAllocationError, match=error):
+        convert_validation_workflow_to_manual(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )
+    assert "PATCH" not in client.methods
+
+
+@pytest.mark.parametrize(
+    "updated",
+    [
+        {"data": []},
+        {
+            "data": {
+                "type": "ciWorkflows",
+                "id": "workflow-1",
+                "attributes": {
+                    "name": "Gradus macOS UI Trial",
+                    "isEnabled": False,
+                    "branchStartCondition": None,
+                    "manualBranchStartCondition": {"source": _main_branch_source()},
+                },
+            }
+        },
+        _validation_conditions(
+            isEnabled=True,
+            branchStartCondition=None,
+            manualBranchStartCondition={"source": _main_branch_source()},
+        ),
+        _validation_conditions(
+            isEnabled=False,
+            manualBranchStartCondition={"source": _main_branch_source()},
+        ),
+        _validation_conditions(
+            isEnabled=False,
+            branchStartCondition=None,
+            manualBranchStartCondition={
+                "source": {
+                    "isAllMatch": False,
+                    "patterns": [{"pattern": "develop", "isPrefix": False}],
+                }
+            },
+        ),
+        _validation_conditions(
+            isEnabled=False,
+            branchStartCondition=None,
+            manualBranchStartCondition={"source": _main_branch_source()},
+            scheduledStartCondition={"schedule": "daily"},
+        ),
+    ],
+)
+def test_convert_validation_workflow_to_manual_rejects_unproven_patch_response(
+    updated: dict,
+) -> None:
+    client = MutationFixtureClient([_validation_inventory(), _validation_conditions(), updated])
+
+    with pytest.raises(IdentityAllocationError, match="conversion-response-invalid"):
+        convert_validation_workflow_to_manual(
+            client, product_id="product-1", workflow_id="workflow-1"
+        )
+
+
+def test_convert_validation_workflow_to_manual_cli_dispatch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    receipt = {
+        "workflowId": "workflow-1",
+        "name": "Gradus macOS UI Trial",
+        "isEnabled": "false",
+        "startCondition": "manual-main",
+    }
+    calls = []
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr("allocate_identity.ASCClient", lambda provider: object())
+
+    def convert(client, *, product_id, workflow_id):
+        calls.append((client, product_id, workflow_id))
+        return receipt
+
+    monkeypatch.setattr("allocate_identity.convert_validation_workflow_to_manual", convert)
+
+    assert (
+        main(
+            [
+                "--convert-validation-workflow-to-manual",
+                "--ci-product-id",
+                "product-1",
+                "--workflow-id",
+                "workflow-1",
+            ]
+        )
+        == 0
+    )
+    assert calls == [(calls[0][0], "product-1", "workflow-1")]
+    assert json.loads(capsys.readouterr().out) == receipt
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--convert-validation-workflow-to-manual", "--workflow-id", "workflow-1"],
+        ["--convert-validation-workflow-to-manual", "--ci-product-id", "product-1"],
+    ],
+)
+def test_convert_validation_workflow_to_manual_cli_requires_both_ids(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "allocate_identity.convert_validation_workflow_to_manual",
+        lambda *args, **kwargs: pytest.fail("conversion must not dispatch"),
+    )
+
+    assert main(argv) == 1
 
 
 def test_read_build_run_status_outputs_only_delivery_state() -> None:
