@@ -1083,6 +1083,131 @@ def read_testflight_build(client: ASCClient, build_id: str) -> dict[str, str]:
     return record
 
 
+def list_app_records(client: ASCClient) -> list[dict[str, str]]:
+    """List every App Store Connect app record the key can see, with its bundle id."""
+
+    payload = client.request("GET", "/apps?fields[apps]=bundleId,name,sku&limit=200")
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        raise IdentityAllocationError("apps-response-invalid")
+    records: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for app in payload["data"]:
+        if not isinstance(app, Mapping):
+            raise IdentityAllocationError("apps-response-invalid")
+        app_id = app.get("id")
+        attributes = app.get("attributes")
+        if (
+            app.get("type") != "apps"
+            or not isinstance(app_id, str)
+            or not app_id
+            or app_id in seen_ids
+            or not isinstance(attributes, Mapping)
+        ):
+            raise IdentityAllocationError("apps-response-ambiguous")
+        record = {"id": app_id}
+        for key in ("bundleId", "name", "sku"):
+            value = attributes.get(key)
+            if not isinstance(value, str) or not value:
+                raise IdentityAllocationError("apps-response-invalid")
+            record[key] = value
+        seen_ids.add(app_id)
+        records.append(record)
+    return records
+
+
+def list_beta_groups(client: ASCClient, app_id: str) -> list[dict[str, str]]:
+    """List one app record's beta groups so a missing tester route is visible."""
+
+    if not isinstance(app_id, str) or not app_id:
+        raise IdentityAllocationError("app-id-invalid")
+    payload = client.request(
+        "GET",
+        f"/apps/{quote(app_id, safe='')}/betaGroups?"
+        "fields[betaGroups]=name,isInternalGroup,hasAccessToAllBuilds&limit=200",
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        raise IdentityAllocationError("beta-groups-response-invalid")
+    groups: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for group in payload["data"]:
+        if not isinstance(group, Mapping):
+            raise IdentityAllocationError("beta-groups-response-invalid")
+        group_id = group.get("id")
+        attributes = group.get("attributes")
+        if (
+            group.get("type") != "betaGroups"
+            or not isinstance(group_id, str)
+            or not group_id
+            or group_id in seen_ids
+            or not isinstance(attributes, Mapping)
+        ):
+            raise IdentityAllocationError("beta-groups-response-ambiguous")
+        name = attributes.get("name")
+        if not isinstance(name, str) or not name:
+            raise IdentityAllocationError("beta-groups-response-invalid")
+        record = {"id": group_id, "name": name}
+        for key in ("isInternalGroup", "hasAccessToAllBuilds"):
+            value = attributes.get(key)
+            if not isinstance(value, bool):
+                raise IdentityAllocationError("beta-groups-response-invalid")
+            record[key] = "true" if value else "false"
+        seen_ids.add(group_id)
+        groups.append(record)
+    return groups
+
+
+def list_app_builds(client: ASCClient, app_id: str) -> list[dict[str, str]]:
+    """List one app record's recent builds so a number collision is visible up front."""
+
+    if not isinstance(app_id, str) or not app_id:
+        raise IdentityAllocationError("app-id-invalid")
+    payload = client.request(
+        "GET",
+        f"/builds?filter[app]={quote(app_id, safe='')}&"
+        "fields[builds]=version,processingState,buildAudienceType,uploadedDate,expired,"
+        "preReleaseVersion&include=preReleaseVersion&fields[preReleaseVersions]=version,platform&"
+        "sort=-uploadedDate&limit=50",
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
+        raise IdentityAllocationError("build-response-invalid")
+    marketing = _marketing_versions(payload.get("included"))
+    builds: list[dict[str, str]] = []
+    for item in payload["data"]:
+        if not isinstance(item, Mapping):
+            raise IdentityAllocationError("build-response-invalid")
+        attributes = item.get("attributes")
+        build_id = item.get("id")
+        if (
+            item.get("type") != "builds"
+            or not isinstance(build_id, str)
+            or not build_id
+            or not isinstance(attributes, Mapping)
+        ):
+            raise IdentityAllocationError("build-response-invalid")
+        record = {"buildId": build_id}
+        for source, key in (
+            ("version", "buildNumber"),
+            ("processingState", "processingState"),
+            ("buildAudienceType", "distributionAudience"),
+        ):
+            value = attributes.get(source)
+            if not isinstance(value, str) or not value:
+                raise IdentityAllocationError("build-response-invalid")
+            record[key] = value
+        uploaded = attributes.get("uploadedDate")
+        if uploaded is not None:
+            if not isinstance(uploaded, str) or not uploaded:
+                raise IdentityAllocationError("build-response-invalid")
+            record["uploadedDate"] = uploaded
+        pre_release = _pre_release_version_id(item)
+        if pre_release is not None:
+            if pre_release not in marketing:
+                raise IdentityAllocationError("build-response-invalid")
+            record.update(marketing[pre_release])
+        builds.append(record)
+    return builds
+
+
 def inspect_testflight_build_app(client: ASCClient, build_id: str) -> dict[str, bool | str]:
     """Check whether one TestFlight build belongs to the fixed Gradus iOS app."""
 
@@ -1386,6 +1511,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Print allowlisted Xcode Cloud product metadata",
     )
     parser.add_argument(
+        "--list-app-records",
+        action="store_true",
+        help="Print every App Store Connect app record the key can see, with its bundle ID",
+    )
+    parser.add_argument(
+        "--list-beta-groups",
+        metavar="APP_ID",
+        help="Print beta groups for one app record returned by --list-app-records",
+    )
+    parser.add_argument(
+        "--list-app-builds",
+        metavar="APP_ID",
+        help="Print recent builds for one app record returned by --list-app-records",
+    )
+    parser.add_argument(
         "--list-product-workflows",
         metavar="CI_PRODUCT_ID",
         help="Print allowlisted workflow metadata for one Cloud product returned by --list-cloud-products",
@@ -1478,6 +1618,9 @@ def main(argv: list[str] | None = None) -> int:
         or args.list_result_bundles
         or args.list_workflows
         or args.list_cloud_products
+        or args.list_app_records
+        or args.list_beta_groups
+        or args.list_app_builds
         or args.list_product_workflows
         or args.read_workflow_template
         or args.resolve_workflow_toolchain
@@ -1907,6 +2050,42 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         except IdentityAllocationError as exc:
             print(f"FAIL: cloud product listing failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.list_app_builds is not None:
+        try:
+            builds = list_app_builds(ASCClient(make_token_provider()), args.list_app_builds)
+            print(json.dumps(builds, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: app build listing failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: app build listing failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.list_beta_groups is not None:
+        try:
+            groups = list_beta_groups(ASCClient(make_token_provider()), args.list_beta_groups)
+            print(json.dumps(groups, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: beta group listing failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: beta group listing failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.list_app_records:
+        try:
+            records = list_app_records(ASCClient(make_token_provider()))
+            print(json.dumps(records, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: app record listing failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: app record listing failed ({exc})", file=sys.stderr)
             return 1
 
     if args.ci_build_action_id is not None and args.list_result_bundles:

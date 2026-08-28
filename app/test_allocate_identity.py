@@ -15,6 +15,9 @@ from allocate_identity import (
     ensure_widget_distribution_profile,
     find_ios_testflight_build,
     inspect_testflight_build_app,
+    list_app_builds,
+    list_app_records,
+    list_beta_groups,
     list_build_run_actions,
     list_ci_builds,
     list_cloud_product_metadata,
@@ -1189,3 +1192,265 @@ def test_resolve_workflow_toolchain_alone_is_a_recognised_action(
         lambda provider: FixtureClient(_toolchain_responses()),
     )
     assert main(["--resolve-workflow-toolchain", "workflow-1"]) == 0
+
+
+def test_list_app_records_names_every_record_and_its_bundle_id() -> None:
+    """Two Gradus records exist, and only the bundle ID tells them apart."""
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "apps",
+                        "id": "6797299170",
+                        "attributes": {
+                            "bundleId": "com.zerodelta.gradus.ios",
+                            "name": "Gradus AI",
+                            "sku": "gradus-ios",
+                        },
+                    },
+                    {
+                        "type": "apps",
+                        "id": "6804252324",
+                        "attributes": {
+                            "bundleId": "com.zerodelta.gradus.mac",
+                            "name": "GradusMac",
+                            "sku": "gradus-mac",
+                        },
+                    },
+                ]
+            }
+        ]
+    )
+    assert list_app_records(client) == [
+        {
+            "id": "6797299170",
+            "bundleId": "com.zerodelta.gradus.ios",
+            "name": "Gradus AI",
+            "sku": "gradus-ios",
+        },
+        {
+            "id": "6804252324",
+            "bundleId": "com.zerodelta.gradus.mac",
+            "name": "GradusMac",
+            "sku": "gradus-mac",
+        },
+    ]
+
+
+def test_list_app_records_rejects_a_repeated_record_id() -> None:
+    """A duplicated id would make the record set ambiguous to read."""
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "apps",
+                        "id": "6797299170",
+                        "attributes": {"bundleId": "a", "name": "b", "sku": "c"},
+                    },
+                    {
+                        "type": "apps",
+                        "id": "6797299170",
+                        "attributes": {"bundleId": "d", "name": "e", "sku": "f"},
+                    },
+                ]
+            }
+        ]
+    )
+    with pytest.raises(IdentityAllocationError, match="apps-response-ambiguous"):
+        list_app_records(client)
+
+
+def test_list_app_records_alone_is_a_recognised_action(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The flag must dispatch on its own rather than fall through to the guard."""
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient",
+        lambda provider: FixtureClient(
+            [
+                {
+                    "data": [
+                        {
+                            "type": "apps",
+                            "id": "6804252324",
+                            "attributes": {
+                                "bundleId": "com.zerodelta.gradus.mac",
+                                "name": "GradusMac",
+                                "sku": "gradus-mac",
+                            },
+                        }
+                    ]
+                }
+            ]
+        ),
+    )
+    assert main(["--list-app-records"]) == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {
+            "id": "6804252324",
+            "bundleId": "com.zerodelta.gradus.mac",
+            "name": "GradusMac",
+            "sku": "gradus-mac",
+        }
+    ]
+
+
+def test_list_beta_groups_reports_whether_builds_need_explicit_assignment() -> None:
+    """hasAccessToAllBuilds decides whether an upload alone reaches a tester."""
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "betaGroups",
+                        "id": "d550d192",
+                        "attributes": {
+                            "name": "Internal Testers",
+                            "isInternalGroup": True,
+                            "hasAccessToAllBuilds": False,
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+    assert list_beta_groups(client, "6797299170") == [
+        {
+            "id": "d550d192",
+            "name": "Internal Testers",
+            "isInternalGroup": "true",
+            "hasAccessToAllBuilds": "false",
+        }
+    ]
+    assert client.paths[0].startswith("/apps/6797299170/betaGroups?")
+
+
+def test_list_beta_groups_rejects_a_mistyped_access_flag() -> None:
+    """A string where a bool belongs would silently read as truthy."""
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "betaGroups",
+                        "id": "d550d192",
+                        "attributes": {
+                            "name": "Internal Testers",
+                            "isInternalGroup": True,
+                            "hasAccessToAllBuilds": "false",
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+    with pytest.raises(IdentityAllocationError, match="beta-groups-response-invalid"):
+        list_beta_groups(client, "6797299170")
+
+
+def test_list_beta_groups_reports_an_app_record_with_no_tester_route() -> None:
+    """An empty group list is the exact state that stranded build 61."""
+    client = FixtureClient([{"data": []}])
+    assert list_beta_groups(client, "6804252324") == []
+
+
+def test_list_app_builds_names_the_marketing_version_of_each_build() -> None:
+    """Choosing a free build number needs the record's own numbering, not the project file."""
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "builds",
+                        "id": "build-23",
+                        "attributes": {
+                            "version": "23",
+                            "processingState": "VALID",
+                            "buildAudienceType": "INTERNAL_ONLY",
+                            "uploadedDate": "2026-08-21T08:26:34-07:00",
+                        },
+                        "relationships": {
+                            "preReleaseVersion": {"data": {"id": "train-182"}},
+                        },
+                    }
+                ],
+                "included": [
+                    {
+                        "type": "preReleaseVersions",
+                        "id": "train-182",
+                        "attributes": {"version": "1.8.2", "platform": "IOS"},
+                    }
+                ],
+            }
+        ]
+    )
+    assert list_app_builds(client, "6797299170") == [
+        {
+            "buildId": "build-23",
+            "buildNumber": "23",
+            "processingState": "VALID",
+            "distributionAudience": "INTERNAL_ONLY",
+            "uploadedDate": "2026-08-21T08:26:34-07:00",
+            "marketingVersion": "1.8.2",
+            "platform": "IOS",
+        }
+    ]
+
+
+def test_list_app_builds_rejects_a_dangling_version_linkage() -> None:
+    """A build naming a train absent from `included` must not report a blank version."""
+    client = FixtureClient(
+        [
+            {
+                "data": [
+                    {
+                        "type": "builds",
+                        "id": "build-23",
+                        "attributes": {
+                            "version": "23",
+                            "processingState": "VALID",
+                            "buildAudienceType": "INTERNAL_ONLY",
+                        },
+                        "relationships": {
+                            "preReleaseVersion": {"data": {"id": "train-missing"}},
+                        },
+                    }
+                ],
+                "included": [],
+            }
+        ]
+    )
+    with pytest.raises(IdentityAllocationError, match="build-response-invalid"):
+        list_app_builds(client, "6797299170")
+
+
+def test_list_app_builds_alone_is_a_recognised_action(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The flag must dispatch on its own rather than fall through to the guard."""
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient",
+        lambda provider: FixtureClient([{"data": [], "included": []}]),
+    )
+    assert main(["--list-app-builds", "6797299170"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_list_beta_groups_alone_is_a_recognised_action(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The flag must dispatch on its own rather than fall through to the guard."""
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient",
+        lambda provider: FixtureClient([{"data": []}]),
+    )
+    assert main(["--list-beta-groups", "6804252324"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
