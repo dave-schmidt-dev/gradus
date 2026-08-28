@@ -3229,6 +3229,51 @@ class ExtractDepletedResetStrTests(unittest.TestCase):
         self.assertTrue(_provider_is_empty(snap, self.now))
         self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 19 at 09:00 AM")
 
+    def test_codex_spark_five_hour_capacity_keeps_provider_available_without_weekly(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 80.0,
+                "weekly_percent_left": 80.0,
+                "spark_five_hour_percent_left": 60.0,
+                "spark_weekly_percent_left": None,
+            },
+        )
+        self.assertFalse(_provider_is_empty(snap, self.now))
+
+    def test_codex_spark_weekly_depletion_does_not_block_when_five_hour_has_capacity(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 80.0,
+                "weekly_percent_left": 80.0,
+                "spark_five_hour_percent_left": 60.0,
+                "spark_weekly_percent_left": 0.0,
+                "spark_weekly_reset": "Resets Mar 15 at 09:00 AM",
+            },
+        )
+        self.assertFalse(_provider_is_empty(snap, self.now))
+
+    def test_codex_spark_reset_selection_considers_both_windows(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={
+                "five_hour_percent_left": 80.0,
+                "weekly_percent_left": 80.0,
+                "spark_five_hour_percent_left": 0.0,
+                "spark_five_hour_reset": "Resets Mar 14 at 10:00 AM",
+                "spark_weekly_percent_left": 0.0,
+                "spark_weekly_reset": "Resets Mar 15 at 09:00 AM",
+            },
+        )
+        self.assertEqual(_extract_depleted_reset_str(snap, self.now), "Resets Mar 15 at 09:00 AM")
+
 
 class MicroDepletedPanelTests(unittest.TestCase):
     def setUp(self) -> None:

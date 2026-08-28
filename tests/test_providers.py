@@ -40,7 +40,7 @@ from gradus.providers import (
     fetch_provider_snapshot,
 )
 from gradus.providers import claude as claude_provider_module
-from gradus.providers._codex_helpers import _extract_spark_window
+from gradus.providers._codex_helpers import _extract_spark_window, _extract_spark_windows
 from gradus.snapshot import _is_transient_probe_error
 
 
@@ -1180,6 +1180,28 @@ class CodexSparkWindowExtractionTests(unittest.TestCase):
         result = _extract_spark_window(self._payload())
         self.assertIs(result, self.SPARK_WINDOW["primary_window"])
 
+    def test_classifies_both_duration_tagged_windows(self) -> None:
+        five_hour = {"limit_window_seconds": 18000, "used_percent": 0, "reset_at": 1}
+        weekly = {"limit_window_seconds": 604800, "used_percent": 100, "reset_at": 2}
+        payload = self._payload()
+        payload["additional_rate_limits"][0]["rate_limit"] = {
+            "primary_window": five_hour,
+            "secondary_window": weekly,
+        }
+
+        self.assertEqual(_extract_spark_windows(payload), (five_hour, weekly))
+
+    def test_reordered_duration_tagged_windows_keep_their_semantics(self) -> None:
+        five_hour = {"limit_window_seconds": 18000, "used_percent": 0, "reset_at": 1}
+        weekly = {"limit_window_seconds": 604800, "used_percent": 100, "reset_at": 2}
+        payload = self._payload()
+        payload["additional_rate_limits"][0]["rate_limit"] = {
+            "primary_window": weekly,
+            "secondary_window": five_hour,
+        }
+
+        self.assertEqual(_extract_spark_windows(payload), (five_hour, weekly))
+
     def test_absent_array_returns_none(self) -> None:
         self.assertIsNone(_extract_spark_window({"rate_limit": {}}))
 
@@ -1377,6 +1399,38 @@ class CodexHttpProviderTests(unittest.TestCase):
             status = provider.fetch()
         self.assertEqual(status.spark_weekly_percent_left, 85.0)
         self.assertIsNotNone(status.spark_weekly_reset)
+        self.assertIsNone(status.spark_five_hour_percent_left)
+        self.assertIsNone(status.spark_five_hour_reset)
+
+    def test_spark_dual_windows_populate_distinct_status_fields(self) -> None:
+        provider = self._make_provider()
+        response = dict(self.NORMAL_RESPONSE)
+        response["additional_rate_limits"] = [
+            {
+                "limit_name": "GPT-5.3-Codex-Spark",
+                "metered_feature": "codex_bengalfox",
+                "rate_limit": {
+                    "primary_window": {
+                        "limit_window_seconds": 18000,
+                        "reset_at": 1787274482,
+                        "used_percent": 0,
+                    },
+                    "secondary_window": {
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1787447282,
+                        "used_percent": 100,
+                    },
+                },
+            }
+        ]
+
+        with patch("gradus.providers._base._http_json", return_value=response):
+            status = provider.fetch()
+
+        self.assertEqual(status.spark_five_hour_percent_left, 100.0)
+        self.assertEqual(status.spark_weekly_percent_left, 0.0)
+        self.assertIsNotNone(status.spark_five_hour_reset)
+        self.assertIsNotNone(status.spark_weekly_reset)
 
     def test_spark_window_absent_leaves_fields_none(self) -> None:
         provider = self._make_provider()
@@ -1384,6 +1438,8 @@ class CodexHttpProviderTests(unittest.TestCase):
             status = provider.fetch()
         self.assertIsNone(status.spark_weekly_percent_left)
         self.assertIsNone(status.spark_weekly_reset)
+        self.assertIsNone(status.spark_five_hour_percent_left)
+        self.assertIsNone(status.spark_five_hour_reset)
 
     def test_spark_reset_at_as_dict_does_not_raise_and_yields_none_reset(self) -> None:
         # A malformed reset_at (dict instead of str/int/float) must not reach

@@ -14,7 +14,7 @@ from ._base import ProbeFailure, _format_reset_time, _is_headless, register
 from ._codex_helpers import (
     _classify_codex_windows,
     _codex_percent_left,
-    _extract_spark_window,
+    _extract_spark_windows,
 )
 
 log = logging.getLogger(__name__)
@@ -168,9 +168,16 @@ class CodexHttpProvider:
         weekly_percent_left = _codex_percent_left(weekly_win)
         weekly_reset = _format_reset_time(weekly_win.get("reset_at")) if weekly_win else None
 
-        spark_win = _extract_spark_window(payload)
-        spark_weekly_percent_left = _codex_percent_left(spark_win)
-        spark_reset_at = spark_win.get("reset_at") if spark_win else None
+        spark_five_hour_win, spark_weekly_win = _extract_spark_windows(payload)
+        spark_five_hour_percent_left = _codex_percent_left(spark_five_hour_win)
+        spark_five_hour_reset = (
+            _format_reset_time(spark_five_hour_win.get("reset_at"))
+            if spark_five_hour_win
+            and isinstance(spark_five_hour_win.get("reset_at"), (str, int, float))
+            else None
+        )
+        spark_weekly_percent_left = _codex_percent_left(spark_weekly_win)
+        spark_reset_at = spark_weekly_win.get("reset_at") if spark_weekly_win else None
         spark_weekly_reset = (
             _format_reset_time(spark_reset_at)
             if spark_reset_at is None or isinstance(spark_reset_at, (str, int, float))
@@ -193,6 +200,8 @@ class CodexHttpProvider:
             weekly_reset=weekly_reset,
             spark_weekly_percent_left=spark_weekly_percent_left,
             spark_weekly_reset=spark_weekly_reset,
+            spark_five_hour_percent_left=spark_five_hour_percent_left,
+            spark_five_hour_reset=spark_five_hour_reset,
             credits=credits,
             raw_text=raw_text,
         )

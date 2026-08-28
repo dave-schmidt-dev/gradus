@@ -132,6 +132,16 @@ PROVIDER_RENDER_SPECS = {
                 24.0 * 7.0,
             ),
             WindowRenderSpec(
+                "spark_five_hour",
+                "sp5h",
+                "sp5h ↻",
+                None,
+                "spark_five_hour_percent_left",
+                "spark_five_hour_reset",
+                5.0,
+                omit_when_empty=True,
+            ),
+            WindowRenderSpec(
                 "spark_weekly",
                 "sp1w",
                 "sp1w ↻",
@@ -532,7 +542,7 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
         return native_blocked and third_party_blocked
 
     if name == "Codex":
-        # Native (5h/1w) and Spark (sp1w) are independent pools, mirroring the
+        # Native (5h/1w) and Spark (sp5h/sp1w) are independent pools, mirroring the
         # Antigravity structure above. Spark is a newer bucket that most
         # accounts don't have yet (spark_weekly_percent_left stays None), so
         # this can't reuse the generic fallthrough's "any single depleted
@@ -550,7 +560,7 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
         spark_windows = tuple(
             window
             for window in PROVIDER_RENDER_SPECS[name].windows
-            if window.window_id == "spark_weekly"
+            if window.window_id in ("spark_five_hour", "spark_weekly")
         )
         values = [
             snapshot.data.get(window.percent_key) for window in (*native_windows, *spark_windows)
@@ -573,8 +583,11 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
         # `native_blocked` for those accounts, preserving that legacy rule.
         # Only an accessible-and-still-has-capacity Spark bucket can keep the
         # provider out of the depleted view despite native exhaustion.
-        spark_percent = snapshot.data.get("spark_weekly_percent_left")
-        spark_blocked = not percent_is_valid(spark_percent) or percent_is_depleted(spark_percent)
+        spark_values = [snapshot.data.get(window.percent_key) for window in spark_windows]
+        spark_present = any(percent_is_valid(value) for value in spark_values)
+        spark_blocked = not spark_present or any(
+            percent_is_depleted(value) for value in spark_values if percent_is_valid(value)
+        )
         return native_blocked and spark_blocked
 
     windows = normalized_warning_windows(snapshot, now)
@@ -1201,7 +1214,9 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
         elif name == "Codex":
             pools = (
                 tuple(w for w in spec.windows if w.window_id in ("five_hour", "weekly")),
-                tuple(w for w in spec.windows if w.window_id == "spark_weekly"),
+                tuple(
+                    w for w in spec.windows if w.window_id in ("spark_five_hour", "spark_weekly")
+                ),
             )
         else:
             pools = (spec.windows,)
@@ -1523,7 +1538,11 @@ def _extract_depleted_reset_str(snapshot: ProviderSnapshot, now: datetime) -> st
                     )
         elif name == "Codex":
             native = tuple(w for w in spec.windows if w.window_id in ("five_hour", "weekly"))
-            spark = tuple(w for w in spec.windows if w.percent_key == "spark_weekly_percent_left")
+            spark = tuple(
+                w
+                for w in spec.windows
+                if w.percent_key in ("spark_five_hour_percent_left", "spark_weekly_percent_left")
+            )
             if _pool_is_present(native, data) and _pool_is_present(spark, data):
                 pool_resets = [
                     reset

@@ -690,6 +690,21 @@ except Exception:
 PY
 }
 
+validate_walkthrough_owner_review() {
+  local ledger_path="$1" review_path="$2"
+  PYTHONPATH="$SCRIPT_DIR" /usr/bin/python3 - "$ledger_path" "$review_path" <<'PY'
+import sys
+from release_candidate.ledger import CandidateLedger
+from release_candidate.walkthrough import WalkthroughError, validate_owner_review
+
+try:
+    validate_owner_review(CandidateLedger(sys.argv[1]), sys.argv[2])
+except WalkthroughError as exc:
+    print(f"FAIL: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 persist_candidate_evidence() {
   local ledger_path="$1" evidence_record_path="$2" candidate_id="$3" source_digest="$4" project_digest="$5"
   local artifact_digest="$6" build="$7" marketing_version="$8" source_revision="$9" producer_build="${10}"
@@ -1453,7 +1468,7 @@ main() {
   cd "$SCRIPT_DIR"
   local project_root evidence_path expected_mac_build expected_cloudkit_environment expected_project_digest
   local baseline_source_digest baseline_project_digest current_artifact_digest actual_source_digest candidate_root candidate_script_dir candidate_receipt_path uv_bin
-  local candidate_workspace candidate_ledger_path candidate_evidence_path walkthrough_path candidate_id source_revision producer_published_at
+  local candidate_workspace candidate_ledger_path candidate_evidence_path walkthrough_path walkthrough_screenshots_path walkthrough_inventory_path walkthrough_review_path candidate_id source_revision producer_published_at
   local producer_evidence_digest artifact_digest marketing_version walkthrough_digest candidate_ipa_path durable_ipa_path prepared_metadata resume_candidate=0
   local allocation_record_path identity_proof_path allocation_metadata candidate_id_hint
   project_root="$(cd .. && pwd)"
@@ -1461,6 +1476,9 @@ main() {
   candidate_ledger_path="${GRADUS_CANDIDATE_LEDGER_PATH:-$project_root/.release-state/candidate.json}"
   candidate_evidence_path="${GRADUS_CANDIDATE_EVIDENCE_PATH:-}"
   walkthrough_path="${GRADUS_WALKTHROUGH_PATH:-}"
+  walkthrough_screenshots_path="${GRADUS_WALKTHROUGH_SCREENSHOTS_PATH:-}"
+  walkthrough_inventory_path="${GRADUS_WALKTHROUGH_INVENTORY_PATH:-}"
+  walkthrough_review_path="${GRADUS_WALKTHROUGH_REVIEW_PATH:-}"
   candidate_receipt_path="${GRADUS_CANDIDATE_RECEIPT_PATH:-}"
   allocation_record_path="${GRADUS_IDENTITY_ALLOCATION_PATH:-$project_root/.release-state/allocated-ios.json}"
   identity_proof_path="${GRADUS_IDENTITY_ALLOCATION_PROOF_PATH:-$project_root/.release-state/evidence/allocate-identity.json}"
@@ -1637,7 +1655,10 @@ main() {
   persist_candidate_ipa "$IPA_PATH" "$durable_ipa_path"
   IPA_PATH="$durable_ipa_path"
   candidate_evidence_path="${candidate_evidence_path:-$candidate_workspace/candidate-evidence.json}"
-  walkthrough_path="${walkthrough_path:-$candidate_workspace/walkthrough.md}"
+  walkthrough_path="${walkthrough_path:-$candidate_workspace/walkthrough.html}"
+  walkthrough_screenshots_path="${walkthrough_screenshots_path:-$candidate_workspace/walkthrough-screenshots}"
+  walkthrough_inventory_path="${walkthrough_inventory_path:-$candidate_workspace/walkthrough-inventory.json}"
+  walkthrough_review_path="${walkthrough_review_path:-$candidate_workspace/walkthrough-owner-review.json}"
   producer_published_at="$(read_evidence_field publishedAt "$evidence_path")"
   producer_evidence_digest="$(sha256_file "$evidence_path")"
   marketing_version="$(read_marketing_version "$candidate_script_dir/project.yml" GradusiOS)"
@@ -1646,10 +1667,14 @@ main() {
     "$artifact_digest" "$NEXT_BUILD" "$marketing_version" "$source_revision" "$expected_mac_build" "$producer_evidence_digest" \
     "$producer_published_at" "$candidate_workspace" "$IPA_PATH" "$supersession_reason" \
     "$project_root/.release-state/archived"
+  echo "==> Capturing candidate-current walkthrough screens"
+  GRADUS_WALKTHROUGH_PROJECT_PATH="$candidate_script_dir/Gradus.xcodeproj" \
+    /bin/bash "$SCRIPT_DIR/scripts/capture-walkthrough.sh" --output-dir "$walkthrough_screenshots_path"
   echo "==> Generating candidate-current walkthrough"
   PYTHONPATH="$SCRIPT_DIR" /usr/bin/python3 -m release_candidate.walkthrough \
     --ledger "$candidate_ledger_path" --artifact "$IPA_PATH" \
-    --source-revision "$source_revision" --output "$walkthrough_path"
+    --source-revision "$source_revision" --screenshots "$walkthrough_screenshots_path" \
+    --inventory-output "$walkthrough_inventory_path" --output "$walkthrough_path"
   walkthrough_digest="$(sha256_file "$walkthrough_path")"
   echo "==> Persisting machine-written candidate evidence and prepared ledger"
   persist_candidate_evidence \
@@ -1658,7 +1683,10 @@ main() {
     "$expected_mac_build" "$producer_evidence_digest" "$walkthrough_path" "$walkthrough_digest" "$producer_published_at" \
     "$candidate_workspace" "$IPA_PATH"
   else
-    walkthrough_path="${walkthrough_path:-$candidate_workspace/walkthrough.md}"
+    walkthrough_path="${walkthrough_path:-$candidate_workspace/walkthrough.html}"
+    walkthrough_screenshots_path="${walkthrough_screenshots_path:-$candidate_workspace/walkthrough-screenshots}"
+    walkthrough_inventory_path="${walkthrough_inventory_path:-$candidate_workspace/walkthrough-inventory.json}"
+    walkthrough_review_path="${walkthrough_review_path:-$candidate_workspace/walkthrough-owner-review.json}"
     candidate_evidence_path="${candidate_evidence_path:-$candidate_workspace/candidate-evidence.json}"
     # A prepared candidate is a frozen, signed artifact. What must be proven
     # before transferring it is that the IPA on disk is still bit-for-bit the
@@ -1677,11 +1705,8 @@ main() {
     producer_published_at="$(read_evidence_field publishedAt "$evidence_path")"
     producer_evidence_digest="$(sha256_file "$evidence_path")"
     if [[ ! -f "$walkthrough_path" || -z "${walkthrough_digest:-}" || "$(sha256_file "$walkthrough_path")" != "$walkthrough_digest" ]]; then
-      echo "==> Completing candidate-current walkthrough for resumed candidate"
-      PYTHONPATH="$SCRIPT_DIR" /usr/bin/python3 -m release_candidate.walkthrough \
-        --ledger "$candidate_ledger_path" --artifact "$IPA_PATH" \
-        --source-revision "$source_revision" --output "$walkthrough_path"
-      walkthrough_digest="$(sha256_file "$walkthrough_path")"
+      echo "FAIL: prepared candidate walkthrough is missing or changed; prepare a new candidate" >&2
+      return 1
     fi
     echo "==> Reusing prepared candidate evidence and IPA"
     persist_candidate_evidence \
@@ -1711,6 +1736,9 @@ PY
     echo "==> Prepared candidate $candidate_id build $NEXT_BUILD; upload deferred"
     return 0
   fi
+
+  echo "==> Validating David's candidate-current walkthrough acknowledgement"
+  validate_walkthrough_owner_review "$candidate_ledger_path" "$walkthrough_review_path"
 
   # Adopt a delivery Apple already accepted instead of re-sending it. Apple
   # rejects a duplicate build number, so a second transfer of a delivered

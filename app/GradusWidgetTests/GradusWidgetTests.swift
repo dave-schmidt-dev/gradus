@@ -125,6 +125,42 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
         .preferredColorScheme(style == .dark ? .dark : .light)
 }
 
+private func walkthroughWidgetView(state: GradusWidgetEntry.State) -> some View {
+    GradusSmallWidgetView(
+        entry: GradusWidgetEntry(date: widgetNow, state: state),
+        syncAgeOverride: "synced 7 min, 0 sec ago"
+    )
+    .environment(\.calendar, Calendar(identifier: .gregorian))
+    .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+    .environment(\.timeZone, widgetTimeZone)
+    .environment(\.dynamicTypeSize, .large)
+    .preferredColorScheme(.dark)
+}
+
+/// Writes deterministic candidate-current widget PNGs only for the walkthrough driver.
+@MainActor
+@Test func exportWalkthroughWidgetStates() throws {
+    guard let destination = ProcessInfo.processInfo.environment["GRADUS_WALKTHROUGH_WIDGET_OUTPUT"] else {
+        return
+    }
+    let states: [(String, GradusWidgetEntry.State)] = [
+        ("widget-render-current.png", .current(widgetSnapshot())),
+        ("widget-render-empty.png", .empty),
+        ("widget-render-unavailable.png", .unavailable)
+    ]
+    try FileManager.default.createDirectory(
+        at: URL(fileURLWithPath: destination, isDirectory: true),
+        withIntermediateDirectories: true
+    )
+    for (name, state) in states {
+        let renderer = ImageRenderer(content: walkthroughWidgetView(state: state))
+        renderer.proposedSize = ProposedViewSize(width: 170, height: 170)
+        renderer.scale = 3
+        let data = try #require(renderer.uiImage?.pngData())
+        try data.write(to: URL(fileURLWithPath: destination).appendingPathComponent(name))
+    }
+}
+
 @Test func missingAndMalformedSnapshotsRenderEmpty() throws {
     let missing = WidgetTimelineProvider(snapshotLoader: { nil }, now: { widgetNow })
     #expect(missing.entry() == GradusWidgetEntry(date: widgetNow, state: .empty))

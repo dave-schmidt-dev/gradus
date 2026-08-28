@@ -454,16 +454,19 @@ class TestWarningPredicate(unittest.TestCase):
         which exists only to avoid colliding with native Codex's "weekly" id
         in the interactive alert union.
         """
-        (spec,) = snap.CODEX_SPARK_WINDOW_SPECS
-        self.assertEqual(spec.window_id, "weekly")
-        self.assertEqual(spec.percent_key, "spark_weekly_percent_left")
-        self.assertEqual(spec.reset_key, "spark_weekly_reset")
+        specs = snap.CODEX_SPARK_WINDOW_SPECS
+        self.assertEqual([spec.window_id for spec in specs], ["five_hour", "weekly"])
+        self.assertEqual(specs[0].percent_key, "spark_five_hour_percent_left")
+        self.assertEqual(specs[0].reset_key, "spark_five_hour_reset")
+        self.assertEqual(specs[1].percent_key, "spark_weekly_percent_left")
+        self.assertEqual(specs[1].reset_key, "spark_weekly_reset")
         self.assertIs(snap.V2_WINDOW_SPECS["Codex (Spark)"], snap.CODEX_SPARK_WINDOW_SPECS)
         self.assertIs(snap.WARNING_WINDOW_SPECS["Codex (Spark)"], snap.CODEX_SPARK_WINDOW_SPECS)
 
-        (alert_spec,) = snap.CODEX_SPARK_ALERT_SPECS
-        self.assertEqual(alert_spec.window_id, "sp1w")
-        self.assertNotEqual(alert_spec.window_id, spec.window_id)
+        self.assertEqual(
+            [spec.window_id for spec in snap.CODEX_SPARK_ALERT_SPECS], ["sp5h", "sp1w"]
+        )
+        self.assertNotEqual(snap.CODEX_SPARK_ALERT_SPECS[0].window_id, specs[0].window_id)
 
 
 class TestReconcile(unittest.TestCase):
@@ -1601,7 +1604,7 @@ class TestConsistencyGuard(unittest.TestCase):
             render_windows = ui.PROVIDER_RENDER_SPECS[name].windows
             spec_windows = snap.WINDOW_SPECS[name]
             if name == "Codex":
-                self.assertEqual(len(render_windows), len(spec_windows) + 1)
+                self.assertEqual(len(render_windows), len(spec_windows) + 2)
                 render_windows = render_windows[: len(spec_windows)]
             else:
                 self.assertEqual(len(render_windows), len(spec_windows))
@@ -1611,14 +1614,16 @@ class TestConsistencyGuard(unittest.TestCase):
                 self.assertEqual(spec_win.reset_key, render_win.reset_key)
                 self.assertEqual(spec_win.window_hours, render_win.window_hours)
 
-        spark_row = ui.PROVIDER_RENDER_SPECS["Codex"].windows[-1]
-        self.assertEqual(spark_row.window_id, "spark_weekly")
-        self.assertEqual(spark_row.percent_key, "spark_weekly_percent_left")
-        self.assertEqual(spark_row.reset_key, "spark_weekly_reset")
-        (spark_alert_spec,) = snap.CODEX_SPARK_ALERT_SPECS
-        self.assertEqual(spark_alert_spec.percent_key, spark_row.percent_key)
-        self.assertEqual(spark_alert_spec.reset_key, spark_row.reset_key)
-        self.assertEqual(spark_alert_spec.window_hours, spark_row.window_hours)
+        spark_rows = ui.PROVIDER_RENDER_SPECS["Codex"].windows[-2:]
+        self.assertEqual([row.window_id for row in spark_rows], ["spark_five_hour", "spark_weekly"])
+        self.assertEqual(spark_rows[0].percent_key, "spark_five_hour_percent_left")
+        self.assertEqual(spark_rows[0].reset_key, "spark_five_hour_reset")
+        self.assertEqual(spark_rows[1].percent_key, "spark_weekly_percent_left")
+        self.assertEqual(spark_rows[1].reset_key, "spark_weekly_reset")
+        for alert_spec, spark_row in zip(snap.CODEX_SPARK_ALERT_SPECS, spark_rows):
+            self.assertEqual(alert_spec.percent_key, spark_row.percent_key)
+            self.assertEqual(alert_spec.reset_key, spark_row.reset_key)
+            self.assertEqual(alert_spec.window_hours, spark_row.window_hours)
 
         # Cursor / Vibe are absent from PROVIDER_RENDER_SPECS. Cursor's
         # router contract remains independent from the TUI's two-pool rows.

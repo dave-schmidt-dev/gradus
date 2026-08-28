@@ -8,7 +8,7 @@ struct GradusiOSApp: App {
     @StateObject private var viewModel: DashboardViewModel
     @StateObject private var sampleSession: SampleDataSession
     @State private var sampleModeActive: Bool
-    @State private var sampleEntryInProgress = false
+    @State private var sampleEntryInProgress: Bool
     @Environment(\.scenePhase) private var scenePhase
     private let liveLifecycleGate: LiveLifecycleGate
     private let accountMonitor: AccountStatusMonitor?
@@ -32,6 +32,9 @@ struct GradusiOSApp: App {
     init() {
         let uiTestFixture = GradusUITestFixture.current
         self.uiTestFixture = uiTestFixture
+        _sampleEntryInProgress = State(
+            initialValue: uiTestFixture?.startsSampleEntryInProgress ?? false
+        )
         uiTestFixture?.prepare(defaults: .standard)
 
         // Resolve the required iCloud authority before any delegate, monitor,
@@ -212,7 +215,7 @@ extension GradusiOSApp {
     private static func makeNotificationAuthorizationSource(
         fixture: GradusUITestFixture?
     ) -> NotificationAuthorizationSource {
-        fixture.map { GradusUITestNotificationAuthorizationSource(authorization: $0.notificationAuthorization) }
+        fixture.map { GradusUITestAuthSource(authorization: $0.notificationAuthorization) }
             ?? SystemNotificationAuthorizationSource()
     }
 

@@ -49,7 +49,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors OpenCode Go usage via the opencode.ai SolidStart console (5h/1w/monthly quota)
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position. The Codex 5-hour limit row is hidden entirely when the upstream API omits it (as OpenAI has done since 2026-07) and reappears automatically once the API reports it again.
-- Shows Codex (Spark) — a separate weekly-quota bucket on the same OpenAI account, disambiguated from the primary Codex weekly window (`sp1w` in the TUI) — with its own remaining percentage, reset time, and pace indicator
+- Shows Codex (Spark) as a separate quota bucket on the same OpenAI account, with independently duration-classified 5-hour (`sp5h`) and weekly (`sp1w`) rows, reset times, and pace indicators
 - Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus Claude+GPT (`cg5`, `cg1w`) rows whenever the canonical v2 snapshot contains valid tracked values. Rows render independently, including at exactly 100%; missing or malformed sibling rows are omitted. The TUI hydrates these rows from the internal `Antigravity (Claude)` synthetic entry at read time.
 - Shows Copilot monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
@@ -163,9 +163,10 @@ Codex and Claude cards show:
 
 - `5h`: remaining usage for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining usage for the current 1-week window, weekly reset time, pace indicator
+- `sp5h`: remaining usage for Codex (Spark)'s separate 5-hour window, reset time, pace indicator
 - `sp1w`: remaining usage for Codex (Spark)'s separate weekly window (a distinct quota bucket on the same OpenAI account), reset time, pace indicator
 
-Codex's `5h` row is omitted entirely when the API doesn't report that window (as OpenAI has done since 2026-07) and reappears automatically once it does; the same hide-when-absent rule applies to `sp1w`. Codex's `1w` row is always shown.
+Codex's `5h` row is omitted entirely when the API doesn't report that window (as OpenAI has done since 2026-07) and reappears automatically once it does; the same hide-when-absent rule applies independently to `sp5h` and `sp1w`. Codex's `1w` row is always shown.
 
 Antigravity card shows (Gemini model group — the pool `agy` consumes):
 

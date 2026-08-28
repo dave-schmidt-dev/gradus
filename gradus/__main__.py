@@ -274,6 +274,12 @@ def _canonical_snapshots(
             "Codex (Spark)",
             (
                 (
+                    "five_hour_percent_left",
+                    "spark_five_hour_percent_left",
+                    "five_hour_reset",
+                    "spark_five_hour_reset",
+                ),
+                (
                     "weekly_percent_left",
                     "spark_weekly_percent_left",
                     "weekly_reset",

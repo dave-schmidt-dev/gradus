@@ -6,6 +6,7 @@ import Foundation
 /// changes a production recovery path.
 enum GradusUITestFixture: String {
     static let environmentKey = "GRADUS_UITEST_FIXTURE"
+    static let cardColumnsEnvironmentKey = "GRADUS_UITEST_CARD_COLUMNS"
 
     case freshAccountDiscovery = "fresh-account-discovery"
     case legacyAwaitingConfirmation = "legacy-awaiting-confirmation"
@@ -15,6 +16,8 @@ enum GradusUITestFixture: String {
     case warningAlertsOff = "warning-alerts-off"
     case warningAlertsRequesting = "warning-alerts-requesting"
     case warningAlertsDenied = "warning-alerts-denied"
+    case warningAlertsAllowed = "warning-alerts-allowed"
+    case sampleEntryInProgress = "sample-entry-in-progress"
 
     static var current: Self? {
         ProcessInfo.processInfo.environment[environmentKey].flatMap(Self.init(rawValue:))
@@ -22,7 +25,7 @@ enum GradusUITestFixture: String {
 
     var warningAlertsEnabled: Bool {
         switch self {
-        case .warningAlertsRequesting, .warningAlertsDenied:
+        case .warningAlertsRequesting, .warningAlertsDenied, .warningAlertsAllowed:
             true
         default:
             false
@@ -30,11 +33,19 @@ enum GradusUITestFixture: String {
     }
 
     var notificationAuthorization: NotificationAuthorization {
-        self == .warningAlertsDenied ? .denied : .notDetermined
+        switch self {
+        case .warningAlertsDenied: .denied
+        case .warningAlertsAllowed: .authorized
+        default: .notDetermined
+        }
     }
 
     var startsWarningAlertRequest: Bool {
         self == .warningAlertsRequesting
+    }
+
+    var startsSampleEntryInProgress: Bool {
+        self == .sampleEntryInProgress
     }
 
     @MainActor
@@ -59,6 +70,10 @@ enum GradusUITestFixture: String {
 
     @MainActor
     func apply(to viewModel: DashboardViewModel) {
+        if let rawColumns = ProcessInfo.processInfo.environment[Self.cardColumnsEnvironmentKey],
+           let columns = Int(rawColumns), columns > 1 {
+            viewModel.setAvailableCardColumns(columns)
+        }
         switch self {
         case .temporaryRetry:
             viewModel.accountAvailabilityCheckFailed()
@@ -72,7 +87,7 @@ enum GradusUITestFixture: String {
     }
 }
 
-struct GradusUITestNotificationAuthorizationSource: NotificationAuthorizationSource {
+struct GradusUITestAuthSource: NotificationAuthorizationSource {
     let authorization: NotificationAuthorization
 
     func currentAuthorization() async -> NotificationAuthorization {

@@ -1,10 +1,4 @@
-"""Generate a deterministic, candidate-bound release-owner walkthrough.
-
-The walkthrough is deliberately data driven.  The route manifest is the release
-owner's inventory of reachable UI, while this module binds that inventory to
-one immutable candidate tuple before it is written.  It never launches an app,
-contacts Apple, or treats a generic date-only document as current evidence.
-"""
+"""Assemble and seal a candidate-current Gradus screenshot walkthrough."""
 
 from __future__ import annotations
 
@@ -12,9 +6,9 @@ import argparse
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import date, datetime, timezone
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,683 +16,778 @@ from .ledger import CandidateError, CandidateLedger, CandidateRecord
 
 
 class WalkthroughError(ValueError):
-    """Raised when candidate identity or route coverage is incomplete."""
+    """Raised when walkthrough evidence is incomplete or stale."""
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_VERSION = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
-_TERMINAL_STATES = frozenset({"failed", "abandoned", "superseded"})
-_REQUIRED_MANIFEST_SECTIONS = ("onboarding", "screens", "roles", "states", "systemOwnedSheets")
-_REQUIRED_VISIBLE_SAMPLE_CONTROLS = {
-    "empty-state": frozenset({"explore-sample"}),
-    "sample-dashboard": frozenset({"sample-data-banner", "sample-data-reset", "sample-data-exit"}),
-    "ios-settings": frozenset({"explore-sample-settings"}),
-    "ios-settings-sample": frozenset({"sample-data-reset-settings", "sample-data-exit-settings"}),
-}
-_SOURCE_ROUTE_MARKERS = {
-    "required-icloud-lifecycle": ("GradusiOS/EmptyStateView.swift", "struct EmptyStateView"),
-    "empty-state": ("GradusiOS/EmptyStateView.swift", "struct EmptyStateView"),
-    "sample-dashboard": ("GradusiOS/SampleDataViews.swift", "struct SampleDataDashboard"),
-    "ios-settings": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
-    "ios-settings-sample": ("GradusiOS/SettingsView.swift", "struct SettingsView"),
-    "small-widget": ("GradusWidget/GradusSmallWidgetView.swift", "struct GradusSmallWidgetView"),
-    "mac-menu": ("GradusMac/MenuContentView.swift", "struct MenuContentView"),
-    "mac-settings": ("GradusMac/MacSettingsView.swift", "struct MacSettingsView"),
-}
-_SOURCE_CONTROL_MARKERS = {
-    "required-icloud-lifecycle": {
-        "checking-icloud": ("GradusiOS/EmptyStateView.swift", 'ProgressView("Checking iCloud")'),
-        "continue-required-icloud": (
-            "GradusiOS/EmptyStateView.swift",
-            "case .syncDisabled, .awaitingConfirmation:",
-        ),
-        "retry-icloud": (
-            "GradusiOS/EmptyStateView.swift",
-            "case .tryAgain, .notSignedIn, .restricted:",
-        ),
-    },
-    "empty-state": {
-        "explore-sample": (
-            "GradusiOS/EmptyStateView.swift",
-            'accessibilityIdentifier("explore-sample")',
-        ),
-    },
-    "sample-dashboard": {
-        "sample-data-banner": ("GradusiOS/SampleDataViews.swift", "struct SampleDataBanner"),
-        "sample-data-reset": (
-            "GradusiOS/SampleDataViews.swift",
-            'accessibilityIdentifier("sample-data-reset")',
-        ),
-        "sample-data-exit": (
-            "GradusiOS/SampleDataViews.swift",
-            'accessibilityIdentifier("sample-data-exit")',
-        ),
-    },
-    "ios-settings": {
-        "explore-sample-settings": (
-            "GradusiOS/SettingsView+SampleMode.swift",
-            'accessibilityIdentifier("explore-sample-settings")',
-        ),
-        "sample-entry-in-progress": (
-            "GradusiOS/SettingsView+SampleMode.swift",
-            ".disabled(isSampleEntryInProgress)",
-        ),
-        "warning-alerts": (
-            "GradusiOS/SettingsView.swift",
-            'accessibilityIdentifier: "warning-alerts-toggle"',
-        ),
-        "warning-alerts-requesting": (
-            "GradusiOS/SettingsView.swift",
-            "Requesting warning-alert permission…",
-        ),
-        "open-ios-notification-settings": (
-            "GradusiOS/SettingsView.swift",
-            'Button("Open iOS Settings")',
-        ),
-    },
-    "ios-settings-sample": {
-        "sample-data-reset-settings": (
-            "GradusiOS/SettingsView+SampleMode.swift",
-            'accessibilityIdentifier("sample-data-reset-settings")',
-        ),
-        "sample-data-exit-settings": (
-            "GradusiOS/SettingsView+SampleMode.swift",
-            'accessibilityIdentifier("sample-data-exit-settings")',
-        ),
-    },
-    "small-widget": {
-        "open-widget-dashboard": (
-            "GradusWidget/GradusWidget.swift",
-            "StaticConfiguration",
-        ),
-    },
-    "mac-menu": {
-        "continue-required-icloud-mac": (
-            "GradusMac/MenuContentView.swift",
-            'Button("Continue")',
-        ),
-        "mac-settings": (
-            "GradusMac/MenuContentView.swift",
-            'Button("Settings…")',
-        ),
-    },
+_VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+_OWNER = "David"
+_SOURCE_MARKERS = {
+    "GradusiOS/EmptyStateView.swift": (
+        "struct EmptyStateView",
+        'accessibilityIdentifier("explore-sample")',
+        'accessibilityIdentifier("icloud-account-discovery-status")',
+        '"Try Again"',
+        '"Continue"',
+    ),
+    "GradusiOS/SampleDataViews.swift": (
+        "struct SampleDataDashboard",
+        'accessibilityIdentifier("sample-data-banner")',
+        'accessibilityIdentifier("sample-data-reset")',
+        'accessibilityIdentifier("sample-data-exit")',
+    ),
+    "GradusiOS/ProviderDetailView.swift": ("struct ProviderDetailView",),
+    "GradusiOS/SettingsView.swift": (
+        "struct SettingsView",
+        'accessibilityIdentifier: "warning-alerts-toggle"',
+        'Button("Open iOS Settings")',
+        "Requesting warning-alert permission…",
+    ),
+    "GradusiOS/SettingsView+SampleMode.swift": (
+        'accessibilityIdentifier("explore-sample-settings")',
+        'accessibilityIdentifier("sample-data-reset-settings")',
+        'accessibilityIdentifier("sample-data-exit-settings")',
+        ".disabled(isSampleEntryInProgress)",
+    ),
+    "GradusiOS/SettingsView+LocalDisplay.swift": (
+        'accessibilityIdentifier: "show-exhausted-toggle"',
+        'Text("Sort providers")',
+        'Toggle("Automatic"',
+        'accessibilityLabel = "Card size"',
+    ),
+    "GradusiOS/SettingsView+WarningThreshold.swift": (
+        'accessibilityIdentifier("warning-threshold-slider")',
+    ),
+    "GradusiOS/DashboardView.swift": ('accessibilityIdentifier("settings-button")',),
+    "GradusWidget/GradusSmallWidgetView.swift": (
+        "struct GradusSmallWidgetView",
+        "case .empty:",
+        "case .unavailable:",
+        "case let .current(snapshot):",
+    ),
+    "GradusWidget/GradusWidget.swift": ("StaticConfiguration", ".supportedFamilies"),
 }
 
 
-def _sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
+def _central_api():
+    root = Path(__file__).resolve().parents[3] / "apple_developer"
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        from release_tools.walkthrough import (  # type: ignore[import-not-found]
+            WalkthroughError as CentralError,
+        )
+        from release_tools.walkthrough import (
+            assemble_walkthrough,
+            write_walkthrough,
+        )
+    except ImportError as exc:
+        raise WalkthroughError("central release_tools.walkthrough is unavailable") from exc
+    return assemble_walkthrough, write_walkthrough, CentralError
 
 
-def _digest_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
+def _digest(path: str | Path) -> str:
+    value = hashlib.sha256()
     try:
         with Path(path).open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+                value.update(chunk)
     except OSError as exc:
-        raise WalkthroughError(f"artifact is unreadable: {path}") from exc
-    return digest.hexdigest()
+        raise WalkthroughError(f"file is unreadable: {path}") from exc
+    return value.hexdigest()
 
 
-def _text(mapping: Mapping[str, Any], *names: str, label: str) -> str:
-    for name in names:
-        value = mapping.get(name)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    raise WalkthroughError(f"missing candidate {label}")
+def _required_text(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise WalkthroughError(f"missing {label}")
+    return value.strip()
 
 
-def _sha(mapping: Mapping[str, Any], *names: str, label: str) -> str:
-    value = _text(mapping, *names, label=label)
-    if not _SHA256.fullmatch(value):
-        raise WalkthroughError(f"candidate {label} is not a SHA-256 digest")
-    return value
-
-
-def _positive_int(mapping: Mapping[str, Any], *names: str, label: str) -> int:
-    value: Any = None
-    for name in names:
-        if name in mapping:
-            value = mapping[name]
-            break
-    if isinstance(value, bool) or not isinstance(value, (int, str)):
-        raise WalkthroughError(f"missing candidate {label}")
-    if isinstance(value, str) and (not value.isdigit() or value.startswith("0")):
-        raise WalkthroughError(f"candidate {label} must be a positive integer")
-    result = int(value)
-    if result < 1:
-        raise WalkthroughError(f"candidate {label} must be a positive integer")
+def _control(
+    identifier: str,
+    label: str,
+    behavior: str,
+    *,
+    kind: str = "button",
+    target: str | None = None,
+    states: Sequence[str] = ("enabled",),
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "id": identifier,
+        "label": label,
+        "kind": kind,
+        "behavior": behavior,
+        "states": list(states),
+    }
+    if target:
+        result["navigatesTo"] = target
     return result
 
 
-@dataclass(frozen=True)
-class CandidateTuple:
-    """The non-secret identity which a walkthrough is allowed to describe."""
-
-    candidate_id: str
-    source_revision: str
-    project_sha256: str
-    artifact_sha256: str
-    build: int
-    marketing_version: str
-
-    @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> CandidateTuple:
-        if not isinstance(data, Mapping):
-            raise WalkthroughError("candidate tuple must be an object")
-        candidate_id = _text(data, "candidateId", "candidate_id", label="id")
-        source_revision = _text(data, "sourceRevision", "source_revision", label="source revision")
-        project = _sha(data, "projectSha256", "project_sha256", label="project digest")
-        artifact = _sha(
-            data,
-            "artifactSha256",
-            "artifact_sha256",
-            "ipaSha256",
-            "ipa_sha256",
-            label="artifact digest",
-        )
-        build = _positive_int(data, "build", "iosBuild", "ios_build", label="build")
-        version = _text(data, "marketingVersion", "marketing_version", label="marketing version")
-        if not _VERSION.fullmatch(version):
-            raise WalkthroughError(
-                "candidate marketing version must be numeric MAJOR.MINOR.PATCH text"
-            )
-        return cls(candidate_id, source_revision, project, artifact, build, version)
-
-    @classmethod
-    def from_record(cls, record: CandidateRecord) -> CandidateTuple:
-        metadata = record.metadata or {}
-        source = metadata.get("sourceRevision", metadata.get("source_revision"))
-        if not isinstance(source, str) or not source.strip():
-            raise WalkthroughError("candidate ledger is missing source revision evidence")
-        if record.build is None or not record.marketing_version:
-            raise WalkthroughError("candidate ledger is missing build or marketing version")
-        return cls(
-            record.candidate_id,
-            source.strip(),
-            record.project_sha256,
-            record.artifact_sha256,
-            record.build,
-            record.marketing_version,
-        )
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "candidateId": self.candidate_id,
-            "sourceRevision": self.source_revision,
-            "sourceRevisionSha256": _sha256_bytes(self.source_revision.encode()),
-            "projectSha256": self.project_sha256,
-            "artifactSha256": self.artifact_sha256,
-            "build": self.build,
-            "marketingVersion": self.marketing_version,
-        }
+def _screen(
+    identifier: str,
+    title: str,
+    purpose: str,
+    fixture: str,
+    marker: str,
+    logic: str,
+    controls: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "id": identifier,
+        "title": title,
+        "purpose": purpose,
+        "logic": [logic],
+        "controls": list(controls),
+        "variants": [
+            {
+                "id": "iphone-dark",
+                "device": "Disposable iPhone Simulator",
+                "appearance": "dark",
+                "image": f"{fixture}.png",
+            }
+        ],
+        "capture": {"fixture": fixture, "marker": marker},
+    }
 
 
 def default_manifest() -> dict[str, Any]:
-    """Return the current Gradus app's explicit reachable-route inventory."""
-
-    def control(identifier, label, *, roles=("all",), state="enabled", recovery=False):
-        return {
-            "id": identifier,
-            "label": label,
-            "roles": list(roles),
-            "state": state,
-            "recovery": recovery,
-        }
-
+    """Return the fixed iOS screenshot and review-surface inventory."""
     return {
-        "onboarding": [
-            {
-                "id": "required-icloud-lifecycle",
-                "title": "Required iCloud availability",
-                "controls": [
-                    control(
-                        "checking-icloud",
-                        "Checking iCloud availability",
-                        state="disabled",
-                    ),
-                    control(
-                        "continue-required-icloud",
-                        "Continue with required iCloud",
-                        state="recovery",
-                        recovery=True,
-                    ),
-                    control(
-                        "retry-icloud",
-                        "Try iCloud availability again",
-                        state="recovery",
-                        recovery=True,
-                    ),
-                ],
-            }
-        ],
+        "formatVersion": 1,
+        "app": "gradus",
+        "platform": "iOS",
         "screens": [
-            {
-                "id": "dashboard",
-                "title": "Now dashboard",
-                "controls": [
-                    control("provider-row", "Open provider details"),
-                    control("settings", "Open Settings"),
+            _screen(
+                "icloud.discovery",
+                "Checking iCloud",
+                "Fresh-account discovery progress.",
+                "fresh-account-discovery",
+                "icloud-account-discovery-status",
+                "The fixture performs no CloudKit access.",
+                [
+                    _control(
+                        "explore-sample",
+                        "Explore Sample",
+                        "Opens local sample data.",
+                        target="sample.dashboard",
+                    )
                 ],
-            },
-            {
-                "id": "empty-state",
-                "title": "Empty state",
-                "controls": [
-                    control("explore-sample", "Explore Sample"),
-                ],
-            },
-            {
-                "id": "sample-dashboard",
-                "title": "Explore Sample dashboard",
-                "controls": [
-                    control("sample-data-banner", "Explore Sample banner"),
-                    control("sample-data-reset", "Reset sample data"),
-                    control("sample-data-exit", "Exit Explore Sample"),
-                    control("provider-row", "Open provider details"),
-                    control("settings", "Open Settings"),
-                ],
-            },
-            {
-                "id": "provider-detail",
-                "title": "Provider detail",
-                "controls": [control("back", "Back")],
-            },
-            {
-                "id": "small-widget",
-                "title": "Small Home Screen widget",
-                "controls": [control("open-widget-dashboard", "Open Gradus dashboard")],
-            },
-            {
-                "id": "ios-settings",
-                "title": "Settings",
-                "controls": [
-                    control("close", "Close Settings"),
-                    control("sort-providers", "Sort providers"),
-                    control("automatic-card-size", "Automatic card size"),
-                    control("card-size-slider", "Card size", state="disabled"),
-                    control("show-exhausted", "Show exhausted"),
-                    control("warning-threshold", "Warning threshold"),
-                    control("warning-alerts", "Warning alerts", state="permission"),
-                    control(
-                        "warning-alerts-requesting",
-                        "Waiting for your iOS notification choice",
-                        state="disabled",
-                    ),
-                    control(
-                        "open-ios-notification-settings",
-                        "Open iOS Settings for denied warning alerts",
-                        state="recovery",
-                        recovery=True,
-                    ),
-                    control("explore-sample-settings", "Explore Sample"),
-                    control(
-                        "sample-entry-in-progress",
-                        "Entering Sample…",
-                        state="disabled",
-                        recovery=True,
+            ),
+            _screen(
+                "icloud.confirmation",
+                "iCloud confirmation",
+                "Migration recovery before account discovery.",
+                "legacy-awaiting-confirmation",
+                "Continue",
+                "Continue begins a fresh account check.",
+                [_control("continue", "Continue", "Starts discovery.", target="icloud.discovery")],
+            ),
+            _screen(
+                "icloud.retry",
+                "Temporary iCloud failure",
+                "Retryable discovery failure.",
+                "temporary-retry",
+                "Try Again",
+                "Retry remains inside Gradus.",
+                [_control("retry", "Try Again", "Retries discovery.", states=["recovery"])],
+            ),
+            _screen(
+                "icloud.no-account",
+                "No iCloud account",
+                "Signed-out recovery state.",
+                "no-account",
+                "Try Again",
+                "No system Settings handoff is offered.",
+                [
+                    _control("retry", "Try Again", "Retries discovery.", states=["recovery"]),
+                    _control(
+                        "explore-sample",
+                        "Explore Sample",
+                        "Opens local sample data.",
+                        target="sample.dashboard",
                     ),
                 ],
-            },
-            {
-                "id": "ios-settings-sample",
-                "title": "Settings (Explore Sample)",
-                "controls": [
-                    control("close", "Close Settings"),
-                    control("sample-data-reset-settings", "Reset Sample Data"),
-                    control("sample-data-exit-settings", "Exit Explore Sample"),
-                    control("sort-providers", "Sort providers"),
-                    control("automatic-card-size", "Automatic card size"),
-                    control("card-size-slider", "Card size", state="disabled"),
-                    control("show-exhausted", "Show exhausted"),
-                    control("warning-threshold", "Warning threshold"),
-                ],
-            },
-            {
-                "id": "mac-menu",
-                "title": "Gradus menu",
-                "controls": [
-                    control(
-                        "continue-required-icloud-mac",
-                        "Continue with required iCloud",
-                        state="recovery",
-                        recovery=True,
+            ),
+            _screen(
+                "icloud.restricted",
+                "Restricted iCloud",
+                "Restricted-account recovery state.",
+                "restricted",
+                "Try Again",
+                "No system Settings handoff is offered.",
+                [_control("retry", "Try Again", "Retries discovery.", states=["recovery"])],
+            ),
+            _screen(
+                "sample.dashboard",
+                "Explore Sample dashboard",
+                "Local-only dashboard and reset/exit outcomes.",
+                "sample-dashboard",
+                "sample-data-exit",
+                "Sample data never writes CloudKit.",
+                [
+                    _control("reset", "Reset", "Restores bundled sample data."),
+                    _control(
+                        "exit", "Exit", "Returns to iCloud recovery.", target="icloud.no-account"
                     ),
-                    control("mac-settings", "Settings"),
-                    control("quit", "Quit Gradus"),
+                    _control("settings", "Settings", "Opens Settings.", target="settings.off"),
                 ],
-            },
-            {
-                "id": "mac-settings",
-                "title": "Gradus Settings",
-                "controls": [
-                    control("mac-sort", "Sort providers"),
-                    control("mac-show-exhausted", "Show exhausted"),
+            ),
+            _screen(
+                "settings.off",
+                "Settings, alerts off",
+                "Settings with optional alerts disabled.",
+                "settings-off",
+                "warning-alerts-toggle",
+                "iCloud syncing is unaffected.",
+                [
+                    _control(
+                        "warning-alerts",
+                        "Warning alerts",
+                        "Requests permission when enabled.",
+                        kind="switch",
+                        states=["off"],
+                    )
                 ],
-            },
-        ],
-        "roles": [
-            {"id": "all", "name": "All users", "permissions": ["view", "change-local-preferences"]},
-            {
-                "id": "icloud-unavailable",
-                "name": "iCloud unavailable or restricted",
-                "permissions": ["view", "retry-icloud"],
-            },
-            {
-                "id": "notifications-denied",
-                "name": "Notifications denied",
-                "permissions": ["view", "open-system-settings"],
-            },
-        ],
-        "states": [
-            {"id": "enabled", "label": "Enabled"},
-            {"id": "icloud-discovery", "label": "Checking iCloud availability"},
-            {"id": "awaiting-confirmation", "label": "Required iCloud awaiting confirmation"},
-            {"id": "temporary-retry", "label": "Temporary iCloud availability retry"},
-            {"id": "no-account", "label": "No iCloud account signed in"},
-            {"id": "restricted", "label": "iCloud account access restricted"},
-            {"id": "empty", "label": "Waiting for the first synced data"},
-            {"id": "offline", "label": "Offline cached data"},
-            {"id": "disabled", "label": "Disabled"},
-            {"id": "permission", "label": "Permission required"},
-            {"id": "recovery", "label": "Recovery"},
-            {"id": "sample", "label": "Local-only sample data"},
-            {"id": "notification-denied", "label": "Warning alerts denied by iOS"},
-            {"id": "widget-current", "label": "Current usage projection"},
-            {"id": "widget-empty", "label": "Open Gradus to sync"},
-            {"id": "widget-unavailable", "label": "Usage unavailable"},
-        ],
-        "systemOwnedSheets": [
-            {
-                "id": "notification-permission",
-                "owner": "iOS",
-                "trigger": "Enabling Warning alerts when iOS notification permission is not yet decided",
-            },
-            {
-                "id": "notification-settings",
-                "owner": "iOS",
-                "trigger": "Open iOS Settings only after warning alerts are denied by iOS",
-            },
-            {
-                "id": "widget-gallery",
-                "owner": "iOS",
-                "trigger": "Adding the Gradus widget from the Home Screen widget gallery",
-            },
-            {
-                "id": "widget-removal",
-                "owner": "iOS",
-                "trigger": "Removing the Gradus widget from the Home Screen or Today View",
-            },
-            {"id": "mac-settings-window", "owner": "macOS", "trigger": "Settings from menu"},
+            ),
+            _screen(
+                "settings.requesting",
+                "Settings, requesting alerts",
+                "Disabled progress while permission is pending.",
+                "settings-requesting",
+                "Requesting warning-alert permission…",
+                "The fixture prevents a real system prompt.",
+                [
+                    _control(
+                        "warning-alerts",
+                        "Warning alerts",
+                        "Waits for permission.",
+                        kind="switch",
+                        states=["disabled", "requesting"],
+                    )
+                ],
+            ),
+            _screen(
+                "settings.denied",
+                "Settings, alerts denied",
+                "Boundary before handing off to iOS Settings.",
+                "settings-denied",
+                "Open iOS Settings",
+                "Capture stops before the system-owned app opens.",
+                [
+                    _control(
+                        "open-ios-settings",
+                        "Open iOS Settings",
+                        "Hands control to iOS Settings.",
+                        states=["recovery", "system-handoff"],
+                    )
+                ],
+            ),
+            _screen(
+                "icloud.confirmation.result",
+                "Continue result",
+                "Account discovery after Continue.",
+                "legacy-continue-result",
+                "icloud-account-discovery-status",
+                "The action enters deterministic discovery.",
+                [],
+            ),
+            _screen(
+                "icloud.retry.result",
+                "Temporary retry result",
+                "Recovery state after Try Again.",
+                "temporary-retry-result",
+                "Try Again",
+                "The offline fixture remains retryable.",
+                [],
+            ),
+            _screen(
+                "icloud.no-account.result",
+                "No-account retry result",
+                "Signed-out state after Try Again.",
+                "no-account-retry-result",
+                "Try Again",
+                "The action stays in-app and remains recoverable.",
+                [],
+            ),
+            _screen(
+                "icloud.restricted.result",
+                "Restricted retry result",
+                "Restricted state after Try Again.",
+                "restricted-retry-result",
+                "Try Again",
+                "The action stays in-app and remains recoverable.",
+                [],
+            ),
+            _screen(
+                "sample.entry-progress",
+                "Entering Sample",
+                "Disabled Explore Sample progress state.",
+                "sample-entry-progress",
+                "explore-sample",
+                "The action is disabled while the lifecycle gate suspends.",
+                [],
+            ),
+            _screen(
+                "sample.provider",
+                "Sample provider detail",
+                "Provider-card navigation outcome.",
+                "sample-provider-detail",
+                "Sample Codex",
+                "Bundled sample data is fixed.",
+                [
+                    _control(
+                        "back",
+                        "Back",
+                        "Returns to the sample dashboard.",
+                        target="sample.provider-back",
+                    )
+                ],
+            ),
+            _screen(
+                "sample.provider-back",
+                "Provider Back result",
+                "Dashboard after returning from provider detail.",
+                "sample-provider-back",
+                "sample-data-banner",
+                "Back preserves sample mode.",
+                [],
+            ),
+            _screen(
+                "sample.reset-result",
+                "Sample Reset result",
+                "Dashboard after immediate sample reset.",
+                "sample-reset-result",
+                "sample-data-banner",
+                "Reset is immediate; the shipped UI has no confirmation sheet.",
+                [],
+            ),
+            _screen(
+                "sample.exit-result",
+                "Sample Exit result",
+                "Required-iCloud recovery after immediate sample exit.",
+                "sample-exit-result",
+                "Try Again",
+                "Exit is immediate; the shipped UI has no confirmation sheet.",
+                [],
+            ),
+            _screen(
+                "sample.settings",
+                "Settings in Explore Sample",
+                "Sample-only Settings controls.",
+                "sample-settings",
+                "sample-data-reset-settings",
+                "Live alert controls are absent in sample mode.",
+                [
+                    _control(
+                        "reset-sample", "Reset Sample Data", "Resets and remains in Settings."
+                    ),
+                    _control(
+                        "exit-sample",
+                        "Exit Explore Sample",
+                        "Returns to required-iCloud recovery.",
+                        target="sample.settings-exit",
+                    ),
+                ],
+            ),
+            _screen(
+                "sample.settings-reset",
+                "Settings sample Reset result",
+                "Settings after resetting sample data.",
+                "sample-settings-reset",
+                "sample-data-reset-settings",
+                "Reset remains in sample Settings.",
+                [],
+            ),
+            _screen(
+                "sample.settings-exit",
+                "Settings sample Exit result",
+                "Required-iCloud recovery after Settings exit.",
+                "sample-settings-exit",
+                "Try Again",
+                "Exit leaves both Settings and sample mode.",
+                [],
+            ),
+            _screen(
+                "settings.close-result",
+                "Settings Close result",
+                "Dashboard after closing Settings.",
+                "settings-close-result",
+                "explore-sample",
+                "Close returns without changing state.",
+                [],
+            ),
+            _screen(
+                "settings.sort-result",
+                "Sort control result",
+                "Settings after selecting Name A-Z.",
+                "settings-sort-result",
+                "Name A-Z",
+                "Sort is a local display preference.",
+                [],
+            ),
+            _screen(
+                "settings.exhausted-result",
+                "Show exhausted result",
+                "Settings after toggling exhausted providers.",
+                "settings-show-exhausted-result",
+                "show-exhausted-toggle",
+                "The toggle is local-only.",
+                [],
+            ),
+            _screen(
+                "settings.threshold-result",
+                "Warning threshold result",
+                "Settings after moving the local threshold.",
+                "settings-threshold-result",
+                "warning-threshold-slider",
+                "The threshold does not change pushed-alert selection.",
+                [],
+            ),
+            _screen(
+                "settings.permission-sheet",
+                "Notification permission sheet",
+                "System-owned notification authorization prompt.",
+                "settings-warning-permission-sheet",
+                "notification-permission-sheet",
+                "The disposable Simulator provides a fresh permission state.",
+                [
+                    _control(
+                        "deny",
+                        "Don’t Allow",
+                        "Returns denied authorization.",
+                        target="settings.permission-denied",
+                    ),
+                    _control(
+                        "allow",
+                        "Allow",
+                        "Returns allowed authorization.",
+                        target="settings.permission-allowed",
+                    ),
+                ],
+            ),
+            _screen(
+                "settings.permission-denied",
+                "Permission denied result",
+                "Settings after denying the system prompt.",
+                "settings-warning-deny-result",
+                "Open iOS Settings",
+                "The recovery handoff becomes visible.",
+                [],
+            ),
+            _screen(
+                "settings.permission-allowed",
+                "Permission allowed result",
+                "Settings after allowing the system prompt.",
+                "settings-warning-allow-result",
+                "warning-alerts-toggle",
+                "Warning alerts remain enabled.",
+                [],
+            ),
+            _screen(
+                "settings.denied-handoff",
+                "iOS Settings handoff",
+                "System-owned Gradus Settings page after Open iOS Settings.",
+                "settings-denied-handoff",
+                "ios-settings-app",
+                "The screenshot proves the reachable system boundary.",
+                [],
+            ),
+            _screen(
+                "settings.sort-reset-result",
+                "Reset-soonest sort result",
+                "Settings after selecting Reset soonest.",
+                "settings-sort-reset-result",
+                "Reset soonest",
+                "All sort outcomes are local display preferences.",
+                [],
+            ),
+            _screen(
+                "settings.automatic-result",
+                "Manual card-size state",
+                "Settings after turning Automatic off.",
+                "settings-automatic-result",
+                "Automatic",
+                "The card-size slider becomes enabled where multiple columns fit.",
+                [],
+            ),
+            _screen(
+                "settings.card-size-disabled",
+                "Automatic card-size state",
+                "The fixed one-column iPhone state where manual card size is unavailable.",
+                "settings-card-size-disabled",
+                "Automatic · 1 column",
+                "Card size is intentionally non-interactive when only one column fits.",
+                [],
+            ),
+            _screen(
+                "settings.card-size-result",
+                "Card-size slider result",
+                "Settings after selecting the largest card size.",
+                "settings-card-size-result",
+                "Card size",
+                "Every position retains all provider windows.",
+                [],
+            ),
+            _screen(
+                "settings.hide-exhausted-result",
+                "Hide exhausted result",
+                "Settings after returning Show exhausted to off.",
+                "settings-hide-exhausted-result",
+                "show-exhausted-toggle",
+                "Both toggle outcomes are captured.",
+                [],
+            ),
+            _screen(
+                "settings.explore-progress",
+                "Entering Sample from Settings",
+                "Disabled Settings entry-progress state.",
+                "settings-explore-progress",
+                "explore-sample-settings",
+                "The entry button is disabled during lifecycle suspension.",
+                [],
+            ),
+            _screen(
+                "settings.explore-result",
+                "Settings Explore Sample result",
+                "Sample dashboard reached from Settings.",
+                "settings-explore-result",
+                "sample-data-banner",
+                "The alternate sample entry route reaches the same local-only dashboard.",
+                [],
+            ),
+            _screen(
+                "settings.alert-off-result",
+                "Warning alerts off result",
+                "Settings after turning an authorized alert toggle off.",
+                "settings-alert-off-result",
+                "warning-alerts-toggle",
+                "Turning alerts off does not affect iCloud syncing.",
+                [],
+            ),
+            _screen(
+                "widget.current",
+                "Small widget, current",
+                "Current most-urgent usage window.",
+                "widget-render-current",
+                "widget-current",
+                "The candidate view is rendered from fixed widget snapshot data.",
+                [
+                    _control(
+                        "open-gradus",
+                        "Open Gradus",
+                        "Tapping the widget opens the containing app.",
+                        target="icloud.discovery",
+                    )
+                ],
+            ),
+            _screen(
+                "widget.empty",
+                "Small widget, empty",
+                "No published widget snapshot is available.",
+                "widget-render-empty",
+                "widget-empty",
+                "The widget directs the user to open Gradus to sync.",
+                [],
+            ),
+            _screen(
+                "widget.unavailable",
+                "Small widget, unavailable",
+                "The selected provider window cannot be displayed.",
+                "widget-render-unavailable",
+                "widget-unavailable",
+                "The widget directs the user to open Gradus to refresh.",
+                [],
+            ),
+            _screen(
+                "widget.gallery",
+                "Widget gallery",
+                "System-owned widget picker reached from Home Screen editing.",
+                "widget-system-gallery",
+                "Search Widgets",
+                "The bounded XCUITest preserves a blocked log if SpringBoard accessibility changes.",
+                [
+                    _control(
+                        "select-gradus",
+                        "Gradus",
+                        "Opens the Gradus widget add surface.",
+                        target="widget.add-surface",
+                    )
+                ],
+            ),
+            _screen(
+                "widget.add-surface",
+                "Gradus widget add surface",
+                "System-owned preview for the static small widget.",
+                "widget-system-add",
+                "Add Widget",
+                "StaticConfiguration has no additional configurable fields.",
+                [
+                    _control(
+                        "add-widget",
+                        "Add Widget",
+                        "Adds the small widget to the Home Screen.",
+                        target="widget.tap-result",
+                    )
+                ],
+            ),
+            _screen(
+                "widget.tap-result",
+                "Widget tap result",
+                "Gradus foregrounded by tapping its Home Screen widget.",
+                "widget-system-tap",
+                "explore-sample",
+                "The containing app opens at its current required-iCloud recovery route.",
+                [],
+            ),
         ],
     }
 
 
-def _items(value: Any, section: str) -> list[Mapping[str, Any]]:
-    if not isinstance(value, list) or not value:
-        raise WalkthroughError(f"walkthrough coverage section is empty: {section}")
-    if any(not isinstance(item, Mapping) for item in value):
-        raise WalkthroughError(f"walkthrough coverage section is malformed: {section}")
-    return list(value)
-
-
-def validate_manifest(
-    manifest: Mapping[str, Any], *, source_root: str | Path | None = None
-) -> dict[str, Any]:
-    """Validate route/control, role, state, and system-sheet completeness."""
-    if not isinstance(manifest, Mapping):
-        raise WalkthroughError("walkthrough manifest must be an object")
-    missing = [section for section in _REQUIRED_MANIFEST_SECTIONS if section not in manifest]
-    if missing:
-        raise WalkthroughError(f"walkthrough coverage is missing: {', '.join(missing)}")
-    onboarding = _items(manifest["onboarding"], "onboarding")
-    screens = _items(manifest["screens"], "screens")
-    roles = _items(manifest["roles"], "roles")
-    states = _items(manifest["states"], "states")
-    sheets = _items(manifest["systemOwnedSheets"], "systemOwnedSheets")
-    seen_routes: set[str] = set()
-    for route in [*onboarding, *screens]:
-        identifier = _text(route, "id", label="route id")
-        if identifier in seen_routes:
-            raise WalkthroughError(f"duplicate reachable route: {identifier}")
-        seen_routes.add(identifier)
-        controls = _items(route.get("controls"), f"controls for {identifier}")
-        control_ids: set[str] = set()
-        for item in controls:
-            control_id = _text(item, "id", label=f"control id in {identifier}")
-            if control_id in control_ids:
-                raise WalkthroughError(f"duplicate control in {identifier}: {control_id}")
-            control_ids.add(control_id)
-            _text(item, "label", "title", label=f"control label for {identifier}/{control_id}")
-            _text(item, "state", label=f"control state for {identifier}/{control_id}")
-            roles_for_control = item.get("roles")
-            if not isinstance(roles_for_control, list) or not roles_for_control:
-                raise WalkthroughError(f"control has no role coverage: {identifier}/{control_id}")
-    state_ids = {_text(item, "id", label="state id") for item in states}
-    if not {"disabled", "recovery"}.issubset(state_ids):
-        raise WalkthroughError("coverage must include disabled and recovery states")
-    role_ids = {_text(item, "id", label="role id") for item in roles}
-    if "all" not in role_ids:
-        raise WalkthroughError("coverage must include the all-users role")
-    for route in [*onboarding, *screens]:
-        for control in route["controls"]:
-            unknown_roles = set(control["roles"]) - role_ids
-            if unknown_roles:
-                raise WalkthroughError(
-                    f"control references unknown roles: {', '.join(sorted(unknown_roles))}"
-                )
-            if control["state"] not in state_ids:
-                raise WalkthroughError(f"control references unknown state: {control['state']}")
-    route_controls = {
-        route["id"]: {control["id"] for control in route["controls"]} for route in screens
-    }
-    for route_id, required_controls in _REQUIRED_VISIBLE_SAMPLE_CONTROLS.items():
-        missing_controls = required_controls - route_controls.get(route_id, set())
-        if missing_controls:
-            raise WalkthroughError(
-                f"visible sample coverage is missing from {route_id}: "
-                f"{', '.join(sorted(missing_controls))}"
-            )
-    _validate_source_markers(
-        manifest,
-        Path(source_root) if source_root is not None else Path(__file__).resolve().parents[1],
-    )
-    for sheet in sheets:
-        _text(sheet, "id", label="system-sheet id")
-        _text(sheet, "owner", label="system-sheet owner")
-        _text(sheet, "trigger", label="system-sheet trigger")
-    return json.loads(json.dumps(manifest, sort_keys=True, separators=(",", ":")))
-
-
-def _validate_source_markers(manifest: Mapping[str, Any], source_root: Path) -> None:
-    """Reject a route inventory that drifts from the shipped iOS source.
-
-    Every marker is checked before raising, and all failures are reported
-    together. Bailing on the first one hides the scale of a drift: when
-    `006356d` split the sample-mode views into their own files it invalidated
-    eight markers at once, but only one was ever visible, so each repair
-    round-trip surfaced exactly one more. A refactor that moves a file breaks
-    markers in batches, so the gate should report in batches too.
-    """
-    routes = {route["id"]: route for route in [*manifest["onboarding"], *manifest["screens"]]}
-    problems: list[str] = []
-
-    def source_of(path: Path, label: str) -> str | None:
-        try:
-            return path.read_text(encoding="utf-8")
-        except OSError:
-            problems.append(f"cannot read source for {label}: {path}")
-            return None
-
-    for route_id, (relative_path, marker) in _SOURCE_ROUTE_MARKERS.items():
-        route = routes.get(route_id)
-        if route is None:
-            problems.append(f"source-backed route is missing from manifest: {route_id}")
-            continue
-        source = source_of(source_root / relative_path, f"route {route_id}")
-        if source is not None and marker not in source:
-            problems.append(f"source route marker is missing for {route_id}: {marker}")
-        route_control_ids = {control["id"] for control in route["controls"]}
-        for control_id, (control_path, control_marker) in _SOURCE_CONTROL_MARKERS.get(
-            route_id, {}
-        ).items():
-            if control_id not in route_control_ids:
-                problems.append(f"source-backed control is missing from {route_id}: {control_id}")
-                continue
-            control_source = source_of(source_root / control_path, f"control {control_id}")
-            if control_source is not None and control_marker not in control_source:
-                problems.append(
-                    f"source control marker is missing for {route_id}/{control_id}: {control_marker}"
-                )
-
-    if problems:
-        raise WalkthroughError(
-            f"{len(problems)} source marker problem(s):\n  " + "\n  ".join(problems)
+def capture_routes(manifest: Mapping[str, Any] | None = None) -> list[dict[str, str]]:
+    """Return validated fixture, marker, and image mappings for capture."""
+    raw = (manifest or default_manifest()).get("screens")
+    if not isinstance(raw, list) or not raw:
+        raise WalkthroughError("walkthrough must declare at least one screen")
+    routes = []
+    for screen in raw:
+        if not isinstance(screen, Mapping) or not isinstance(screen.get("capture"), Mapping):
+            raise WalkthroughError("walkthrough capture mapping is incomplete")
+        variants = screen.get("variants")
+        if (
+            not isinstance(variants, list)
+            or len(variants) != 1
+            or not isinstance(variants[0], Mapping)
+        ):
+            raise WalkthroughError("walkthrough capture variant is incomplete")
+        capture = screen["capture"]
+        routes.append(
+            {
+                "screenId": _required_text(screen.get("id"), "screen id"),
+                "fixture": _required_text(capture.get("fixture"), "fixture"),
+                "marker": _required_text(capture.get("marker"), "marker"),
+                "image": _required_text(variants[0].get("image"), "image"),
+            }
         )
+    return routes
 
 
-def _load_manifest(path: str | Path | None) -> Mapping[str, Any]:
-    if path is None:
-        return default_manifest()
-    try:
-        with Path(path).open(encoding="utf-8") as handle:
-            value = json.load(handle)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise WalkthroughError(f"cannot read walkthrough manifest: {path}") from exc
+def central_manifest(manifest: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Return the manifest accepted by the central walkthrough API."""
+    value = json.loads(json.dumps(manifest or default_manifest()))
+    capture_routes(value)
+    if manifest is None:
+        validate_source_coverage()
+    for screen in value["screens"]:
+        screen.pop("capture", None)
     return value
 
 
-def _candidate_from_input(
-    ledger: CandidateLedger, candidate: Mapping[str, Any] | None
-) -> tuple[CandidateRecord, CandidateTuple]:
+def validate_source_coverage(source_root: str | Path | None = None) -> None:
+    """Reject when a declared iOS route or control drifts out of shipped source."""
+    root = Path(source_root or Path(__file__).resolve().parents[1])
+    problems = []
+    for relative, markers in _SOURCE_MARKERS.items():
+        try:
+            source = (root / relative).read_text(encoding="utf-8")
+        except OSError:
+            problems.append(f"cannot read source: {relative}")
+            continue
+        problems.extend(
+            f"source marker is missing: {relative}: {marker}"
+            for marker in markers
+            if marker not in source
+        )
+    if problems:
+        raise WalkthroughError(
+            f"{len(problems)} source coverage problem(s):\n  " + "\n  ".join(problems)
+        )
+
+
+def _candidate(ledger: CandidateLedger) -> tuple[CandidateRecord, dict[str, Any]]:
     record = ledger.load()
-    if record is None:
-        raise WalkthroughError("candidate ledger is missing")
-    if record.state in _TERMINAL_STATES:
-        raise WalkthroughError(f"candidate is not current in state {record.state}")
-    if candidate is not None and not any(
-        name in candidate for name in ("candidateId", "candidate_id")
-    ):
-        candidate = {"candidateId": record.candidate_id, **candidate}
-    tuple_value = (
-        CandidateTuple.from_mapping(candidate)
-        if candidate is not None
-        else CandidateTuple.from_record(record)
-    )
-    if tuple_value.candidate_id != record.candidate_id:
-        raise WalkthroughError("candidate id mismatch")
-    if tuple_value.project_sha256 != record.project_sha256:
-        raise WalkthroughError("candidate project digest mismatch")
-    if tuple_value.artifact_sha256 != record.artifact_sha256:
-        raise WalkthroughError("candidate artifact digest mismatch")
-    if (
-        record.build != tuple_value.build
-        or record.marketing_version != tuple_value.marketing_version
-    ):
-        raise WalkthroughError("candidate build or marketing version mismatch")
+    if record is None or record.state in {"failed", "abandoned", "superseded"}:
+        raise WalkthroughError("candidate ledger is missing or not current")
     metadata = record.metadata or {}
-    recorded_source = metadata.get("sourceRevision", metadata.get("source_revision"))
-    if recorded_source != tuple_value.source_revision:
-        raise WalkthroughError("candidate source revision mismatch")
-    return record, tuple_value
-
-
-def render_walkthrough(
-    tuple_value: CandidateTuple, manifest: Mapping[str, Any], *, generated_on: date
-) -> bytes:
-    """Render stable Markdown; only the supplied date changes the dated header."""
-    normalized = validate_manifest(manifest)
-    lines = [
-        "# Gradus internal TestFlight candidate walkthrough",
-        "",
-        f"- Candidate: `{tuple_value.candidate_id}`",
-        f"- Marketing version/build: `{tuple_value.marketing_version}` / `{tuple_value.build}`",
-        f"- Source revision: `{tuple_value.source_revision}`",
-        f"- Source revision SHA-256: `{_sha256_bytes(tuple_value.source_revision.encode())}`",
-        f"- Project SHA-256: `{tuple_value.project_sha256}`",
-        f"- Artifact SHA-256: `{tuple_value.artifact_sha256}`",
-        f"- Generated on: `{generated_on.isoformat()}`",
-        "- Scope: internal TestFlight only; App Store submission and public release are excluded.",
-        "",
-        "## Release-owner review gate",
-        "",
-        "Review every route, control, role, disabled/recovery state, and system-owned sheet on the exact candidate artifact before authorizing TestFlight. This document is evidence for review, not proof of Apple processing or installability.",
-        "",
-    ]
-    for section, heading in (
-        ("onboarding", "Onboarding"),
-        ("screens", "Reachable screens and controls"),
-        ("roles", "Role and permission differences"),
-        ("states", "Disabled and recovery states"),
-        ("systemOwnedSheets", "System-owned sheets"),
+    identity = {
+        "candidateId": record.candidate_id,
+        "sourceRevision": _required_text(metadata.get("sourceRevision"), "source revision"),
+        "projectSha256": record.project_sha256,
+        "artifactSha256": record.artifact_sha256,
+        "build": record.build,
+        "marketingVersion": record.marketing_version,
+    }
+    if not _SHA256.fullmatch(record.project_sha256) or not _SHA256.fullmatch(
+        record.artifact_sha256
     ):
-        lines.extend([f"## {heading}", ""])
-        for item in normalized[section]:
-            identifier = item["id"]
-            title = item.get("title", item.get("name", identifier))
-            lines.append(f"### `{identifier}`: {title}")
-            for key in ("owner", "trigger", "permissions", "label"):
-                if key in item:
-                    value = item[key]
-                    lines.append(
-                        f"- {key}: `{json.dumps(value, sort_keys=True) if isinstance(value, (list, dict)) else value}`"
-                    )
-            for control in item.get("controls", []):
-                roles = ", ".join(control["roles"])
-                recovery = "; recovery path required" if control.get("recovery") else ""
-                lines.append(
-                    f"- [ ] Control `{control['id']}` ({control.get('label', control.get('title', control['id']))}); roles: `{roles}`; state: `{control['state']}`{recovery}"
-                )
-            lines.append("")
-    return ("\n".join(lines).rstrip() + "\n").encode()
+        raise WalkthroughError("candidate digest is invalid")
+    if (
+        not isinstance(record.build, int)
+        or record.build < 1
+        or not isinstance(record.marketing_version, str)
+        or not _VERSION.fullmatch(record.marketing_version)
+    ):
+        raise WalkthroughError("candidate build identity is invalid")
+    return record, identity
 
 
 def generate_walkthrough(
     ledger: CandidateLedger,
     artifact_path: str | Path,
     *,
-    source_revision: str | None = None,
-    candidate: Mapping[str, Any] | None = None,
-    manifest: Mapping[str, Any] | None = None,
+    screenshots_path: str | Path,
     output_path: str | Path,
-    generated_on: date | None = None,
+    inventory_path: str | Path | None = None,
+    source_revision: str | None = None,
+    manifest: Mapping[str, Any] | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Validate, render, hash, and bind one walkthrough to a candidate ledger."""
-    record = ledger.load()
-    if record is None:
-        raise WalkthroughError("candidate ledger is missing")
-    if candidate is None and source_revision is not None:
-        candidate = {
-            **CandidateTuple.from_record(record).as_dict(),
-            "sourceRevision": source_revision,
-        }
-    record, tuple_value = _candidate_from_input(ledger, candidate)
-    if source_revision is not None and source_revision != tuple_value.source_revision:
-        raise WalkthroughError("source revision mismatch")
-    actual_artifact = _digest_file(artifact_path)
-    if actual_artifact != tuple_value.artifact_sha256:
+    """Assemble, hash, and bind one screenshot walkthrough to its candidate."""
+    record, identity = _candidate(ledger)
+    if source_revision and source_revision != identity["sourceRevision"]:
+        raise WalkthroughError("candidate source revision mismatch")
+    if _digest(artifact_path) != identity["artifactSha256"]:
         raise WalkthroughError("artifact bytes do not match candidate tuple")
-    effective_date = generated_on or datetime.now(timezone.utc).date()
-    content = render_walkthrough(
-        tuple_value, manifest or default_manifest(), generated_on=effective_date
-    )
-    digest = _sha256_bytes(content)
-    output = Path(output_path)
+    assemble, write, central_error = _central_api()
+    label = f"{identity['marketingVersion']} ({identity['build']}) | source {identity['sourceRevision']} | project {identity['projectSha256']} | artifact {identity['artifactSha256']}"
+    try:
+        result = assemble(
+            central_manifest(manifest),
+            screenshots_path,
+            candidate_id=identity["candidateId"],
+            label=label,
+            on_status=on_status,
+        )
+        if result.screen_count < 1:
+            raise WalkthroughError("walkthrough contains zero screens")
+        output = Path(output_path)
+        inventory = Path(inventory_path or output.with_name("walkthrough-inventory.json"))
+        hashes = write(result, html_path=output, inventory_path=inventory)
+    except central_error as exc:
+        raise WalkthroughError(str(exc)) from exc
+    binding = {
+        "path": str(output),
+        "sha256": hashes["htmlSha256"],
+        "inventoryPath": str(inventory),
+        "inventorySha256": result.inventory_sha256,
+        "inventoryFileSha256": hashes["inventoryFileSha256"],
+        "screenCount": result.screen_count,
+        **{
+            key: identity[key]
+            for key in ("candidateId", "sourceRevision", "projectSha256", "artifactSha256")
+        },
+    }
     metadata = dict(record.metadata or {})
     existing = metadata.get("walkthrough")
-    prior_digests = [metadata.get("walkthroughSha256")]
-    prior_digests.append(existing.get("sha256") if isinstance(existing, Mapping) else existing)
-    if any(prior is not None and prior != digest for prior in prior_digests):
-        raise WalkthroughError("candidate already contains a different walkthrough digest")
-    output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    output.write_bytes(content)
-    metadata["walkthrough"] = {
-        "path": str(output),
-        "sha256": digest,
-        "generatedOn": effective_date.isoformat(),
-    }
-    metadata["walkthroughPath"] = str(output)
-    metadata["walkthroughSha256"] = digest
+    if isinstance(existing, Mapping) and existing != binding:
+        raise WalkthroughError("candidate already contains different walkthrough evidence")
+    metadata.update(
+        {
+            "walkthrough": binding,
+            "walkthroughPath": str(output),
+            "walkthroughSha256": binding["sha256"],
+        }
+    )
     ledger.write(
         CandidateRecord(
             record.candidate_id,
@@ -711,50 +800,148 @@ def generate_walkthrough(
             metadata,
         )
     )
-    return {
-        "candidateId": tuple_value.candidate_id,
-        "sourceRevision": tuple_value.source_revision,
-        "artifactSha256": actual_artifact,
-        "walkthroughPath": str(output),
-        "walkthroughSha256": digest,
-        "generatedOn": metadata["walkthrough"]["generatedOn"],
+    return binding
+
+
+def _validated_binding(ledger: CandidateLedger) -> Mapping[str, Any]:
+    """Return current, nonempty walkthrough evidence after checking its files."""
+    record, identity = _candidate(ledger)
+    binding = (record.metadata or {}).get("walkthrough")
+    if (
+        not isinstance(binding, Mapping)
+        or not isinstance(binding.get("screenCount"), int)
+        or binding["screenCount"] < 1
+    ):
+        raise WalkthroughError("walkthrough evidence is missing or empty")
+    for key in ("candidateId", "sourceRevision", "projectSha256", "artifactSha256"):
+        if binding.get(key) != identity[key]:
+            raise WalkthroughError("walkthrough candidate binding is stale")
+    if _digest(_required_text(binding.get("path"), "walkthrough path")) != binding.get("sha256"):
+        raise WalkthroughError("walkthrough HTML digest mismatch")
+    inventory_path = _required_text(binding.get("inventoryPath"), "walkthrough inventory path")
+    if _digest(inventory_path) != binding.get("inventoryFileSha256"):
+        raise WalkthroughError("walkthrough inventory digest mismatch")
+    try:
+        inventory = json.loads(Path(inventory_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WalkthroughError("walkthrough inventory is unreadable") from exc
+    if not isinstance(inventory, Mapping):
+        raise WalkthroughError("walkthrough inventory binding mismatch")
+    screens = inventory.get("screens")
+    if (
+        inventory.get("candidateId") != identity["candidateId"]
+        or inventory.get("inventorySha256") != binding.get("inventorySha256")
+        or not isinstance(screens, list)
+        or len(screens) != binding["screenCount"]
+    ):
+        raise WalkthroughError("walkthrough inventory binding mismatch")
+    return binding
+
+
+def record_owner_review(
+    ledger: CandidateLedger, output_path: str | Path, *, reviewed_by: str
+) -> dict[str, Any]:
+    """Record David's explicit acknowledgement of the exact sealed page."""
+    if reviewed_by != _OWNER:
+        raise WalkthroughError("walkthrough review must be explicitly acknowledged by David")
+    binding = _validated_binding(ledger)
+    proof = {
+        "formatVersion": 1,
+        "approved": True,
+        "reviewedBy": _OWNER,
+        "reviewedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        **{
+            key: binding[key]
+            for key in (
+                "candidateId",
+                "sourceRevision",
+                "projectSha256",
+                "artifactSha256",
+                "sha256",
+                "inventorySha256",
+                "screenCount",
+            )
+        },
     }
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(proof, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return proof
+
+
+def validate_owner_review(ledger: CandidateLedger, review_path: str | Path) -> dict[str, Any]:
+    """Reject unless a David acknowledgement matches the current candidate."""
+    binding = _validated_binding(ledger)
+    try:
+        proof = json.loads(Path(review_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WalkthroughError("walkthrough owner acknowledgement is missing") from exc
+    if not isinstance(proof, Mapping):
+        raise WalkthroughError("walkthrough owner acknowledgement is invalid")
+    expected = {
+        "approved": True,
+        "reviewedBy": _OWNER,
+        **{
+            key: binding.get(key)
+            for key in (
+                "candidateId",
+                "sourceRevision",
+                "projectSha256",
+                "artifactSha256",
+                "sha256",
+                "inventorySha256",
+                "screenCount",
+            )
+        },
+    }
+    if proof.get("screenCount", 0) < 1 or any(
+        proof.get(key) != value for key, value in expected.items()
+    ):
+        raise WalkthroughError(
+            "walkthrough owner acknowledgement does not match candidate evidence"
+        )
+    return dict(proof)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ledger", required=True, type=Path)
-    parser.add_argument("--artifact", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--record-owner-review", type=Path)
+    mode.add_argument("--validate-owner-review", type=Path)
+    parser.add_argument("--reviewed-by")
+    parser.add_argument("--artifact", type=Path)
+    parser.add_argument("--screenshots", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--inventory-output", type=Path)
     parser.add_argument("--source-revision")
-    parser.add_argument(
-        "--candidate",
-        type=Path,
-        help="JSON candidate tuple; required unless ledger metadata is complete",
-    )
-    parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--date", type=date.fromisoformat, dest="generated_on")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        candidate = None
-        if args.candidate:
-            with args.candidate.open(encoding="utf-8") as handle:
-                candidate = json.load(handle)
-        result = generate_walkthrough(
-            CandidateLedger(args.ledger),
-            args.artifact,
-            source_revision=args.source_revision,
-            candidate=candidate,
-            manifest=_load_manifest(args.manifest),
-            output_path=args.output,
-            generated_on=args.generated_on,
-        )
-    except (CandidateError, OSError, json.JSONDecodeError, WalkthroughError) as exc:
-        print(f"walkthrough: {exc}")
+        ledger = CandidateLedger(args.ledger)
+        if args.record_owner_review:
+            result = record_owner_review(
+                ledger, args.record_owner_review, reviewed_by=args.reviewed_by or ""
+            )
+        elif args.validate_owner_review:
+            result = validate_owner_review(ledger, args.validate_owner_review)
+        elif args.artifact and args.screenshots and args.output:
+            result = generate_walkthrough(
+                ledger,
+                args.artifact,
+                screenshots_path=args.screenshots,
+                output_path=args.output,
+                inventory_path=args.inventory_output,
+                source_revision=args.source_revision,
+                on_status=lambda value: print(f"walkthrough: {value}", file=sys.stderr),
+            )
+        else:
+            raise WalkthroughError("artifact, screenshots, and output are required")
+    except (CandidateError, OSError, WalkthroughError) as exc:
+        print(f"walkthrough: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0

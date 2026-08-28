@@ -722,16 +722,20 @@ THIRD_PARTY_WINDOW_SPECS: tuple[WindowSpec, ...] = (
 V2_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
 WARNING_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
 
-# Task 3.1: Spark is a weekly-only pool (the API's Spark ``secondary_window``
-# is always null — there is no 5-hour Spark window, unlike the cg5/cg1w or
-# third_party_* pairs above), so a single-window tuple is unioned onto
-# Codex's native five_hour/weekly windows purely for interactive alert
-# purposes. The window id ``sp1w`` is deliberately NOT ``weekly``: warning
+# Spark windows are unioned onto Codex's native windows purely for interactive
+# alert purposes. The window id ``sp1w`` is deliberately NOT ``weekly``: warning
 # lookup (:func:`warning_window_ids`) resolves by the raw snapshot name
 # ("Codex"), and _provider_is_empty keys off window id, so reusing the
 # native "weekly" id here would make Spark depletion indistinguishable from
 # native Codex weekly depletion.
 CODEX_SPARK_ALERT_SPECS: tuple[WindowSpec, ...] = (
+    WindowSpec(
+        "sp5h",
+        "session",
+        "spark_five_hour_percent_left",
+        reset_key="spark_five_hour_reset",
+        window_hours=5.0,
+    ),
     WindowSpec(
         "sp1w",
         "session",
@@ -752,6 +756,13 @@ WARNING_WINDOW_SPECS["Codex"] = (*WINDOW_SPECS["Codex"], *CODEX_SPARK_ALERT_SPEC
 # collapsing CODEX_SPARK_ALERT_SPECS onto this "weekly" id would collide
 # with native Codex's own "weekly" window id in the union above.
 CODEX_SPARK_WINDOW_SPECS: tuple[WindowSpec, ...] = (
+    WindowSpec(
+        "five_hour",
+        "session",
+        "spark_five_hour_percent_left",
+        reset_key="spark_five_hour_reset",
+        window_hours=5.0,
+    ),
     WindowSpec(
         "weekly",
         "session",
@@ -1044,6 +1055,8 @@ def _project_codex_spark_data(snapshot: ProviderSnapshot) -> dict:
     """
     data = snapshot.data if isinstance(snapshot.data, Mapping) else {}
     field_map = {
+        "spark_five_hour_percent_left": "five_hour_percent_left",
+        "spark_five_hour_reset": "five_hour_reset",
         "spark_weekly_percent_left": "weekly_percent_left",
         "spark_weekly_reset": "weekly_reset",
     }

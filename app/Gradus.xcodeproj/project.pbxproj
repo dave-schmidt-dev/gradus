@@ -135,6 +135,7 @@
 		A4F69ECFB284B0DC20C3EFD7 /* DevicePresenceCloud.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98B4FBEE1FE575C297ED2A0A /* DevicePresenceCloud.swift */; };
 		A5876D18D94654C7D06FDA3B /* DesignTokensTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DAFEC9CD08A27D977D11246 /* DesignTokensTests.swift */; };
 		A5AD8227DFFF38BECE770CAB /* DashboardXCUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E733250C46C9B37FE9BC74F /* DashboardXCUITests.swift */; };
+		E1A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift */; };
 		A6646E36F4CF419C88064C92 /* PublishCoordinatorSaveAndRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A74FD96A8FACB126615DC2A /* PublishCoordinatorSaveAndRetryTests.swift */; };
 		A84C8B76652D49AAD0024AD2 /* UITestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B26E72868E1308EF38915A6 /* UITestFixtures.swift */; };
 		A8BC4188E23E23E90BFD5919 /* ProviderRetryAccessibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 007AB014431BC4CBAE324BBA /* ProviderRetryAccessibilityTests.swift */; };
@@ -488,6 +489,7 @@
 		C65739F0A1AD5EF5B8322F3E /* BridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeTests.swift; sourceTree = "<group>"; };
 		C6BB112D29211092758C4A6A /* GradusMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GradusMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C7CEF22E360E7772B0118758 /* DensityLayoutXCUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DensityLayoutXCUITests.swift; sourceTree = "<group>"; };
+		E2A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalkthroughCaptureXCUITests.swift; sourceTree = "<group>"; };
 		C8C9A1A0989CAC73B0A89A75 /* densityLargePadPortraitExtraExtraExtraLarge.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densityLargePadPortraitExtraExtraExtraLarge.1.png; sourceTree = "<group>"; };
 		CB6D4E80E55036E625838581 /* exhaustedCompactCellsPad.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = exhaustedCompactCellsPad.1.png; sourceTree = "<group>"; };
 		CB856A4F5C7351FABBCA9E85 /* ProviderAttention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAttention.swift; sourceTree = "<group>"; };
@@ -789,6 +791,7 @@
 			children = (
 				2E733250C46C9B37FE9BC74F /* DashboardXCUITests.swift */,
 				C7CEF22E360E7772B0118758 /* DensityLayoutXCUITests.swift */,
+				E2A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift */,
 			);
 			path = GradusiOSUITests;
 			sourceTree = "<group>";
@@ -1683,6 +1686,7 @@
 			files = (
 				A5AD8227DFFF38BECE770CAB /* DashboardXCUITests.swift in Sources */,
 				76A832343DC8C29AAE7CA141 /* DensityLayoutXCUITests.swift in Sources */,
+				E1A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

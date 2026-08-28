@@ -19,8 +19,10 @@ def _codex_percent_left(window: dict[str, Any] | None) -> float | None:
         return None
 
 
-def _extract_spark_window(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Pull the weekly window for the GPT-5.3-Codex-Spark bucket.
+def _extract_spark_windows(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Pull duration-classified windows for the Spark bucket.
 
     Spark ships in a top-level ``additional_rate_limits`` array (sibling of
     ``rate_limit``), one element per named bucket. Prefer matching on
@@ -32,7 +34,7 @@ def _extract_spark_window(payload: dict[str, Any]) -> dict[str, Any] | None:
     """
     entries = payload.get("additional_rate_limits")
     if not isinstance(entries, list):
-        return None
+        return None, None
 
     by_feature: dict[str, Any] | None = None
     by_name: dict[str, Any] | None = None
@@ -46,15 +48,28 @@ def _extract_spark_window(payload: dict[str, Any]) -> dict[str, Any] | None:
 
     spark_entry = by_feature if by_feature is not None else by_name
     if spark_entry is None:
-        return None
+        return None, None
 
     rate_limit = spark_entry.get("rate_limit")
     if not isinstance(rate_limit, dict):
-        return None
-    primary_window = rate_limit.get("primary_window")
-    if not isinstance(primary_window, dict):
-        return None
-    return primary_window
+        return None, None
+    primary = rate_limit.get("primary_window")
+    secondary = rate_limit.get("secondary_window")
+    if not isinstance(primary, dict) and not isinstance(secondary, dict):
+        return None, None
+    if not any(
+        isinstance(window, dict) and isinstance(window.get("limit_window_seconds"), (int, float))
+        for window in (primary, secondary)
+    ):
+        # Older payloads exposed one unnamed Spark allowance; retain the
+        # historical weekly interpretation for that compatibility shape.
+        return None, primary if isinstance(primary, dict) else secondary
+    return _classify_codex_windows([primary, secondary])
+
+
+def _extract_spark_window(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Backward-compatible weekly Spark accessor."""
+    return _extract_spark_windows(payload)[1]
 
 
 def _classify_codex_windows(
