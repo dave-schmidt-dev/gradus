@@ -554,6 +554,108 @@ def read_workflow_template(client: ASCClient, workflow_id: str) -> dict[str, str
     return result
 
 
+def _read_toolchain_version(
+    client: ASCClient, resource_type: str, version_id: str
+) -> dict[str, str]:
+    """Read one Cloud toolchain version's allowlisted name and version."""
+
+    if not isinstance(version_id, str) or not version_id:
+        raise IdentityAllocationError(f"{resource_type}-id-invalid")
+    payload = client.request(
+        "GET",
+        f"/{resource_type}/{quote(version_id, safe='')}?fields[{resource_type}]=name,version",
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
+        raise IdentityAllocationError(f"{resource_type}-response-invalid")
+    record = payload["data"]
+    attributes = record.get("attributes")
+    if record.get("type") != resource_type or not isinstance(attributes, Mapping):
+        raise IdentityAllocationError(f"{resource_type}-response-invalid")
+    name = attributes.get("name")
+    if not isinstance(name, str) or not name:
+        raise IdentityAllocationError(f"{resource_type}-response-invalid")
+    resolved = {"id": version_id, "name": name}
+    # `version` is the concrete build Cloud resolves a floating name like
+    # "Latest Release" to. It is the field that actually answers the question,
+    # and it is absent whenever the name is already concrete -- so it is
+    # reported when present rather than required.
+    version = attributes.get("version")
+    if version is not None:
+        if not isinstance(version, str) or not version:
+            raise IdentityAllocationError(f"{resource_type}-response-invalid")
+        resolved["version"] = version
+    return resolved
+
+
+def _test_destinations(attributes: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Extract only the allowlisted fields from TEST workflow actions.
+
+    This is the missing half of "which toolchain does Cloud build with": the
+    Xcode and macOS versions describe the host, while `destination` describes
+    the simulator that actually renders a snapshot. A value such as
+    `ANY_IOS_SIMULATOR` means Cloud chooses the runtime from its own image
+    rather than honouring any pin in the repository -- which is precisely the
+    condition a local gate cannot reproduce.
+    """
+
+    actions = attributes.get("actions")
+    if not isinstance(actions, list):
+        raise IdentityAllocationError("workflow-actions-invalid")
+    tests: list[dict[str, Any]] = []
+    for action in actions:
+        if not isinstance(action, Mapping):
+            raise IdentityAllocationError("workflow-actions-invalid")
+        if action.get("actionType") != "TEST":
+            continue
+        entry: dict[str, Any] = {}
+        for key in ("name", "scheme", "platform", "destination"):
+            value = action.get(key)
+            if isinstance(value, str) and value:
+                entry[key] = value
+        configuration = action.get("testConfiguration")
+        if isinstance(configuration, Mapping):
+            kinds = configuration.get("testPlanName")
+            if isinstance(kinds, str) and kinds:
+                entry["testPlanName"] = kinds
+            devices = configuration.get("devices")
+            if isinstance(devices, list):
+                entry["deviceCount"] = len(devices)
+        tests.append(entry)
+    return tests
+
+
+def resolve_workflow_toolchain(client: ASCClient, workflow_id: str) -> dict[str, Any]:
+    """Resolve one workflow's opaque Xcode/macOS version IDs into named versions.
+
+    Read-only, and separate from `read_workflow_template` on purpose: that
+    function returns the opaque relationship IDs, which is exactly enough to
+    clone a workflow and useless for answering "which toolchain does Cloud
+    actually build with". That question decides whether a snapshot baseline
+    recorded on Cloud can ever match a local render, and it was unanswerable
+    until this mode existed.
+    """
+
+    template = read_workflow_template(client, workflow_id)
+    resolved: dict[str, Any] = {
+        "xcodeVersion": _read_toolchain_version(
+            client, "ciXcodeVersions", str(template["xcodeVersionId"])
+        ),
+        "macOsVersion": _read_toolchain_version(
+            client, "ciMacOsVersions", str(template["macOsVersionId"])
+        ),
+    }
+    payload = client.request(
+        "GET", f"/ciWorkflows/{quote(workflow_id, safe='')}?fields[ciWorkflows]=actions"
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
+        raise IdentityAllocationError("workflow-actions-response-invalid")
+    attributes = payload["data"].get("attributes")
+    if not isinstance(attributes, Mapping):
+        raise IdentityAllocationError("workflow-actions-response-invalid")
+    resolved["testDestinations"] = _test_destinations(attributes)
+    return resolved
+
+
 def create_internal_testflight_workflow(
     client: ASCClient, *, product_id: str, template_workflow_id: str
 ) -> dict[str, str]:
@@ -1133,6 +1235,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Print safe template metadata for creating a sibling Cloud workflow",
     )
     parser.add_argument(
+        "--resolve-workflow-toolchain",
+        metavar="WORKFLOW_ID",
+        help="Print the named Xcode and macOS versions one Cloud workflow builds with",
+    )
+    parser.add_argument(
         "--create-internal-testflight-workflow",
         action="store_true",
         help="Create the one locked, manual iOS internal-TestFlight workflow",
@@ -1192,6 +1299,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.list_cloud_products
         or args.list_product_workflows
         or args.read_workflow_template
+        or args.resolve_workflow_toolchain
         or args.create_internal_testflight_workflow
         or args.start_internal_testflight_build
         or args.build_run_status
@@ -1331,6 +1439,28 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         except IdentityAllocationError as exc:
             print(f"FAIL: workflow template failed ({exc})", file=sys.stderr)
+            return 1
+
+    if args.resolve_workflow_toolchain:
+        if (
+            args.ci_build_action_id
+            or args.output_dir
+            or args.ci_artifact_id
+            or args.list_result_bundles
+        ):
+            print("FAIL: toolchain resolution does not accept artifact options", file=sys.stderr)
+            return 1
+        try:
+            toolchain = resolve_workflow_toolchain(
+                ASCClient(make_token_provider()), args.resolve_workflow_toolchain
+            )
+            print(json.dumps(toolchain, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: toolchain resolution failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: toolchain resolution failed ({exc})", file=sys.stderr)
             return 1
 
     if args.create_internal_testflight_workflow:
@@ -1586,7 +1716,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     print(
-        "FAIL: --product, --list-workflows, --list-product-workflows, --list-cloud-products, --read-workflow-template, --list-result-bundles with an action ID, or an action ID with --output-dir is required",
+        "FAIL: --product, --list-workflows, --list-product-workflows, --list-cloud-products, --read-workflow-template, --resolve-workflow-toolchain, --list-result-bundles with an action ID, or an action ID with --output-dir is required",
         file=sys.stderr,
     )
     return 1

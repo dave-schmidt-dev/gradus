@@ -25,6 +25,7 @@ from allocate_identity import (
     read_build_run_status,
     read_marketing_version,
     read_workflow_template,
+    resolve_workflow_toolchain,
     start_internal_testflight_build,
     write_proof,
 )
@@ -822,3 +823,101 @@ def test_cli_rejects_conflicting_and_missing_arguments() -> None:
     assert main([]) == 1
     # Only action ID without output dir
     assert main(["--ci-build-action-id", "11111111-2222-3333-4444-555555555555"]) == 1
+
+
+def _toolchain_responses(*, xcode_version="26.7", macos_version=None):
+    """Workflow template, then the two version records it points at."""
+    template = {
+        "data": {
+            "type": "ciWorkflows",
+            "attributes": {"containerFilePath": "app/Gradus.xcodeproj", "clean": True},
+            "relationships": {
+                "repository": {"data": {"type": "scmRepositories", "id": "repo-1"}},
+                "xcodeVersion": {"data": {"type": "ciXcodeVersions", "id": "xcode-1"}},
+                "macOsVersion": {"data": {"type": "ciMacOsVersions", "id": "macos-1"}},
+            },
+        }
+    }
+    xcode_attributes = {"name": "Latest Release"}
+    if xcode_version is not None:
+        xcode_attributes["version"] = xcode_version
+    macos_attributes = {"name": "Latest Release"}
+    if macos_version is not None:
+        macos_attributes["version"] = macos_version
+    actions = {
+        "data": {
+            "type": "ciWorkflows",
+            "attributes": {
+                "actions": [
+                    {"actionType": "ARCHIVE", "scheme": "GradusiOS", "testDestinations": []},
+                    {
+                        "actionType": "TEST",
+                        "name": "Test - iOS",
+                        "scheme": "GradusiOS",
+                        "platform": "IOS",
+                        "destination": "ANY_IOS_SIMULATOR",
+                        "testConfiguration": {"devices": ["d1", "d2"]},
+                    },
+                ]
+            },
+        }
+    }
+    return [
+        template,
+        {"data": {"type": "ciXcodeVersions", "id": "xcode-1", "attributes": xcode_attributes}},
+        {"data": {"type": "ciMacOsVersions", "id": "macos-1", "attributes": macos_attributes}},
+        actions,
+    ]
+
+
+def test_resolve_workflow_toolchain_names_the_versions_behind_opaque_ids(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The point of the mode: turn an opaque ID into the concrete build Cloud uses."""
+    client = FixtureClient(_toolchain_responses())
+    assert resolve_workflow_toolchain(client, "workflow-1") == {
+        "xcodeVersion": {"id": "xcode-1", "name": "Latest Release", "version": "26.7"},
+        "macOsVersion": {"id": "macos-1", "name": "Latest Release"},
+        "testDestinations": [
+            {
+                "name": "Test - iOS",
+                "scheme": "GradusiOS",
+                "platform": "IOS",
+                "destination": "ANY_IOS_SIMULATOR",
+                "deviceCount": 2,
+            }
+        ],
+    }
+    assert client.paths[1:] == [
+        "/ciXcodeVersions/xcode-1?fields[ciXcodeVersions]=name,version",
+        "/ciMacOsVersions/macos-1?fields[ciMacOsVersions]=name,version",
+        "/ciWorkflows/workflow-1?fields[ciWorkflows]=actions",
+    ]
+
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient",
+        lambda provider: FixtureClient(_toolchain_responses()),
+    )
+    assert main(["--resolve-workflow-toolchain", "workflow-1"]) == 0
+    assert json.loads(capsys.readouterr().out)["xcodeVersion"]["version"] == "26.7"
+
+
+def test_resolve_workflow_toolchain_rejects_a_mistyped_version_record() -> None:
+    """A wrong resource type means the ID was resolved against the wrong collection."""
+    responses = _toolchain_responses()
+    responses[1] = {"data": {"type": "ciMacOsVersions", "attributes": {"name": "Latest Release"}}}
+    with pytest.raises(IdentityAllocationError, match="ciXcodeVersions-response-invalid"):
+        resolve_workflow_toolchain(FixtureClient(responses), "workflow-1")
+
+
+def test_resolve_workflow_toolchain_alone_is_a_recognised_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard for the --list-ci-builds class of bug: the flag must dispatch."""
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient",
+        lambda provider: FixtureClient(_toolchain_responses()),
+    )
+    assert main(["--resolve-workflow-toolchain", "workflow-1"]) == 0
