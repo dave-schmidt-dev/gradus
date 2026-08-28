@@ -2122,6 +2122,118 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
                     with self.assertRaises(PREPARE.BridgeError):
                         PREPARE._identity_proof(root, successor)
 
+    def _prepared_staged_successor(self, temporary: str) -> tuple[Path, PREPARE.CandidateContext]:
+        root, predecessor_context = self._fixture(temporary)
+        predecessor = "1.8.2-21"
+        workspace = root / ".release-state" / "candidates" / predecessor
+        workspace.mkdir(parents=True)
+        (workspace / "prepared.txt").write_text("prepared", encoding="utf-8")
+        (root / ".release-state" / "candidate.json").write_text(
+            json.dumps(
+                {
+                    "candidateId": predecessor,
+                    "state": "prepared",
+                    "marketingVersion": "1.8.2",
+                    "build": 21,
+                    "sourceSha256": "c" * 64,
+                    "projectSha256": "d" * 64,
+                    "artifactSha256": "e" * 64,
+                    "metadata": {"candidateWorkspace": str(workspace)},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / ".release-state" / "allocated-ios.json").write_text(
+            json.dumps(
+                {
+                    "candidateId": predecessor,
+                    "state": "allocated-but-unfrozen",
+                    "marketingVersion": "1.8.2",
+                    "build": 21,
+                    "allocatedAt": "2026-08-21T14:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        manifest = json.loads(predecessor_context.manifest_path.read_text())
+        manifest["candidateId"] = "1.8.2-22"
+        manifest["release"]["buildNumber"] = "22"
+        replacement = predecessor_context.manifest_path.parent.parent / "1.8.2-22" / "manifest.json"
+        replacement.parent.mkdir()
+        package = (
+            json.dumps({"candidateId": predecessor, "result": "staged"}, sort_keys=True).encode()
+            + b"\n"
+        )
+        (replacement.parent.parent / predecessor / "approval-package.json").write_bytes(package)
+        identity = {
+            "allocation": {
+                "productKey": "gradus-ios",
+                "requestedMarketingVersion": "1.8.2",
+                "allocatedBuildNumber": 22,
+                "remoteHighestMarketingVersion": "1.8.0",
+                "remoteHighestBuildNumber": 20,
+                "observedAt": "2026-08-21T15:02:30Z",
+                "result": "allocated",
+            },
+            "reuseAuthorization": {
+                "kind": "staged-preupload-correction",
+                "priorCandidateId": predecessor,
+                "priorStagePackageSha256": hashlib.sha256(package).hexdigest(),
+            },
+        }
+        identity_path = replacement.parent / "identity-allocation.json"
+        identity_path.write_text(json.dumps(identity), encoding="utf-8")
+        manifest["identityAllocation"] = {
+            "proofSha256": hashlib.sha256(identity_path.read_bytes()).hexdigest()
+        }
+        replacement.write_text(json.dumps(manifest), encoding="utf-8")
+        return root, PREPARE.load_context(replacement, git_common_dir=replacement.parents[4])
+
+    def test_prepared_predecessor_rollover_archives_and_stages_exactly(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, successor = self._prepared_staged_successor(temporary)
+            self.assertEqual(PREPARE.reconcile_assigned_candidate(root, successor), "1.8.2-21")
+            archived = root / ".release-state" / "archived" / "1.8.2-21"
+            self.assertEqual(
+                json.loads((archived / "candidate.json").read_text())["state"], "superseded"
+            )
+            self.assertTrue((archived / "candidate-workspace" / "prepared.txt").is_file())
+            self.assertTrue(
+                (
+                    root / ".release-state" / ".rollover" / "1.8.2-21" / "allocated-ios.json"
+                ).is_file()
+            )
+            PREPARE._finalize_staged_allocations(root)
+            self.assertTrue((archived / "allocated-ios.json").is_file())
+
+    def test_prepared_predecessor_rollover_rejects_tampered_authorization_without_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, successor = self._prepared_staged_successor(temporary)
+            identity_path = successor.manifest_path.parent / "identity-allocation.json"
+            identity = json.loads(identity_path.read_text())
+            identity["reuseAuthorization"]["priorStagePackageSha256"] = "0" * 64
+            identity_path.write_text(json.dumps(identity), encoding="utf-8")
+            ledger_before = (root / ".release-state" / "candidate.json").read_bytes()
+            with self.assertRaises(PREPARE.BridgeError):
+                PREPARE.reconcile_assigned_candidate(root, successor)
+            self.assertEqual(
+                (root / ".release-state" / "candidate.json").read_bytes(), ledger_before
+            )
+
+    def test_prepared_predecessor_rollover_retry_is_idempotent_after_archive_interruption(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, successor = self._prepared_staged_successor(temporary)
+            self.assertEqual(PREPARE.reconcile_assigned_candidate(root, successor), "1.8.2-21")
+            # A retry after staging/finalization may still have the prepared ledger.
+            PREPARE._finalize_staged_allocations(root)
+            self.assertIsNone(PREPARE.reconcile_assigned_candidate(root, successor))
+            self.assertFalse((root / ".release-state" / "candidate.json").exists())
+            PREPARE._finalize_staged_allocations(root)
+
     def test_failed_preupload_successor_rejects_identity_allocation_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, context = self._fixture(temporary)

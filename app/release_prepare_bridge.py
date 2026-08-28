@@ -16,6 +16,7 @@ import json
 import os
 import plistlib
 import re
+import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -348,6 +349,125 @@ def _authorized_failed_preupload_predecessor(context: CandidateContext) -> str |
     return predecessor
 
 
+def _authorized_staged_preupload_predecessor(context: CandidateContext) -> str | None:
+    """Return the exact predecessor authorized by a staged correction proof."""
+
+    if context.identity_allocation_proof_sha256 is None:
+        return None
+    central_path = context.manifest_path.parent / "identity-allocation.json"
+    central_bytes, central = _load_json_bytes(central_path)
+    if hashlib.sha256(central_bytes).hexdigest() != context.identity_allocation_proof_sha256:
+        raise BridgeError("identity-proof-central-mismatch")
+    authorization = central.get("reuseAuthorization")
+    if (
+        not isinstance(authorization, Mapping)
+        or authorization.get("kind") != "staged-preupload-correction"
+    ):
+        return None
+    predecessor = authorization.get("priorCandidateId")
+    prior_hash = authorization.get("priorStagePackageSha256")
+    if (
+        not isinstance(predecessor, str)
+        or predecessor != f"{context.marketing_version}-{context.build_number - 1}"
+        or _CANDIDATE.fullmatch(predecessor) is None
+        or not isinstance(prior_hash, str)
+        or _HEX64.fullmatch(prior_hash) is None
+    ):
+        return None
+    return predecessor
+
+
+def _archive_prepared_predecessor(
+    root: Path,
+    ledger_path: Path,
+    allocation_path: Path,
+    ledger: Mapping[str, Any],
+    predecessor: str,
+) -> str:
+    """Recoverably archive one prepared predecessor authorized by central proof."""
+
+    version = ledger.get("marketingVersion")
+    build = ledger.get("build")
+    metadata = ledger.get("metadata")
+    workspace_value = metadata.get("candidateWorkspace") if isinstance(metadata, Mapping) else None
+    if (
+        ledger.get("candidateId") != predecessor
+        or ledger.get("state") != "prepared"
+        or not isinstance(version, str)
+        or _SEMVER.fullmatch(version) is None
+        or predecessor != f"{version}-{build}"
+        or isinstance(build, bool)
+        or not isinstance(build, int)
+        or not isinstance(workspace_value, str)
+    ):
+        raise BridgeError("prepared-candidate-allocation-mismatch")
+    workspace = Path(workspace_value)
+    expected_workspace = (root / ".release-state" / "candidates" / predecessor).resolve()
+    if (
+        workspace.is_symlink()
+        or not workspace.is_dir()
+        or workspace.resolve() != expected_workspace
+    ):
+        raise BridgeError("prepared-candidate-allocation-mismatch")
+    archived_root = root / ".release-state" / "archived" / predecessor
+    archived_workspace = archived_root / "candidate-workspace"
+    archived_ledger = archived_root / "candidate.json"
+    archived_allocation = archived_root / "allocated-ios.json"
+    allocation = None
+    if allocation_path.is_file() and not allocation_path.is_symlink():
+        allocation = _load_json(allocation_path)
+    elif archived_allocation.is_file() and not archived_allocation.is_symlink():
+        allocation = _load_json(archived_allocation)
+    if (
+        allocation is None
+        or allocation.get("candidateId") != predecessor
+        or allocation.get("state") != "allocated-but-unfrozen"
+        or not _allocation_matches(allocation, candidate=predecessor, version=version, build=build)
+    ):
+        raise BridgeError("prepared-candidate-allocation-mismatch")
+    if archived_root.exists():
+        if (
+            not archived_ledger.is_file()
+            or _load_json(archived_ledger).get("state") != "superseded"
+        ):
+            raise BridgeError("prepared-candidate-archive-mismatch")
+        if not archived_workspace.is_dir():
+            raise BridgeError("prepared-candidate-archive-mismatch")
+    else:
+        archived_root.mkdir(mode=0o700, parents=True)
+        try:
+            shutil.copytree(workspace, archived_workspace)
+            archived_record = dict(ledger)
+            archived_record["state"] = "superseded"
+            archived_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+            archived_metadata.update(
+                {
+                    "candidateWorkspace": str(archived_workspace),
+                    "archivePath": str(archived_root),
+                    "supersededReason": f"staged pre-upload correction for {predecessor}",
+                    "supersededAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
+            )
+            archived_record["metadata"] = archived_metadata
+            _write_json(archived_ledger, archived_record)
+        except Exception:
+            shutil.rmtree(archived_root, ignore_errors=True)
+            raise
+
+    if allocation_path.exists():
+        staged = root / ".release-state" / ".rollover" / predecessor / "allocated-ios.json"
+        if staged.exists():
+            if staged.is_symlink() or staged.read_bytes() != allocation_path.read_bytes():
+                raise BridgeError("staged-allocation-mismatch")
+            allocation_path.unlink()
+        else:
+            staged.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
+            os.replace(allocation_path, staged)
+    if ledger_path.exists():
+        ledger_path.unlink()
+    return predecessor
+
+
 def _archive_authorized_unfrozen_predecessor(
     root: Path,
     allocation_path: Path,
@@ -444,6 +564,13 @@ def reconcile_assigned_candidate(root: Path, context: CandidateContext) -> str |
         ):
             raise BridgeError("central-ledger-mismatch")
         return None
+    if ledger.get("state") == "prepared":
+        predecessor = _authorized_staged_preupload_predecessor(context)
+        if predecessor != ledger.get("candidateId"):
+            raise BridgeError("legacy-candidate-not-rollover-safe")
+        return _archive_prepared_predecessor(
+            root, ledger_path, allocation_path, ledger, predecessor
+        )
     if ledger.get("state") != "assigned":
         raise BridgeError("legacy-candidate-not-rollover-safe")
 
