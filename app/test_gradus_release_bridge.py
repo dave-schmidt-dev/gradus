@@ -2234,6 +2234,68 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
             self.assertFalse((root / ".release-state" / "candidate.json").exists())
             PREPARE._finalize_staged_allocations(root)
 
+    def _workspace_handoff_fixture(
+        self, temporary: str
+    ) -> tuple[Path, PREPARE.CandidateContext, PREPARE.PreparedArtifact]:
+        root, context = self._fixture(temporary)
+        workspace = root / ".release-state" / "candidates" / context.candidate_id
+        workspace.mkdir(parents=True)
+        ipa = workspace / "GradusiOS.ipa"
+        ipa.write_bytes(b"prepared-ipa")
+        (workspace / "walkthrough.html").write_text("<html>proof</html>", encoding="utf-8")
+        digest = hashlib.sha256(ipa.read_bytes()).hexdigest()
+        (root / ".release-state" / "candidate.json").write_text(
+            json.dumps(
+                {
+                    "candidateId": context.candidate_id,
+                    "state": "prepared",
+                    "marketingVersion": context.marketing_version,
+                    "build": context.build_number,
+                    "sourceSha256": "c" * 64,
+                    "projectSha256": "d" * 64,
+                    "artifactSha256": digest,
+                    "metadata": {"candidateWorkspace": str(workspace), "ipaPath": str(ipa)},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return root, context, PREPARE.PreparedArtifact(ipa, digest)
+
+    def test_prepared_workspace_handoff_copies_exact_candidate_bound_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context, artifact = self._workspace_handoff_fixture(temporary)
+            PREPARE._handoff_prepared_workspace(root, context, artifact)
+            destination = context.manifest_path.parent / "candidate-workspace"
+            self.assertEqual((destination / "walkthrough.html").read_text(), "<html>proof</html>")
+            self.assertEqual((destination / "GradusiOS.ipa").read_bytes(), b"prepared-ipa")
+
+    def test_prepared_workspace_handoff_rejects_tampered_existing_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context, artifact = self._workspace_handoff_fixture(temporary)
+            PREPARE._handoff_prepared_workspace(root, context, artifact)
+            destination = context.manifest_path.parent / "candidate-workspace"
+            (destination / "walkthrough.html").write_text("tampered", encoding="utf-8")
+            with self.assertRaises(PREPARE.BridgeError):
+                PREPARE._handoff_prepared_workspace(root, context, artifact)
+
+    def test_prepared_workspace_handoff_is_idempotent_for_identical_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context, artifact = self._workspace_handoff_fixture(temporary)
+            PREPARE._handoff_prepared_workspace(root, context, artifact)
+            destination = context.manifest_path.parent / "candidate-workspace"
+            before = sorted(
+                (p.relative_to(destination), p.read_bytes())
+                for p in destination.rglob("*")
+                if p.is_file()
+            )
+            PREPARE._handoff_prepared_workspace(root, context, artifact)
+            after = sorted(
+                (p.relative_to(destination), p.read_bytes())
+                for p in destination.rglob("*")
+                if p.is_file()
+            )
+            self.assertEqual(before, after)
+
     def test_failed_preupload_successor_rejects_identity_allocation_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, context = self._fixture(temporary)

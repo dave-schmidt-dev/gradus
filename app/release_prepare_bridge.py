@@ -685,6 +685,65 @@ def prepared_artifact(root: Path, context: CandidateContext) -> PreparedArtifact
     return PreparedArtifact(ipa, str(ledger["artifactSha256"]))
 
 
+def _handoff_prepared_workspace(
+    root: Path, context: CandidateContext, artifact: PreparedArtifact
+) -> None:
+    """Copy the exact legacy prepared workspace into the central candidate record."""
+
+    ledger = _load_json(root / ".release-state" / "candidate.json")
+    metadata = ledger.get("metadata")
+    workspace_value = metadata.get("candidateWorkspace") if isinstance(metadata, Mapping) else None
+    if (
+        ledger.get("candidateId") != context.candidate_id
+        or ledger.get("state") != "prepared"
+        or not isinstance(workspace_value, str)
+    ):
+        raise BridgeError("prepared-workspace-binding-mismatch")
+    workspace = Path(workspace_value)
+    expected_workspace = (root / ".release-state" / "candidates" / context.candidate_id).resolve()
+    if (
+        workspace.is_symlink()
+        or not workspace.is_dir()
+        or workspace.resolve() != expected_workspace
+    ):
+        raise BridgeError("prepared-workspace-binding-mismatch")
+    try:
+        artifact.ipa_path.resolve().relative_to(workspace.resolve())
+    except ValueError as exc:
+        raise BridgeError("prepared-artifact-path-mismatch") from exc
+
+    destination = context.manifest_path.parent / "candidate-workspace"
+
+    def validate_tree(path: Path) -> None:
+        if path.is_symlink():
+            raise BridgeError("prepared-workspace-symlink")
+        for entry in path.iterdir():
+            if entry.is_symlink():
+                raise BridgeError("prepared-workspace-symlink")
+            if entry.is_dir():
+                validate_tree(entry)
+
+    validate_tree(workspace)
+    if destination.exists():
+        if destination.is_symlink() or not destination.is_dir():
+            raise BridgeError("central-workspace-mismatch")
+        validate_tree(destination)
+        source_files = sorted(
+            path.relative_to(workspace) for path in workspace.rglob("*") if path.is_file()
+        )
+        target_files = sorted(
+            path.relative_to(destination) for path in destination.rglob("*") if path.is_file()
+        )
+        if source_files != target_files or any(
+            (workspace / relative).read_bytes() != (destination / relative).read_bytes()
+            for relative in source_files
+        ):
+            raise BridgeError("central-workspace-mismatch")
+        return
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shutil.copytree(workspace, destination)
+
+
 def _run_checked(
     argv: Sequence[str], *, capture_output: bool = False
 ) -> subprocess.CompletedProcess[bytes]:
@@ -1098,6 +1157,7 @@ def execute(
         if result.returncode != 0:
             raise BridgeError("legacy-preparation-failed")
         _finalize_staged_allocations(root)
+        _handoff_prepared_workspace(root, context, prepared_artifact(root, context))
 
     artifact = prepared_artifact(root, context)
     if operation == "all":
