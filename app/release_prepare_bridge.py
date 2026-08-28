@@ -255,7 +255,8 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
             raise BridgeError("identity-proof-central-mismatch")
         if (
             not isinstance(authorization, Mapping)
-            or authorization.get("kind") != "failed-preupload-correction"
+            or authorization.get("kind")
+            not in {"failed-preupload-correction", "staged-preupload-correction"}
             or authorization.get("priorCandidateId")
             != f"{context.marketing_version}-{context.build_number - 1}"
             or allocation.get("productKey") != PRODUCT
@@ -270,6 +271,25 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
             or not isinstance(allocation.get("observedAt"), str)
         ):
             raise BridgeError("identity-proof-central-mismatch")
+        if authorization.get("kind") == "staged-preupload-correction":
+            prior_candidate = str(authorization["priorCandidateId"])
+            prior_package = (
+                context.manifest_path.parent.parent / prior_candidate / "approval-package.json"
+            )
+            prior_stage_hash = authorization.get("priorStagePackageSha256")
+            if (
+                not isinstance(prior_stage_hash, str)
+                or _HEX64.fullmatch(prior_stage_hash) is None
+                or prior_package.is_symlink()
+                or not prior_package.is_file()
+            ):
+                raise BridgeError("identity-proof-central-mismatch")
+            try:
+                prior_package_bytes = prior_package.read_bytes()
+            except OSError as exc:
+                raise BridgeError("identity-proof-central-mismatch") from exc
+            if hashlib.sha256(prior_package_bytes).hexdigest() != prior_stage_hash:
+                raise BridgeError("identity-proof-central-mismatch")
         proof = {
             "proofVersion": "1.0.0",
             "operationClass": "identityAllocation",

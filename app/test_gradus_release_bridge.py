@@ -2063,6 +2063,65 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
             self.assertEqual(proof["remoteHighestBuildNumber"], 20)
             self.assertEqual(proof["remoteHighestMarketingVersion"], "1.8.1")
 
+    def test_staged_preupload_successor_requires_matching_prior_stage_package(self) -> None:
+        for package_case in ("valid", "missing", "tampered"):
+            with (
+                self.subTest(package_case=package_case),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root, context = self._fixture(temporary)
+                manifest = json.loads(context.manifest_path.read_text())
+                manifest["candidateId"] = "1.8.2-22"
+                manifest["release"]["buildNumber"] = "22"
+                replacement = context.manifest_path.parent.parent / "1.8.2-22" / "manifest.json"
+                replacement.parent.mkdir()
+                prior_dir = context.manifest_path.parent
+                package = {
+                    "formatVersion": 1,
+                    "proofSchema": "release.approval-package.v1",
+                    "result": "staged",
+                    "candidateId": "1.8.2-21",
+                }
+                package_bytes = (
+                    json.dumps(package, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+                )
+                prior_package = prior_dir / "approval-package.json"
+                prior_package.write_bytes(package_bytes)
+                allocation = {
+                    "productKey": "gradus-ios",
+                    "requestedMarketingVersion": "1.8.2",
+                    "allocatedBuildNumber": 22,
+                    "remoteHighestMarketingVersion": "1.8.0",
+                    "remoteHighestBuildNumber": 20,
+                    "observedAt": "2026-08-21T15:02:30Z",
+                    "result": "allocated",
+                }
+                authorization = {
+                    "kind": "staged-preupload-correction",
+                    "priorCandidateId": "1.8.2-21",
+                    "priorStagePackageSha256": hashlib.sha256(package_bytes).hexdigest(),
+                }
+                if package_case == "missing":
+                    prior_package.unlink()
+                elif package_case == "tampered":
+                    prior_package.write_bytes(b"tampered\n")
+                allocation_path = replacement.parent / "identity-allocation.json"
+                allocation_path.write_text(
+                    json.dumps({"allocation": allocation, "reuseAuthorization": authorization}),
+                    encoding="utf-8",
+                )
+                manifest["identityAllocation"] = {
+                    "proofSha256": hashlib.sha256(allocation_path.read_bytes()).hexdigest()
+                }
+                replacement.write_text(json.dumps(manifest), encoding="utf-8")
+                successor = PREPARE.load_context(replacement, git_common_dir=replacement.parents[4])
+                if package_case == "valid":
+                    proof = PREPARE._identity_proof(root, successor)
+                    self.assertEqual(proof["buildNumber"], 22)
+                else:
+                    with self.assertRaises(PREPARE.BridgeError):
+                        PREPARE._identity_proof(root, successor)
+
     def test_failed_preupload_successor_rejects_identity_allocation_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, context = self._fixture(temporary)
