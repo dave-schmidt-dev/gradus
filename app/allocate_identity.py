@@ -887,6 +887,44 @@ def list_ci_builds(client: ASCClient, build_run_id: str) -> list[dict[str, str]]
     return builds
 
 
+def _pre_release_version_id(item: Any) -> str | None:
+    """Read one build's preReleaseVersion linkage id, or None when absent."""
+
+    relationships = item.get("relationships") if isinstance(item, Mapping) else None
+    relation = (
+        relationships.get("preReleaseVersion") if isinstance(relationships, Mapping) else None
+    )
+    data = relation.get("data") if isinstance(relation, Mapping) else None
+    if data is None:
+        return None
+    identifier = data.get("id") if isinstance(data, Mapping) else None
+    if not isinstance(identifier, str) or not identifier:
+        raise IdentityAllocationError("build-response-invalid")
+    return identifier
+
+
+def _marketing_versions(included: Any) -> dict[str, str]:
+    """Index the sideloaded preReleaseVersions by id so builds can name their train."""
+
+    if included is None:
+        return {}
+    if not isinstance(included, list):
+        raise IdentityAllocationError("build-response-invalid")
+    versions: dict[str, str] = {}
+    for entry in included:
+        if not isinstance(entry, Mapping) or entry.get("type") != "preReleaseVersions":
+            continue
+        identifier = entry.get("id")
+        attributes = entry.get("attributes")
+        version = attributes.get("version") if isinstance(attributes, Mapping) else None
+        if not isinstance(identifier, str) or not identifier:
+            raise IdentityAllocationError("build-response-invalid")
+        if not isinstance(version, str) or not version:
+            raise IdentityAllocationError("build-response-invalid")
+        versions[identifier] = version
+    return versions
+
+
 def find_ios_testflight_build(client: ASCClient, build_number: str) -> list[dict[str, str]]:
     """Resolve a Cloud build number through the fixed Gradus iOS app relation."""
 
@@ -896,10 +934,12 @@ def find_ios_testflight_build(client: ASCClient, build_number: str) -> list[dict
     payload = client.request(
         "GET",
         f"/builds?filter[app]={quote(app_id, safe='')}&filter[version]={quote(build_number, safe='')}&"
-        "fields[builds]=version,processingState,buildAudienceType&limit=50",
+        "fields[builds]=version,processingState,buildAudienceType,preReleaseVersion&"
+        "include=preReleaseVersion&fields[preReleaseVersions]=version&limit=50",
     )
     if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
         raise IdentityAllocationError("build-response-invalid")
+    marketing = _marketing_versions(payload.get("included"))
     results: list[dict[str, str]] = []
     for item in payload["data"]:
         attributes = item.get("attributes") if isinstance(item, Mapping) else None
@@ -911,14 +951,18 @@ def find_ios_testflight_build(client: ASCClient, build_number: str) -> list[dict
             isinstance(value, str) and value for value in (build_id, version, state, audience)
         ):
             raise IdentityAllocationError("build-response-invalid")
-        results.append(
-            {
-                "buildId": build_id,
-                "buildNumber": version,
-                "processingState": state,
-                "distributionAudience": audience,
-            }
-        )
+        record = {
+            "buildId": build_id,
+            "buildNumber": version,
+            "processingState": state,
+            "distributionAudience": audience,
+        }
+        pre_release = _pre_release_version_id(item)
+        if pre_release is not None:
+            if pre_release not in marketing:
+                raise IdentityAllocationError("build-response-invalid")
+            record["marketingVersion"] = marketing[pre_release]
+        results.append(record)
     return results
 
 
@@ -1584,6 +1628,16 @@ def main(argv: list[str] | None = None) -> int:
         ):
             print("FAIL: CI build listing does not accept artifact options", file=sys.stderr)
             return 1
+        try:
+            builds = list_ci_builds(ASCClient(make_token_provider()), args.list_ci_builds)
+            print(json.dumps(builds, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: CI build listing failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: CI build listing failed ({exc})", file=sys.stderr)
+            return 1
 
     if args.find_ios_testflight_build:
         try:
@@ -1608,19 +1662,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         except IdentityAllocationError as exc:
             print(f"FAIL: build binding failed ({exc})", file=sys.stderr)
-            return 1
-        except IdentityAllocationError as exc:
-            print(f"FAIL: build lookup failed ({exc})", file=sys.stderr)
-            return 1
-        try:
-            builds = list_ci_builds(ASCClient(make_token_provider()), args.list_ci_builds)
-            print(json.dumps(builds, sort_keys=True, separators=(",", ":")))
-            return 0
-        except ASCError as exc:
-            print(f"FAIL: CI build listing failed ({exc.outcome.error_class})", file=sys.stderr)
-            return 1
-        except IdentityAllocationError as exc:
-            print(f"FAIL: CI build listing failed ({exc})", file=sys.stderr)
             return 1
 
     if args.assign_internal_testflight_build or args.inspect_internal_testflight_build:

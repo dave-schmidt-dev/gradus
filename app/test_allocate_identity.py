@@ -662,6 +662,67 @@ def test_find_ios_testflight_build_binds_the_number_to_the_fixed_app() -> None:
     ]
 
 
+def test_find_ios_testflight_build_names_the_marketing_version_behind_the_number() -> None:
+    client = FixtureClient(
+        [
+            {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+            {
+                "data": [
+                    {
+                        "id": "build-12",
+                        "attributes": {
+                            "version": "12",
+                            "processingState": "VALID",
+                            "buildAudienceType": "INTERNAL_ONLY",
+                        },
+                        "relationships": {"preReleaseVersion": {"data": {"id": "train-190"}}},
+                    }
+                ],
+                "included": [
+                    {
+                        "type": "preReleaseVersions",
+                        "id": "train-190",
+                        "attributes": {"version": "1.9.0"},
+                    }
+                ],
+            },
+        ]
+    )
+    assert find_ios_testflight_build(client, "12") == [
+        {
+            "buildId": "build-12",
+            "buildNumber": "12",
+            "processingState": "VALID",
+            "distributionAudience": "INTERNAL_ONLY",
+            "marketingVersion": "1.9.0",
+        }
+    ]
+
+
+def test_find_ios_testflight_build_rejects_a_dangling_version_linkage() -> None:
+    client = FixtureClient(
+        [
+            {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+            {
+                "data": [
+                    {
+                        "id": "build-12",
+                        "attributes": {
+                            "version": "12",
+                            "processingState": "VALID",
+                            "buildAudienceType": "INTERNAL_ONLY",
+                        },
+                        "relationships": {"preReleaseVersion": {"data": {"id": "train-190"}}},
+                    }
+                ],
+                "included": [],
+            },
+        ]
+    )
+    with pytest.raises(IdentityAllocationError, match="build-response-invalid"):
+        find_ios_testflight_build(client, "12")
+
+
 def test_inspect_testflight_build_app_returns_only_fixed_app_membership() -> None:
     client = FixtureClient(
         [
@@ -909,6 +970,42 @@ def test_resolve_workflow_toolchain_rejects_a_mistyped_version_record() -> None:
     responses[1] = {"data": {"type": "ciMacOsVersions", "attributes": {"name": "Latest Release"}}}
     with pytest.raises(IdentityAllocationError, match="ciXcodeVersions-response-invalid"):
         resolve_workflow_toolchain(FixtureClient(responses), "workflow-1")
+
+
+def test_list_ci_builds_alone_dispatches_instead_of_falling_through(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The flag validated its arguments and then reached no dispatch at all."""
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient",
+        lambda provider: FixtureClient(
+            [
+                {
+                    "data": [
+                        {
+                            "id": "build-24",
+                            "attributes": {
+                                "version": "24",
+                                "processingState": "PROCESSING",
+                                "buildAudienceType": "INTERNAL_ONLY",
+                            },
+                        }
+                    ]
+                }
+            ]
+        ),
+    )
+    assert main(["--list-ci-builds", "run-1"]) == 0
+    assert json.loads(capsys.readouterr().out) == [
+        {
+            "buildId": "build-24",
+            "buildNumber": "24",
+            "processingState": "PROCESSING",
+            "distributionAudience": "INTERNAL_ONLY",
+        }
+    ]
 
 
 def test_resolve_workflow_toolchain_alone_is_a_recognised_action(
