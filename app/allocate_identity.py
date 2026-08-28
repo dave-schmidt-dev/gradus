@@ -966,6 +966,47 @@ def find_ios_testflight_build(client: ASCClient, build_number: str) -> list[dict
     return results
 
 
+def read_testflight_build(client: ASCClient, build_id: str) -> dict[str, str]:
+    """Read one TestFlight build by id, whichever app it belongs to."""
+
+    if not isinstance(build_id, str) or not build_id:
+        raise IdentityAllocationError("build-id-invalid")
+    payload = client.request(
+        "GET",
+        f"/builds/{quote(build_id, safe='')}?"
+        "fields[builds]=version,processingState,buildAudienceType,uploadedDate,expired,"
+        "preReleaseVersion&include=preReleaseVersion&fields[preReleaseVersions]=version",
+    )
+    data = payload.get("data") if isinstance(payload, Mapping) else None
+    attributes = data.get("attributes") if isinstance(data, Mapping) else None
+    if not isinstance(data, Mapping) or not isinstance(attributes, Mapping):
+        raise IdentityAllocationError("build-response-invalid")
+    record: dict[str, str] = {}
+    for source, key in (
+        ("version", "buildNumber"),
+        ("processingState", "processingState"),
+        ("buildAudienceType", "distributionAudience"),
+        ("uploadedDate", "uploadedDate"),
+    ):
+        value = attributes.get(source)
+        if not isinstance(value, str) or not value:
+            raise IdentityAllocationError("build-response-invalid")
+        record[key] = value
+    record["buildId"] = build_id
+    expired = attributes.get("expired")
+    if expired is not None:
+        if not isinstance(expired, bool):
+            raise IdentityAllocationError("build-response-invalid")
+        record["expired"] = "true" if expired else "false"
+    marketing = _marketing_versions(payload.get("included"))
+    pre_release = _pre_release_version_id(data)
+    if pre_release is not None:
+        if pre_release not in marketing:
+            raise IdentityAllocationError("build-response-invalid")
+        record["marketingVersion"] = marketing[pre_release]
+    return record
+
+
 def inspect_testflight_build_app(client: ASCClient, build_id: str) -> dict[str, bool | str]:
     """Check whether one TestFlight build belongs to the fixed Gradus iOS app."""
 
@@ -1322,6 +1363,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Resolve an iOS TestFlight build number through the fixed Gradus app",
     )
     parser.add_argument(
+        "--read-testflight-build",
+        metavar="BUILD_ID",
+        help="Print safe state for one TestFlight build, whichever app owns it",
+    )
+    parser.add_argument(
         "--inspect-testflight-build-app",
         metavar="BUILD_ID",
         help="Print whether one TestFlight build belongs to the fixed Gradus iOS app",
@@ -1350,6 +1396,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.list_workflow_build_runs
         or args.list_ci_builds
         or args.find_ios_testflight_build
+        or args.read_testflight_build
         or args.inspect_testflight_build_app
         or args.assign_internal_testflight_build
         or args.inspect_internal_testflight_build
@@ -1648,6 +1695,20 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except ASCError as exc:
             print(f"FAIL: build lookup failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+
+    if args.read_testflight_build:
+        try:
+            record = read_testflight_build(
+                ASCClient(make_token_provider()), args.read_testflight_build
+            )
+            print(json.dumps(record, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: build read failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: build read failed ({exc})", file=sys.stderr)
             return 1
 
     if args.inspect_testflight_build_app:

@@ -24,6 +24,7 @@ from allocate_identity import (
     make_proof,
     read_build_run_status,
     read_marketing_version,
+    read_testflight_build,
     read_workflow_template,
     resolve_workflow_toolchain,
     start_internal_testflight_build,
@@ -721,6 +722,87 @@ def test_find_ios_testflight_build_rejects_a_dangling_version_linkage() -> None:
     )
     with pytest.raises(IdentityAllocationError, match="build-response-invalid"):
         find_ios_testflight_build(client, "12")
+
+
+def test_read_testflight_build_reports_upload_date_and_train() -> None:
+    """Provenance needs the upload date: a linkage alone cannot date a build."""
+    client = FixtureClient(
+        [
+            {
+                "data": {
+                    "id": "build-61",
+                    "attributes": {
+                        "version": "61",
+                        "processingState": "VALID",
+                        "buildAudienceType": "INTERNAL_ONLY",
+                        "uploadedDate": "2026-08-27T16:40:49-07:00",
+                        "expired": False,
+                    },
+                    "relationships": {"preReleaseVersion": {"data": {"id": "train-190"}}},
+                },
+                "included": [
+                    {
+                        "type": "preReleaseVersions",
+                        "id": "train-190",
+                        "attributes": {"version": "1.9.0"},
+                    }
+                ],
+            }
+        ]
+    )
+    assert read_testflight_build(client, "build-61") == {
+        "buildId": "build-61",
+        "buildNumber": "61",
+        "processingState": "VALID",
+        "distributionAudience": "INTERNAL_ONLY",
+        "uploadedDate": "2026-08-27T16:40:49-07:00",
+        "expired": "false",
+        "marketingVersion": "1.9.0",
+    }
+
+
+def test_read_testflight_build_rejects_a_build_missing_its_upload_date() -> None:
+    client = FixtureClient(
+        [
+            {
+                "data": {
+                    "id": "build-61",
+                    "attributes": {
+                        "version": "61",
+                        "processingState": "VALID",
+                        "buildAudienceType": "INTERNAL_ONLY",
+                    },
+                }
+            }
+        ]
+    )
+    with pytest.raises(IdentityAllocationError, match="build-response-invalid"):
+        read_testflight_build(client, "build-61")
+
+
+def test_read_testflight_build_alone_is_a_recognised_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    monkeypatch.setattr(
+        "allocate_identity.ASCClient",
+        lambda provider: FixtureClient(
+            [
+                {
+                    "data": {
+                        "id": "build-61",
+                        "attributes": {
+                            "version": "61",
+                            "processingState": "VALID",
+                            "buildAudienceType": "INTERNAL_ONLY",
+                            "uploadedDate": "2026-08-27T16:40:49-07:00",
+                        },
+                    }
+                }
+            ]
+        ),
+    )
+    assert main(["--read-testflight-build", "build-61"]) == 0
 
 
 def test_inspect_testflight_build_app_returns_only_fixed_app_membership() -> None:
