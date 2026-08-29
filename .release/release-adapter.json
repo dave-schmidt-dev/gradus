@@ -361,6 +361,7 @@
     {"name": "archive-proof", "path": ".release-state/evidence/{candidateId}/archive.json", "contentType": "application/json"},
     {"name": "signing-proof", "path": ".release-state/evidence/{candidateId}/signing.json", "contentType": "application/json"},
     {"name": "artifact-proof", "path": ".release-state/evidence/{candidateId}/artifact.json", "contentType": "application/json"},
+    {"name": "build-lookup-proof", "path": ".release-state/evidence/{candidateId}/build-lookup.json", "contentType": "application/json"},
     {"name": "upload-proof", "path": ".release-state/evidence/{candidateId}/upload.json", "contentType": "application/json"},
     {"name": "processing-proof", "path": ".release-state/evidence/{candidateId}/processing.json", "contentType": "application/json"},
     {"name": "compliance-proof", "path": ".release-state/evidence/{candidateId}/compliance.json", "contentType": "application/json"},

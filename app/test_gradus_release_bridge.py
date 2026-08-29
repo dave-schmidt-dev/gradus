@@ -55,6 +55,14 @@ class _RecordingClient:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_release_adapter_declares_build_lookup_proof_path(self) -> None:
+        adapter = json.loads((ROOT / ".release" / "release-adapter.json").read_text())
+        paths = {entry["name"]: entry["path"] for entry in adapter["evidencePaths"]}
+        self.assertEqual(
+            paths["build-lookup-proof"],
+            ".release-state/evidence/{candidateId}/build-lookup.json",
+        )
+
     def _release_wrapper_fixture(self, temporary: str) -> tuple[Path, Path, Path]:
         """Create an isolated checkout with a separately located Git common dir."""
         base = Path(temporary).resolve()
