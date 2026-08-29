@@ -2062,6 +2062,35 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIsInstance(status.weekly_percent_left, float)
         self.assertIsInstance(status.opus_percent_left, float)
 
+    def test_enabled_extra_usage_exposes_remaining_dollar_credit(self) -> None:
+        response = {
+            **self.NORMAL_RESPONSE,
+            "extra_usage": {
+                "is_enabled": True,
+                "monthly_limit": 100,
+                "used_credits": 12.25,
+            },
+        }
+        provider = self._make_provider()
+        with patch("gradus.providers._base._http_json", return_value=response):
+            status = provider.fetch()
+        self.assertEqual(status.credit_balance, 87.75)
+
+    def test_missing_disabled_or_invalid_extra_usage_omits_credit(self) -> None:
+        cases = (
+            {},
+            {"is_enabled": False, "monthly_limit": 100, "used_credits": 10},
+            {"is_enabled": True, "monthly_limit": "bad", "used_credits": 10},
+            {"is_enabled": True, "monthly_limit": 100, "used_credits": -1},
+        )
+        for extra_usage in cases:
+            with self.subTest(extra_usage=extra_usage):
+                provider = self._make_provider()
+                response = {**self.NORMAL_RESPONSE, "extra_usage": extra_usage}
+                with patch("gradus.providers._base._http_json", return_value=response):
+                    status = provider.fetch()
+                self.assertIsNone(status.credit_balance)
+
     def test_bucketless_success_is_transient_instead_of_erasing_usage(self) -> None:
         provider = self._make_provider()
         with patch("gradus.providers._base._http_json", return_value={}):

@@ -67,6 +67,7 @@ class ClaudeStatus:
     account_organization: str | None
     login_method: str | None
     raw_text: str
+    credit_balance: float | None = None
 
     def __post_init__(self) -> None:
         for field in ("session_percent_left", "weekly_percent_left", "opus_percent_left"):
@@ -76,6 +77,15 @@ class ClaudeStatus:
             val = getattr(self, field)
             if val is not None and not isinstance(val, str):
                 object.__setattr__(self, field, None)
+        if (
+            isinstance(self.credit_balance, bool)
+            or not isinstance(self.credit_balance, (int, float))
+            or not math.isfinite(self.credit_balance)
+            or self.credit_balance < 0
+        ):
+            object.__setattr__(self, "credit_balance", None)
+        else:
+            object.__setattr__(self, "credit_balance", float(self.credit_balance))
         if not isinstance(self.raw_text, str):
             object.__setattr__(self, "raw_text", str(self.raw_text))
 

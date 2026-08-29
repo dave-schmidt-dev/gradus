@@ -162,22 +162,34 @@ func makeDensityViewModel(providers: [ProviderStatus], test: String = #function)
     #expect(withInvalid.visibleWindows.map(\.id) == ["auto"])
 }
 
-@Test func densityCardShowsThreeDecimalZenCreditOnlyForOpenCodeData() {
+@Test func densityCardShowsProviderSpecificCreditOnlyWhenPresent() {
     let withCredit = provider(
         "opencode", windows: [window("weekly", 61)], data: ["zen_credit": .double(12.345)]
     )
     #expect(
-        ProviderDensityCard(provider: withCredit, now: fixedNow).zenCreditSummary
+        ProviderDensityCard(provider: withCredit, now: fixedNow).creditSummary
             == "Zen credit $12.345"
     )
 
     let withoutCredit = provider("opencode", windows: [window("weekly", 61)])
-    #expect(ProviderDensityCard(provider: withoutCredit, now: fixedNow).zenCreditSummary == nil)
+    #expect(ProviderDensityCard(provider: withoutCredit, now: fixedNow).creditSummary == nil)
 
     let wrongProvider = provider(
         "codex", windows: [window("weekly", 61)], data: ["zen_credit": .double(12.345)]
     )
-    #expect(ProviderDensityCard(provider: wrongProvider, now: fixedNow).zenCreditSummary == nil)
+    #expect(ProviderDensityCard(provider: wrongProvider, now: fixedNow).creditSummary == nil)
+
+    let codex = provider("codex", windows: [], data: ["credits": .double(2500)])
+    #expect(ProviderDensityCard(provider: codex, now: fixedNow).creditSummary == "Credits 2,500")
+
+    let cursor = provider("cursor", windows: [], data: ["credit_balance": .double(5)])
+    #expect(ProviderDensityCard(provider: cursor, now: fixedNow).creditSummary == "Credit $5.00")
+
+    let claude = provider("claude", windows: [], data: ["credit_balance": .double(87.75)])
+    #expect(ProviderDensityCard(provider: claude, now: fixedNow).creditSummary == "Credit $87.75")
+
+    let unrelated = provider("vibe", windows: [], data: ["credit_balance": .double(10)])
+    #expect(ProviderDensityCard(provider: unrelated, now: fixedNow).creditSummary == nil)
 }
 
 /// The candidate is deliberately row-major: every row is left-to-right and

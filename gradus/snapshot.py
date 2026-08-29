@@ -944,6 +944,7 @@ def warning_membership(
 SAFE_DATA_KEYS = frozenset(
     {
         "credits",
+        "credit_balance",
         "zen_credit",
         "five_hour_percent_left",
         "weekly_percent_left",
@@ -982,11 +983,21 @@ def project_data(snapshot: ProviderSnapshot) -> dict:
         A new dict containing only keys present in :data:`SAFE_DATA_KEYS`.
     """
     data = snapshot.data if isinstance(snapshot.data, Mapping) else {}
-    return {
+    projected = {
         key: value
         for key, raw_value in data.items()
         if key in SAFE_DATA_KEYS and (value := _json_safe_value(raw_value)) is not _UNSAFE_JSON
     }
+    if snapshot.name == "Cursor":
+        remaining_cents = data.get("remaining_cents")
+        if (
+            not isinstance(remaining_cents, bool)
+            and isinstance(remaining_cents, (int, float))
+            and math.isfinite(remaining_cents)
+            and remaining_cents >= 0
+        ):
+            projected["credit_balance"] = float(remaining_cents) / 100.0
+    return projected
 
 
 _UNSAFE_JSON = object()

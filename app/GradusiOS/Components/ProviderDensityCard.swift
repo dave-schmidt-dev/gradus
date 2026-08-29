@@ -81,14 +81,14 @@ struct ProviderDensityCard: View {
     /// that is errored or window-less reads the same on both screens.
     @ViewBuilder
     private func body(for provider: ProviderStatus) -> some View {
-        if !visibleWindows.isEmpty || zenCreditSummary != nil {
+        if !visibleWindows.isEmpty || creditSummary != nil {
             VStack(spacing: metrics.rowGap) {
                 ForEach(Array(visibleWindows.enumerated()), id: \.offset) { _, window in
                     WindowRow(
                         window: window, now: now, showsReset: showsReset, metrics: metrics
                     )
                 }
-                if let credit = zenCreditSummary {
+                if let credit = creditSummary {
                     Text(credit)
                         .font(metrics.labelFont.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -135,18 +135,40 @@ struct ProviderDensityCard: View {
         CrossSurfaceParity.visibleWindows(provider.windows)
     }
 
-    var zenCreditSummary: String? {
-        let isOpenCode = provider.providerName.lowercased().contains("opencode")
-            || provider.providerDisplayName.lowercased().contains("opencode")
-        guard isOpenCode,
-              let credit = provider.data["zen_credit"]?.doubleValue,
-              credit.isFinite,
-              credit >= 0 else {
-            return nil
-        }
-        let amount = String(
-            format: "$%.3f", locale: Locale(identifier: "en_US_POSIX"), credit
-        )
-        return "Zen credit \(amount)"
+    var creditSummary: String? {
+        providerCreditSummary(provider)
     }
+}
+
+func providerCreditSummary(_ provider: ProviderStatus) -> String? {
+    let name = "\(provider.providerName) \(provider.providerDisplayName)".lowercased()
+    if name.contains("opencode"),
+       let credit = validCredit(provider.data["zen_credit"]?.doubleValue) {
+        return String(
+            format: "Zen credit $%.3f", locale: Locale(identifier: "en_US_POSIX"), credit
+        )
+    }
+    if name.contains("codex"),
+       let credits = validCredit(provider.data["credits"]?.doubleValue) {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.minimumFractionDigits = credits.rounded() == credits ? 0 : 1
+        formatter.maximumFractionDigits = 2
+        guard let amount = formatter.string(from: NSNumber(value: credits)) else { return nil }
+        return "Credits \(amount)"
+    }
+    if name.contains("claude") || name.contains("cursor"),
+       let balance = validCredit(provider.data["credit_balance"]?.doubleValue) {
+        return String(
+            format: "Credit $%.2f", locale: Locale(identifier: "en_US_POSIX"), balance
+        )
+    }
+    return nil
+}
+
+private func validCredit(_ value: Double?) -> Double? {
+    guard let value, value.isFinite, value >= 0 else { return nil }
+    return value
 }

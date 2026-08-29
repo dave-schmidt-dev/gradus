@@ -103,14 +103,12 @@ class TestAllowlist(unittest.TestCase):
         )
         self.assertEqual(snap.project_data(opencode), {"zen_credit": 12.345})
 
-    def test_cursor_dollar_meter_field_is_not_allowlisted(self) -> None:
-        """The router projection excludes the dollar-spend meter; per-pool fields are kept.
+    def test_cursor_dollar_balance_is_projected_as_supplemental_credit(self) -> None:
+        """The router projects remaining dollars separately from usage pools.
 
-        ``credit_percent_left`` is a $ spend meter, not a usage pool, so it is
-        no longer surfaced in the projected/persisted ``data`` block (it
-        remains internal provider metadata). ``auto_percent_used`` and
-        ``api_percent_used`` are Cursor's two real per-pool percent-used
-        fields and ARE allowlisted.
+        ``credit_percent_left`` remains internal because it is not a usage
+        pool. The raw cents are normalized to ``credit_balance`` for optional
+        supplemental text, while the two real per-pool usage fields remain.
         """
         cursor = _ps(
             "Cursor",
@@ -124,8 +122,23 @@ class TestAllowlist(unittest.TestCase):
             },
         )
         self.assertEqual(
-            snap.project_data(cursor), {"auto_percent_used": 20.0, "api_percent_used": 30.0}
+            snap.project_data(cursor),
+            {
+                "auto_percent_used": 20.0,
+                "api_percent_used": 30.0,
+                "credit_balance": 5.0,
+            },
         )
+
+    def test_invalid_cursor_remaining_cents_is_not_projected(self) -> None:
+        for value in (-1, float("inf"), "500", True):
+            with self.subTest(value=value):
+                cursor = _ps("Cursor", True, data={"remaining_cents": value})
+                self.assertNotIn("credit_balance", snap.project_data(cursor))
+
+    def test_claude_credit_balance_is_allowlisted(self) -> None:
+        claude = _ps("Claude", True, data={"credit_balance": 87.75})
+        self.assertEqual(snap.project_data(claude), {"credit_balance": 87.75})
 
     def test_project_antigravity_claude_data_reads_only_third_party_fields(self) -> None:
         """The synthetic entry's projection reads only the third_party_* fields.

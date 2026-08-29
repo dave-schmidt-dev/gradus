@@ -106,6 +106,7 @@ class ClaudeHttpProvider:
         primary_reset: str | None = None
         secondary_reset: str | None = None
         opus_reset: str | None = None
+        credit_balance: float | None = None
 
         def _util(key: str) -> float | None:
             bucket = payload.get(key) or {}
@@ -133,6 +134,19 @@ class ClaudeHttpProvider:
         opus_percent_left = _util("seven_day_opus")
         opus_reset = _reset("seven_day_opus")
 
+        extra_usage = payload.get("extra_usage") or {}
+        if isinstance(extra_usage, dict) and extra_usage.get("is_enabled") is True:
+            monthly_limit = extra_usage.get("monthly_limit")
+            used_credits = extra_usage.get("used_credits")
+            try:
+                limit = float(monthly_limit)
+                used = float(used_credits)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if math.isfinite(limit) and math.isfinite(used) and limit >= 0 and used >= 0:
+                    credit_balance = max(0.0, limit - used)
+
         if all(
             value is None
             for value in (session_percent_left, weekly_percent_left, opus_percent_left)
@@ -150,6 +164,7 @@ class ClaudeHttpProvider:
             account_organization=None,
             login_method=None,
             raw_text=raw_text,
+            credit_balance=credit_balance,
         )
 
     def close(self) -> None:

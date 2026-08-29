@@ -16,6 +16,7 @@ enum SnapshotDataValidationError: Error, Equatable {
 
 private let snapshotDataAllowedKeys: Set<String> = [
     "credits",
+    "credit_balance",
     "zen_credit",
     "five_hour_percent_left",
     "weekly_percent_left",
