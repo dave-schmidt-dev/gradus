@@ -151,6 +151,7 @@ struct WidgetProviderSettingsView: View {
         VStack(spacing: 0) {
             MobileNavBar(title: "Widget Providers") {
                 IconButton(Icon.close) { dismiss() }
+                    .accessibilityIdentifier("widget-providers-close")
             }
             List {
                 Section {

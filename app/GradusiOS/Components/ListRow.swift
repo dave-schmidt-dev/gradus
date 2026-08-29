@@ -68,6 +68,7 @@ struct ListRow: View {
             trailingAccessory
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

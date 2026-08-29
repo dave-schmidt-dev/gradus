@@ -115,7 +115,9 @@ final class DashboardXCUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(widgetProviders.waitForExistence(timeout: 5))
-        widgetProviders.tap()
+        XCTAssertTrue(widgetProviders.isHittable)
+        widgetProviders.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["Widget Providers"].waitForExistence(timeout: 5))
 
         let cursor = app.switches["widget-provider-sample-cursor-toggle"]
         XCTAssertTrue(cursor.waitForExistence(timeout: 5))
@@ -123,12 +125,12 @@ final class DashboardXCUITests: XCTestCase {
         cursor.tap()
         XCTAssertEqual(cursor.value as? String, "0")
 
-        let closeWidgetProviders = app.buttons.firstMatch
+        let closeWidgetProviders = app.buttons["widget-providers-close"]
         XCTAssertTrue(closeWidgetProviders.waitForExistence(timeout: 5))
         closeWidgetProviders.tap()
-        XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Widget Providers"].waitForExistence(timeout: 2))
 
-        let closeSettings = app.buttons.firstMatch
+        let closeSettings = app.buttons["xmark"]
         XCTAssertTrue(closeSettings.waitForExistence(timeout: 5))
         closeSettings.tap()
         XCTAssertTrue(app.staticTexts["Sample Cursor"].waitForExistence(timeout: 5))
