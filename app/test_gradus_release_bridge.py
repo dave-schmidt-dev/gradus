@@ -744,6 +744,9 @@ class BridgeTests(unittest.TestCase):
 
     def test_identity_reuses_valid_proof_without_second_call(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir = root / "git-common"
+            common_dir.mkdir()
             proof = {
                 "proofVersion": "1.0.0",
                 "operationClass": "identityAllocation",
@@ -757,8 +760,9 @@ class BridgeTests(unittest.TestCase):
                 "observedAt": "2026-08-13T00:00:00Z",
             }
             with (
-                patch.object(BRIDGE, "IDENTITY_PROOF", Path(temporary) / "allocate.json"),
-                patch.object(BRIDGE, "ROOT", Path(temporary)),
+                patch.object(BRIDGE, "IDENTITY_PROOF", root / "allocate.json"),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
                 patch.object(BRIDGE, "_current_marketing_version", return_value="1.6.7"),
             ):
                 BRIDGE.IDENTITY_PROOF.write_text(json.dumps(proof), encoding="utf-8")
@@ -772,6 +776,67 @@ class BridgeTests(unittest.TestCase):
                     ),
                     0,
                 )
+
+    def test_identity_archives_consumed_proof_and_allocates_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir = root / "repository.git"
+            worktree_dir = common_dir / "worktrees" / "identity-proof"
+            worktree_dir.mkdir(parents=True)
+            (root / ".git").write_text(f"gitdir: {worktree_dir}\n", encoding="utf-8")
+            (worktree_dir / "commondir").write_text("../..\n", encoding="utf-8")
+            manifest = (
+                common_dir
+                / "release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.6.7-19"
+                / "manifest.json"
+            )
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("{}", encoding="utf-8")
+            proof_path = root / "evidence" / "allocate.json"
+            consumed = {
+                "proofVersion": "1.0.0",
+                "operationClass": "identityAllocation",
+                "result": "passed",
+                "productKey": "gradus-ios",
+                "marketingVersion": "1.6.7",
+                "buildNumber": 19,
+                "responseSha256": "a" * 64,
+                "remoteHighestMarketingVersion": "1.6.7",
+                "remoteHighestBuildNumber": 18,
+                "observedAt": "2026-08-13T00:00:00Z",
+            }
+            fresh = dict(consumed, buildNumber=20, remoteHighestBuildNumber=19)
+            proof_path.parent.mkdir(parents=True)
+            proof_path.write_text(json.dumps(consumed), encoding="utf-8")
+            calls = []
+
+            def runner(*args, **kwargs):
+                calls.append((args, kwargs))
+                proof_path.write_text(json.dumps(fresh), encoding="utf-8")
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_current_marketing_version", return_value="1.6.7"),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.6.7"))
+                self.assertEqual(
+                    BRIDGE.dispatch(
+                        "identity-allocation", product="gradus-ios", candidate=None, runner=runner
+                    ),
+                    0,
+                )
+
+            self.assertEqual(len(calls), 1)
+            archived = list((root / "evidence" / "archive").glob("*.json"))
+            self.assertEqual(len(archived), 1)
+            self.assertEqual(json.loads(archived[0].read_text()), consumed)
+            self.assertEqual(json.loads(proof_path.read_text()), fresh)
 
     def test_identity_archives_prior_train_before_allocating_current_train(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -219,11 +219,50 @@ def _candidate_record(candidate: str) -> Mapping[str, Any] | None:
     return record
 
 
+def _git_common_dir() -> Path | None:
+    """Resolve this checkout's Git common directory without invoking Git."""
+
+    git_entry = ROOT / ".git"
+    if git_entry.is_dir() and not git_entry.is_symlink():
+        return git_entry
+    if git_entry.is_symlink() or not git_entry.is_file():
+        return None
+    try:
+        prefix, worktree_value = git_entry.read_text(encoding="utf-8").split(": ", 1)
+        if prefix != "gitdir" or "\n" not in worktree_value:
+            return None
+        worktree_dir = Path(worktree_value.strip())
+        if not worktree_dir.is_absolute():
+            worktree_dir = ROOT / worktree_dir
+        common_entry = worktree_dir / "commondir"
+        if common_entry.is_symlink() or not common_entry.is_file():
+            return None
+        common_value = common_entry.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if not common_value or "\x00" in common_value:
+        return None
+    common_dir = Path(common_value)
+    if not common_dir.is_absolute():
+        common_dir = worktree_dir / common_dir
+    return common_dir if common_dir.is_dir() and not common_dir.is_symlink() else None
+
+
+def _central_candidate_manifest(candidate: str) -> Path | None:
+    common_dir = _git_common_dir()
+    if common_dir is None:
+        return None
+    return common_dir / "release-state" / PRODUCT / "candidates" / candidate / "manifest.json"
+
+
 def _central_candidate_record(candidate: str) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
     """Load the central manifest and its immutable artifact attestation."""
 
-    candidate_root = ROOT / ".git" / "release-state" / PRODUCT / "candidates" / candidate
-    manifest = _read_json(candidate_root / "manifest.json")
+    manifest_path = _central_candidate_manifest(candidate)
+    if manifest_path is None:
+        return None
+    candidate_root = manifest_path.parent
+    manifest = _read_json(manifest_path)
     if manifest is None or manifest.get("candidateId") != candidate:
         return None
     release = manifest.get("release")
@@ -454,7 +493,7 @@ def _identity_proof_valid(*, marketing_version: str) -> bool:
     }
     remote_version = proof.get("remoteHighestMarketingVersion")
     remote_build = proof.get("remoteHighestBuildNumber")
-    return (
+    valid = (
         set(proof) == required
         and proof.get("proofVersion") == "1.0.0"
         and proof.get("operationClass") == "identityAllocation"
@@ -476,6 +515,10 @@ def _identity_proof_valid(*, marketing_version: str) -> bool:
         and proof["buildNumber"] == remote_build + 1
         and isinstance(proof.get("observedAt"), str)
     )
+    if not valid:
+        return False
+    manifest = _central_candidate_manifest(f"{marketing_version}-{proof['buildNumber']}")
+    return manifest is None or (not manifest.is_symlink() and not manifest.is_file())
 
 
 def _archive_identity_proof() -> None:
