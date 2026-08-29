@@ -2244,6 +2244,33 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
             PREPARE._finalize_staged_allocations(root)
             self.assertTrue((archived / "allocated-ios.json").is_file())
 
+    def test_prepared_predecessor_accepts_failed_preupload_correction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, successor = self._prepared_staged_successor(temporary)
+            identity_path = successor.manifest_path.parent / "identity-allocation.json"
+            identity = json.loads(identity_path.read_text())
+            identity["reuseAuthorization"] = {
+                "kind": "failed-preupload-correction",
+                "priorCandidateId": "1.8.2-21",
+            }
+            identity_path.write_text(json.dumps(identity), encoding="utf-8")
+            manifest = json.loads(successor.manifest_path.read_text())
+            manifest["identityAllocation"] = {
+                "proofSha256": hashlib.sha256(identity_path.read_bytes()).hexdigest()
+            }
+            successor.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            successor = PREPARE.load_context(
+                successor.manifest_path,
+                git_common_dir=successor.manifest_path.parents[4],
+            )
+
+            self.assertEqual(PREPARE.reconcile_assigned_candidate(root, successor), "1.8.2-21")
+            archived = root / ".release-state" / "archived" / "1.8.2-21"
+            self.assertEqual(
+                json.loads((archived / "candidate.json").read_text())["state"],
+                "superseded",
+            )
+
     def test_prepared_predecessor_rollover_rejects_tampered_authorization_without_mutation(
         self,
     ) -> None:

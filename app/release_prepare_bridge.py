@@ -566,6 +566,8 @@ def reconcile_assigned_candidate(root: Path, context: CandidateContext) -> str |
         return None
     if ledger.get("state") == "prepared":
         predecessor = _authorized_staged_preupload_predecessor(context)
+        if predecessor is None:
+            predecessor = _authorized_failed_preupload_predecessor(context)
         if predecessor != ledger.get("candidateId"):
             raise BridgeError("legacy-candidate-not-rollover-safe")
         return _archive_prepared_predecessor(
