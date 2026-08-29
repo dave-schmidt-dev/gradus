@@ -554,24 +554,36 @@ def _build_state(item: Mapping[str, Any], key: str) -> str:
     return str(_build_attribute(item, key) or "").upper().replace(" ", "_")
 
 
-def _uploaded_identifier_from_proof(candidate: str) -> str | None:
-    """Read this candidate's own upload proof for the transport confirmation.
+def _uploaded_identifier_from_proof(candidate: str, artifact: str) -> str | None:
+    """Read this candidate's bound transport or reconciliation confirmation.
 
     Downstream operations must describe the build Apple actually accepted, so
-    the identifier comes from the recorded upload proof rather than being
-    recomputed from the ledger.  A proof belonging to another candidate, or one
-    that did not pass, yields nothing instead of a plausible guess.
+    the identifier comes from recorded proof rather than being recomputed from
+    the ledger.  An upload reconciled after an ambiguous transport result uses
+    the exact-build lookup only when it binds the same candidate and signed IPA.
     """
 
     proof = _read_json(_proof_path("upload", candidate))
-    if proof is None or proof.get("result") != "passed":
+    if (
+        proof is not None
+        and proof.get("result") == "passed"
+        and proof.get("candidateId") == candidate
+    ):
+        identifier = proof.get("uploadedBuildIdentifier")
+        if isinstance(identifier, str) and identifier.strip():
+            return identifier.strip()
+
+    lookup = _read_json(_proof_path("build-lookup", candidate))
+    if (
+        lookup is None
+        or lookup.get("result") != "passed"
+        or lookup.get("candidateId") != candidate
+        or lookup.get("lookupResult") != "found"
+        or lookup.get("signedArtifactSha256") != artifact
+    ):
         return None
-    if proof.get("candidateId") != candidate:
-        return None
-    identifier = proof.get("uploadedBuildIdentifier")
-    if not isinstance(identifier, str) or not identifier.strip():
-        return None
-    return identifier.strip()
+    identifier = lookup.get("remoteIdentifier")
+    return identifier.strip() if isinstance(identifier, str) and identifier.strip() else None
 
 
 def _resolve_app_id(client: Any) -> str:
@@ -923,8 +935,8 @@ def _assignment(candidate: str, *, runner: Callable[..., subprocess.CompletedPro
     binding = _candidate_bindings(candidate)
     if binding is None:
         return _blocked("assignment", candidate, "candidate-ledger-mismatch")
-    legacy_candidate, record, _marketing_version, build, _artifact = binding
-    uploaded = _uploaded_identifier_from_proof(candidate)
+    legacy_candidate, record, _marketing_version, build, artifact = binding
+    uploaded = _uploaded_identifier_from_proof(candidate, artifact)
     if uploaded is None:
         return _blocked("assignment", candidate, "uploaded-build-identifier-unavailable")
     confirmation = _confirmed_tester_group(candidate)
@@ -982,8 +994,8 @@ def _observation_context(operation: str, candidate: str) -> tuple[int, str] | in
     binding = _candidate_bindings(candidate)
     if binding is None:
         return _blocked(operation, candidate, "candidate-ledger-mismatch")
-    _legacy, _record, _marketing_version, build, _artifact = binding
-    uploaded = _uploaded_identifier_from_proof(candidate)
+    _legacy, _record, _marketing_version, build, artifact = binding
+    uploaded = _uploaded_identifier_from_proof(candidate, artifact)
     if uploaded is None:
         return _blocked(operation, candidate, "uploaded-build-identifier-unavailable")
     return build, uploaded

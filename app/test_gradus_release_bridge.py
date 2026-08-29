@@ -1126,6 +1126,33 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(proof["remoteIdentifier"], "build-1")
             self.assertEqual(proof["signedArtifactSha256"], "a" * 64)
 
+    def test_observation_context_accepts_artifact_bound_lookup_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root, uploaded=False)
+            proof = root / "evidence" / "gradus-ios-19" / "build-lookup.json"
+            proof.parent.mkdir(parents=True, exist_ok=True)
+            proof.write_text(
+                json.dumps(
+                    {
+                        "result": "passed",
+                        "candidateId": "gradus-ios-19",
+                        "lookupResult": "found",
+                        "remoteIdentifier": "build-1",
+                        "signedArtifactSha256": "a" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "EVIDENCE_ROOT", root / "evidence"),
+            ):
+                self.assertEqual(
+                    BRIDGE._observation_context("processing", "gradus-ios-19"),
+                    (19, "build-1"),
+                )
+
     def test_processing_attests_only_after_apple_reports_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
