@@ -1103,6 +1103,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(proof["operationClass"], "buildLookup")
             self.assertEqual(proof["marketingVersion"], "1.7.0")
             self.assertEqual(proof["buildNumber"], "19")
+            self.assertEqual(proof["signedArtifactSha256"], "a" * 64)
             self.assertEqual(proof["lookupResult"], "absent")
             self.assertEqual(proof["processingState"], "absent")
             self.assertNotIn("remoteIdentifier", proof)
@@ -1123,6 +1124,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(proof["lookupResult"], "found")
             self.assertEqual(proof["processingState"], "ready")
             self.assertEqual(proof["remoteIdentifier"], "build-1")
+            self.assertEqual(proof["signedArtifactSha256"], "a" * 64)
 
     def test_processing_attests_only_after_apple_reports_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

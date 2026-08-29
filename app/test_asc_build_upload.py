@@ -213,6 +213,25 @@ def test_poll_build_upload_state_returns_on_first_terminal_state() -> None:
     )
 
 
+def test_poll_build_upload_state_reads_documented_nested_state() -> None:
+    def transport(request, _timeout):
+        assert request.full_url.endswith("/buildUploads/upload-1")
+        return _json(
+            200,
+            {
+                "data": {
+                    "id": "upload-1",
+                    "attributes": {"state": {"state": "COMPLETE", "errors": []}},
+                }
+            },
+        )
+
+    assert (
+        poll_build_upload_state(_client(transport), "upload-1", sleep=lambda seconds: None)
+        == "COMPLETE"
+    )
+
+
 def test_poll_build_upload_state_reports_progress_while_waiting() -> None:
     states = iter(["PROCESSING", "PROCESSING", "COMPLETE"])
 

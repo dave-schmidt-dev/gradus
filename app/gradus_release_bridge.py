@@ -617,7 +617,7 @@ def _build_lookup(candidate: str, *, client_factory: Callable[[], Any]) -> int:
     binding = _candidate_bindings(candidate)
     if binding is None:
         return _blocked("build-lookup", candidate, "candidate-ledger-mismatch")
-    _legacy, _record, marketing_version, build, _artifact = binding
+    _legacy, _record, marketing_version, build, artifact = binding
     try:
         client = client_factory()
         item = _exact_build(client, _resolve_app_id(client), build)
@@ -651,6 +651,7 @@ def _build_lookup(candidate: str, *, client_factory: Callable[[], Any]) -> int:
     observed: dict[str, Any] = {
         "marketingVersion": marketing_version,
         "buildNumber": str(build),
+        "signedArtifactSha256": artifact,
         "lookupResult": lookup_result,
         "processingState": processing_state,
     }

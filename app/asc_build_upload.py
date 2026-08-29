@@ -237,7 +237,8 @@ def poll_build_upload_state(
             if isinstance(data, Mapping):
                 attributes = data.get("attributes")
                 if isinstance(attributes, Mapping):
-                    state = attributes.get("state")
+                    raw_state = attributes.get("state")
+                    state = raw_state.get("state") if isinstance(raw_state, Mapping) else raw_state
         if not isinstance(state, str) or not state:
             raise BuildUploadError("build-upload-state-unreadable")
         if state in _TERMINAL_STATES:
