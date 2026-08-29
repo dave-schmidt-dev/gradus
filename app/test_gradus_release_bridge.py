@@ -1274,6 +1274,75 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(proof["operationClass"], "compliance")
             self.assertEqual(proof["complianceState"], "COMPLIANT")
 
+    def test_device_health_requires_exact_build_visibility_in_confirmed_group(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            self._confirm(root, "group-1", "Internal Testers")
+            self._tester_group_proof(root, "group-1")
+            groups = {
+                "data": [
+                    {
+                        "id": "group-1",
+                        "attributes": {
+                            "name": "Internal Testers",
+                            "isInternalGroup": True,
+                            "hasAccessToAllBuilds": False,
+                        },
+                    }
+                ]
+            }
+            status, client = self._dispatch_observed(
+                "device-health",
+                root,
+                [
+                    {"data": [{"id": "app-1"}]},
+                    self._builds(19, "VALID"),
+                    groups,
+                    {"data": [{"id": "build-1"}]},
+                ],
+            )
+            self.assertEqual(status, 0)
+            self.assertTrue(all(method == "GET" for method, _path, _body in client.requests))
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "device-health.json").read_text()
+            )
+            self.assertEqual(proof["operationClass"], "deviceHealth")
+            self.assertRegex(proof["evidenceSha256"], r"^[0-9a-f]{64}$")
+
+    def test_notification_sends_for_exact_build_after_device_health(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            health = root / "evidence" / "gradus-ios-19" / "device-health.json"
+            health.parent.mkdir(parents=True, exist_ok=True)
+            health.write_text(
+                json.dumps(
+                    {
+                        "result": "passed",
+                        "candidateId": "gradus-ios-19",
+                        "uploadedBuildIdentifier": "1.7.0 (19)",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            status, client = self._dispatch_observed(
+                "notification",
+                root,
+                [
+                    {"data": [{"id": "app-1"}]},
+                    self._builds(19, "VALID"),
+                    {"data": {"type": "buildBetaNotifications", "id": "notice-1"}},
+                ],
+            )
+            self.assertEqual(status, 0)
+            self.assertEqual(client.requests[-1][0], "POST")
+            self.assertEqual(client.requests[-1][1], "/buildBetaNotifications")
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "notification.json").read_text()
+            )
+            self.assertRegex(proof["deliveryReceiptSha256"], r"^[0-9a-f]{64}$")
+
     def test_observation_refuses_an_ambiguous_build_match(self) -> None:
         """Two builds claiming the same version must not be silently narrowed."""
 

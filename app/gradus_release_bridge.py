@@ -1102,6 +1102,128 @@ def _compliance(candidate: str, *, client_factory: Callable[[], Any]) -> int:
     )
 
 
+def _device_health(candidate: str, *, client_factory: Callable[[], Any]) -> int:
+    """Verify that the exact assigned build remains visible to its internal group."""
+
+    context = _observation_context("device-health", candidate)
+    if isinstance(context, int):
+        return context
+    build, uploaded = context
+    confirmation = _confirmed_tester_group(candidate)
+    if confirmation is None:
+        return _blocked("device-health", candidate, "tester-group-confirmation-required")
+    group_id, group_name = confirmation
+    try:
+        client = client_factory()
+        app_id = _resolve_app_id(client)
+        item = _exact_build(client, app_id, build)
+        if item is None:
+            return _blocked("device-health", candidate, "exact-build-unavailable")
+        build_id = item.get("id")
+        if not isinstance(build_id, str) or not build_id:
+            return _blocked("device-health", candidate, "build-identity-missing")
+        groups = _internal_groups(client, app_id)
+        matches = [
+            group
+            for group in groups
+            if group.get("id") == group_id and _build_attribute(group, "name") == group_name
+        ]
+        if len(groups) != 1 or len(matches) != 1:
+            return _blocked("device-health", candidate, "confirmed-tester-group-mismatch")
+        if _build_attribute(matches[0], "hasAccessToAllBuilds") is not True:
+            relationship = client.request("GET", f"/betaGroups/{group_id}/builds?limit=200") or {}
+            entries = relationship.get("data") if isinstance(relationship, Mapping) else None
+            if not isinstance(entries, list):
+                return _blocked("device-health", candidate, "group-build-response-malformed")
+            if not any(
+                isinstance(entry, Mapping) and entry.get("id") == build_id for entry in entries
+            ):
+                return _blocked("device-health", candidate, "build-not-assigned")
+    except _ObservationError as error:
+        return _blocked("device-health", candidate, str(error))
+    except ImportError:
+        return _blocked("device-health", candidate, "asc-client-unavailable")
+    except _transport_error_types():
+        return _blocked("device-health", candidate, "app-store-connect-request-failed")
+
+    evidence = _digest(
+        {
+            "buildIdentifier": build_id,
+            "groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest(),
+        }
+    )
+    return _observation_passed(
+        "device-health",
+        candidate,
+        uploaded_build_identifier=uploaded,
+        observed={"evidenceSha256": evidence},
+    )
+
+
+def _notification(candidate: str, *, client_factory: Callable[[], Any]) -> int:
+    """Send Apple's TestFlight build notification after device health passes."""
+
+    context = _observation_context("notification", candidate)
+    if isinstance(context, int):
+        return context
+    build, uploaded = context
+    health = _read_json(_proof_path("device-health", candidate))
+    if (
+        health is None
+        or health.get("result") != "passed"
+        or health.get("candidateId") != candidate
+        or health.get("uploadedBuildIdentifier") != uploaded
+    ):
+        return _blocked("notification", candidate, "device-health-proof-required")
+    try:
+        client = client_factory()
+        item = _exact_build(client, _resolve_app_id(client), build)
+        if item is None:
+            return _blocked("notification", candidate, "exact-build-unavailable")
+        build_id = item.get("id")
+        if not isinstance(build_id, str) or not build_id:
+            return _blocked("notification", candidate, "build-identity-missing")
+        created = client.request(
+            "POST",
+            "/buildBetaNotifications",
+            {
+                "data": {
+                    "type": "buildBetaNotifications",
+                    "relationships": {"build": {"data": {"type": "builds", "id": build_id}}},
+                }
+            },
+            idempotent=False,
+        )
+        data = created.get("data") if isinstance(created, Mapping) else None
+        notification_id = data.get("id") if isinstance(data, Mapping) else None
+        if (
+            not isinstance(data, Mapping)
+            or data.get("type") != "buildBetaNotifications"
+            or not isinstance(notification_id, str)
+            or not notification_id
+        ):
+            return _blocked("notification", candidate, "notification-response-invalid")
+        receipt = _digest({"buildIdentifier": build_id, "notificationIdentifier": notification_id})
+        observed: dict[str, Any] = {"deliveryReceiptSha256": receipt}
+    except _ObservationError as error:
+        return _blocked("notification", candidate, str(error))
+    except ImportError:
+        return _blocked("notification", candidate, "asc-client-unavailable")
+    except _transport_error_types() as error:
+        outcome = getattr(error, "outcome", None)
+        if getattr(outcome, "http_status", None) != 409:
+            return _blocked("notification", candidate, "app-store-connect-request-failed")
+        receipt = _digest({"buildIdentifier": build_id, "alreadySent": True})
+        observed = {"deliveryReceiptSha256": receipt, "alreadySent": True}
+
+    return _observation_passed(
+        "notification",
+        candidate,
+        uploaded_build_identifier=uploaded,
+        observed=observed,
+    )
+
+
 def dispatch(
     operation: str,
     *,
@@ -1222,7 +1344,13 @@ def dispatch(
         )
     if operation == "assignment":
         return _assignment(candidate, runner=runner)
-    if operation in ("processing", "compliance", "tester-group"):
+    if operation in (
+        "processing",
+        "compliance",
+        "tester-group",
+        "device-health",
+        "notification",
+    ):
         # Resolved lazily inside the observers so a candidate that fails the
         # local ledger or upload-proof checks never causes a credential to be
         # requested at all.  Blocking is a local decision; it should not need
@@ -1239,7 +1367,11 @@ def dispatch(
             )
         if operation == "compliance":
             return _compliance(candidate, client_factory=factory)
-        return _tester_group(candidate, client_factory=factory)
+        if operation == "tester-group":
+            return _tester_group(candidate, client_factory=factory)
+        if operation == "device-health":
+            return _device_health(candidate, client_factory=factory)
+        return _notification(candidate, client_factory=factory)
     return _blocked(operation, candidate, "operation-interface-not-yet-authorized")
 
 
