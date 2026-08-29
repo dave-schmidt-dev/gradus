@@ -31,6 +31,7 @@ ASSIGN = ROOT / "app" / "testflight-assign.py"
 LEGACY_LEDGER = ROOT / ".release-state" / "candidate.json"
 OPERATIONS = (
     "identity-allocation",
+    "build-lookup",
     "upload",
     "processing",
     "compliance",
@@ -63,6 +64,7 @@ _FAILED_PROCESSING = frozenset({"FAILED", "INVALID"})
 # what class they belong to.
 _PROOF_CLASSES = {
     "identity-allocation": "identityAllocation",
+    "build-lookup": "buildLookup",
     "tester-group": "testerGroup",
     "device-health": "deviceHealth",
 }
@@ -609,6 +611,76 @@ def _exact_build(client: Any, app_id: str, build: int) -> Mapping[str, Any] | No
     return exact[0] if exact else None
 
 
+def _build_lookup(candidate: str, *, client_factory: Callable[[], Any]) -> int:
+    """Attest whether Apple's build index already contains this build number."""
+
+    binding = _candidate_bindings(candidate)
+    if binding is None:
+        return _blocked("build-lookup", candidate, "candidate-ledger-mismatch")
+    _legacy, _record, marketing_version, build, _artifact = binding
+    try:
+        client = client_factory()
+        item = _exact_build(client, _resolve_app_id(client), build)
+    except _ObservationError as error:
+        return _blocked("build-lookup", candidate, str(error))
+    except ImportError:
+        return _blocked("build-lookup", candidate, "asc-client-unavailable")
+    except _transport_error_types():
+        return _blocked("build-lookup", candidate, "app-store-connect-request-failed")
+
+    lookup_result = "absent" if item is None else "found"
+    if item is None:
+        processing_state = "absent"
+        remote_identifier = None
+    else:
+        apple_state = _build_state(item, "processingState")
+        processing_state = (
+            "ready"
+            if apple_state == "VALID"
+            else "failed"
+            if apple_state in _FAILED_PROCESSING
+            else "processing"
+        )
+        raw_identifier = item.get("id")
+        remote_identifier = (
+            raw_identifier.strip()
+            if isinstance(raw_identifier, str) and raw_identifier.strip()
+            else None
+        )
+
+    observed: dict[str, Any] = {
+        "marketingVersion": marketing_version,
+        "buildNumber": str(build),
+        "lookupResult": lookup_result,
+        "processingState": processing_state,
+    }
+    if remote_identifier is not None:
+        observed["remoteIdentifier"] = remote_identifier
+    payload: dict[str, Any] = {
+        "proofVersion": "1.0.0",
+        "operationClass": "buildLookup",
+        "candidateId": candidate,
+        "result": "passed",
+        **observed,
+        "responseSha256": _digest(
+            {"operation": "build-lookup", "candidateId": candidate, **observed}
+        ),
+    }
+    path = _proof_path("build-lookup", candidate)
+    _write_json(path, payload)
+    print(
+        json.dumps(
+            {
+                "operation": "build-lookup",
+                "result": "passed",
+                "proofPath": str(path.relative_to(ROOT)),
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def _observation_passed(
     operation: str,
     candidate: str,
@@ -1073,6 +1145,9 @@ def dispatch(
         return 0
     if candidate is None:
         raise ValueError("candidate is required")
+    if operation == "build-lookup":
+        factory = (lambda: client) if client is not None else _default_client
+        return _build_lookup(candidate, client_factory=factory)
     if operation == "upload":
         binding = _candidate_bindings(candidate)
         if binding is None:

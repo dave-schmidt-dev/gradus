@@ -1078,6 +1078,44 @@ class BridgeTests(unittest.TestCase):
             )
         return status, client
 
+    def test_build_lookup_attests_absence_with_get_requests_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root, uploaded=False)
+            status, client = self._dispatch_observed(
+                "build-lookup",
+                root,
+                [{"data": [{"id": "app-1"}]}, {"data": []}],
+            )
+            self.assertEqual(status, 0)
+            self.assertEqual([request[0] for request in client.requests], ["GET", "GET"])
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "build-lookup.json").read_text()
+            )
+            self.assertEqual(proof["operationClass"], "buildLookup")
+            self.assertEqual(proof["marketingVersion"], "1.7.0")
+            self.assertEqual(proof["buildNumber"], "19")
+            self.assertEqual(proof["lookupResult"], "absent")
+            self.assertEqual(proof["processingState"], "absent")
+            self.assertNotIn("remoteIdentifier", proof)
+
+    def test_build_lookup_reports_an_existing_ready_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root, uploaded=False)
+            status, _client = self._dispatch_observed(
+                "build-lookup",
+                root,
+                [{"data": [{"id": "app-1"}]}, self._builds(19, "VALID")],
+            )
+            self.assertEqual(status, 0)
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "build-lookup.json").read_text()
+            )
+            self.assertEqual(proof["lookupResult"], "found")
+            self.assertEqual(proof["processingState"], "ready")
+            self.assertEqual(proof["remoteIdentifier"], "build-1")
+
     def test_processing_attests_only_after_apple_reports_valid(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

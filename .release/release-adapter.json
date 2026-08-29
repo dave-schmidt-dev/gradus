@@ -198,6 +198,32 @@
       }
     },
     {
+      "id": "build-lookup",
+      "class": "buildLookup",
+      "mode": "credential",
+      "consumer": "gradus-app-store-connect-bridge",
+      "arguments": [
+        "--operation",
+        "build-lookup",
+        "--product",
+        "gradus-ios",
+        "--candidate",
+        "{candidateId}"
+      ],
+      "proofSchema": "release.proof.lookup.v1",
+      "dependencies": [
+        "artifact-verify"
+      ],
+      "timeoutSeconds": 120,
+      "statusEvents": {
+        "started": "build-lookup:started",
+        "heartbeat": "build-lookup:heartbeat",
+        "succeeded": "build-lookup:succeeded",
+        "failed": "build-lookup:failed",
+        "blocked": "build-lookup:blocked"
+      }
+    },
+    {
       "id": "upload",
       "class": "upload",
       "mode": "credential",
