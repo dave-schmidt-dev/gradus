@@ -50,7 +50,7 @@ COUNTING_LEG_REPORTERS=(
   "xctest"
 )
 # The iPad leg includes the 12 canonical image tests below as well as the
-# ten GradusiOSUITests workflows. Its floor must exceed the image-only
+# eleven GradusiOSUITests workflows. Its floor must exceed the image-only
 # result, or a zero-test UI target could be hidden by the snapshot count.
 #
 # GradusiOS-iPhone's floor (index 3) is pinned to its exact integrated-gate
@@ -62,7 +62,7 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 177 10 22 6 5 5 15 5 5 4 31 10)
+COUNTING_LEG_MINIMUMS=(2 2 2 177 10 23 6 5 5 15 5 5 4 31 11)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"

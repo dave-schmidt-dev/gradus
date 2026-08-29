@@ -200,7 +200,9 @@ extension DashboardViewModel {
             return
         }
         widgetSnapshotPublisher?.synchronize(
-            providers: allProviders,
+            providers: allProviders.filter {
+                !widgetExcludedProviderNames.contains($0.providerName)
+            },
             phoneSyncDate: lastSyncedAt,
             localWarningThreshold: localWarningThresholdPercent
         )

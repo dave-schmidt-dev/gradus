@@ -9,6 +9,27 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## 1.10.0 — 2026-08-29
+
+### Added
+
+- Provider cards show optional account credits when a provider reports them,
+  including Codex and Claude-compatible data without inventing unavailable
+  balances.
+- Settings can exclude selected providers from widgets without hiding them from
+  the Gradus dashboard.
+- A medium Home Screen widget shows up to three eligible providers, ranked by
+  urgency, alongside the existing single-provider small widget.
+
+### TestFlight focus
+
+- Confirm available credits match the provider source and providers without a
+  reported balance do not show a fabricated value.
+- Exclude and restore providers in Settings, then confirm the widget updates
+  while the dashboard remains unchanged.
+- Add both small and medium widgets; confirm the small widget shows one urgent
+  provider and the medium widget shows up to three in the expected order.
+
 ## 1.9.0 — 2026-08-23
 
 ### Added

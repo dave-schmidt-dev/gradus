@@ -6,7 +6,7 @@ import WidgetKit
 struct GradusWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: GradusWidgetMetadata.kind, provider: WidgetTimelineProvider()) { entry in
-            GradusSmallWidgetView(entry: entry)
+            GradusWidgetView(entry: entry)
         }
         .configurationDisplayName(GradusWidgetMetadata.displayName)
         .description(GradusWidgetMetadata.galleryDescription)

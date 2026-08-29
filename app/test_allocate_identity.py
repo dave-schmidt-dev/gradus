@@ -108,7 +108,7 @@ def _responses():
 
 def _workflow_responses():
     return [
-        {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.ios"}}]},
+        {"data": [{"id": "app-1", "attributes": {"bundleId": "com.zerodelta.gradus.mac"}}]},
         {"data": [{"type": "ciProducts", "id": "product-1"}]},
         {
             "data": [
@@ -416,7 +416,7 @@ def test_ios_app_group_profile_replaces_only_the_named_main_profile(
     )
 
 
-def test_list_workflows_resolves_fixed_app_and_emits_allowlisted_metadata(
+def test_list_workflows_resolves_mac_bound_cloud_product_and_emits_allowlisted_metadata(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     client = FixtureClient(_workflow_responses())
@@ -436,7 +436,7 @@ def test_list_workflows_resolves_fixed_app_and_emits_allowlisted_metadata(
         }
     ]
     assert client.paths == [
-        "/apps?filter[bundleId]=com.zerodelta.gradus.ios",
+        "/apps?filter[bundleId]=com.zerodelta.gradus.mac",
         "/ciProducts?filter[app]=app-1&fields[ciProducts]=app&limit=200",
         "/ciProducts/product-1/workflows?fields[ciWorkflows]=name,isEnabled,manualBranchStartCondition,manualTagStartCondition,manualPullRequestStartCondition,actions&limit=200",
     ]
@@ -1646,6 +1646,16 @@ def test_assign_build_to_internal_group_reports_the_denied_phase_without_respons
 
 
 def test_list_workflows_fails_closed_on_ambiguous_or_malformed_responses() -> None:
+    missing_product = _workflow_responses()
+    missing_product[1]["data"] = []
+    with pytest.raises(IdentityAllocationError, match="ci-product-missing"):
+        list_workflow_metadata(FixtureClient(missing_product))
+
+    duplicate_product = _workflow_responses()
+    duplicate_product[1]["data"].append({"type": "ciProducts", "id": "product-2"})
+    with pytest.raises(IdentityAllocationError, match="ci-product-ambiguous"):
+        list_workflow_metadata(FixtureClient(duplicate_product))
+
     duplicate = _workflow_responses()
     duplicate[2]["data"].append(duplicate[2]["data"][0])
     with pytest.raises(IdentityAllocationError, match="workflow-response-ambiguous"):
@@ -1660,6 +1670,12 @@ def test_list_workflows_fails_closed_on_ambiguous_or_malformed_responses() -> No
     malformed_pagination[2]["links"] = []
     with pytest.raises(IdentityAllocationError, match="workflow-pagination-invalid"):
         list_workflow_metadata(FixtureClient(malformed_pagination))
+
+    for field, value in (("platform", "MAC_OS"), ("scheme", "GradusMac")):
+        wrong_archive = _workflow_responses()
+        wrong_archive[2]["data"][0]["attributes"]["actions"][1][field] = value
+        with pytest.raises(IdentityAllocationError, match="gradus-ios-cloud-workflow-missing"):
+            list_workflow_metadata(FixtureClient(wrong_archive))
 
 
 def test_cli_artifact_download_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

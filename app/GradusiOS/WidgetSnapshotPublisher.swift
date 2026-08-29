@@ -62,11 +62,10 @@ final class WidgetSnapshotPublisher {
         diagnosticHandler: ((Diagnostic) -> Void)? = nil,
         appGroupContainerLookup: ((String) -> URL?)? = nil
     ) -> WidgetSnapshotPublisher? {
-        let directory: URL?
-        if let appGroupContainerLookup {
-            directory = appGroupContainerLookup(appGroupIdentifier)
+        let directory: URL? = if let appGroupContainerLookup {
+            appGroupContainerLookup(appGroupIdentifier)
         } else {
-            directory = fileManager.containerURL(
+            fileManager.containerURL(
                 forSecurityApplicationGroupIdentifier: appGroupIdentifier
             )
         }
@@ -87,22 +86,29 @@ final class WidgetSnapshotPublisher {
         phoneSyncDate: Date?,
         localWarningThreshold: Double
     ) {
-        guard let phoneSyncDate,
-              let provider = selectProvider(
-                  from: providers,
-                  localWarningThreshold: localWarningThreshold
-              )
-        else {
+        guard let phoneSyncDate else {
+            clear()
+            return
+        }
+        let selectedProviders = selectProviders(
+            from: providers,
+            localWarningThreshold: localWarningThreshold
+        )
+        guard !selectedProviders.isEmpty else {
             clear()
             return
         }
 
         let snapshot = WidgetSnapshot(
             phoneSyncDate: phoneSyncDate,
-            providerName: provider.providerName,
-            providerDisplayName: provider.providerDisplayName,
-            status: status(for: provider, localWarningThreshold: localWarningThreshold),
-            selectedWindow: selectWidgetWindowSnapshot(from: provider.windows)
+            providers: selectedProviders.map { provider in
+                WidgetProviderSnapshot(
+                    providerName: provider.providerName,
+                    providerDisplayName: provider.providerDisplayName,
+                    status: status(for: provider, localWarningThreshold: localWarningThreshold),
+                    selectedWindow: selectWidgetWindowSnapshot(from: provider.windows)
+                )
+            }
         )
         guard store.loadSnapshot() != snapshot else { return }
         do {
@@ -141,15 +147,17 @@ final class WidgetSnapshotPublisher {
         }
     }
 
-    private func selectProvider(
+    private func selectProviders(
         from providers: [ProviderStatus],
         localWarningThreshold: Double
-    ) -> ProviderStatus? {
+    ) -> [ProviderStatus] {
         let ranked = fixedMostUrgentRankedProviders(
             providers,
             localThreshold: localWarningThreshold
         )
-        return ranked.first { selectWidgetWindow(from: $0.windows) != nil } ?? ranked.first
+        let withValidWindow = ranked.filter { selectWidgetWindow(from: $0.windows) != nil }
+        let withoutValidWindow = ranked.filter { selectWidgetWindow(from: $0.windows) == nil }
+        return Array((withValidWindow + withoutValidWindow).prefix(WidgetSnapshot.maximumProviderCount))
     }
 
     private func status(

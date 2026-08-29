@@ -12,7 +12,7 @@ private func makeTempDirectory() -> URL {
 private let referenceDate = Date(timeIntervalSince1970: 1_785_000_000)
 
 private func makeSampleSnapshot(
-    schemaVersion: Int = 1,
+    schemaVersion: Int = WidgetSnapshot.currentSchemaVersion,
     phoneSyncDate: Date = referenceDate,
     providerName: String = "codex",
     providerDisplayName: String = "Codex",
@@ -45,7 +45,7 @@ struct InjectedWriteError: Error, Equatable {}
     let decoded = try JSONDecoder().decode(WidgetSnapshot.self, from: data)
 
     #expect(decoded == original)
-    #expect(decoded.schemaVersion == 1)
+    #expect(decoded.schemaVersion == 2)
     #expect(decoded.phoneSyncDate == referenceDate)
     #expect(decoded.providerName == "codex")
     #expect(decoded.providerDisplayName == "Codex")
@@ -69,7 +69,7 @@ struct InjectedWriteError: Error, Equatable {}
 @Test func widgetSnapshotRejectsUnknownSchemaVersion() throws {
     let json = """
     {
-        "schema_version": 2,
+        "schema_version": 3,
         "phone_sync_date": \(referenceDate.timeIntervalSinceReferenceDate),
         "provider_name": "codex",
         "provider_display_name": "Codex",
@@ -78,7 +78,7 @@ struct InjectedWriteError: Error, Equatable {}
     """
     let data = try #require(json.data(using: .utf8))
 
-    #expect(throws: WidgetSnapshotDecodeError.unsupportedSchemaVersion(2)) {
+    #expect(throws: WidgetSnapshotDecodeError.unsupportedSchemaVersion(3)) {
         try JSONDecoder().decode(WidgetSnapshot.self, from: data)
     }
 }
@@ -188,10 +188,7 @@ struct InjectedWriteError: Error, Equatable {}
     let allowedTopLevelKeys: Set = [
         "schema_version",
         "phone_sync_date",
-        "provider_name",
-        "provider_display_name",
-        "status",
-        "selected_window"
+        "providers"
     ]
     let actualTopLevelKeys = Set(jsonObject.keys)
     #expect(actualTopLevelKeys == allowedTopLevelKeys)
@@ -203,7 +200,16 @@ struct InjectedWriteError: Error, Equatable {}
         "signal_level",
         "reset_date"
     ]
-    let windowDict = try #require(jsonObject["selected_window"] as? [String: Any])
+    let providers = try #require(jsonObject["providers"] as? [[String: Any]])
+    let providerDict = try #require(providers.first)
+    let allowedProviderKeys: Set = [
+        "provider_name",
+        "provider_display_name",
+        "status",
+        "selected_window"
+    ]
+    #expect(Set(providerDict.keys) == allowedProviderKeys)
+    let windowDict = try #require(providerDict["selected_window"] as? [String: Any])
     let actualWindowKeys = Set(windowDict.keys)
     #expect(actualWindowKeys == allowedWindowKeys)
 
@@ -220,6 +226,7 @@ struct InjectedWriteError: Error, Equatable {}
 
     for forbidden in prohibitedKeys {
         #expect(jsonObject[forbidden] == nil, "Top-level JSON must not contain key '\(forbidden)'")
+        #expect(providerDict[forbidden] == nil, "Provider JSON must not contain key '\(forbidden)'")
         #expect(windowDict[forbidden] == nil, "Selected window JSON must not contain key '\(forbidden)'")
     }
 }

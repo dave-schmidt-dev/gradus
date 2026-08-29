@@ -117,6 +117,73 @@ extension SettingsView {
         dashboardViewModel.availableCardColumns > 1
             && dashboardViewModel.cardColumnPreference != 0
     }
+
+    var widgetProvidersSection: some View {
+        Section("Widget") {
+            Button {
+                showingWidgetProviders = true
+            } label: {
+                ListRow.chevron(icon: Icon.listBullet, label: "Widget providers")
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("widget-providers-button")
+            Text("Choose which providers can appear in the small and medium widgets.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct WidgetProviderSettingsView: View {
+    @ObservedObject var dashboardViewModel: DashboardViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    private var providers: [ProviderStatus] {
+        dashboardViewModel.allProviders.sorted {
+            if $0.providerDisplayName != $1.providerDisplayName {
+                return $0.providerDisplayName.localizedStandardCompare($1.providerDisplayName) == .orderedAscending
+            }
+            return $0.providerName < $1.providerName
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MobileNavBar(title: "Widget Providers") {
+                IconButton(Icon.close) { dismiss() }
+            }
+            List {
+                Section {
+                    if providers.isEmpty {
+                        Text("Sync Gradus to choose providers.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(providers, id: \.providerName) { provider in
+                            ListRow.toggle(
+                                icon: Icon.listBullet,
+                                label: provider.providerDisplayName,
+                                isOn: providerBinding(provider.providerName),
+                                accessibilityIdentifier: "widget-provider-\(provider.providerName)-toggle"
+                            )
+                        }
+                    }
+                } footer: {
+                    Text(
+                        "Small shows the most urgent included provider; medium shows up to three. "
+                            + "Dashboard visibility, alerts, and synced data are unchanged."
+                    )
+                }
+            }
+            .listStyle(.plain)
+        }
+    }
+
+    private func providerBinding(_ providerName: String) -> Binding<Bool> {
+        Binding(
+            get: { dashboardViewModel.isProviderIncludedInWidget(providerName) },
+            set: { dashboardViewModel.setProviderIncludedInWidget(providerName, included: $0) }
+        )
+    }
 }
 
 /// A discrete UIKit slider keeps the card-size control quiet. SwiftUI's

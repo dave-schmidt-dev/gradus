@@ -119,9 +119,12 @@ private func makeViewModel(
     #expect(viewModel.availableCardColumns == 4)
 
     viewModel.showExhausted = false
+    viewModel.setProviderIncludedInWidget("cursor", included: false)
 
     #expect(defaults.bool(forKey: DashboardViewModel.showExhaustedKey) == false)
     #expect(viewModel.showExhausted == false)
+    #expect(!viewModel.isProviderIncludedInWidget("cursor"))
+    #expect(defaults.stringArray(forKey: DashboardViewModel.widgetExcludedProviderNamesKey) == ["cursor"])
 }
 
 @Test func warningAlertsCopyIsExplicitlyOptionalAndIndependentOfICloudSync() {

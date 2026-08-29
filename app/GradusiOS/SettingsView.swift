@@ -27,6 +27,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var warningAlertPermissionRequestPending = false
+    @State var showingWidgetProviders = false
 
     init(
         dashboardViewModel: DashboardViewModel,
@@ -92,6 +93,7 @@ struct SettingsView: View {
                 }
                 connectedComputerSection
                 localDisplaySection
+                widgetProvidersSection
                 warningThresholdSection
                 aboutSection
             }
@@ -106,6 +108,9 @@ struct SettingsView: View {
             if !dashboardViewModel.notificationsEnabled {
                 warningAlertPermissionRequestPending = false
             }
+        }
+        .sheet(isPresented: $showingWidgetProviders) {
+            WidgetProviderSettingsView(dashboardViewModel: dashboardViewModel)
         }
     }
 

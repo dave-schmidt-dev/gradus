@@ -27,11 +27,26 @@ enum WidgetFormatting {
         timeZone: TimeZone = .current,
         calendar: Calendar = .current
     ) -> String {
-        guard snapshot.status != .error, let window = snapshot.selectedWindow else {
-            return "\(snapshot.providerDisplayName), usage unavailable"
+        guard let provider = snapshot.providers.first else { return "Usage unavailable" }
+        return accessibilityLabel(
+            provider: provider,
+            locale: locale,
+            timeZone: timeZone,
+            calendar: calendar
+        )
+    }
+
+    static func accessibilityLabel(
+        provider: WidgetProviderSnapshot,
+        locale: Locale = Locale(identifier: "en_US_POSIX"),
+        timeZone: TimeZone = .current,
+        calendar: Calendar = .current
+    ) -> String {
+        guard provider.status != .error, let window = provider.selectedWindow else {
+            return "\(provider.providerDisplayName), usage unavailable"
         }
         var parts = [
-            snapshot.providerDisplayName,
+            provider.providerDisplayName,
             window.label,
             percentDisplay(window.percentLeft, suffix: " percent remaining")
         ]

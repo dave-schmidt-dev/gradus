@@ -110,13 +110,16 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
 
     let viewModel = DashboardViewModel(cache: cache, userDefaults: defaults)
     #expect(viewModel.showExhausted)
+    #expect(viewModel.widgetExcludedProviderNames.isEmpty)
     #expect(viewModel.providers.map(\.providerName) == ["exhausted"])
 
     viewModel.showExhausted = false
     viewModel.providerSortOption = .nameAZ
+    viewModel.setProviderIncludedInWidget("cursor", included: false)
     let reloaded = DashboardViewModel(cache: cache, userDefaults: defaults)
     #expect(!reloaded.showExhausted)
     #expect(reloaded.providerSortOption == .nameAZ)
+    #expect(reloaded.widgetExcludedProviderNames == ["cursor"])
     #expect(reloaded.providers.isEmpty)
 
     // Preferences remain view-model state: the provider payload has no local
@@ -125,6 +128,7 @@ private let fixedTestDate = Date(timeIntervalSince1970: 1_785_000_000)
     let payloadText = try #require(String(data: payload, encoding: .utf8))
     #expect(!payloadText.contains(DashboardViewModel.providerSortOptionKey))
     #expect(!payloadText.contains(DashboardViewModel.showExhaustedKey))
+    #expect(!payloadText.contains(DashboardViewModel.widgetExcludedProviderNamesKey))
 }
 
 @MainActor

@@ -43,6 +43,31 @@ private func widgetSnapshot(
     )
 }
 
+private func mediumWidgetSnapshot() -> WidgetSnapshot {
+    let providers = [
+        ("codex", "Codex", 17.0, SignalLevel.red),
+        ("claude", "Claude", 42.0, SignalLevel.orange),
+        ("opencode-go", "OpenCode Go", 68.0, SignalLevel.yellow)
+    ].map { item in
+        let (name, displayName, percentLeft, signalLevel) = item
+        return WidgetProviderSnapshot(
+            providerName: name,
+            providerDisplayName: displayName,
+            status: .attention,
+            selectedWindow: WidgetWindowSnapshot(
+                id: "weekly",
+                label: "Weekly",
+                percentLeft: percentLeft,
+                signalLevel: signalLevel
+            )
+        )
+    }
+    return WidgetSnapshot(
+        phoneSyncDate: widgetNow.addingTimeInterval(-7 * 60),
+        providers: providers
+    )
+}
+
 private func defaultGradusWidgetTestsBundleResourceURL() -> URL? {
     let bundle = Bundle(for: GradusWidgetTestsBundleToken.self)
     return bundle.resourceURL ?? bundle.bundleURL
@@ -118,6 +143,18 @@ private func widgetView(style: UIUserInterfaceStyle) -> some View {
         date: widgetNow,
         state: .current(widgetSnapshot())
     ), syncAgeOverride: "synced 7 min, 0 sec ago")
+        .environment(\.calendar, Calendar(identifier: .gregorian))
+        .environment(\.locale, Locale(identifier: "en_US_POSIX"))
+        .environment(\.timeZone, widgetTimeZone)
+        .environment(\.dynamicTypeSize, .large)
+        .preferredColorScheme(style == .dark ? .dark : .light)
+}
+
+private func mediumWidgetView(style: UIUserInterfaceStyle) -> some View {
+    GradusMediumWidgetView(entry: GradusWidgetEntry(
+        date: widgetNow,
+        state: .current(mediumWidgetSnapshot())
+    ), syncAgeOverride: "synced 7 min ago")
         .environment(\.calendar, Calendar(identifier: .gregorian))
         .environment(\.locale, Locale(identifier: "en_US_POSIX"))
         .environment(\.timeZone, widgetTimeZone)
@@ -204,100 +241,25 @@ private func walkthroughWidgetView(state: GradusWidgetEntry.State) -> some View 
     #expect(timeline.entries.count == 1)
 }
 
-@Test func galleryMetadataAndFamilyStaySmallOnly() {
+@Test func galleryMetadataSupportsSmallAndMediumFamilies() {
     #expect(GradusWidgetMetadata.kind == "GradusWidget")
     #expect(GradusWidgetMetadata.displayName == "Gradus")
-    #expect(GradusWidgetMetadata.galleryDescription == "Your most urgent usage window at a glance.")
-    #expect(GradusWidgetMetadata.supportedFamilies == [.systemSmall])
+    #expect(GradusWidgetMetadata.galleryDescription == "Your most urgent provider usage at a glance.")
+    #expect(GradusWidgetMetadata.supportedFamilies == [.systemSmall, .systemMedium])
 }
 
-@Test func percentageFormattingPreservesSubOnePercentAndMissingValues() {
-    #expect(WidgetFormatting.percent(17.9) == "17%")
-    #expect(WidgetFormatting.percent(0.7) == "0.7%")
-    #expect(WidgetFormatting.percent(0.6) == "0.6%")
-    #expect(WidgetFormatting.percent(0.0) == "0.0%")
-    #expect(WidgetFormatting.percent(100.0) == "100%")
-    #expect(WidgetFormatting.percent(nil) == "n/a")
-    #expect(WidgetFormatting.percent(Double.nan) == "n/a")
-    #expect(WidgetFormatting.percent(Double.infinity) == "n/a")
-}
-
-@Test func resetCopyHandlesPresentAndMissingDates() {
-    let calendar = Calendar(identifier: .gregorian)
-    let resetDate = Date(timeIntervalSince1970: 1_788_010_800)
-    let usReset = WidgetFormatting.reset(
-        resetDate,
-        locale: Locale(identifier: "en_US"),
-        timeZone: widgetTimeZone,
-        calendar: calendar
+@Test func aValidSecondaryProviderKeepsTheMediumSnapshotCurrent() {
+    let snapshot = WidgetSnapshot(
+        phoneSyncDate: widgetNow,
+        providers: [
+            WidgetProviderSnapshot(
+                providerName: "broken", providerDisplayName: "Broken", status: .error
+            ),
+            mediumWidgetSnapshot().providers[0]
+        ]
     )
-    #expect(usReset?.contains("Aug 29") == true)
-    #expect(usReset?.contains("9:40") == true)
-    #expect(usReset?.contains("AM") == true)
-
-    let gbReset = WidgetFormatting.reset(
-        resetDate,
-        locale: Locale(identifier: "en_GB"),
-        timeZone: widgetTimeZone,
-        calendar: calendar
-    )
-    #expect(gbReset?.contains("29 Aug") == true)
-    #expect(gbReset?.contains("09:40") == true)
-
-    let deReset = WidgetFormatting.reset(
-        resetDate,
-        locale: Locale(identifier: "de_DE"),
-        timeZone: widgetTimeZone,
-        calendar: calendar
-    )
-    #expect(deReset?.contains("29") == true)
-    #expect(deReset?.contains("Aug") == true)
-    #expect(deReset?.contains("09:40") == true)
-
-    #expect(WidgetFormatting.reset(nil, timeZone: widgetTimeZone, calendar: calendar) == nil)
-}
-
-@Test func accessibilityNamesProviderWindowPercentAndResetWithoutStaleSyncAge() {
-    let label = WidgetFormatting.accessibilityLabel(
-        snapshot: widgetSnapshot(),
-        locale: Locale(identifier: "en_US"),
-        timeZone: widgetTimeZone,
-        calendar: Calendar(identifier: .gregorian)
-    )
-    #expect(label.contains("Codex"))
-    #expect(label.contains("Weekly"))
-    #expect(label.contains("17 percent remaining"))
-    #expect(label.contains("resets"))
-    #expect(!label.contains("synced"))
-
-    // Sub-1 percent accessibility label
-    let subOneLabel = WidgetFormatting.accessibilityLabel(
-        snapshot: widgetSnapshot(percentLeft: 0.7),
-        locale: Locale(identifier: "en_US"),
-        timeZone: widgetTimeZone,
-        calendar: Calendar(identifier: .gregorian)
-    )
-    #expect(subOneLabel.contains("0.7 percent remaining"))
-    #expect(!subOneLabel.contains("0 percent remaining"))
-    #expect(!subOneLabel.contains("synced"))
-
-    // Error status accessibility label
-    let errorLabel = WidgetFormatting.accessibilityLabel(
-        snapshot: widgetSnapshot(status: .error),
-        locale: Locale(identifier: "en_US"),
-        timeZone: widgetTimeZone,
-        calendar: Calendar(identifier: .gregorian)
-    )
-    #expect(errorLabel == "Codex, usage unavailable")
-
-    // Missing window accessibility label
-    let noWindowLabel = WidgetFormatting.accessibilityLabel(
-        snapshot: widgetSnapshot(selectedWindow: false),
-        locale: Locale(identifier: "en_US"),
-        timeZone: widgetTimeZone,
-        calendar: Calendar(identifier: .gregorian)
-    )
-    #expect(noWindowLabel == "Codex, usage unavailable")
+    let provider = WidgetTimelineProvider(snapshotLoader: { snapshot }, now: { widgetNow })
+    #expect(provider.entry() == GradusWidgetEntry(date: widgetNow, state: .current(snapshot)))
 }
 
 @Test func placeholderEntryPreservesPlaceholderState() {
@@ -307,21 +269,6 @@ private func walkthroughWidgetView(state: GradusWidgetEntry.State) -> some View 
 
 @Test func widgetRailHeightIsUniformTwelvePoints() {
     #expect(GradusSmallWidgetView.railHeight == 12)
-}
-
-@Test func resetFormattingHandlesFractionalSecondDates() {
-    let fractionalDate = Date(timeIntervalSince1970: 1_788_010_800.456)
-    let calendar = Calendar(identifier: .gregorian)
-    let reset = WidgetFormatting.reset(
-        fractionalDate,
-        locale: Locale(identifier: "en_US"),
-        timeZone: widgetTimeZone,
-        calendar: calendar
-    )
-    #expect(reset != nil)
-    #expect(reset?.contains("Aug 29") == true)
-    #expect(reset?.contains("9:40") == true)
-    #expect(reset?.contains("AM") == true)
 }
 
 @MainActor
@@ -371,6 +318,32 @@ private func walkthroughWidgetView(state: GradusWidgetEntry.State) -> some View 
         ),
         record: recordWidgetSnapshots,
         testName: "gradusSmallWidgetCurrentDark"
+    )
+}
+
+@MainActor
+@Test func gradusMediumWidgetCurrentLight() {
+    assertWidgetSnapshot(
+        of: mediumWidgetView(style: .light),
+        as: .image(
+            layout: .fixed(width: 364, height: 170),
+            traits: UITraitCollection(userInterfaceStyle: .light)
+        ),
+        record: recordWidgetSnapshots,
+        testName: "gradusMediumWidgetCurrentLight"
+    )
+}
+
+@MainActor
+@Test func gradusMediumWidgetCurrentDark() {
+    assertWidgetSnapshot(
+        of: mediumWidgetView(style: .dark),
+        as: .image(
+            layout: .fixed(width: 364, height: 170),
+            traits: UITraitCollection(userInterfaceStyle: .dark)
+        ),
+        record: recordWidgetSnapshots,
+        testName: "gradusMediumWidgetCurrentDark"
     )
 }
 

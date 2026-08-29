@@ -103,6 +103,37 @@ final class DashboardXCUITests: XCTestCase {
         XCTAssertTrue(app.switches["warning-alerts-toggle"].exists)
     }
 
+    func testWidgetProvidersCanBeExcludedWithoutHidingDashboardData() {
+        let app = launch(.noAccount)
+        app.buttons["explore-sample"].tap()
+        XCTAssertTrue(staticText(containing: "Local-only sample data", in: app).waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Sample Cursor"].exists)
+        openSettings(in: app)
+
+        let widgetProviders = app.buttons["widget-providers-button"]
+        for _ in 0 ..< 4 where !widgetProviders.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(widgetProviders.waitForExistence(timeout: 5))
+        widgetProviders.tap()
+
+        let cursor = app.switches["widget-provider-sample-cursor-toggle"]
+        XCTAssertTrue(cursor.waitForExistence(timeout: 5))
+        XCTAssertEqual(cursor.value as? String, "1")
+        cursor.tap()
+        XCTAssertEqual(cursor.value as? String, "0")
+
+        let closeWidgetProviders = app.buttons.firstMatch
+        XCTAssertTrue(closeWidgetProviders.waitForExistence(timeout: 5))
+        closeWidgetProviders.tap()
+        XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 5))
+
+        let closeSettings = app.buttons.firstMatch
+        XCTAssertTrue(closeSettings.waitForExistence(timeout: 5))
+        closeSettings.tap()
+        XCTAssertTrue(app.staticTexts["Sample Cursor"].waitForExistence(timeout: 5))
+    }
+
     private func launch(_ fixture: Fixture) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GRADUS_UITEST_FIXTURE"] = fixture.rawValue

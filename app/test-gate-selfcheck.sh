@@ -232,7 +232,7 @@ validate_widget_contract() {
   [[ -n "$tests_source_dir" && -f "$source_root/$tests_source_dir/GradusWidgetTests.swift" ]] || return 1
   [[ -n "$mac_marketing" && "$mac_marketing" == "$ios_marketing" && "$ios_marketing" == "$widget_marketing" ]] || return 1
   [[ -n "$ios_build" && "$ios_build" == "$widget_build" ]] || return 1
-  [[ "$(find "$source_root/GradusWidgetTests/__Snapshots__" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 2 ]] || return 1
+  [[ "$(find "$source_root/GradusWidgetTests/__Snapshots__" -type f -name '*.png' | wc -l | tr -d ' ')" -eq 4 ]] || return 1
   ! grep -Eqr 'URLSession|CKContainer|CloudKit|import Security|Keychain|widgetURL|AppIntent|ActivityKit|aps-environment|UIBackgroundModes' \
     "$source_root/GradusWidget"
 }
@@ -547,8 +547,8 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
 # otherwise the image count can hide a zero-test UI target.
 snapshot_count="${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"
 ios_ui_test_count="$(rg --no-heading '^\s*func test' "$SCRIPT_DIR/GradusiOSUITests" -g '*.swift' | wc -l | tr -d ' ')"
-[[ "$ios_ui_test_count" -eq 10 ]] ||
-  fail "expected 10 GradusiOSUITests workflows, found $ios_ui_test_count"
+[[ "$ios_ui_test_count" -eq 11 ]] ||
+  fail "expected 11 GradusiOSUITests workflows, found $ios_ui_test_count"
 ipad_leg_index=-1
 iphone_ui_leg_index=-1
 for ((index = 0; index < leg_count; index++)); do

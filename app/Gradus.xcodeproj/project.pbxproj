@@ -11,6 +11,7 @@
 		03F6DDCCCD16DD8D518B1C75 /* dashboardColorsByPaceNotByPercentageRemaining.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 7390820BB42E2C2D5AB614C1 /* dashboardColorsByPaceNotByPercentageRemaining.1.png */; };
 		04E43AAD13E15DCD5A6A9781 /* SettingsViewSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BF44C34E2606F782B908ECD /* SettingsViewSnapshotTests.swift */; };
 		05B8EC6D2C9501DC3517B3EC /* LaunchAtLoginManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA940B9518211CC36512CB8 /* LaunchAtLoginManager.swift */; };
+		07E4F6D510D7BC9C86C21560 /* GradusWidgetFormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D109255042B98352B77322B /* GradusWidgetFormattingTests.swift */; };
 		09801C60B4E8FF2594CB8266 /* DevicePresenceCloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98F6CB296C90F289C788AF13 /* DevicePresenceCloudTests.swift */; };
 		0BA71EDF1661486CF726AE6B /* RuntimeLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E350C9676163BC22DD9C9E /* RuntimeLifecycle.swift */; };
 		0C5F7734F58B158602C9F4AF /* DashboardViewModel+Sync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 478E6CB932BAAB2F9617E20B /* DashboardViewModel+Sync.swift */; };
@@ -62,6 +63,7 @@
 		4C38D6FC2D81278630E82931 /* libGradusWidgetSupport.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5220829C13343A2C85B19724 /* libGradusWidgetSupport.a */; };
 		4D2161D0B473BBF8200C8399 /* ProviderRowBalancedLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 205857956B1F1198387896FB /* ProviderRowBalancedLayout.swift */; };
 		4D6924DEA987A8E40678A8F0 /* SnapshotDataValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3959C384884D098CE318B518 /* SnapshotDataValidation.swift */; };
+		4DFBB8387F5F3677F020FAEF /* gradusMediumWidgetCurrentLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = BE67781EE04DF5E424DCED2E /* gradusMediumWidgetCurrentLight.1.png */; };
 		4E567885E0DE1A1DACAB6B97 /* menuMixedWindowCountsShareTheBarLeadingEdge.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 4BF5584600D189897F90279A /* menuMixedWindowCountsShareTheBarLeadingEdge.1.png */; };
 		4E6A698A6B2AE13FB49CD91A /* ProviderWindowLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00241A1600CB85B81015297B /* ProviderWindowLabel.swift */; };
 		4EABA3841A8B02C8999FC445 /* CKCloudFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F921644EC255B8548BC067E /* CKCloudFetcher.swift */; };
@@ -135,7 +137,6 @@
 		A4F69ECFB284B0DC20C3EFD7 /* DevicePresenceCloud.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98B4FBEE1FE575C297ED2A0A /* DevicePresenceCloud.swift */; };
 		A5876D18D94654C7D06FDA3B /* DesignTokensTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DAFEC9CD08A27D977D11246 /* DesignTokensTests.swift */; };
 		A5AD8227DFFF38BECE770CAB /* DashboardXCUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E733250C46C9B37FE9BC74F /* DashboardXCUITests.swift */; };
-		E1A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift */; };
 		A6646E36F4CF419C88064C92 /* PublishCoordinatorSaveAndRetryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A74FD96A8FACB126615DC2A /* PublishCoordinatorSaveAndRetryTests.swift */; };
 		A84C8B76652D49AAD0024AD2 /* UITestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B26E72868E1308EF38915A6 /* UITestFixtures.swift */; };
 		A8BC4188E23E23E90BFD5919 /* ProviderRetryAccessibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 007AB014431BC4CBAE324BBA /* ProviderRetryAccessibilityTests.swift */; };
@@ -172,6 +173,7 @@
 		C565853A7DF852D21EF44E78 /* densePadPortraitDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = E4917825AA69205E648400EC /* densePadPortraitDark.1.png */; };
 		C7190B7BFD1BF34117B6272C /* GradusKit in Frameworks */ = {isa = PBXBuildFile; productRef = E11D3653FC901E3C1096A5FB /* GradusKit */; };
 		C74CF17BF41E1D70057C1EB2 /* ListRowSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2C3E7C7520DAE18E7D4BE4 /* ListRowSnapshotTests.swift */; };
+		C775F6F91B765071DE464774 /* WalkthroughCaptureXCUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D54987E6FF59B5938C44010 /* WalkthroughCaptureXCUITests.swift */; };
 		C8AFFC1DEA5860E25F3C3F62 /* libGradusWidgetSupport.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 5220829C13343A2C85B19724 /* libGradusWidgetSupport.a */; };
 		C94AC17F9A02A2756948F69D /* menuAtEightProvidersByFourWindowsFitsReferenceHeight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 436BD98F9F5CEB8E0C3FCCF0 /* menuAtEightProvidersByFourWindowsFitsReferenceHeight.1.png */; };
 		C97E8B6367C64AD126B0C593 /* providerListViewRendersFromFixtureData.1.png in Resources */ = {isa = PBXBuildFile; fileRef = D304181716737E8F5FEECFDE /* providerListViewRendersFromFixtureData.1.png */; };
@@ -189,6 +191,7 @@
 		D193E089FA3A8C56D2A00584 /* GradusLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD2348F4826277A5AE85395E /* GradusLog.swift */; };
 		D1A2EE156D6B374DA300AD1B /* providerListViewRendersEveryRampLevel.1.png in Resources */ = {isa = PBXBuildFile; fileRef = A1E6989D7780540EB690F60F /* providerListViewRendersEveryRampLevel.1.png */; };
 		D1AD84E9A6485B978E7BE24B /* SignalColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CF375B5C2686010AAE0B6C2 /* SignalColor.swift */; };
+		D57E0F96C558D8EC91EAF2FD /* gradusMediumWidgetCurrentDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 0F960987512AA4C3C470DFF8 /* gradusMediumWidgetCurrentDark.1.png */; };
 		D80910B4025560E98E4D6186 /* GradusMacTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4A9C81A1B6C687FEE2818CA /* GradusMacTests.swift */; };
 		D8F758A3FF68827DE102DBC8 /* densityLargePadPortraitLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = D5188810F818DACE3F2A1277 /* densityLargePadPortraitLight.1.png */; };
 		D95F6187DFA1B3F3077688C5 /* sampleDataDashboardIPhone.1.png in Resources */ = {isa = PBXBuildFile; fileRef = AE971F7C1E1A30BE2BAA939A /* sampleDataDashboardIPhone.1.png */; };
@@ -217,6 +220,7 @@
 		F5D62CAAD5156AA9028E5089 /* settingsViewNotificationsOffDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 2AFD892CA7D419209595FEEE /* settingsViewNotificationsOffDark.1.png */; };
 		F6F166A6EA7A708C9634405E /* SettingsView+WarningThreshold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B7A600554BA48E9DA66F65A /* SettingsView+WarningThreshold.swift */; };
 		F7E05B729282014DECBA36E5 /* providerDetailRendersAllWindowsLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 577C1A12EE87B547E6604318 /* providerDetailRendersAllWindowsLight.1.png */; };
+		FA6A699C1475A0C27500DAA1 /* WidgetSnapshotProviderSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B970EBAA5F0EC01A1BF396 /* WidgetSnapshotProviderSelectionTests.swift */; };
 		FAF2AFC377B12F0025DD341A /* CKSubscriptionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F128D0C6FE35003BFFD93F9B /* CKSubscriptionManagerTests.swift */; };
 		FAF74EC69E7AC9631E676A74 /* ProviderListViewSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1272D0F0FE664E43500295B /* ProviderListViewSnapshotTests.swift */; };
 		FCADDB2664A2D8FFB2416447 /* PublisherViewModelSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16339AD680532557DEFD7C37 /* PublisherViewModelSyncTests.swift */; };
@@ -318,6 +322,8 @@
 		0B434805837160BE6A13F8EA /* emptyStateSyncDisabled.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = emptyStateSyncDisabled.1.png; sourceTree = "<group>"; };
 		0B9E31C8A0A7CA73A7804142 /* SettingsView+LocalDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView+LocalDisplay.swift"; sourceTree = "<group>"; };
 		0D1EF52385A537EB8469588E /* DensityMetricsAndLabelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DensityMetricsAndLabelsTests.swift; sourceTree = "<group>"; };
+		0D54987E6FF59B5938C44010 /* WalkthroughCaptureXCUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalkthroughCaptureXCUITests.swift; sourceTree = "<group>"; };
+		0F960987512AA4C3C470DFF8 /* gradusMediumWidgetCurrentDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = gradusMediumWidgetCurrentDark.1.png; sourceTree = "<group>"; };
 		0FF4BA2596FEC5DCC8EC7395 /* T17SeamGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = T17SeamGate.swift; sourceTree = "<group>"; };
 		13A5FC8850CE01888DD7CDA7 /* listRowValueLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = listRowValueLight.1.png; sourceTree = "<group>"; };
 		16339AD680532557DEFD7C37 /* PublisherViewModelSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublisherViewModelSyncTests.swift; sourceTree = "<group>"; };
@@ -403,6 +409,7 @@
 		6B270DAE848461522EEA974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6C34AE581013767B89C84A00 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png; sourceTree = "<group>"; };
 		6CD2A7EEE9BC5667647B000A /* CardLayoutSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardLayoutSolver.swift; sourceTree = "<group>"; };
+		6D109255042B98352B77322B /* GradusWidgetFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusWidgetFormattingTests.swift; sourceTree = "<group>"; };
 		6D527542E168FE738F064F7F /* GradusiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GradusiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6ED6FF507C14BCA7CBE51FB6 /* PublisherViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublisherViewModel.swift; sourceTree = "<group>"; };
 		732847D4ECCFB37A36F5A83A /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
@@ -472,6 +479,7 @@
 		BA7BFEFED9EBDDA3FD2BB51B /* WidgetSnapshotPublisherDiagnosticTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotPublisherDiagnosticTests.swift; sourceTree = "<group>"; };
 		BDFD6CD431EE85AE136D96BF /* ProviderStatus+Ranking.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProviderStatus+Ranking.swift"; sourceTree = "<group>"; };
 		BE1AFA6159459E3688BAC6E7 /* MenuContentSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuContentSnapshotTests.swift; sourceTree = "<group>"; };
+		BE67781EE04DF5E424DCED2E /* gradusMediumWidgetCurrentLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = gradusMediumWidgetCurrentLight.1.png; sourceTree = "<group>"; };
 		BE6A984FC7F10EE34E91165C /* AppIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconTests.swift; sourceTree = "<group>"; };
 		BF4AAD4A0ADCD34CFE56A99D /* SnapshotDataValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotDataValidationTests.swift; sourceTree = "<group>"; };
 		C0432ECF3CC53B414BFACA8A /* densePadLandscapeDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densePadLandscapeDark.1.png; sourceTree = "<group>"; };
@@ -489,7 +497,6 @@
 		C65739F0A1AD5EF5B8322F3E /* BridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeTests.swift; sourceTree = "<group>"; };
 		C6BB112D29211092758C4A6A /* GradusMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GradusMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C7CEF22E360E7772B0118758 /* DensityLayoutXCUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DensityLayoutXCUITests.swift; sourceTree = "<group>"; };
-		E2A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalkthroughCaptureXCUITests.swift; sourceTree = "<group>"; };
 		C8C9A1A0989CAC73B0A89A75 /* densityLargePadPortraitExtraExtraExtraLarge.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densityLargePadPortraitExtraExtraExtraLarge.1.png; sourceTree = "<group>"; };
 		CB6D4E80E55036E625838581 /* exhaustedCompactCellsPad.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = exhaustedCompactCellsPad.1.png; sourceTree = "<group>"; };
 		CB856A4F5C7351FABBCA9E85 /* ProviderAttention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderAttention.swift; sourceTree = "<group>"; };
@@ -515,6 +522,7 @@
 		E96E6293B7AE6B35228F5620 /* SettingsView+SampleMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView+SampleMode.swift"; sourceTree = "<group>"; };
 		E98462A4E165668C09ABC36A /* SyncStatusLine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusLine.swift; sourceTree = "<group>"; };
 		E9C45956EB90B261C6A0920A /* providerListViewRendersEmptyState.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = providerListViewRendersEmptyState.1.png; sourceTree = "<group>"; };
+		F0B970EBAA5F0EC01A1BF396 /* WidgetSnapshotProviderSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotProviderSelectionTests.swift; sourceTree = "<group>"; };
 		F128D0C6FE35003BFFD93F9B /* CKSubscriptionManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CKSubscriptionManagerTests.swift; sourceTree = "<group>"; };
 		F14B13C0BA70D84DFF740D12 /* menuOverflowPreservesReadableRows.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = menuOverflowPreservesReadableRows.1.png; sourceTree = "<group>"; };
 		F200D5883F1DCE4DBB0B3055 /* DensityExhaustedGridTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DensityExhaustedGridTests.swift; sourceTree = "<group>"; };
@@ -616,6 +624,7 @@
 		04B66CA5F2F448B4152319C8 /* GradusWidgetTests */ = {
 			isa = PBXGroup;
 			children = (
+				6D109255042B98352B77322B /* GradusWidgetFormattingTests.swift */,
 				D9412C16431BA54883E06E8F /* GradusWidgetTests.swift */,
 				B925745603D6474DA1475ADB /* __Snapshots__ */,
 			);
@@ -791,7 +800,7 @@
 			children = (
 				2E733250C46C9B37FE9BC74F /* DashboardXCUITests.swift */,
 				C7CEF22E360E7772B0118758 /* DensityLayoutXCUITests.swift */,
-				E2A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift */,
+				0D54987E6FF59B5938C44010 /* WalkthroughCaptureXCUITests.swift */,
 			);
 			path = GradusiOSUITests;
 			sourceTree = "<group>";
@@ -826,6 +835,8 @@
 		723265C15D3E927F5DF5172A /* GradusWidgetTests */ = {
 			isa = PBXGroup;
 			children = (
+				0F960987512AA4C3C470DFF8 /* gradusMediumWidgetCurrentDark.1.png */,
+				BE67781EE04DF5E424DCED2E /* gradusMediumWidgetCurrentLight.1.png */,
 				5F2E2CC0663928F8C3501AC7 /* gradusSmallWidgetCurrentDark.1.png */,
 				B70C321E9E10684B8B7ED693 /* gradusSmallWidgetCurrentLight.1.png */,
 			);
@@ -1030,6 +1041,7 @@
 				007AB014431BC4CBAE324BBA /* ProviderRetryAccessibilityTests.swift */,
 				9C0B004F460C3F9A27CFC461 /* ProviderWindowLabelTests.swift */,
 				9BF44C34E2606F782B908ECD /* SettingsViewSnapshotTests.swift */,
+				F0B970EBAA5F0EC01A1BF396 /* WidgetSnapshotProviderSelectionTests.swift */,
 				BA7BFEFED9EBDDA3FD2BB51B /* WidgetSnapshotPublisherDiagnosticTests.swift */,
 				AC42989F2614BF0DFE121C06 /* WidgetSnapshotPublisherFixtures.swift */,
 				3A89DBFD34D3E2AD9849711F /* WidgetSnapshotPublisherTests.swift */,
@@ -1454,6 +1466,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D57E0F96C558D8EC91EAF2FD /* gradusMediumWidgetCurrentDark.1.png in Resources */,
+				4DFBB8387F5F3677F020FAEF /* gradusMediumWidgetCurrentLight.1.png in Resources */,
 				CC803BC43F70FC7EE32C19B5 /* gradusSmallWidgetCurrentDark.1.png in Resources */,
 				56B070E0DE2F6DA88BBB7094 /* gradusSmallWidgetCurrentLight.1.png in Resources */,
 			);
@@ -1676,6 +1690,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				07E4F6D510D7BC9C86C21560 /* GradusWidgetFormattingTests.swift in Sources */,
 				99947842940B00430B5C8ADF /* GradusWidgetTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1686,7 +1701,7 @@
 			files = (
 				A5AD8227DFFF38BECE770CAB /* DashboardXCUITests.swift in Sources */,
 				76A832343DC8C29AAE7CA141 /* DensityLayoutXCUITests.swift in Sources */,
-				E1A01B02C03D04E05F060708 /* WalkthroughCaptureXCUITests.swift in Sources */,
+				C775F6F91B765071DE464774 /* WalkthroughCaptureXCUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1752,6 +1767,7 @@
 				A8BC4188E23E23E90BFD5919 /* ProviderRetryAccessibilityTests.swift in Sources */,
 				35D2E2FE5CDAED8ADB33C5C6 /* ProviderWindowLabelTests.swift in Sources */,
 				04E43AAD13E15DCD5A6A9781 /* SettingsViewSnapshotTests.swift in Sources */,
+				FA6A699C1475A0C27500DAA1 /* WidgetSnapshotProviderSelectionTests.swift in Sources */,
 				6CB21EB250614C39218CF7F7 /* WidgetSnapshotPublisherDiagnosticTests.swift in Sources */,
 				DE4F962BAB51B05E4CA99D31 /* WidgetSnapshotPublisherFixtures.swift in Sources */,
 				CEAC09488AA671497C75244C /* WidgetSnapshotPublisherTests.swift in Sources */,
@@ -1883,7 +1899,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.mac.dev;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
@@ -2003,7 +2019,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.ios;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -2051,7 +2067,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.mac;
 				PROVISIONING_PROFILE_SPECIFIER = "Gradus Mac Developer ID (API-created)";
 				SDKROOT = macosx;
@@ -2142,7 +2158,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.ios;
 				PROVISIONING_PROFILE_SPECIFIER = "Gradus iOS App Store App Group (API-created)";
 				SDKROOT = iphoneos;
@@ -2203,7 +2219,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -2337,7 +2353,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",

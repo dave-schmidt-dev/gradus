@@ -31,6 +31,7 @@ from xcode_cloud_artifact import (
 
 PRODUCT = "gradus-ios"
 BUNDLE_ID = "com.zerodelta.gradus.ios"
+MAC_BUNDLE_ID = "com.zerodelta.gradus.mac"
 WIDGET_BUNDLE_ID = "com.zerodelta.gradus.ios.widget"
 WIDGET_PROFILE_NAME = "Gradus Widget App Store (API-created)"
 WIDGET_PROFILE_FILENAME = "gradus-widget-app-store.provisionprofile"
@@ -143,8 +144,8 @@ def read_marketing_version(project_path: Path) -> str:
     return version
 
 
-def _one_app(client: ASCClient) -> str:
-    payload = client.request("GET", f"/apps?filter[bundleId]={quote(BUNDLE_ID, safe='')}")
+def _one_app(client: ASCClient, bundle_id: str = BUNDLE_ID) -> str:
+    payload = client.request("GET", f"/apps?filter[bundleId]={quote(bundle_id, safe='')}")
     if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), list):
         raise IdentityAllocationError("app-response-invalid")
     entries = payload["data"]
@@ -156,7 +157,7 @@ def _one_app(client: ASCClient) -> str:
         not isinstance(app_id, str)
         or not app_id
         or not isinstance(attributes, Mapping)
-        or attributes.get("bundleId") != BUNDLE_ID
+        or attributes.get("bundleId") != bundle_id
     ):
         raise IdentityAllocationError("app-identity-invalid")
     return app_id
@@ -530,9 +531,27 @@ def list_product_workflow_metadata(client: ASCClient, product_id: str) -> list[d
 
 
 def list_workflow_metadata(client: ASCClient) -> list[dict[str, Any]]:
-    """List allowlisted workflow metadata for the fixed Gradus iOS app only."""
+    """List allowlisted metadata for the product that archives GradusiOS."""
 
-    return list_product_workflow_metadata(client, _one_ci_product(client, _one_app(client)))
+    _, _, workflows = _gradus_ios_cloud_product(client)
+    return workflows
+
+
+def _gradus_ios_cloud_product(
+    client: ASCClient,
+) -> tuple[str, str, list[dict[str, Any]]]:
+    """Resolve the fixed Mac-bound Cloud product that archives GradusiOS."""
+
+    app_id = _one_app(client, MAC_BUNDLE_ID)
+    product_id = _one_ci_product(client, app_id)
+    workflows = list_product_workflow_metadata(client, product_id)
+    if not any(
+        action.get("platform") == "IOS" and action.get("scheme") == "GradusiOS"
+        for workflow in workflows
+        for action in workflow["archiveActions"]
+    ):
+        raise IdentityAllocationError("gradus-ios-cloud-workflow-missing")
+    return app_id, product_id, workflows
 
 
 def read_workflow_template(client: ASCClient, workflow_id: str) -> dict[str, str | bool]:

@@ -83,10 +83,8 @@ public enum DashboardEmptyState: Equatable {
 /// the view can be snapshot-tested from seeded fixture data (T3.5).
 @MainActor
 public final class DashboardViewModel: ObservableObject {
-    // Several `@Published` properties below are `internal(set)` rather than
-    // `private(set)`: their writers live in sibling extension files (see the
-    // stored-property note further down) and `private`/`private(set)` only
-    // reach extensions declared in the *same* file. The public surface --
+    // These `internal(set)` writers live in sibling extension files (see the
+    // stored-property note further down). The public surface --
     // what's writable from outside the GradusiOS module -- is unchanged
     // either way; `internal(set)` is still not writable outside the module.
     @Published public internal(set) var providers: [ProviderStatus] = []
@@ -164,6 +162,9 @@ public final class DashboardViewModel: ObservableObject {
         }
     }
 
+    /// Provider names excluded only from widget ranking on this device.
+    @Published public private(set) var widgetExcludedProviderNames: Set<String>
+
     /// `0` is Auto; positive values are explicit size stops from Small to
     /// Large. This remains device-local: iPad positions depend on its current
     /// geometry, while a one-column phone is always Automatic.
@@ -194,6 +195,7 @@ public final class DashboardViewModel: ObservableObject {
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
     static let providerSortOptionKey = "providerSortOption"
     static let showExhaustedKey = "showExhausted"
+    static let widgetExcludedProviderNamesKey = "widgetExcludedProviderNames"
     static let cardColumnPreferenceKey = "dashboardCardColumnPreference"
     private static let cardColumnPreferenceFormatKey = "dashboardCardSizePreferenceFormat"
     // Not `private`: read/written by `setAvailableCardColumns(_:)` in
@@ -353,6 +355,9 @@ public final class DashboardViewModel: ObservableObject {
         } else {
             showExhausted = true
         }
+        widgetExcludedProviderNames = Set(
+            userDefaults.stringArray(forKey: Self.widgetExcludedProviderNamesKey) ?? []
+        )
         allProviders = cache.loadCachedStatuses()
         providers = Self.presentedProviders(
             allProviders,
@@ -362,6 +367,23 @@ public final class DashboardViewModel: ObservableObject {
         )
         lastSyncedAt = cache.lastSyncedAt()
         updateConnectedSource()
+        synchronizeWidgetSnapshot()
+    }
+
+    public func isProviderIncludedInWidget(_ providerName: String) -> Bool {
+        !widgetExcludedProviderNames.contains(providerName)
+    }
+
+    public func setProviderIncludedInWidget(_ providerName: String, included: Bool) {
+        var updated = widgetExcludedProviderNames
+        if included {
+            updated.remove(providerName)
+        } else {
+            updated.insert(providerName)
+        }
+        guard updated != widgetExcludedProviderNames else { return }
+        widgetExcludedProviderNames = updated
+        userDefaults.set(updated.sorted(), forKey: Self.widgetExcludedProviderNamesKey)
         synchronizeWidgetSnapshot()
     }
 

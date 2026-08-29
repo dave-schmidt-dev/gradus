@@ -5,8 +5,8 @@ import WidgetKit
 public enum GradusWidgetMetadata {
     public static let kind = "GradusWidget"
     public static let displayName = "Gradus"
-    public static let galleryDescription = "Your most urgent usage window at a glance."
-    public static let supportedFamilies: [WidgetFamily] = [.systemSmall]
+    public static let galleryDescription = "Your most urgent provider usage at a glance."
+    public static let supportedFamilies: [WidgetFamily] = [.systemSmall, .systemMedium]
 }
 
 public struct GradusWidgetEntry: TimelineEntry, Equatable {
@@ -81,7 +81,9 @@ public struct WidgetTimelineProvider: TimelineProvider {
         guard let snapshot = snapshotLoader() else {
             return GradusWidgetEntry(date: date, state: .empty)
         }
-        guard snapshot.status != .error, snapshot.selectedWindow != nil else {
+        guard snapshot.providers.contains(where: {
+            $0.status != .error && $0.selectedWindow != nil
+        }) else {
             return GradusWidgetEntry(date: date, state: .unavailable)
         }
         return GradusWidgetEntry(date: date, state: .current(snapshot))

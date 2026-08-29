@@ -1,10 +1,13 @@
 import Foundation
 
-/// The schema version for the widget snapshot contract (INV-5, INV-14).
-public let supportedWidgetSnapshotSchemaVersion = 1
+/// Schema versions accepted by the widget snapshot contract (INV-5, INV-14).
+/// Version 1 carried one provider at the top level. Version 2 carries up to
+/// three provider projections while retaining version-1 decoding for upgrades.
+public let supportedWidgetSnapshotSchemaVersions: Set<Int> = [1, 2]
 
 public enum WidgetSnapshotDecodeError: Error, Equatable, Sendable {
     case unsupportedSchemaVersion(Int)
+    case invalidProviderCount(Int)
 }
 
 /// The coarse-grained operational statuses a small widget presents.
@@ -132,22 +135,66 @@ public func selectWidgetWindowSnapshot(from windows: [ProviderWindow]) -> Widget
     return WidgetWindowSnapshot(from: selected)
 }
 
-/// Schema-v1 widget snapshot containing only safe presentation fields (INV-14).
-///
-/// Strictly excludes ProviderStatus.data, errorMessage, identity, CloudKit/account/token
-/// data, credentials, and filesystem paths. Unknown schema versions are rejected
-/// on decoding.
-public struct WidgetSnapshot: Equatable, Sendable {
-    public typealias Status = WidgetProviderStatus
-    public typealias SelectedWindow = WidgetWindowSnapshot
-
-    public static let currentSchemaVersion = 1
-    public let schemaVersion: Int
-    public let phoneSyncDate: Date
+/// One credential-free provider projection inside a widget snapshot.
+public struct WidgetProviderSnapshot: Codable, Equatable, Sendable {
     public let providerName: String
     public let providerDisplayName: String
     public let status: WidgetProviderStatus
     public let selectedWindow: WidgetWindowSnapshot?
+
+    enum CodingKeys: String, CodingKey {
+        case providerName = "provider_name"
+        case providerDisplayName = "provider_display_name"
+        case status
+        case selectedWindow = "selected_window"
+    }
+
+    public init(
+        providerName: String,
+        providerDisplayName: String,
+        status: WidgetProviderStatus,
+        selectedWindow: WidgetWindowSnapshot? = nil
+    ) {
+        self.providerName = providerName
+        self.providerDisplayName = providerDisplayName
+        self.status = status
+        self.selectedWindow = selectedWindow
+    }
+}
+
+/// Widget snapshot containing only safe presentation fields (INV-14).
+///
+/// Strictly excludes ProviderStatus.data, errorMessage, identity, CloudKit/account/token
+/// data, credentials, and filesystem paths. Version 2 carries one to three
+/// providers; version 1 remains decode-compatible for an in-place app upgrade.
+/// Unknown versions and invalid provider counts are rejected on decoding.
+public struct WidgetSnapshot: Equatable, Sendable {
+    public typealias Status = WidgetProviderStatus
+    public typealias SelectedWindow = WidgetWindowSnapshot
+
+    public static let currentSchemaVersion = 2
+    public static let maximumProviderCount = 3
+    public let schemaVersion: Int
+    public let phoneSyncDate: Date
+    public let providers: [WidgetProviderSnapshot]
+
+    /// Compatibility accessors keep the small-widget presentation and older
+    /// call sites anchored to the first, most-urgent provider.
+    public var providerName: String {
+        providers.first?.providerName ?? ""
+    }
+
+    public var providerDisplayName: String {
+        providers.first?.providerDisplayName ?? ""
+    }
+
+    public var status: WidgetProviderStatus {
+        providers.first?.status ?? .error
+    }
+
+    public var selectedWindow: WidgetWindowSnapshot? {
+        providers.first?.selectedWindow
+    }
 
     public init(
         schemaVersion: Int = WidgetSnapshot.currentSchemaVersion,
@@ -159,10 +206,26 @@ public struct WidgetSnapshot: Equatable, Sendable {
     ) {
         self.schemaVersion = schemaVersion
         self.phoneSyncDate = phoneSyncDate
-        self.providerName = providerName
-        self.providerDisplayName = providerDisplayName
-        self.status = status
-        self.selectedWindow = selectedWindow
+        providers = [WidgetProviderSnapshot(
+            providerName: providerName,
+            providerDisplayName: providerDisplayName,
+            status: status,
+            selectedWindow: selectedWindow
+        )]
+    }
+
+    public init(
+        schemaVersion: Int = WidgetSnapshot.currentSchemaVersion,
+        phoneSyncDate: Date,
+        providers: [WidgetProviderSnapshot]
+    ) {
+        precondition(
+            (1 ... Self.maximumProviderCount).contains(providers.count),
+            "Widget snapshots require one to three providers"
+        )
+        self.schemaVersion = schemaVersion
+        self.phoneSyncDate = phoneSyncDate
+        self.providers = providers
     }
 }
 
@@ -170,6 +233,7 @@ extension WidgetSnapshot: Codable {
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
         case phoneSyncDate = "phone_sync_date"
+        case providers
         case providerName = "provider_name"
         case providerDisplayName = "provider_display_name"
         case status
@@ -179,24 +243,40 @@ extension WidgetSnapshot: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decode(Int.self, forKey: .schemaVersion)
-        guard version == supportedWidgetSnapshotSchemaVersion else {
+        guard supportedWidgetSnapshotSchemaVersions.contains(version) else {
             throw WidgetSnapshotDecodeError.unsupportedSchemaVersion(version)
         }
         schemaVersion = version
         phoneSyncDate = try container.decode(Date.self, forKey: .phoneSyncDate)
-        providerName = try container.decode(String.self, forKey: .providerName)
-        providerDisplayName = try container.decode(String.self, forKey: .providerDisplayName)
-        status = try container.decode(WidgetProviderStatus.self, forKey: .status)
-        selectedWindow = try container.decodeIfPresent(WidgetWindowSnapshot.self, forKey: .selectedWindow)
+        if version == 1 {
+            providers = try [WidgetProviderSnapshot(
+                providerName: container.decode(String.self, forKey: .providerName),
+                providerDisplayName: container.decode(String.self, forKey: .providerDisplayName),
+                status: container.decode(WidgetProviderStatus.self, forKey: .status),
+                selectedWindow: container.decodeIfPresent(
+                    WidgetWindowSnapshot.self, forKey: .selectedWindow
+                )
+            )]
+        } else {
+            let decodedProviders = try container.decode([WidgetProviderSnapshot].self, forKey: .providers)
+            guard (1 ... Self.maximumProviderCount).contains(decodedProviders.count) else {
+                throw WidgetSnapshotDecodeError.invalidProviderCount(decodedProviders.count)
+            }
+            providers = decodedProviders
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(phoneSyncDate, forKey: .phoneSyncDate)
-        try container.encode(providerName, forKey: .providerName)
-        try container.encode(providerDisplayName, forKey: .providerDisplayName)
-        try container.encode(status, forKey: .status)
-        try container.encodeIfPresent(selectedWindow, forKey: .selectedWindow)
+        if schemaVersion == 1, let provider = providers.first {
+            try container.encode(provider.providerName, forKey: .providerName)
+            try container.encode(provider.providerDisplayName, forKey: .providerDisplayName)
+            try container.encode(provider.status, forKey: .status)
+            try container.encodeIfPresent(provider.selectedWindow, forKey: .selectedWindow)
+        } else {
+            try container.encode(providers, forKey: .providers)
+        }
     }
 }
