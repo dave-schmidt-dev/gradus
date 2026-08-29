@@ -838,6 +838,86 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(json.loads(archived[0].read_text()), consumed)
             self.assertEqual(json.loads(proof_path.read_text()), fresh)
 
+    def test_identity_reuses_active_failed_preupload_proof_for_successor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir = root / "repository.git"
+            common_dir.mkdir()
+            candidate = common_dir / "release-state" / "gradus-ios" / "candidates" / "1.6.7-19"
+            candidate.mkdir(parents=True)
+            (candidate / "manifest.json").write_text("{}", encoding="utf-8")
+            (candidate / "transitions.jsonl").write_text(
+                '{"transition":"readinessSatisfied"}\n{"transition":"failed"}\n',
+                encoding="utf-8",
+            )
+            pointer = common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+            pointer.write_text('{"candidateId":"1.6.7-19"}', encoding="utf-8")
+            proof_path = root / "evidence" / "allocate.json"
+            proof_path.parent.mkdir(parents=True)
+            proof_path.write_text(
+                json.dumps(
+                    {
+                        "proofVersion": "1.0.0",
+                        "operationClass": "identityAllocation",
+                        "result": "passed",
+                        "productKey": "gradus-ios",
+                        "marketingVersion": "1.6.7",
+                        "buildNumber": 19,
+                        "responseSha256": "a" * 64,
+                        "remoteHighestMarketingVersion": "1.6.7",
+                        "remoteHighestBuildNumber": 18,
+                        "observedAt": "2026-08-13T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertTrue(BRIDGE._identity_proof_valid(marketing_version="1.6.7"))
+
+    def test_identity_rejects_uploaded_failed_candidate_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir = root / "repository.git"
+            common_dir.mkdir()
+            candidate = common_dir / "release-state" / "gradus-ios" / "candidates" / "1.6.7-19"
+            candidate.mkdir(parents=True)
+            (candidate / "manifest.json").write_text("{}", encoding="utf-8")
+            (candidate / "transitions.jsonl").write_text(
+                '{"transition":"uploadAttemptStarted"}\n{"transition":"failed"}\n',
+                encoding="utf-8",
+            )
+            pointer = common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+            pointer.write_text('{"candidateId":"1.6.7-19"}', encoding="utf-8")
+            proof_path = root / "evidence" / "allocate.json"
+            proof_path.parent.mkdir(parents=True)
+            proof_path.write_text(
+                json.dumps(
+                    {
+                        "proofVersion": "1.0.0",
+                        "operationClass": "identityAllocation",
+                        "result": "passed",
+                        "productKey": "gradus-ios",
+                        "marketingVersion": "1.6.7",
+                        "buildNumber": 19,
+                        "responseSha256": "a" * 64,
+                        "remoteHighestMarketingVersion": "1.6.7",
+                        "remoteHighestBuildNumber": 18,
+                        "observedAt": "2026-08-13T00:00:00Z",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.6.7"))
+
     def test_identity_archives_prior_train_before_allocating_current_train(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

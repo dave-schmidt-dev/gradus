@@ -255,6 +255,44 @@ def _central_candidate_manifest(candidate: str) -> Path | None:
     return common_dir / "release-state" / PRODUCT / "candidates" / candidate / "manifest.json"
 
 
+def _failed_preupload_candidate_can_reserve_successor(candidate: str) -> bool:
+    """Return whether one consumed identity may seed a central successor.
+
+    App Store Connect cannot observe a build that failed locally before upload,
+    so its next-build proof still names the failed local build.  The central
+    release framework consumes that observation under its recorded correction
+    authorization and reserves the following build.  Keep this exception bound
+    to the active candidate and a terminal failed, never-uploaded ledger.
+    """
+
+    common_dir = _git_common_dir()
+    manifest_path = _central_candidate_manifest(candidate)
+    if common_dir is None or manifest_path is None:
+        return False
+    pointer = _read_json(common_dir / "release-state" / PRODUCT / "active-candidate.json")
+    if pointer is None or pointer.get("candidateId") != candidate:
+        return False
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return False
+    ledger = manifest_path.parent / "transitions.jsonl"
+    if ledger.is_symlink() or not ledger.is_file():
+        return False
+    try:
+        records = [
+            json.loads(line)
+            for line in ledger.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not records or not all(isinstance(record, Mapping) for record in records):
+        return False
+    uploaded = {"uploadAttemptStarted", "uploaded", "internalTestFlightReceipted"}
+    return records[-1].get("transition") == "failed" and not any(
+        record.get("transition") in uploaded for record in records
+    )
+
+
 def _central_candidate_record(candidate: str) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
     """Load the central manifest and its immutable artifact attestation."""
 
@@ -517,8 +555,13 @@ def _identity_proof_valid(*, marketing_version: str) -> bool:
     )
     if not valid:
         return False
-    manifest = _central_candidate_manifest(f"{marketing_version}-{proof['buildNumber']}")
-    return manifest is None or (not manifest.is_symlink() and not manifest.is_file())
+    candidate = f"{marketing_version}-{proof['buildNumber']}"
+    manifest = _central_candidate_manifest(candidate)
+    return (
+        manifest is None
+        or (not manifest.is_symlink() and not manifest.is_file())
+        or _failed_preupload_candidate_can_reserve_successor(candidate)
+    )
 
 
 def _archive_identity_proof() -> None:
