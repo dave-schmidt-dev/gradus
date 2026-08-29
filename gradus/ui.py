@@ -1052,15 +1052,14 @@ def build_provider_panel(
         elif spec:
             _add_usage_rows(body, snapshot.data, now, spec.windows)
 
-    if base_name == "OpenCode Go" and (
-        zen_credit := _zen_credit_text(snapshot.data.get("zen_credit"))
-    ):
+    if credit_entry := _provider_credit_entry(base_name, snapshot.data):
+        label, value = credit_entry
         body = Group(
             body,
             Text.assemble(
-                ("Zen credit", "text.muted"),
+                (label, "text.muted"),
                 ("  ", ""),
-                (zen_credit, "text.ink"),
+                (value, "text.ink"),
             ),
         )
 
@@ -1117,6 +1116,35 @@ def _add_usage_rows(
         )
 
 
+def _codex_credits_text(value: object) -> str | None:
+    """Format validated Codex credits as an integer or decimal string."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        return None
+    val = float(value)
+    if val.is_integer():
+        return f"{int(val):,}"
+    formatted = f"{val:,.2f}"
+    trimmed = formatted.rstrip("0")
+    return f"{trimmed}0" if trimmed.endswith(".") else trimmed
+
+
+def _dollar_credit_text(value: object) -> str | None:
+    """Format a validated dollar balance with two decimals."""
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        return None
+    return f"${float(value):.2f}"
+
+
 def _zen_credit_text(value: object) -> str | None:
     """Format a validated OpenCode Zen balance as USD with three decimals."""
     if (
@@ -1127,6 +1155,24 @@ def _zen_credit_text(value: object) -> str | None:
     ):
         return None
     return f"${float(value):.3f}"
+
+
+def _provider_credit_entry(name: str, data: dict[str, object] | None) -> tuple[str, str] | None:
+    """Extract (label, formatted_value) for a provider's optional credits."""
+    if not data:
+        return None
+    clean_name = name.removesuffix(" [HTTP]")
+    lower_name = clean_name.lower()
+    if "opencode" in lower_name:
+        credit = _zen_credit_text(data.get("zen_credit"))
+        return ("Zen credit", credit) if credit else None
+    if "codex" in lower_name:
+        credits = _codex_credits_text(data.get("credits"))
+        return ("Credits", credits) if credits else None
+    if "claude" in lower_name or "cursor" in lower_name:
+        balance = _dollar_credit_text(data.get("credit_balance"))
+        return ("Credit", balance) if balance else None
+    return None
 
 
 def _antigravity_cg_data(data: dict[str, object]) -> dict[str, object]:
@@ -1919,6 +1965,9 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
             pace = _billing_cycle_pace_label(pct_left, start, end, now)
             part = f"{label}:{_percent_str(pct_left)}% {_compact_pace(pace)}"
             parts.append((part, _pace_style(part)))
+        if credit_entry := _provider_credit_entry(name, snapshot.data):
+            label, value = credit_entry
+            parts.append((f"{label}:{value}", "text.ink"))
         return parts
 
     # --- Vibe (percent-used → percent-remaining, billing-cycle pace) ---
@@ -1958,8 +2007,9 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
         part = f"{window.session_label}:{pct}% {_compact_pace(pace)}"
         parts.append((part, _pace_style(part)))
 
-    if name == "OpenCode Go" and (credit := _zen_credit_text(snapshot.data.get("zen_credit"))):
-        parts.append((f"Zen credit:{credit}", "text.ink"))
+    if credit_entry := _provider_credit_entry(name, snapshot.data):
+        label, value = credit_entry
+        parts.append((f"{label}:{value}", "text.ink"))
 
     # Antigravity C+G windows
     if name == "Antigravity":

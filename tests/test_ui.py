@@ -29,17 +29,21 @@ from gradus.ui import (
     PaceLabel,
     PercentageBar,
     _build_compact_lines,
+    _codex_credits_text,
     _compact_pace,
     _compact_window_parts,
+    _dollar_credit_text,
     _expected_remaining,
     _extract_depleted_reset_str,
     _format_pace_delta,
     _format_percent_value,
     _format_reset_display,
     _percent_str,
+    _provider_credit_entry,
     _provider_is_empty,
     _ResponsiveDashboardBody,
     _style_for_signal,
+    _zen_credit_text,
     build_dashboard,
     build_loading_screen,
     build_micro_depleted_panel,
@@ -803,6 +807,177 @@ class ProviderPanelTests(unittest.TestCase):
         )
         parts = [text for text, _style in _compact_window_parts(snap, self.now)]
         self.assertIn("Zen credit:$12.345", parts)
+
+    def test_codex_panel_shows_integer_credits_only_when_present(self) -> None:
+        data = {
+            "five_hour_percent_left": 75,
+            "weekly_percent_left": 90,
+            "credits": 2500,
+        }
+        snap = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("Credits", output)
+        self.assertIn("2,500", output)
+
+        data_single = {
+            "five_hour_percent_left": 75,
+            "weekly_percent_left": 90,
+            "credits": 125,
+        }
+        snap_single = ProviderSnapshot(name="Codex", ok=True, source="cli", data=data_single)
+        output_single = _capture(build_provider_panel(snap_single, self.now), width=50)
+        self.assertIn("Credits", output_single)
+        self.assertIn("125", output_single)
+
+        without_credits = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={key: value for key, value in data.items() if key != "credits"},
+        )
+        self.assertNotIn(
+            "Credits", _capture(build_provider_panel(without_credits, self.now), width=50)
+        )
+
+        invalid_credits = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 90, "credits": -10},
+        )
+        self.assertNotIn(
+            "Credits", _capture(build_provider_panel(invalid_credits, self.now), width=50)
+        )
+
+    def test_codex_compact_line_shows_integer_credits(self) -> None:
+        snap = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 90, "credits": 2500},
+        )
+        parts = [text for text, _style in _compact_window_parts(snap, self.now)]
+        self.assertIn("Credits:2,500", parts)
+
+        snap_small = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 90, "credits": 125},
+        )
+        parts_small = [text for text, _style in _compact_window_parts(snap_small, self.now)]
+        self.assertIn("Credits:125", parts_small)
+
+    def test_claude_panel_shows_two_decimal_credit_balance_only_when_present(self) -> None:
+        data = {
+            "session_percent_left": 75,
+            "weekly_percent_left": 90,
+            "credit_balance": 87.75,
+        }
+        snap = ProviderSnapshot(name="Claude", ok=True, source="cli", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("Credit", output)
+        self.assertIn("$87.75", output)
+
+        without_balance = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={key: value for key, value in data.items() if key != "credit_balance"},
+        )
+        self.assertNotIn(
+            "Credit", _capture(build_provider_panel(without_balance, self.now), width=50)
+        )
+
+        negative_balance = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 90, "credit_balance": -5.0},
+        )
+        self.assertNotIn(
+            "Credit", _capture(build_provider_panel(negative_balance, self.now), width=50)
+        )
+
+    def test_claude_compact_line_shows_two_decimal_credit_balance(self) -> None:
+        snap = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 90, "credit_balance": 87.75},
+        )
+        parts = [text for text, _style in _compact_window_parts(snap, self.now)]
+        self.assertIn("Credit:$87.75", parts)
+
+    def test_cursor_panel_shows_two_decimal_credit_balance_only_when_present(self) -> None:
+        data = {
+            "auto_percent_used": 20,
+            "api_percent_used": 30,
+            "credit_balance": 5.0,
+        }
+        snap = ProviderSnapshot(name="Cursor", ok=True, source="cli", data=data)
+        output = _capture(build_provider_panel(snap, self.now), width=50)
+        self.assertIn("Credit", output)
+        self.assertIn("$5.00", output)
+
+        without_balance = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="cli",
+            data={"auto_percent_used": 20, "api_percent_used": 30},
+        )
+        self.assertNotIn(
+            "Credit", _capture(build_provider_panel(without_balance, self.now), width=50)
+        )
+
+    def test_cursor_compact_line_shows_two_decimal_credit_balance(self) -> None:
+        snap = ProviderSnapshot(
+            name="Cursor",
+            ok=True,
+            source="cli",
+            data={"auto_percent_used": 20, "api_percent_used": 30, "credit_balance": 5.0},
+        )
+        parts = [text for text, _style in _compact_window_parts(snap, self.now)]
+        self.assertIn("Credit:$5.00", parts)
+
+    def test_provider_mismatch_and_unrelated_omit_credits(self) -> None:
+        # Codex with zen_credit or credit_balance
+        codex_mismatch = ProviderSnapshot(
+            name="Codex",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 90, "zen_credit": 12.345, "credit_balance": 50.0},
+        )
+        output = _capture(build_provider_panel(codex_mismatch, self.now), width=50)
+        self.assertNotIn("Zen credit", output)
+        self.assertNotIn("Credit", output)
+        self.assertNotIn("Credits", output)
+        self.assertEqual(
+            _compact_window_parts(codex_mismatch, self.now), [("1w:90% —", "text.muted")]
+        )
+
+        # Claude with credits or zen_credit
+        claude_mismatch = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 90, "credits": 500, "zen_credit": 12.345},
+        )
+        output_claude = _capture(build_provider_panel(claude_mismatch, self.now), width=50)
+        self.assertNotIn("Credits", output_claude)
+        self.assertNotIn("Zen credit", output_claude)
+        self.assertNotIn("Credit", output_claude)
+
+        # Unrelated provider (Vibe) with credit keys
+        vibe_mismatch = ProviderSnapshot(
+            name="Vibe",
+            ok=True,
+            source="cli",
+            data={"usage_percent": 20, "credit_balance": 10.0, "credits": 100},
+        )
+        output_vibe = _capture(build_provider_panel(vibe_mismatch, self.now), width=50)
+        self.assertNotIn("Credit", output_vibe)
+        self.assertNotIn("Credits", output_vibe)
 
     def test_panel_shows_decimal_for_fractional_percent_below_ten(self) -> None:
         snap = ProviderSnapshot(
@@ -3499,3 +3674,68 @@ class DynamicMicroDepletedSingleTests(unittest.TestCase):
 
         pair_output = _capture(DynamicMicroDepletedPair(snap, snap, self.now), width=50)
         self.assertEqual(pair_output.count("╭"), 2)
+
+
+class ProviderCreditHelpersTests(unittest.TestCase):
+    def test_codex_credits_text(self) -> None:
+        self.assertEqual(_codex_credits_text(125), "125")
+        self.assertEqual(_codex_credits_text(2500), "2,500")
+        self.assertEqual(_codex_credits_text(10000), "10,000")
+        self.assertEqual(_codex_credits_text(125.5), "125.5")
+        self.assertEqual(_codex_credits_text(125.25), "125.25")
+        self.assertEqual(_codex_credits_text(100.004), "100.0")
+        self.assertEqual(_codex_credits_text(0), "0")
+        self.assertIsNone(_codex_credits_text(-10))
+        self.assertIsNone(_codex_credits_text(float("nan")))
+        self.assertIsNone(_codex_credits_text(float("inf")))
+        self.assertIsNone(_codex_credits_text(None))
+        self.assertIsNone(_codex_credits_text(True))
+        self.assertIsNone(_codex_credits_text(False))
+        self.assertIsNone(_codex_credits_text("100"))
+
+    def test_dollar_credit_text(self) -> None:
+        self.assertEqual(_dollar_credit_text(87.75), "$87.75")
+        self.assertEqual(_dollar_credit_text(5), "$5.00")
+        self.assertEqual(_dollar_credit_text(0), "$0.00")
+        self.assertIsNone(_dollar_credit_text(-5))
+        self.assertIsNone(_dollar_credit_text(float("nan")))
+        self.assertIsNone(_dollar_credit_text(float("inf")))
+        self.assertIsNone(_dollar_credit_text(None))
+        self.assertIsNone(_dollar_credit_text(True))
+        self.assertIsNone(_dollar_credit_text(False))
+        self.assertIsNone(_dollar_credit_text("5.00"))
+
+    def test_zen_credit_text(self) -> None:
+        self.assertEqual(_zen_credit_text(12.345), "$12.345")
+        self.assertEqual(_zen_credit_text(0), "$0.000")
+        self.assertIsNone(_zen_credit_text(-0.001))
+        self.assertIsNone(_zen_credit_text(float("nan")))
+        self.assertIsNone(_zen_credit_text(None))
+        self.assertIsNone(_zen_credit_text(True))
+        self.assertIsNone(_zen_credit_text(False))
+
+    def test_provider_credit_entry(self) -> None:
+        self.assertEqual(
+            _provider_credit_entry("OpenCode Go", {"zen_credit": 12.345}),
+            ("Zen credit", "$12.345"),
+        )
+        self.assertEqual(
+            _provider_credit_entry("Codex", {"credits": 2500}),
+            ("Credits", "2,500"),
+        )
+        self.assertEqual(
+            _provider_credit_entry("Claude", {"credit_balance": 87.75}),
+            ("Credit", "$87.75"),
+        )
+        self.assertEqual(
+            _provider_credit_entry("Cursor", {"credit_balance": 5.0}),
+            ("Credit", "$5.00"),
+        )
+        self.assertIsNone(_provider_credit_entry("Codex", {"zen_credit": 12.345}))
+        self.assertIsNone(_provider_credit_entry("Claude", {"credits": 500}))
+        self.assertIsNone(_provider_credit_entry("Cursor", {"credits": 500}))
+        self.assertIsNone(_provider_credit_entry("OpenCode Go", {"credits": 500}))
+        self.assertIsNone(_provider_credit_entry("Vibe", {"credit_balance": 10.0}))
+        self.assertIsNone(_provider_credit_entry("Copilot", {"credit_balance": 10.0}))
+        self.assertIsNone(_provider_credit_entry("Antigravity", {"credits": 100}))
+        self.assertIsNone(_provider_credit_entry("Unknown", {"credits": 100}))

@@ -21,17 +21,39 @@ struct MenuHeader: View {
         providers.filter { $0.rankingNeedsAttention(localThreshold: localThreshold) }.count
     }
 
+    static func statusText(
+        providers: [ProviderEntry],
+        localThreshold: Double = PublisherViewModel.defaultLocalWarningThresholdPercent
+    ) -> String {
+        if providers.isEmpty {
+            return "usage unavailable"
+        }
+        let count = providers.filter { $0.rankingNeedsAttention(localThreshold: localThreshold) }.count
+        if count > 0 {
+            return "\(count) low"
+        }
+        return "all healthy"
+    }
+
+    var statusText: String {
+        Self.statusText(providers: providers, localThreshold: localThreshold)
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             Text("Gradus")
                 .font(.headline)
             Spacer()
-            if attentionCount > 0 {
-                Text("\(attentionCount) low")
+            if providers.isEmpty {
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if attentionCount > 0 {
+                Text(statusText)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(SignalColor.forLevel(.red))
             } else {
-                Text("all healthy")
+                Text(statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -266,11 +266,12 @@ validate_inv7_staging_contract() {
     "$SCRIPT_DIR/GradusMacTests/ProviderListViewSnapshotTests.swift"
   )
   snapshot_assertion_count="$(rg -o 'assertStagedSnapshot\(' "${snapshot_files[@]}" | wc -l | tr -d ' ')"
-  [[ "$snapshot_assertion_count" -eq 5 ]] || return 1
+  [[ "$snapshot_assertion_count" -eq 6 ]] || return 1
   ! rg -q 'assertSnapshot\(' "${snapshot_files[@]}" || return 1
   grep -Fq 'environment[stagedSnapshotRootEnvironmentKey]' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
   grep -Fq '!rawRoot.isEmpty' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
-  grep -Fq 'fileExists(atPath: root.path, isDirectory: &isDirectory)' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
+  rg -Uq 'FileManager\.default\.fileExists\(\s*atPath: root\.path,\s*isDirectory: &isDirectory\s*\)' \
+    "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
   grep -Fq 'snapshotDirectory: snapshotDirectory.path' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
 }
 
@@ -546,8 +547,8 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
 # otherwise the image count can hide a zero-test UI target.
 snapshot_count="${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"
 ios_ui_test_count="$(rg --no-heading '^\s*func test' "$SCRIPT_DIR/GradusiOSUITests" -g '*.swift' | wc -l | tr -d ' ')"
-[[ "$ios_ui_test_count" -eq 9 ]] ||
-  fail "expected 9 GradusiOSUITests workflows, found $ios_ui_test_count"
+[[ "$ios_ui_test_count" -eq 10 ]] ||
+  fail "expected 10 GradusiOSUITests workflows, found $ios_ui_test_count"
 ipad_leg_index=-1
 iphone_ui_leg_index=-1
 for ((index = 0; index < leg_count; index++)); do

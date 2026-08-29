@@ -17,7 +17,8 @@ struct ProviderTriageTests {
         ok: Bool = true,
         percentLeft: Double? = nil,
         paceDelta: Double? = nil,
-        resetISO: String? = nil
+        resetISO: String? = nil,
+        data: [String: JSONValue] = [:]
     ) -> ProviderEntry {
         ProviderEntry(
             name: name,
@@ -28,7 +29,7 @@ struct ProviderTriageTests {
                     id: "5h", percentLeft: $0, resetISO: resetISO, windowHours: 5, paceDelta: paceDelta
                 )]
             } ?? [],
-            data: [:],
+            data: data,
             observedAt: nil
         )
     }
@@ -268,5 +269,99 @@ struct ProviderTriageTests {
             observedAt: nil
         )
         #expect(ProviderTriage.worstWindow(entry)?.id == "weekly")
+    }
+
+    // MARK: - MenuHeader & Credit Parity
+
+    @Test func menuHeaderReportsUnavailableWhenEmptyAttentionWhenLowAndHealthyWhenClear() {
+        #expect(MenuHeader.statusText(providers: []) == "usage unavailable")
+
+        let healthy = [
+            provider("Codex", percentLeft: 80, paceDelta: 0.05),
+            provider("Claude", percentLeft: 90, paceDelta: 0.10)
+        ]
+        #expect(MenuHeader.statusText(providers: healthy) == "all healthy")
+
+        let oneLow = [
+            provider("Codex", percentLeft: 80, paceDelta: 0.05),
+            provider("Broken", ok: false)
+        ]
+        #expect(MenuHeader.statusText(providers: oneLow) == "1 low")
+
+        let twoLow = [
+            provider("Codex", percentLeft: 10, paceDelta: -0.40),
+            provider("Broken", ok: false)
+        ]
+        #expect(MenuHeader.statusText(providers: twoLow) == "2 low")
+    }
+
+    @Test func providerRowsShowOptionalCreditParityAndOmitInvalidData() {
+        // Valid provider credit summaries
+        let opencode = provider("OpenCode Go", percentLeft: 80, data: ["zen_credit": .double(12.345)])
+        #expect(providerCreditSummary(opencode) == "Zen credit $12.345")
+        #expect(menuProviderCredit(opencode)?.label == "Zen credit")
+        #expect(menuProviderCredit(opencode)?.value == "$12.345")
+
+        let codex = provider("Codex", percentLeft: 80, data: ["credits": .double(2500)])
+        #expect(providerCreditSummary(codex) == "Credits 2,500")
+        #expect(menuProviderCredit(codex)?.label == "Credits")
+        #expect(menuProviderCredit(codex)?.value == "2,500")
+
+        let codexInteger = provider("Codex", percentLeft: 80, data: ["credits": .double(125)])
+        #expect(providerCreditSummary(codexInteger) == "Credits 125")
+
+        let claude = provider("Claude", percentLeft: 80, data: ["credit_balance": .double(87.75)])
+        #expect(providerCreditSummary(claude) == "Credit $87.75")
+        #expect(menuProviderCredit(claude)?.label == "Credit")
+        #expect(menuProviderCredit(claude)?.value == "$87.75")
+
+        let cursor = provider("Cursor", percentLeft: 80, data: ["credit_balance": .double(5)])
+        #expect(providerCreditSummary(cursor) == "Credit $5.00")
+        #expect(menuProviderCredit(cursor)?.label == "Credit")
+        #expect(menuProviderCredit(cursor)?.value == "$5.00")
+
+        // Missing data
+        let missingCredit = provider("Codex", percentLeft: 80)
+        #expect(providerCreditSummary(missingCredit) == nil)
+        #expect(menuProviderCredit(missingCredit) == nil)
+
+        // Negative data
+        let negativeZen = provider("OpenCode Go", percentLeft: 80, data: ["zen_credit": .double(-1.0)])
+        #expect(providerCreditSummary(negativeZen) == nil)
+
+        let negativeCredits = provider("Codex", percentLeft: 80, data: ["credits": .double(-100)])
+        #expect(providerCreditSummary(negativeCredits) == nil)
+
+        let negativeClaude = provider("Claude", percentLeft: 80, data: ["credit_balance": .double(-5.50)])
+        #expect(providerCreditSummary(negativeClaude) == nil)
+
+        // Non-finite data
+        let nanCredit = provider("Claude", percentLeft: 80, data: ["credit_balance": .double(.nan)])
+        #expect(providerCreditSummary(nanCredit) == nil)
+
+        let infCredit = provider("Cursor", percentLeft: 80, data: ["credit_balance": .double(.infinity)])
+        #expect(providerCreditSummary(infCredit) == nil)
+
+        // Provider-mismatched data
+        let codexWithZen = provider("Codex", percentLeft: 80, data: ["zen_credit": .double(12.345)])
+        #expect(providerCreditSummary(codexWithZen) == nil)
+
+        let codexWithBalance = provider("Codex", percentLeft: 80, data: ["credit_balance": .double(50.0)])
+        #expect(providerCreditSummary(codexWithBalance) == nil)
+
+        let claudeWithZen = provider("Claude", percentLeft: 80, data: ["zen_credit": .double(12.345)])
+        #expect(providerCreditSummary(claudeWithZen) == nil)
+
+        let claudeWithCredits = provider("Claude", percentLeft: 80, data: ["credits": .double(500)])
+        #expect(providerCreditSummary(claudeWithCredits) == nil)
+
+        let cursorWithCredits = provider("Cursor", percentLeft: 80, data: ["credits": .double(500)])
+        #expect(providerCreditSummary(cursorWithCredits) == nil)
+
+        let opencodeWithBalance = provider("OpenCode Go", percentLeft: 80, data: ["credit_balance": .double(10.0)])
+        #expect(providerCreditSummary(opencodeWithBalance) == nil)
+
+        let unrelated = provider("Vibe", percentLeft: 80, data: ["credit_balance": .double(10.0)])
+        #expect(providerCreditSummary(unrelated) == nil)
     }
 }

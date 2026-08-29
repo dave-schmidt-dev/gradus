@@ -180,7 +180,7 @@ private struct ProviderRow: View {
             .frame(height: density.barHeight)
 
             MenuWindowMetadata(window: window, now: now, density: density)
-            zenCreditRow
+            creditRow
         }
     }
 
@@ -226,36 +226,68 @@ private struct ProviderRow: View {
                     MenuWindowRow(provider: provider, window: window, now: now, density: density)
                 }
             }
-            zenCreditRow
+            creditRow
         }
     }
 
-    private var zenCreditText: String? {
-        guard provider.name == "OpenCode Go",
-              let credit = provider.data["zen_credit"]?.doubleValue,
-              credit.isFinite,
-              credit >= 0 else {
-            return nil
-        }
-        return String(
-            format: "$%.3f", locale: Locale(identifier: "en_US_POSIX"), credit
-        )
+    private var creditSummary: (label: String, value: String)? {
+        menuProviderCredit(provider)
     }
 
     @ViewBuilder
-    private var zenCreditRow: some View {
-        if let credit = zenCreditText {
+    private var creditRow: some View {
+        if let (label, value) = creditSummary {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Zen credit")
+                Text(label)
                     .font(density.metadataFont.weight(.medium))
                 Spacer(minLength: 4)
-                Text(credit)
+                Text(value)
                     .font(density.metadataFont.monospacedDigit())
             }
             .foregroundStyle(.secondary)
             .accessibilityElement(children: .combine)
         }
     }
+}
+
+func menuProviderCredit(_ provider: ProviderEntry) -> (label: String, value: String)? {
+    let name = provider.name.lowercased()
+    if name.contains("opencode"),
+       let credit = validCredit(provider.data["zen_credit"]?.doubleValue) {
+        return (
+            "Zen credit",
+            String(format: "$%.3f", locale: Locale(identifier: "en_US_POSIX"), credit)
+        )
+    }
+    if name.contains("codex"),
+       let credits = validCredit(provider.data["credits"]?.doubleValue) {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = true
+        formatter.minimumFractionDigits = credits.rounded() == credits ? 0 : 1
+        formatter.maximumFractionDigits = 2
+        guard let amount = formatter.string(from: NSNumber(value: credits)) else { return nil }
+        return ("Credits", amount)
+    }
+    if name.contains("claude") || name.contains("cursor"),
+       let balance = validCredit(provider.data["credit_balance"]?.doubleValue) {
+        return (
+            "Credit",
+            String(format: "$%.2f", locale: Locale(identifier: "en_US_POSIX"), balance)
+        )
+    }
+    return nil
+}
+
+func providerCreditSummary(_ provider: ProviderEntry) -> String? {
+    guard let (label, value) = menuProviderCredit(provider) else { return nil }
+    return "\(label) \(value)"
+}
+
+private func validCredit(_ value: Double?) -> Double? {
+    guard let value, value.isFinite, value >= 0 else { return nil }
+    return value
 }
 
 private struct MenuWindowRow: View {
