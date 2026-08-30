@@ -230,10 +230,8 @@ struct DashboardContent: View {
             SettingsView(
                 dashboardViewModel: viewModel,
                 isSampleMode: isSampleMode,
-                onExploreSample: onExploreSample,
                 onExitSample: onExitSample,
                 onResetSample: onResetSample,
-                isSampleEntryInProgress: isSampleEntryInProgress,
                 initialWarningAlertsPending: initialWarningAlertsPending
             )
         }

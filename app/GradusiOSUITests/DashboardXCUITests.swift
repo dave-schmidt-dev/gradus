@@ -79,6 +79,18 @@ final class DashboardXCUITests: XCTestCase {
         XCTAssertTrue(staticText(containing: "iCloud syncing is unaffected", in: app).exists)
     }
 
+    func testNormalSettingsExplainsWidgetSizingAndOmitsSampleEntry() {
+        let app = launch(.noAccount)
+        openSettings(in: app)
+
+        XCTAssertFalse(app.buttons["explore-sample-settings"].exists)
+        XCTAssertFalse(app.staticTexts["Explore Sample"].exists)
+        XCTAssertTrue(app.staticTexts["Dashboard card size"].exists)
+        XCTAssertTrue(staticText(containing: "automatic on this device", in: app).exists)
+        XCTAssertTrue(staticText(containing: "This screen only chooses providers", in: app).exists)
+        XCTAssertTrue(staticText(containing: "iOS Home Screen widget gallery", in: app).exists)
+    }
+
     func testWarningAlertsRequestingShowsProgressWithoutSystemPrompt() {
         let app = launch(.warningAlertsRequesting)
         openSettings(in: app)

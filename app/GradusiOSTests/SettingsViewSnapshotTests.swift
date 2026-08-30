@@ -141,6 +141,14 @@ private func makeViewModel(
     #expect(NotificationAuthorization.denied == .denied)
 }
 
+@Test func settingsCopyDistinguishesDashboardCardsFromWidgetSizing() {
+    #expect(SettingsView.dashboardCardSizeTitle == "Dashboard card size")
+    #expect(SettingsView.dashboardCardSizeDescription.contains("dashboard cards only"))
+    #expect(SettingsView.dashboardCardSizeDescription.contains("widget gallery"))
+    #expect(SettingsView.widgetDescription.contains("only chooses providers"))
+    #expect(SettingsView.widgetDescription.contains("widget gallery"))
+}
+
 /// Tall enough to contain every control, including the last one.
 ///
 /// Raised from 500 when the density picker was added (2026-08-06): at 500 the

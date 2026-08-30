@@ -17,10 +17,8 @@ import UIKit
 struct SettingsView: View {
     @ObservedObject var dashboardViewModel: DashboardViewModel
     let isSampleMode: Bool
-    let onExploreSample: () -> Void
     let onExitSample: () -> Void
     let onResetSample: () -> Void
-    let isSampleEntryInProgress: Bool
     /// Only supplied by the UI-test launch fixture. Normal launches start
     /// false and enter this state only after the user enables Warning alerts.
     let initialWarningAlertsPending: Bool
@@ -32,18 +30,14 @@ struct SettingsView: View {
     init(
         dashboardViewModel: DashboardViewModel,
         isSampleMode: Bool = false,
-        onExploreSample: @escaping () -> Void = {},
         onExitSample: @escaping () -> Void = {},
         onResetSample: @escaping () -> Void = {},
-        isSampleEntryInProgress: Bool = false,
         initialWarningAlertsPending: Bool = false
     ) {
         self.dashboardViewModel = dashboardViewModel
         self.isSampleMode = isSampleMode
-        self.onExploreSample = onExploreSample
         self.onExitSample = onExitSample
         self.onResetSample = onResetSample
-        self.isSampleEntryInProgress = isSampleEntryInProgress
         self.initialWarningAlertsPending = initialWarningAlertsPending
         _warningAlertPermissionRequestPending = State(
             initialValue: initialWarningAlertsPending
@@ -89,7 +83,6 @@ struct SettingsView: View {
                     sampleSection
                 } else {
                     warningAlertsSection
-                    exploreSampleSection
                 }
                 connectedComputerSection
                 localDisplaySection

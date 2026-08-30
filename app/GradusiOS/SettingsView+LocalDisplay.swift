@@ -7,6 +7,12 @@ import UIKit
 /// exhausted-provider visibility toggle. Split out of `SettingsView.swift`
 /// to keep that file's type body under SwiftLint's length gate.
 extension SettingsView {
+    static let dashboardCardSizeTitle = "Dashboard card size"
+    static let dashboardCardSizeDescription =
+        "These controls affect dashboard cards only. Widget size is selected in the iOS Home Screen widget gallery."
+    static let widgetDescription =
+        "This screen only chooses providers. Choose the widget size in the iOS Home Screen widget gallery."
+
     var localDisplaySection: some View {
         Section("Local Display") {
             VStack(alignment: .leading, spacing: 8) {
@@ -28,17 +34,17 @@ extension SettingsView {
 
             if dashboardViewModel.availableCardColumns <= 1 {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Card size")
+                    Text(Self.dashboardCardSizeTitle)
                         .font(.headline)
                     Text("Automatic · 1 column")
-                    Text("Card size is automatic on this device.")
+                    Text("Dashboard card size is automatic on this device.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Card size")
+                    Text(Self.dashboardCardSizeTitle)
                         .font(.headline)
                     Toggle("Automatic", isOn: automaticCardSizeBinding)
                         .accessibilityHint("When on, Gradus chooses the largest card layout that fits this device.")
@@ -70,12 +76,9 @@ extension SettingsView {
                         },
                         isEnabled: cardSizeSliderEnabled
                     )
-                    Text(
-                        "Automatic is separate from the size slider. Small uses more columns; Large uses fewer. "
-                            + "Every position keeps all provider windows visible."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    Text(Self.dashboardCardSizeDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
             }
@@ -127,7 +130,7 @@ extension SettingsView {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("widget-providers-button")
-            Text("Choose which providers can appear in the small and medium widgets.")
+            Text(Self.widgetDescription)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -209,7 +212,7 @@ private struct QuietDiscreteSlider: UIViewRepresentable {
         slider.addTarget(
             context.coordinator, action: #selector(Coordinator.valueChanged(_:)), for: .valueChanged
         )
-        slider.accessibilityLabel = "Card size"
+        slider.accessibilityLabel = SettingsView.dashboardCardSizeTitle
         update(slider)
         return slider
     }

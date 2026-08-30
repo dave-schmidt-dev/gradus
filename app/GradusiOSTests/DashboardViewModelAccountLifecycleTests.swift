@@ -70,8 +70,6 @@ struct LiveLifecycleTransitionTests {
     func sampleEntryPendingLabelsAreVisibleAndDistinct() {
         #expect(EmptyStateView.exploreSampleButtonTitle(isInProgress: false) == "Explore Sample")
         #expect(EmptyStateView.exploreSampleButtonTitle(isInProgress: true) == "Entering Sample…")
-        #expect(SettingsView.exploreSampleButtonTitle(isInProgress: false) == "Explore Sample")
-        #expect(SettingsView.exploreSampleButtonTitle(isInProgress: true) == "Entering Sample…")
     }
 
     @Test(arguments: ["iPhone", "iPad"])

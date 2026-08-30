@@ -26,7 +26,7 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
     // This is the fixed route-to-fixture inventory for the release walkthrough.
     // swiftlint:disable:next cyclomatic_complexity
     private func appFixture(for route: String) -> String {
-        if route == "sample-entry-progress" || route == "settings-explore-progress" {
+        if route == "sample-entry-progress" {
             return "sample-entry-in-progress"
         }
         if route.hasPrefix("widget-system-") {
@@ -96,7 +96,7 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
             openSettings(in: app); reveal(app.staticTexts["Automatic · 1 column"], in: app)
         case "settings-card-size-result":
             openSettings(in: app); tap("Automatic", in: app)
-            slider("Card size", in: app).adjust(toNormalizedSliderPosition: 1)
+            slider("Dashboard card size", in: app).adjust(toNormalizedSliderPosition: 1)
         case "settings-show-exhausted-result": openSettings(in: app); tap("show-exhausted-toggle", in: app)
         case "settings-hide-exhausted-result":
             openSettings(in: app); tap("show-exhausted-toggle", in: app); tap("show-exhausted-toggle", in: app)
@@ -123,8 +123,6 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
             openSettings(in: app); tap("Open iOS Settings", in: app)
             let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
             XCTAssertTrue(settings.wait(for: .runningForeground, timeout: 30))
-        case "settings-explore-progress": openSettings(in: app)
-        case "settings-explore-result": openSettings(in: app); tap("explore-sample-settings", in: app)
         case "settings-alert-off-result": openSettings(in: app); tap("warning-alerts-toggle", in: app)
         case "widget-system-gallery": openWidgetGallery(app: app)
         case "widget-system-add": openGradusWidgetAddSurface(app: app)
@@ -158,9 +156,8 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
         if route == "widget-system-gallery" {
             return XCUIApplication(bundleIdentifier: "com.apple.springboard").descendants(matching: .any)[marker]
         }
-        if route == "sample-entry-progress" || route == "settings-explore-progress" {
-            let identifier = route == "sample-entry-progress" ? "explore-sample" : "explore-sample-settings"
-            return app.buttons.matching(identifier: identifier)
+        if route == "sample-entry-progress" {
+            return app.buttons.matching(identifier: "explore-sample")
                 .matching(NSPredicate(format: "value == %@", "In progress"))
                 .firstMatch
         }

@@ -47,7 +47,7 @@ class CaptureContractTests(unittest.TestCase):
         routes = re.findall(
             r'^\s+"([^|]+)\|([^|]+)\|([^|]+)\|([^"|]+\.png)"', self.shell, re.MULTILINE
         )
-        self.assertEqual(len(routes), 43)
+        self.assertEqual(len(routes), 41)
         self.assertEqual(len({route[0] for route in routes}), len(routes))
         self.assertEqual(len({route[3] for route in routes}), len(routes))
         self.assertEqual(
