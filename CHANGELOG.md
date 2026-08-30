@@ -9,6 +9,18 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## 1.10.1 — 2026-08-29
+
+### Fixed
+
+- Clarified widget sizing and removed the normal Settings Explore Sample path.
+
+### TestFlight focus
+
+- In the iOS widget gallery, select the actual small and medium Gradus widgets
+  and confirm each renders the expected provider layout.
+- Filter providers in Settings and confirm the widget follows that filtering.
+
 ## 1.10.0 — 2026-08-29
 
 ### Added
