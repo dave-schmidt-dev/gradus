@@ -1646,6 +1646,7 @@ class TestProviderRefreshSchedule(unittest.TestCase):
     def test_claude_cooldown_and_rate_limit_backoff_are_preserved(self) -> None:
         normal = self._payload()
         limited = self._payload(claude_error="HTTP 429 rate limited")
+        expired = self._payload(claude_error="Claude Code session expired: run `claude auth login`")
         synthetic_disabled = self._payload(claude_error="provider not enabled")
 
         self.assertEqual(
@@ -1665,6 +1666,12 @@ class TestProviderRefreshSchedule(unittest.TestCase):
         )
         self.assertFalse(_claude_probe_is_due(limited, self.BASE + timedelta(seconds=3599)))
         self.assertTrue(_claude_probe_is_due(limited, self.BASE + timedelta(seconds=3600)))
+        self.assertEqual(
+            _provider_next_probe_at(expired, "Claude", self.BASE),
+            self.BASE + timedelta(seconds=3600),
+        )
+        self.assertFalse(_claude_probe_is_due(expired, self.BASE + timedelta(seconds=3599)))
+        self.assertTrue(_claude_probe_is_due(expired, self.BASE + timedelta(seconds=3600)))
 
     def test_rate_limited_claude_is_deferred_safely_before_one_hour(self) -> None:
         raw_detail = "HTTP 429 rate limited raw-account-detail"
@@ -1685,6 +1692,24 @@ class TestProviderRefreshSchedule(unittest.TestCase):
         self.assertEqual(statuses, [("Claude", 1)])
         self.assertEqual(snapshots[0].source, "snapshot")
         self.assertNotIn("raw-account-detail", repr(statuses))
+
+    def test_claude_cooldown_defers_session_expiry_before_one_hour(self) -> None:
+        payload = self._payload(claude_error="Claude Code session expired: run `claude auth login`")
+        provider = MagicMock()
+        statuses: list[tuple[str, int]] = []
+        scheduled = _schedule_refresh_providers(
+            [("Claude", provider)],
+            payload,
+            self.BASE + timedelta(seconds=3599),
+            on_deferred=lambda name, seconds: statuses.append((name, seconds)),
+        )
+
+        with patch("gradus.__main__.fetch_provider_snapshot") as fetch:
+            snapshots = collect_snapshots(scheduled, False)
+
+        fetch.assert_not_called()
+        self.assertEqual(statuses, [("Claude", 1)])
+        self.assertEqual(snapshots[0].source, "snapshot")
 
 
 class TestCredentialAwareRefresh(unittest.TestCase):
