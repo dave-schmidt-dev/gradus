@@ -2,154 +2,21 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
-[[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]] || {
-  echo "release-testflight: checkout root could not be verified" >&2
-  exit 4
-}
-
-CENTRAL_ROOT="$ROOT/../apple_developer"
-ADAPTER="$ROOT/.release/release-adapter.json"
-# `release_tools` declares `requires-python = ">=3.11"`, and since
-# apple_developer's `809c413` its `workflow.py` imports `datetime.UTC`, which
-# 3.9 does not have. macOS `/usr/bin/python3` is 3.9, so invoking the central
-# package with it dies at import. gradus's own scripts stay 3.9-compatible and
-# keep using `/usr/bin/python3` deliberately (`96fee19`); this resolution
-# applies only to invocations of the central package.
-release_python() {
-  local candidate
-  # Absolute prefixes are listed alongside the PATH names on purpose: these
-  # wrappers must work under a minimal PATH (Git hooks, launchd, and the
-  # `release-testflight` tests all run them with `PATH=<stubs>:/bin:/usr/bin`),
-  # which is what the previous hardcoded absolute interpreter satisfied.
-  for candidate in \
-    "${GRADUS_RELEASE_PYTHON:-}" \
-    python3 python3.13 python3.12 python3.11 \
-    /opt/homebrew/bin/python3 /usr/local/bin/python3 \
-    /usr/bin/python3; do
-    [[ -n "$candidate" ]] || continue
-    candidate="$(command -v "$candidate" 2>/dev/null)" || continue
-    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || continue
-    printf '%s\n' "$candidate"
-    return 0
-  done
-  return 1
-}
-PYTHON_BIN="$(release_python)" || {
-  echo "release-testflight: no Python >= 3.11 is available for release_tools; set GRADUS_RELEASE_PYTHON" >&2
-  exit 4
-}
-if [[ -x "${HOME:-}/.agent/bin/bws-secret-exec" ]]; then
-  PATH="$HOME/.agent/bin:$PATH"
-  export PATH
-fi
-[[ -f "$CENTRAL_ROOT/release_tools/__main__.py" && -f "$ADAPTER" ]] || {
-  echo "release-testflight: central release_tools or adapter is unavailable" >&2
-  exit 4
-}
 
 case "${1:-}" in
   --prepare-only)
-    [[ $# -eq 1 ]] || { echo "release-testflight: --prepare-only takes no extra arguments" >&2; exit 64; }
-    git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
-      echo "release-testflight: Git common directory is unavailable" >&2
-      exit 4
+    [[ $# -eq 1 ]] || {
+      echo "release-testflight: --prepare-only takes no extra arguments" >&2
+      exit 64
     }
-    [[ -d "$git_common_dir" ]] || {
-      echo "release-testflight: Git common directory is unavailable" >&2
-      exit 4
-    }
-    routing="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -c '
-import re, sys
-from pathlib import Path
-from release_tools.iterative_release import read_candidate_ledger_v2
-from release_tools.product_state import ProductState
-
-try:
-    state = ProductState.for_repository(
-        Path(sys.argv[1]), "gradus-ios", non_git_home=".release-state"
-    )
-    pointer = state.home / "active-candidate.json"
-    if pointer.is_symlink() or (pointer.exists() and not pointer.is_file()):
-        raise ValueError("active-candidate-corrupt")
-    active = state._active()
-except Exception as exc:
-    print(f"release-testflight: canonical release state is invalid: {exc}", file=sys.stderr)
-    sys.exit(3)
-
-if active is None:
-    print("CORRECTION")
-    sys.exit(0)
-
-candidate = active.get("candidateId")
-if not isinstance(candidate, str) or not re.fullmatch(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", candidate):
-    print("release-testflight: active candidate pointer missing or invalid candidateId", file=sys.stderr)
-    sys.exit(3)
-
-uploaded_transitions = {"uploadAttemptStarted", "uploaded", "internalTestFlightReceipted"}
-try:
-    candidate_directory = state.candidates_directory / candidate
-    ledger = candidate_directory / "transitions.jsonl"
-    if candidate_directory.is_symlink() or (
-        candidate_directory.exists() and not candidate_directory.is_dir()
-    ):
-        raise ValueError("candidate-directory-invalid")
-    if ledger.is_symlink() or (ledger.exists() and not ledger.is_file()):
-        raise ValueError("candidate-ledger-unreadable")
-    records = read_candidate_ledger_v2(candidate_directory)
-except Exception as exc:
-    print(f"release-testflight: canonical transitions ledger is invalid: {exc}", file=sys.stderr)
-    sys.exit(3)
-
-if any(record.get("transition") in uploaded_transitions for record in records):
-    print("FRESH")
-else:
-    print("CORRECTION")
-' "$ROOT")" || exit $?
-
-    prepare_args=(--adapter "$ADAPTER" --repository "$ROOT")
-    if [[ "$routing" == "CORRECTION" ]]; then
-      prepare_args+=(--successor-correction)
-    fi
-
-    prepared="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools testflight "${prepare_args[@]}")" || {
-      status=$?
-      printf '%s\n' "$prepared"
-      exit "$status"
-    }
-    candidate="$($PYTHON_BIN -c 'import json,sys; print(json.loads(sys.argv[1])["candidateId"])' \
-      "$prepared")" || {
-      echo "release-testflight: prepared candidate identity is unavailable" >&2
-      exit 4
-    }
-    readiness_manifest="$git_common_dir/release-state/gradus-ios/candidates/$candidate/manifest.json"
-    exec env PYTHONPATH="$CENTRAL_ROOT" READINESS_MANIFEST="$readiness_manifest" \
-      "$PYTHON_BIN" -m release_tools stage \
-      --adapter "$ADAPTER" --repository "$ROOT" --candidate "$candidate"
+    exec "$SCRIPT_DIR/prepare-testflight-candidate"
     ;;
   --upload)
-    [[ $# -eq 1 ]] || { echo "release-testflight: --upload takes no extra arguments" >&2; exit 64; }
-    git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
-      echo "release-testflight: Git common directory is unavailable" >&2
-      exit 4
+    [[ $# -eq 1 ]] || {
+      echo "release-testflight: --upload takes no extra arguments" >&2
+      exit 64
     }
-    [[ -d "$git_common_dir" ]] || {
-      echo "release-testflight: Git common directory is unavailable" >&2
-      exit 4
-    }
-    candidate="$($PYTHON_BIN -c 'import json,sys; print(json.loads(open(sys.argv[1], encoding="utf-8").read())["candidateId"])' \
-      "$git_common_dir/release-state/gradus-ios/active-candidate.json" 2>/dev/null)" || {
-      echo "release-testflight: no prepared central candidate" >&2
-      exit 3
-    }
-    readiness_manifest="$git_common_dir/release-state/gradus-ios/candidates/$candidate/manifest.json"
-    [[ -f "$readiness_manifest" && ! -L "$readiness_manifest" ]] || {
-      echo "release-testflight: prepared candidate manifest is unavailable" >&2
-      exit 3
-    }
-    exec env PYTHONPATH="$CENTRAL_ROOT" READINESS_MANIFEST="$readiness_manifest" \
-      "$PYTHON_BIN" -m release_tools testflight \
-      --adapter "$ADAPTER" --repository "$ROOT" --upload --candidate "$candidate"
+    exec "$SCRIPT_DIR/deploy-testflight" --attended
     ;;
   *)
     echo "usage: app/release-testflight --prepare-only|--upload" >&2

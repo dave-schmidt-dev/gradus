@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[[ $# -eq 1 && "$1" == "--attended" ]] || {
+  echo "deploy-testflight: requires exactly --attended" >&2
+  exit 64
+}
+[[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]] || {
+  echo "release-testflight: checkout root could not be verified" >&2
+  exit 4
+}
+
+CENTRAL_ROOT="$ROOT/../apple_developer"
+ADAPTER="$ROOT/.release/release-adapter.json"
+# `release_tools` declares `requires-python = ">=3.11"`, and since
+# apple_developer's `809c413` its `workflow.py` imports `datetime.UTC`, which
+# 3.9 does not have. macOS `/usr/bin/python3` is 3.9, so invoking the central
+# package with it dies at import. gradus's own scripts stay 3.9-compatible and
+# keep using `/usr/bin/python3` deliberately (`96fee19`); this resolution
+# applies only to invocations of the central package.
+release_python() {
+  local candidate
+  # Absolute prefixes are listed alongside the PATH names on purpose: these
+  # wrappers must work under a minimal PATH (Git hooks, launchd, and the
+  # `release-testflight` tests all run them with `PATH=<stubs>:/bin:/usr/bin`),
+  # which is what the previous hardcoded absolute interpreter satisfied.
+  for candidate in \
+    "${GRADUS_RELEASE_PYTHON:-}" \
+    python3 python3.13 python3.12 python3.11 \
+    /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+    /usr/bin/python3; do
+    [[ -n "$candidate" ]] || continue
+    candidate="$(command -v "$candidate" 2>/dev/null)" || continue
+    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+PYTHON_BIN="$(release_python)" || {
+  echo "release-testflight: no Python >= 3.11 is available for release_tools; set GRADUS_RELEASE_PYTHON" >&2
+  exit 4
+}
+if [[ -x "${HOME:-}/.agent/bin/bws-secret-exec" ]]; then
+  PATH="$HOME/.agent/bin:$PATH"
+  export PATH
+fi
+[[ -f "$CENTRAL_ROOT/release_tools/__main__.py" && -f "$ADAPTER" ]] || {
+  echo "release-testflight: central release_tools or adapter is unavailable" >&2
+  exit 4
+}
+
+git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
+  echo "release-testflight: Git common directory is unavailable" >&2
+  exit 4
+}
+[[ -d "$git_common_dir" ]] || {
+  echo "release-testflight: Git common directory is unavailable" >&2
+  exit 4
+}
+candidate="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -c '
+import json, re, sys
+from pathlib import Path
+from release_tools.product_state import ProductState
+
+try:
+    state = ProductState.for_repository(
+        Path(sys.argv[1]), "gradus-ios", non_git_home=".release-state"
+    )
+    pointer = state.home / "active-candidate.json"
+    if pointer.is_symlink() or (pointer.exists() and not pointer.is_file()):
+        raise ValueError("active-candidate-corrupt")
+    active = state._active()
+    if active is None:
+        raise ValueError("active-candidate-missing")
+
+    candidate = active.get("candidateId")
+    if not isinstance(candidate, str) or not re.fullmatch(
+        r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", candidate
+    ):
+        raise ValueError("active-candidate-invalid")
+
+    candidate_directory = state.candidates_directory / candidate
+    if candidate_directory.is_symlink() or not candidate_directory.is_dir():
+        raise ValueError("candidate-directory-invalid")
+    manifest = candidate_directory / "manifest.json"
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ValueError("candidate-manifest-invalid")
+    manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(manifest_value, dict) or manifest_value.get("candidateId") != candidate:
+        raise ValueError("candidate-manifest-identity-mismatch")
+except Exception as exc:
+    print(f"release-testflight: canonical deployment state is invalid: {exc}", file=sys.stderr)
+    sys.exit(3)
+
+print(candidate)
+' "$ROOT")" || exit $?
+readiness_manifest="$git_common_dir/release-state/gradus-ios/candidates/$candidate/manifest.json"
+exec env PYTHONPATH="$CENTRAL_ROOT" READINESS_MANIFEST="$readiness_manifest" \
+  "$PYTHON_BIN" -m release_tools testflight \
+  --adapter "$ADAPTER" --repository "$ROOT" --upload --candidate "$candidate"

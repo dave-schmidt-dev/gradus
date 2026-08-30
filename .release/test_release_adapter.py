@@ -234,7 +234,11 @@ class GradusAdapterTests(unittest.TestCase):
         self.assertIn("adapter-unknown-field", adapter_rejection_codes(route))
 
     def test_wrappers_are_fixed_and_executable(self) -> None:
-        for name in ("release-testflight", "release-status"):
+        for name in (
+            "prepare-testflight-candidate",
+            "deploy-testflight",
+            "release-status",
+        ):
             path = ROOT / "app" / name
             self.assertTrue(path.is_file())
             self.assertTrue(path.stat().st_mode & 0o111)
@@ -245,15 +249,25 @@ class GradusAdapterTests(unittest.TestCase):
             self.assertIn("../apple_developer", source)
             self.assertIn("python3", source)
             self.assertNotIn("archive-upload-ios.sh", source)
-            if name == "release-testflight":
+            if name in ("prepare-testflight-candidate", "deploy-testflight"):
                 self.assertIn("-m release_tools testflight", source)
                 self.assertIn('--adapter "$ADAPTER" --repository "$ROOT"', source)
             else:
                 self.assertIn("-m release_tools status", source)
             if name == "release-status":
                 self.assertIn("[[ $# -eq 0 ]]", source)
+            elif name == "prepare-testflight-candidate":
+                self.assertIn("[[ $# -eq 0 ]]", source)
             else:
-                self.assertIn("[[ $# -eq 1 ]]", source)
+                self.assertIn('[[ $# -eq 1 && "$1" == "--attended" ]]', source)
+
+        compatibility = ROOT / "app" / "release-testflight"
+        self.assertTrue(compatibility.is_file())
+        self.assertTrue(compatibility.stat().st_mode & 0o111)
+        source = compatibility.read_text(encoding="utf-8")
+        self.assertNotIn("release_tools", source)
+        self.assertIn('exec "$SCRIPT_DIR/prepare-testflight-candidate"', source)
+        self.assertIn('exec "$SCRIPT_DIR/deploy-testflight" --attended', source)
 
 
 if __name__ == "__main__":

@@ -463,11 +463,12 @@ gate-green release candidate or a release-blocking correction; small
 non-blocking tweaks are batched into the next patch release.
 
 **Current release policy:** Xcode Cloud performs the source-bound validation
-checks; the fixed `app/release-testflight` wrapper performs production archive,
-signing, upload, processing, and internal-tester assignment against the Gradus
-iOS App Store Connect record. Do not use the `Gradus iOS Internal TestFlight`
-Cloud workflow for delivery: the account's Cloud product is attached to the
-GradusMac app record, so its iOS builds cannot reach the Gradus AI beta group.
+checks; `app/prepare-testflight-candidate` performs production archive and
+signing, then `app/deploy-testflight --attended` performs upload, processing,
+and internal-tester assignment against the Gradus iOS App Store Connect record.
+Do not use the `Gradus iOS Internal TestFlight` Cloud workflow for delivery: the
+account's Cloud product is attached to the GradusMac app record, so its iOS
+builds cannot reach the Gradus AI beta group.
 
 The exact release commit must pass `Gradus macOS UI Trial` and `Gradus iOS
 Snapshot Trial` before candidate preparation. Those workflows use manual
@@ -486,19 +487,23 @@ New candidates' readiness and local-gate evidence is content-bound rather than
 time-bound: source or proof-contract drift invalidates it; elapsed time alone
 does not.
 
-The compatibility entry points are:
+The fixed release entry points are:
 
-- `app/release-testflight` — the fixed release route; `--prepare-only` performs
-  local production archive/sign work and `--upload` remains a separate
-  publication boundary.
+- `app/prepare-testflight-candidate` — prepares and stages a candidate; it does
+  not upload.
+- `app/deploy-testflight --attended` — performs the attended publication
+  boundary.
 - `app/release-status` — read the current local candidate status.
+- `app/release-testflight` — compatibility-only dispatcher for the old
+  `--prepare-only` and `--upload` arguments.
 
 Profile 2.0 adoption was proven historically for candidate
 `gradus-ios-18-a4acb3118b78faff`. The candidate-bound bridge canary returned
 `adoption-authorized` after broker identity lookup, Xcode signing verification,
 and App Store Connect reconciliation. That result is historical adoption
-evidence, not candidate-current release authority. The fixed wrapper derives
-current authorization and evidence for each successor candidate.
+evidence, not candidate-current release authority. The fixed preparation and
+deployment wrappers derive current authorization and evidence for each
+successor candidate.
 
 The legacy `archive-upload-ios.sh`, `testflight-setup.py`, and
 `testflight-setup-safe.sh` entry points remain available for compatibility;
