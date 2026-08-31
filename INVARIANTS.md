@@ -4,12 +4,15 @@
 > to invariants. Per-project convention (commit prefix, invariant refs) is declared
 > in this project's CLAUDE.md/README, not globally.
 
-### INV-1 — The router-facing snapshot contains no credential material and no account PII, and lives in the credential-free .state/ dir
-area: ["gradus/snapshot.py", "gradus/parsing.py", "gradus/history.py"]
+### INV-1 — Canonical public state contains no credential material or account PII and has one nonaliasing root per runtime mode
+area: ["gradus/paths.py", "gradus/snapshot.py", "gradus/parsing.py", "gradus/history.py"]
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
 rationale: The snapshot files are read by a separate repo (review-plugin router). They are written to
-  ~/Documents/Projects/gradus/.state/snapshot.json and snapshot-v2.json — Deliberately NOT under .cache/ (which holds
+  `.state/snapshot.json` and `.state/snapshot-v2.json` in explicit source mode, or
+  `~/Library/Application Support/Gradus/Installed/snapshot.json` and `snapshot-v2.json` when
+  `GRADUS_RUNTIME_MODE=installed`. Both public roots are deliberately outside their private cache roots
+  (source `.cache`; installed `~/Library/Application Support/Gradus/Private/.cache`) which hold
   auth cookies/tokens); review-plugin's INV-5 forbids the router from reading credential paths, so the
   snapshot must live in a credential-free dir. `data` is a whitelist projection of usage/reset fields
   only — it must never carry cookies, tokens, sessionKey, ory_*, csrftoken, access_token, nor
@@ -22,9 +25,10 @@ rationale: The snapshot files are read by a separate repo (review-plugin router)
   where that error string is constructed. The history writer accepts only an existing, validated schema-v2
   payload plus fixed provider-owned safe provenance descriptors; it does not widen the allowlist or persist raw
   upstream data.
-  The schema-v2 writer also atomically mirrors that same allowlisted payload to
-  ~/Library/Application Support/Gradus/snapshot-v2.json for GradusMac; this is
-  a consumer copy, not a router input, and it has the identical safe schema.
+  In source mode only, the schema-v2 writer also atomically mirrors that same allowlisted payload to
+  `~/Library/Application Support/Gradus/snapshot-v2.json` for legacy GradusMac rollback. This consumer
+  copy is not a router input and never aliases the source or installed canonical. Installed mode writes
+  no legacy mirror. `tests/test_snapshot.py::RuntimePathPolicyTests` gates mode selection and nonaliasing.
 
 ### INV-2 — The machine-safe (--json / --write-snapshot) paths have zero credential side effects
 area: ["gradus/providers/*.py", "gradus/__main__.py"]
@@ -42,9 +46,9 @@ rationale: Machine-readable --json and headless --write-snapshot surfaces must n
 area: ["gradus/snapshot.py"]
 gate_test: tests/test_snapshot.py::test_vibe_percent_left_is_remaining
 threshold: 3
-rationale: Vibe's usage_percent and Cursor Auto + Composer's auto_percent_used are converted from used
-to 100 − x at one place. A sign flip or double-normalization would make the router route toward the MOST
-depleted provider — the exact opposite of correct. Every window's percent_left is remaining capacity.
+rationale: Vibe's usage_percent is converted from used to 100 − x at one place, as are Cursor's ac/ap
+windows. A sign flip or double-normalization would make the router route toward the MOST
+depleted provider — the exact opposite of correct. Every emitted window's percent_left is remaining capacity.
 
 ### INV-4 — pace_delta sign and unit are canonical
 area: ["gradus/snapshot.py", "tests/test_snapshot.py", "tests/test_ui.py"]
@@ -65,23 +69,32 @@ rationale: The router asserts schema_version. Both versioned files always carry 
   hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported
   schema_version, so incompatible changes to the top-level payload, provider-entry fields, or
   windows[] require a schema bump and coordinated compatibility updates in both consumer projects. Schema v1
-  remains at snapshot.json; schema v2 lives at snapshot-v2.json and Cursor's ac/ap windows are numeric or omitted.
+  remains at snapshot.json; schema v2 lives at snapshot-v2.json and publishes Cursor's Auto + Composer (ac)
+  and API (ap) pools as independent windows where v1 emits a single billing_cycle window.
   Each file has a path- and schema-specific transient prior. The history envelope has an independent
   history_schema_version and is not a replacement or redirect for either router schema. Prevents silent schema
   drift that a version-asserting consumer cannot detect.
 
-### INV-6 — Safari-derived credentials cross one app boundary and stay private at rest
-area: ["app/GradusCredentialBridge/**", "gradus/providers/*.py", "launchd/*", "gradus/history.py"]
-gate_test: app/GradusCredentialBridgeTests/BridgeTests.swift::testRefreshWritesOnlyAllowedPayloadsWithPrivateModes
+### INV-6 — Browser-derived credentials cross one app boundary and stay private at rest
+area: ["app/GradusCredentialBridge/**", "app/GradusCredentialBridgeCore/**", "app/GradusCredentialBridgeTests/**", "app/project.yml", "gradus/paths.py", "gradus/providers/*.py", "launchd/*", "gradus/history.py"]
+gate_test: app/test-gate.sh::GradusCredentialBridge
 threshold: 3
 rationale: Safari-derived provider cookies are read only by the Developer-ID-signed
-  GradusCredentialBridge.app, which atomically writes the fixed allowlisted cache payloads at
-  0600 inside a 0700 .cache directory. Python providers consume those caches only; neither they
-  nor the launchd wrapper may read Safari, Chrome, Desktop databases, or a credential file fallback.
-  This confines Full Disk Access to ~/Applications/GradusCredentialBridge.app rather than a shared
-  Python runtime or shell wrapper. Codex auth.json and debug dumps retain the Python private-write
-  helper. The bridge test proves parser allowlists, payload boundaries, and file modes; provider
-  tests tripwire prohibited browser paths. Prevents private browser state from becoming available to
+  separately identified nested GradusCredentialBridge.app. Its fixed refresh operation atomically writes
+  only Vibe cache payloads at
+  0600 inside a 0700 cache directory: source mode uses checkout `.cache`, while installed mode uses
+  `~/Library/Application Support/Gradus/Private/.cache`. Its fixed check operation attempts that exact Safari read
+  and returns only credential-free success, denied, missing, or malformed state. Claude authentication remains
+  Keychain-backed and has no Safari cache; OpenCode Go and Cursor are also Keychain-backed, reading fixed
+  generic-password items read-only with no refresh or write-back.
+  Python providers consume the allowlisted bridge caches only; neither they,
+  GradusMac, GradusRefreshAgent, the frozen runtime packaging, nor the launchd wrapper may read Safari, Chrome,
+  Desktop databases, or a credential file fallback. Full Disk Access remains confined to the nested bridge rather
+  than the UI, agent, Python runtime, or shell wrapper. Codex auth.json and debug dumps retain the Python private-write
+  helper. The counted bridge gate proves fixed operations, typed recovery, structural isolation, parser allowlists,
+  nested identity/embedding, payload boundaries, and file modes; provider
+  tests tripwire prohibited browser paths, and `tests/test_snapshot.py::RuntimePathPolicyTests` rejects
+  aliasing between public state and private caches. Prevents private browser state from becoming available to
   arbitrary Python processes or world-readable at rest.
 
 ### INV-7 — The CloudKit publisher takes its snapshot data through a single injected snapshot-path dependency, and its source references no credential path
@@ -98,15 +111,37 @@ rationale: The Mac app runs on the same machine holding live credentials in `.ca
   runtime canary check is deferred beta-hardening, not this gate.
 
 ### INV-8 — Credential-aware background refresh is explicit, single-flight, and progress-visible
-area: ["gradus/__main__.py", "gradus/providers/*.py", "launchd/*"]
-gate_test: tests/test_main.py::TestCredentialAwareRefresh::test_refresh_is_explicit_single_flight_progress_visible_and_one_probe
+area: ["gradus/paths.py", "gradus/__main__.py", "gradus/publisher_watchdog.py", "gradus/providers/*.py", "launchd/*", "app/GradusRefreshAgent/**", "app/GradusRefreshAgentTests/**", "app/GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist"]
+gate_test: app/test-gate.sh
 threshold: 3
 rationale: Only the explicit --refresh-snapshot command may use non-headless provider behavior for
-  unattended observation. It acquires one private single-flight lock before provider initialization,
-  reports safe progress through provider and persistence waits, and never routes --json or
+  unattended observation. It acquires one private per-root single-flight lock before provider initialization:
+  source `.state/.refresh-snapshot.lock` or installed
+  `~/Library/Application Support/Gradus/Installed/.refresh-snapshot.lock`. These locks are intentionally
+  independent because migration serialization requires verified legacy quiescence; the modes never share a
+  canonical writer or infer mode from a path. The bundled-agent contract rejects an absent, source, or unknown
+  marker and accepts only `GRADUS_RUNTIME_MODE=installed`, gated by
+  `tests/test_snapshot.py::RuntimePathPolicyTests`.
+  The native GradusRefreshAgent additionally holds the installed-only
+  `~/Library/Application Support/Gradus/Installed/.refresh-agent.lock` while supervising its fixed,
+  bundle-relative bridge and frozen-runtime executables. Its counted `GradusRefreshAgent` macOS gate proves
+  separate bounded deadlines, prior-complete-snapshot restoration, and credential-free structured progress
+  before every subprocess wait; it accepts no arbitrary command input. A denied, missing, malformed, timed-out,
+  or failed optional Vibe bridge is a typed credential-free degraded state, not a refresh failure: the frozen
+  producer still runs and the final status is a degraded success. Producer failure, cancellation, and final
+  status-write failure restore the prior complete snapshots. The agent lock is deliberately distinct from the
+  producer's `.refresh-snapshot.lock`, which the child acquires itself. Refresh reports safe progress through
+  provider and persistence waits, and never routes --json or
   --write-snapshot through credential-aware behavior. One Antigravity probe supplies both the direct
   entry and the schema-v2 Antigravity (Claude) synthetic projection; no second credential request is
   implied. Overlap, lock failure, safe status, and one-probe behavior are binary-tested.
+  Because the supervised refresh feeds an unsupervised GUI publisher, the job additionally runs one bounded
+  publisher-liveness check per successful cycle via the opt-in `--publisher-watchdog` command. It relaunches
+  only an absent publisher, only by absolute bundle path, and only when a fresh snapshot sits behind lagging
+  publish evidence; a present-but-stale publisher and a relaunch loop are both reported rather than acted on.
+  The command is never reached except from the launchd wrapper, so no test, hermetic run, machine-safe path, or
+  interactive session can launch an application, and it is advisory only — it cannot fail the refresh. This is
+  interim until the publisher moves inside the supervised agent, after which launchd owns its liveness.
 
 ### INV-9 — A cross-platform feature ships its producer and consumer as one compatibility unit
 area: ["app/GradusMac/**", "app/GradusiOS/**", "app/GradusKit/**", "app/project.yml", "app/test-gate.sh", "app/archive-upload-ios.sh", "app/release_candidate/**", "app/testflight-assign.py", "app/testflight-setup.py", "app/_asc_api.py", "RELEASE_CHECKLIST.md"]

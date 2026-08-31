@@ -14,12 +14,17 @@ GATE_REPO_ROOT="$(cd -P "$GATE_SCRIPT_DIR/.." && pwd)"
 # `assert_counting_leg`.  The Python paths are intentionally listed here so
 # the self-check can detect a new hermetic suite that is not wired into the
 # canonical gate.
-EXPECTED_COUNTING_LEG_COUNT=15
+EXPECTED_COUNTING_LEG_COUNT=20
 COUNTING_LEG_NAMES=(
   "swift-testing"
   "pytest"
   "GradusMac"
+  "GradusMacUI"
+  "GradusCredentialBridge"
+  "GradusRefreshAgent"
   "GradusiOS-iPhone"
+  "GradusiOS-DensityPhone"
+  "GradusiOS-DensityPad"
   "GradusWidget"
   "GradusiOS-iPad"
   "release-candidate"
@@ -36,7 +41,12 @@ COUNTING_LEG_REPORTERS=(
   "swift-testing"
   "pytest"
   "xctest"
+  "xctest"
+  "xctest"
+  "xctest"
   "aggregate-xctest-swift"
+  "swift-testing"
+  "swift-testing"
   "swift-testing"
   "aggregate-xctest-swift"
   "pytest"
@@ -49,11 +59,11 @@ COUNTING_LEG_REPORTERS=(
   "pytest"
   "xctest"
 )
-# The iPad leg includes the 12 canonical image tests below as well as the
-# eleven GradusiOSUITests workflows. Its floor must exceed the image-only
-# result, or a zero-test UI target could be hidden by the snapshot count.
+# Fixed-size image snapshots run in separate, explicitly destination-bound
+# phone and pad legs. The iPad UI leg remains independent so neither class of
+# evidence can hide a zero-test result in the other.
 #
-# GradusiOS-iPhone's floor (index 3) is pinned to its exact integrated-gate
+# GradusiOS-iPhone's floor (index 6) is pinned to its exact integrated-gate
 # count (177) rather than a loose lower
 # bound, so a test silently dropping out of selection fails the gate instead
 # of hiding under slack. Raise it deliberately when adding tests there. The
@@ -62,12 +72,31 @@ COUNTING_LEG_REPORTERS=(
 # here), not `xctest` (max across patterns) -- the latter would let the
 # smaller XCTest count silently ride under the larger Swift Testing one
 # without ever binding to the reported/floor-checked total.
-COUNTING_LEG_MINIMUMS=(2 2 2 177 10 23 6 5 5 15 5 5 4 31 11)
+#
+# The `swift-testing` (index 0) and `pytest` (index 1) floors read 2 until
+# 2026-08-31, against observed counts of 100 and 1077: those two legs would
+# have passed with 98% and 99.8% of their tests silently gone, which is the
+# exact failure the floors exist to catch. Both are now sized just under their
+# observed counts. They are deliberately NOT pinned exactly like index 6 --
+# GradusiOS-iPhone is a fixed scenario set, while these two grow on most
+# commits, and an exact floor there would make every added test a gate edit.
+# Slack of a few tests still fails a leg that collapses.
+#
+# `GradusMac` (index 2) keeps its floor of 2 pending an observed count: it is
+# an app-hosted XCTest bundle, and no full gate has run since the owner's
+# UI-testing pause. Raise it from the next full gate run; the static source
+# count is 119.
+COUNTING_LEG_MINIMUMS=(95 1000 2 2 15 12 177 3 9 10 12 6 5 5 15 5 5 4 31 12)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
   "GradusMac"
+  "GradusMacUITests"
+  "GradusCredentialBridgeTests"
+  "GradusRefreshAgentTests"
   "GradusiOS-iPhone"
+  "GradusiOSTests/DensityLayoutSnapshotTests.swift"
+  "GradusiOSTests/DensityLayoutSnapshotTests.swift"
   "GradusWidgetTests"
   "GradusiOS-iPad"
   "test_release_candidate.py"
@@ -94,6 +123,22 @@ DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS=(
   "GradusiOSTests/densityLargePhoneDark()"
   "GradusiOSTests/densityCompactPhoneAccessibility1()"
   "GradusiOSTests/densityCompactPhoneAccessibility5()"
+  "GradusiOSTests/densityLargePadPortraitAccessibility1()"
+  "GradusiOSTests/densityLargePadPortraitAccessibility5()"
+)
+DENSITY_PHONE_SNAPSHOT_TEST_SELECTORS=(
+  "GradusiOSTests/densityLargePhoneDark()"
+  "GradusiOSTests/densityCompactPhoneAccessibility1()"
+  "GradusiOSTests/densityCompactPhoneAccessibility5()"
+)
+DENSITY_PAD_SNAPSHOT_TEST_SELECTORS=(
+  "GradusiOSTests/densePadPortraitLight()"
+  "GradusiOSTests/densePadPortraitDark()"
+  "GradusiOSTests/densePadLandscapeDark()"
+  "GradusiOSTests/densityStandardPadPortraitLight()"
+  "GradusiOSTests/densityLargePadPortraitLight()"
+  "GradusiOSTests/densityLargePadPortraitExtraExtraExtraLarge()"
+  "GradusiOSTests/densityCompactPadPortraitExtraExtraExtraLarge()"
   "GradusiOSTests/densityLargePadPortraitAccessibility1()"
   "GradusiOSTests/densityLargePadPortraitAccessibility5()"
 )
@@ -346,6 +391,9 @@ echo "==> Hermetic local Mac install behavior tests"
 echo "==> Hermetic credential bridge install behavior tests"
 ./test-install-credential-bridge.sh
 
+echo "==> Hermetic universal2 Gradus runtime build and relocation tests"
+bash ./test-build-gradus-runtime.sh
+
 echo "==> Hermetic release-candidate ledger tests"
 assert_counting_leg "release-candidate" uv run pytest -q test_release_candidate.py
 
@@ -514,6 +562,8 @@ echo "    Swept $swept_count stale gate device(s)."
 derived_data_dir="$(gate_derived_data)"
 gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"
 gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"
+gradus_bridge_stage_root="$derived_data_dir/bridge-source"
+gradus_bridge_source_root="$gradus_bridge_stage_root/app"
 
 echo "==> Creating disposable Gradus gate iPhone simulator (iOS $SIM_OS_VERSION)"
 sim_udid="$(gate_sim_create gradus iphone "$SIM_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
@@ -559,13 +609,82 @@ assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECO
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
   -destination 'platform=macOS,arch=arm64' \
+  -only-testing:GradusMacTests \
+  CODE_SIGNING_ALLOWED=NO
+
+echo "==> xcodebuild test — GradusMacUITests (platform=macOS; exact GradusMac product)"
+assert_counting_leg "GradusMacUI" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env \
+  GRADUS_DISABLE_PIPELINE=1 \
+  xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusMac \
+  -destination 'platform=macOS,arch=arm64' \
+  -only-testing:GradusMacUITests
+
+echo "==> xcodebuild test — GradusCredentialBridge (platform=macOS)"
+# These structural tests must not open the checkout below ~/Documents from the
+# hosted XCTest process. Stage exactly the files and trees they inspect under
+# gate-owned DerivedData, preserving the app/repository layout they validate.
+mkdir -p "$gradus_bridge_source_root/GradusCredentialBridgeCore"
+/bin/cp "$GATE_REPO_ROOT/app/project.yml" "$gradus_bridge_source_root/project.yml"
+/bin/cp "$GATE_REPO_ROOT/app/GradusCredentialBridgeCore/Bridge.swift" \
+  "$gradus_bridge_source_root/GradusCredentialBridgeCore/Bridge.swift"
+for source_directory in GradusMac GradusRefreshAgent packaging; do
+  /usr/bin/ditto "$GATE_REPO_ROOT/app/$source_directory/." \
+    "$gradus_bridge_source_root/$source_directory"
+done
+/usr/bin/ditto "$GATE_REPO_ROOT/gradus/." "$gradus_bridge_stage_root/gradus"
+
+staged_bridge_file="$(find "$gradus_bridge_stage_root" -type f -print -quit)"
+if [[ -z "$staged_bridge_file" ]] ||
+   [[ ! -s "$gradus_bridge_source_root/project.yml" ]] ||
+   [[ ! -s "$gradus_bridge_source_root/GradusCredentialBridgeCore/Bridge.swift" ]]; then
+  echo "FAIL: could not stage non-empty GradusCredentialBridge structural-test inputs" >&2
+  exit 1
+fi
+for staged_directory in \
+  "$gradus_bridge_source_root/GradusMac" \
+  "$gradus_bridge_source_root/GradusRefreshAgent" \
+  "$gradus_bridge_source_root/packaging" \
+  "$gradus_bridge_stage_root/gradus"; do
+  if [[ ! -d "$staged_directory" ]] ||
+     [[ -z "$(find "$staged_directory" -type f -print -quit)" ]]; then
+    echo "FAIL: staged GradusCredentialBridge input is empty: $staged_directory" >&2
+    exit 1
+  fi
+done
+
+assert_counting_leg "GradusCredentialBridge" env \
+  TEST_RUNNER_GRADUS_BRIDGE_SOURCE_ROOT="$gradus_bridge_source_root" \
+  xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusCredentialBridge \
+  -destination 'platform=macOS,arch=arm64' \
+  -only-testing:GradusCredentialBridgeTests \
+  CODE_SIGNING_ALLOWED=NO
+
+echo "==> xcodebuild test — GradusRefreshAgent (platform=macOS)"
+assert_counting_leg "GradusRefreshAgent" xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusRefreshAgent \
+  -destination 'platform=macOS,arch=arm64' \
+  -only-testing:GradusRefreshAgentTests \
   CODE_SIGNING_ALLOWED=NO
 
 density_snapshot_skip_args=()
-density_snapshot_only_args=()
+density_phone_only_args=()
+density_pad_only_args=()
 for selector in "${DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"; do
   density_snapshot_skip_args+=("-skip-testing:$selector")
-  density_snapshot_only_args+=("-only-testing:$selector")
+done
+for selector in "${DENSITY_PHONE_SNAPSHOT_TEST_SELECTORS[@]}"; do
+  density_phone_only_args+=("-only-testing:$selector")
+done
+for selector in "${DENSITY_PAD_SNAPSHOT_TEST_SELECTORS[@]}"; do
+  density_pad_only_args+=("-only-testing:$selector")
 done
 
 echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
@@ -576,6 +695,24 @@ assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
   -destination "platform=iOS Simulator,id=$sim_udid" \
   -skip-testing:GradusiOSUITests \
   "${density_snapshot_skip_args[@]}" \
+  CODE_SIGNING_ALLOWED=NO
+
+echo "==> xcodebuild test — GradusiOS phone density snapshots (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+assert_counting_leg "GradusiOS-DensityPhone" xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusiOS \
+  -destination "platform=iOS Simulator,id=$sim_udid" \
+  "${density_phone_only_args[@]}" \
+  CODE_SIGNING_ALLOWED=NO
+
+echo "==> xcodebuild test — GradusiOS pad density snapshots ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
+assert_counting_leg "GradusiOS-DensityPad" xcodebuild test \
+  -project Gradus.xcodeproj \
+  -derivedDataPath "$derived_data_dir" \
+  -scheme GradusiOS \
+  -destination "platform=iOS Simulator,id=$ipad_udid" \
+  "${density_pad_only_args[@]}" \
   CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusWidget (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
@@ -591,7 +728,7 @@ assert_counting_leg "GradusWidget" xcodebuild test \
 # broad unit-test pass prevents Xcode from bootstrapping the same UI runner
 # twice, while the dedicated leg still makes loss of UI coverage visible.
 
-# `DensityLayoutXCUITests` runs on the iPhone destination above too, but only
+# `DensityLayoutXCUITests` runs on the iPhone destination below too, but only
 # here does the adaptive grid resolve to multiple columns. The test carries no
 # idiom skip, so removing this step would not make it go silently green -- it
 # would just stop covering the multi-column geometry. Kept as a named,
@@ -603,7 +740,6 @@ assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI
   -scheme GradusiOS \
   -destination "platform=iOS Simulator,id=$ipad_udid" \
   -only-testing:GradusiOSUITests \
-  "${density_snapshot_only_args[@]}" \
   CODE_SIGNING_ALLOWED=NO
 
 # A completed iPad XCTest runner can leave testmanagerd's Accessibility session

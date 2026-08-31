@@ -141,16 +141,20 @@ if [[ "$(printf '%s\n' "$snapshot_test_names" | sed '/^$/d' | sort)" != "$snapsh
 fi
 grep -Fq '"${density_snapshot_skip_args[@]}"' "$GATE_SCRIPT" ||
   fail "iPhone does not derive density snapshot exclusions from the shared selector list"
-grep -Fq '"${density_snapshot_only_args[@]}"' "$GATE_SCRIPT" ||
-  fail "iPad does not derive density snapshot inclusions from the shared selector list"
+grep -Fq 'assert_counting_leg "GradusiOS-DensityPhone"' "$GATE_SCRIPT" ||
+  fail "dedicated phone density snapshot leg is missing"
+grep -Fq 'assert_counting_leg "GradusiOS-DensityPad"' "$GATE_SCRIPT" ||
+  fail "dedicated pad density snapshot leg is missing"
 
 # The two iOS destinations are separate evidence, not interchangeable labels.
 # Keep the destination contract structural so a copied iPhone command cannot
 # silently make the iPad leg green (or vice versa).
 validate_ios_destination_contract() {
   local gate_path="$1"
-  local iphone_block widget_block ipad_block iphone_ui_block
+  local iphone_block density_phone_block density_pad_block widget_block ipad_block iphone_ui_block
   iphone_block="$(sed -n '/assert_counting_leg "GradusiOS-iPhone"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+  density_phone_block="$(sed -n '/assert_counting_leg "GradusiOS-DensityPhone"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+  density_pad_block="$(sed -n '/assert_counting_leg "GradusiOS-DensityPad"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
   widget_block="$(sed -n '/assert_counting_leg "GradusWidget"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
   ipad_block="$(sed -n '/assert_counting_leg "GradusiOS-iPad"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
   iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
@@ -158,6 +162,14 @@ validate_ios_destination_contract() {
   [[ "$iphone_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
     return 1
   [[ "$widget_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
+    return 1
+  [[ "$density_phone_block" == *'-destination "platform=iOS Simulator,id=$sim_udid"'* ]] ||
+    return 1
+  [[ "$density_phone_block" == *'"${density_phone_only_args[@]}"'* ]] ||
+    return 1
+  [[ "$density_pad_block" == *'-destination "platform=iOS Simulator,id=$ipad_udid"'* ]] ||
+    return 1
+  [[ "$density_pad_block" == *'"${density_pad_only_args[@]}"'* ]] ||
     return 1
   [[ "$widget_block" == *'-scheme GradusWidget'* ]] || return 1
   [[ "$widget_block" == *'-only-testing:GradusWidgetTests'* ]] || return 1
@@ -170,8 +182,6 @@ validate_ios_destination_contract() {
   [[ "$ipad_block" == *'-only-testing:GradusiOSUITests'* ]] ||
     return 1
   [[ "$iphone_block" == *'"${density_snapshot_skip_args[@]}"'* ]] ||
-    return 1
-  [[ "$ipad_block" == *'"${density_snapshot_only_args[@]}"'* ]] ||
     return 1
 }
 
@@ -186,7 +196,7 @@ validate_derived_data_contract() {
   grep -Fq 'derived_data_dir="$(gate_derived_data)"' "$gate_path" ||
     return 1
   grep -Fq 'rm -rf "$derived_data_dir"' "$gate_path" || return 1
-  for leg in GradusMac GradusiOS-iPhone GradusWidget GradusiOS-iPad GradusiOSUI; do
+  for leg in GradusMac GradusRefreshAgent GradusiOS-iPhone GradusiOS-DensityPhone GradusiOS-DensityPad GradusWidget GradusiOS-iPad GradusiOSUI; do
     block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$gate_path")"
     [[ "$block" == *'-derivedDataPath "$derived_data_dir"'* ]] || return 1
   done
@@ -278,30 +288,53 @@ validate_inv7_staging_contract() {
 validate_inv7_staging_contract "$GATE_SCRIPT" ||
   fail "INV-7 hosted test does not use the staged, explicit source root"
 
-validate_xcode_cloud_scheme_contract() {
-  local project_path="$1" local_block cloud_block
+validate_bridge_staging_contract() {
+  local gate_path="$1"
+  # The structural assertions live in the sibling suite; `BridgeTests.swift`
+  # holds only behaviour tests, which are free to use `#filePath`.
+  local test_path="$SCRIPT_DIR/GradusCredentialBridgeTests/BridgeStructureTests.swift"
+  local stage_block bridge_leg_block staged_root_call_count
+  stage_block="$(sed -n '/^# These structural tests must not open/,/assert_counting_leg "GradusCredentialBridge"/p' "$gate_path")"
+  bridge_leg_block="$(sed -n '/assert_counting_leg "GradusCredentialBridge"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+
+  grep -Fq 'gradus_bridge_stage_root="$derived_data_dir/bridge-source"' "$gate_path" || return 1
+  grep -Fq 'gradus_bridge_source_root="$gradus_bridge_stage_root/app"' "$gate_path" || return 1
+  [[ "$stage_block" == *'/bin/cp "$GATE_REPO_ROOT/app/project.yml" "$gradus_bridge_source_root/project.yml"'* ]] || return 1
+  [[ "$stage_block" == *'/bin/cp "$GATE_REPO_ROOT/app/GradusCredentialBridgeCore/Bridge.swift"'* ]] || return 1
+  [[ "$stage_block" == *'for source_directory in GradusMac GradusRefreshAgent packaging; do'* ]] || return 1
+  [[ "$stage_block" == *'"$GATE_REPO_ROOT/app/$source_directory/."'* ]] || return 1
+  [[ "$stage_block" == *'"$gradus_bridge_source_root/$source_directory"'* ]] || return 1
+  [[ "$stage_block" == *'/usr/bin/ditto "$GATE_REPO_ROOT/gradus/." "$gradus_bridge_stage_root/gradus"'* ]] || return 1
+  [[ "$stage_block" == *'could not stage non-empty GradusCredentialBridge structural-test inputs'* ]] || return 1
+  [[ "$bridge_leg_block" == *'env \
+  TEST_RUNNER_GRADUS_BRIDGE_SOURCE_ROOT="$gradus_bridge_source_root" \
+  xcodebuild test'* ]] || return 1
+
+  grep -Fq 'bridgeSourceRootEnvironmentKey = "GRADUS_BRIDGE_SOURCE_ROOT"' "$test_path" || return 1
+  grep -Fq 'environment[Self.bridgeSourceRootEnvironmentKey]' "$test_path" || return 1
+  grep -Fq '!rawRoot.isEmpty' "$test_path" || return 1
+  grep -Fq 'checkout fallback is disabled' "$test_path" || return 1
+  grep -Fq 'fileExists(atPath: root.path, isDirectory: &isDirectory)' "$test_path" || return 1
+  staged_root_call_count="$(grep -Fc 'let appRoot = try stagedAppRoot()' "$test_path")"
+  [[ "$staged_root_call_count" -eq 3 ]] || return 1
+  ! grep -Fq '#filePath' "$test_path"
+}
+
+validate_bridge_staging_contract "$GATE_SCRIPT" ||
+  fail "GradusCredentialBridge structural tests do not use the staged, explicit source root"
+
+validate_local_macos_ui_contract() {
+  local project_path="$1" local_block
   local_block="$(sed -n '/^  GradusMac:$/,/^  GradusMacCloud:$/p' "$project_path")"
-  cloud_block="$(sed -n '/^  GradusMacCloud:$/,/^  GradusiOS:$/p' "$project_path")"
-  [[ -n "$cloud_block" ]] || return 1
-  [[ "$local_block" != *'- GradusMacUITests'* ]] || return 1
-  [[ "$cloud_block" == *'- GradusMacTests'* ]] || return 1
-  [[ "$cloud_block" == *'- GradusMacUITests'* ]] || return 1
-  [[ "$cloud_block" == *'GRADUS_DISABLE_PIPELINE: "1"'* ]] || return 1
-  [[ "$(printf '%s\n' "$cloud_block" | grep -Fc -- '- GradusMacUITests' || true)" -eq 1 ]] || return 1
-  [[ "$(printf '%s\n' "$cloud_block" | grep -Fc 'GRADUS_DISABLE_PIPELINE: "1"' || true)" -eq 1 ]] || return 1
-  [[ "$cloud_block" != *'GRADUS_INV7_SOURCE_ROOT'* ]] || return 1
-  [[ "$cloud_block" != *'GRADUS_SNAPSHOT_ROOT'* ]] || return 1
+  [[ "$local_block" == *'- GradusMacTests'* ]] || return 1
+  [[ "$local_block" == *'- GradusMacUITests'* ]] || return 1
+  [[ "$local_block" == *'GRADUS_DISABLE_PIPELINE: "1"'* ]] || return 1
+  [[ "$(printf '%s\n' "$local_block" | grep -Fc -- '- GradusMacUITests' || true)" -eq 1 ]] || return 1
   [[ "$local_block" != *'TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT'* ]] || return 1
   [[ "$local_block" != *'TEST_RUNNER_GRADUS_SNAPSHOT_ROOT'* ]] || return 1
 }
 
-local_scheme_excludes_macos_ui() {
-  local scheme_path="$1"
-  [[ -f "$scheme_path" ]] || return 1
-  [[ "$(grep -Fc 'GradusMacUITests' "$scheme_path" || true)" -eq 0 ]] || return 1
-}
-
-cloud_scheme_keeps_macos_ui() {
+local_scheme_keeps_macos_ui() {
   local scheme_path="$1"
   [[ -f "$scheme_path" ]] || return 1
   [[ "$(grep -Fc 'GradusMacUITests' "$scheme_path" || true)" -eq 2 ]] || return 1
@@ -309,43 +342,36 @@ cloud_scheme_keeps_macos_ui() {
   [[ "$(grep -Fc 'BlueprintName = "GradusMacUITests"' "$scheme_path" || true)" -eq 1 ]] || return 1
 }
 
-validate_xcode_cloud_scheme_contract "$SCRIPT_DIR/project.yml" ||
-  fail "GradusMacCloud must preserve a separate, explicit Cloud test-path contract"
-
-release_checklist_cloud_only() {
+release_checklist_local_authority() {
   local checklist_path="$1"
   [[ -f "$checklist_path" ]] || return 1
-  grep -Fq "required passing Xcode Cloud \`GradusMacCloud\`" "$checklist_path" || return 1
-  grep -Fq "sole macOS UI runner" "$checklist_path" || return 1
-  grep -Fq "exact-head candidate evidence" "$checklist_path" || return 1
-  ! grep -Fq "headless equivalent of the \`GradusMacUI\` leg" "$checklist_path" || return 1
-  ! grep -Fq "local pre-push selector does not replace this candidate evidence" "$checklist_path" || return 1
+  grep -Fq "candidate-bound local gate" "$checklist_path" || return 1
+  grep -Fq "exact-source candidate evidence" "$checklist_path" || return 1
 }
 
-local_scheme_excludes_macos_ui \
+validate_local_macos_ui_contract "$SCRIPT_DIR/project.yml" ||
+  fail "local GradusMac scheme must preserve Mac unit and UI coverage"
+local_scheme_keeps_macos_ui \
   "$SCRIPT_DIR/Gradus.xcodeproj/xcshareddata/xcschemes/GradusMac.xcscheme" ||
-  fail "local GradusMac scheme must exclude GradusMacUITests"
-cloud_scheme_keeps_macos_ui \
-  "$SCRIPT_DIR/Gradus.xcodeproj/xcshareddata/xcschemes/GradusMacCloud.xcscheme" ||
-  fail "cloud GradusMacCloud scheme must include GradusMacUITests exactly twice"
-release_checklist_cloud_only "$SCRIPT_DIR/../RELEASE_CHECKLIST.md" ||
-  fail "release checklist must name Xcode Cloud as the sole macOS UI runner"
+  fail "local GradusMac scheme must include GradusMacUITests exactly twice"
+release_checklist_local_authority "$SCRIPT_DIR/../RELEASE_CHECKLIST.md" ||
+  fail "release checklist must name the candidate-bound local gate as authority"
 
-grep -Fq -- '-only-testing:GradusMacUITests' "$GATE_SCRIPT" &&
-  fail "local gate must not select GradusMacUITests"
-grep -Fq 'assert_counting_leg "GradusMacUI"' "$GATE_SCRIPT" &&
-  fail "local gate must not declare a GradusMacUI counting leg"
+grep -Fq -- '-only-testing:GradusMacUITests' "$GATE_SCRIPT" ||
+  fail "local gate must select GradusMacUITests"
+grep -Fq 'assert_counting_leg "GradusMacUI"' "$GATE_SCRIPT" ||
+  fail "local gate must declare a GradusMacUI counting leg"
 
-mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-cloud-mac-ui-contract.XXXXXX")"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-local-mac-ui-contract.XXXXXX")"
 sed '/- GradusMacUITests/d' "$SCRIPT_DIR/project.yml" > "$mutated_project"
-if validate_xcode_cloud_scheme_contract "$mutated_project"; then
-  fail "GradusMacCloud contract accepted a missing GradusMacUITests target"
+if validate_local_macos_ui_contract "$mutated_project"; then
+  fail "local GradusMac contract accepted a missing GradusMacUITests target"
 fi
 rm -f "$mutated_project"
-mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-cloud-mac-pipeline-contract.XXXXXX")"
+mutated_project="$(mktemp "${TMPDIR:-/tmp}/gradus-local-mac-pipeline-contract.XXXXXX")"
 sed '/GRADUS_DISABLE_PIPELINE: "1"/d' "$SCRIPT_DIR/project.yml" > "$mutated_project"
-if validate_xcode_cloud_scheme_contract "$mutated_project"; then
-  fail "GradusMacCloud contract accepted a missing pipeline-disable setting"
+if validate_local_macos_ui_contract "$mutated_project"; then
+  fail "local GradusMac contract accepted a missing pipeline-disable setting"
 fi
 rm -f "$mutated_project"
 
@@ -367,6 +393,48 @@ validate_gradus_mac_deadline_contract() {
 
 validate_gradus_mac_deadline_contract "$GATE_SCRIPT" ||
   fail "GradusMac unit-test deadline contract is incomplete"
+
+validate_refresh_agent_contract() {
+  local gate_path="$1" project_path="$2"
+  local agent_block core_target tool_target tests_target scheme_block mac_target plist_path
+  agent_block="$(sed -n '/assert_counting_leg "GradusRefreshAgent"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
+  core_target="$(awk '/^  GradusRefreshAgentCore:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$project_path")"
+  tool_target="$(awk '/^  GradusRefreshAgent:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$project_path")"
+  tests_target="$(awk '/^  GradusRefreshAgentTests:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$project_path")"
+  scheme_block="$(awk '/^schemes:/ { in_s=1; next } in_s && /^  GradusRefreshAgent:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$project_path")"
+  mac_target="$(awk '/^  GradusMac:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$project_path")"
+  plist_path="$SCRIPT_DIR/GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist"
+
+  [[ "$agent_block" == *'-scheme GradusRefreshAgent'* ]] || return 1
+  [[ "$agent_block" == *'-only-testing:GradusRefreshAgentTests'* ]] || return 1
+  [[ "$agent_block" == *'-destination '\''platform=macOS,arch=arm64'\'''* ]] || return 1
+  [[ "$agent_block" == *'-derivedDataPath "$derived_data_dir"'* ]] || return 1
+  # An explicit include list, not a directory glob: the core target must never
+  # absorb a file by being dropped into the directory.
+  [[ "$core_target" == *'includes: [RefreshAgent.swift, RefreshAgentCollaborators.swift]'* ]] || return 1
+  [[ "$tool_target" == *'includes: [GradusRefreshAgentApp.swift]'* ]] || return 1
+  [[ "$tool_target" == *'- target: GradusRefreshAgentCore'* ]] || return 1
+  [[ "$tests_target" == *'- target: GradusRefreshAgentCore'* ]] || return 1
+  [[ "$scheme_block" == *'- GradusRefreshAgentTests'* ]] || return 1
+  [[ "$mac_target" == *'subpath: Contents/Library/LaunchAgents'* ]] || return 1
+  [[ "$mac_target" == *'subpath: Contents/Helpers'* ]] || return 1
+  [[ -f "$plist_path" ]] || return 1
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$plist_path" 2>/dev/null)" == "Contents/Helpers/GradusRefreshAgent" ]] || return 1
+  ! /usr/libexec/PlistBuddy -c 'Print :Program' "$plist_path" >/dev/null 2>&1 || return 1
+  ! /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' "$plist_path" >/dev/null 2>&1 || return 1
+  ! rg -qi 'import Security|Keychain|Cookies\.binarycookies|CloudKit|CKContainer|dropFirst\(\)' \
+    "$SCRIPT_DIR/GradusRefreshAgent"
+}
+
+validate_refresh_agent_contract "$GATE_SCRIPT" "$SCRIPT_DIR/project.yml" ||
+  fail "GradusRefreshAgent target, counted gate, BundleProgram plist, or isolation contract is incomplete"
+
+mutated_agent_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-refresh-agent-contract.XXXXXX")"
+sed '/-only-testing:GradusRefreshAgentTests/d' "$GATE_SCRIPT" > "$mutated_agent_gate"
+if validate_refresh_agent_contract "$mutated_agent_gate" "$SCRIPT_DIR/project.yml"; then
+  fail "GradusRefreshAgent contract accepted a missing target-level selector"
+fi
+rm -f "$mutated_agent_gate"
 
 # Run the real helper with hermetic commands. A normal failure keeps its exact
 # status, a hung command is terminated with status 124, progress is visible,
@@ -413,7 +481,7 @@ for leg in GradusiOS-iPad GradusiOSUI; do
   [[ "$ui_block" == *'"$APPLE_UI_TEST_LOCK" --label'* ]] ||
     fail "$leg is not serialized by apple-ui-test-lock"
 done
-for leg in GradusMac GradusiOS-iPhone GradusWidget; do
+for leg in GradusMac GradusRefreshAgent GradusiOS-iPhone GradusWidget; do
   unit_block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$GATE_SCRIPT")"
   [[ "$unit_block" != *'"$APPLE_UI_TEST_LOCK"'* ]] ||
     fail "$leg unit leg must not use apple-ui-test-lock"
@@ -542,14 +610,15 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
 [[ "${#COUNTING_LEG_SOURCES[@]}" -eq "$EXPECTED_COUNTING_LEG_COUNT" ]] ||
   fail "live expected count does not match live sources"
 
-# The iPad leg also carries the 12 canonical image snapshots. Its aggregate
-# floor must therefore include every image plus every shipped iOS UI test;
-# otherwise the image count can hide a zero-test UI target.
+# The fixed-size density snapshots and adaptive iPad workflows are separate
+# legs so neither count can hide a zero-test result in the other.
 snapshot_count="${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"
 ios_ui_test_count="$(rg --no-heading '^\s*func test' "$SCRIPT_DIR/GradusiOSUITests" -g '*.swift' | wc -l | tr -d ' ')"
-[[ "$ios_ui_test_count" -eq 11 ]] ||
-  fail "expected 11 GradusiOSUITests workflows, found $ios_ui_test_count"
+[[ "$ios_ui_test_count" -eq 12 ]] ||
+  fail "expected 12 GradusiOSUITests workflows, found $ios_ui_test_count"
 ipad_leg_index=-1
+density_phone_leg_index=-1
+density_pad_leg_index=-1
 iphone_ui_leg_index=-1
 for ((index = 0; index < leg_count; index++)); do
   if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOS-iPad" ]]; then
@@ -558,10 +627,25 @@ for ((index = 0; index < leg_count; index++)); do
   if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOSUI" ]]; then
     iphone_ui_leg_index="$index"
   fi
+  if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOS-DensityPhone" ]]; then
+    density_phone_leg_index="$index"
+  fi
+  if [[ "${COUNTING_LEG_NAMES[index]}" == "GradusiOS-DensityPad" ]]; then
+    density_pad_leg_index="$index"
+  fi
 done
 if [[ "$ipad_leg_index" -lt 0 ||
-      "${COUNTING_LEG_MINIMUMS[ipad_leg_index]}" -lt $((snapshot_count + ios_ui_test_count)) ]]; then
-  fail "iPad aggregate floor does not protect its UI target from snapshot masking"
+      "${COUNTING_LEG_MINIMUMS[ipad_leg_index]}" -lt "$ios_ui_test_count" ]]; then
+  fail "iPad floor does not protect its UI target"
+fi
+if [[ "$density_phone_leg_index" -lt 0 ||
+      "${COUNTING_LEG_MINIMUMS[density_phone_leg_index]}" -lt "${#DENSITY_PHONE_SNAPSHOT_TEST_SELECTORS[@]}" ]]; then
+  fail "phone density snapshot floor is incomplete"
+fi
+if [[ "$density_pad_leg_index" -lt 0 ||
+      "${COUNTING_LEG_MINIMUMS[density_pad_leg_index]}" -lt "${#DENSITY_PAD_SNAPSHOT_TEST_SELECTORS[@]}" ||
+      $(( ${#DENSITY_PHONE_SNAPSHOT_TEST_SELECTORS[@]} + ${#DENSITY_PAD_SNAPSHOT_TEST_SELECTORS[@]} )) -ne "$snapshot_count" ]]; then
+  fail "pad density snapshot floor or selector partition is incomplete"
 fi
 if [[ "$iphone_ui_leg_index" -lt 0 ||
       "${COUNTING_LEG_MINIMUMS[iphone_ui_leg_index]}" -lt "$ios_ui_test_count" ]]; then
@@ -585,8 +669,7 @@ for ((index = 0; index < leg_count; index++)); do
   fi
 done
 
-# iOS target-level UI legs must remain explicit rather than hidden inside a
-# broad scheme invocation. GradusMacUITests belongs only to GradusMacCloud.
+# UI target-level legs remain explicit rather than hidden in broad schemes.
 grep -Fq -- "-only-testing:GradusiOSUITests" "$GATE_SCRIPT" ||
   fail "iOS UI target-level selector is missing from the canonical gate"
 

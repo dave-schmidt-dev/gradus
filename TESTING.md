@@ -39,16 +39,15 @@ pieces; the candidate-bound bridge canary is now authorized.
 `app/release-testflight --prepare-only` currently composes central `testflight`
 identity freeze with a local production build, archive, signing, and artifact
 verification stage. That behavior is retained only for compatibility and is
-not an approved current release route. GradusiOS production archive, signing,
-and upload must move to a source-bound Xcode Cloud distribution workflow before
-another TestFlight attempt. The required PR checks prove app validation only;
-they are not distribution workflows or upload evidence.
+not an approved current release route. The candidate-bound local gate provides
+source-bound app validation; it does not replace archive, signing, upload,
+processing, device, or owner evidence.
 
 Profile 2.0 adoption was proven historically for candidate
 `gradus-ios-18-a4acb3118b78faff`. Its `adoption-authorized` canary does not
-authorize candidate 1.9.0-24 or override the current cloud-only pause. The fixed
-wrappers remain fail-closed, and local adapter or fixture checks do not replace
-cloud archive/upload, processing, device, or user-visible TestFlight evidence.
+authorize candidate 1.9.0-24. The fixed wrappers remain fail-closed, and local
+adapter or fixture checks do not replace archive/upload, processing, device, or
+user-visible TestFlight evidence.
 
 `app/test_walkthrough.py` additionally proves that the dated release-owner
 walkthrough is bound to the candidate's source revision, project/artifact
@@ -59,10 +58,10 @@ processing evidence.
 
 - Add the test to the correct Xcode target or Python test runner in the same
   change as the feature.
-- Ensure the test is included in the required Xcode Cloud app checks; an
-  unregistered test file is not coverage.
-- Run focused non-Xcode tests where applicable, then require both Xcode Cloud
-  app checks to pass on the exact release head.
+- Ensure the test is included in `app/test-gate.sh`; an unregistered test file
+  is not coverage.
+- Run focused tests where applicable, then run the candidate-bound local gate
+  against the exact release source.
 - Cover both success and meaningful failure/empty states for new sync or
   provider behavior.
 - A manual-only check is an exception, not a substitute. Use one only when
@@ -71,16 +70,17 @@ processing evidence.
   exact steps, and follow-up in `HISTORY.md`/`TASKS.md`.
 
 Gradus currently uses Swift Testing/XCTest for logic, XCUITest for iOS user
-flows, and swift-snapshot-testing for visual regression. `app/test-gate.sh`
-remains an attended diagnostic mirror, not a push or release prerequisite. It
-runs, in order:
+flows, and swift-snapshot-testing for visual regression. `app/test-gate.sh` is
+the authoritative local app-validation gate used by `app/release_local_gate.py`.
+It runs, in order:
 
 1. the hermetic notarization and iOS-upload script tests (including inside-out
    nested signing, separate App Store profile verification, and version/build parity),
 2. `swift test` over the **GradusKit** package (including atomic widget snapshot models),
 3. `pytest` over the **Python producer** suite,
-4. `xcodebuild test` for **GradusMac** (macOS), **GradusiOS** (pinned iPhone simulator),
-   and **GradusWidget** (`GradusWidgetTests` unit and snapshot tests),
+4. `xcodebuild test` for **GradusMac** unit tests and **GradusMacUITests** against
+   the exact local app product, plus **GradusiOS** (pinned iPhone simulator) and
+   **GradusWidget** (`GradusWidgetTests` unit and snapshot tests),
 5. `xcodebuild test -only-testing:GradusiOSUITests` on the pinned **iPad**
    simulator.
 
@@ -121,16 +121,15 @@ product but never its test targets, and XcodeGen cannot add them to a scheme's
 `test:` block since they are not project targets. Without step 2 the package's
 tests — the reconciliation core both apps import — do not run at all.
 
-Pushes rely on required Xcode Cloud checks for app validation. Local hooks are
-kept free of app automation: pre-commit runs fast lint and formatting checks,
-and pre-push runs the whole Python suite (`uv run pytest -q`, ~40s).
-App-specific evidence is collected by the required Xcode Cloud checks
-after push.
+Local hooks are kept free of app automation: pre-commit runs fast lint and
+formatting checks, and pre-push runs the whole Python suite (`uv run pytest -q`,
+~40s). App-specific candidate evidence is collected by the source-bound local
+release gate.
 
-iOS snapshot baselines are canonical to the Xcode Cloud default runtime. Refresh
-them only from an exact result-bundle artifact downloaded through the repository
-helper, after reviewing every rendered image. The replacement is not accepted
-until the same required Xcode Cloud action reruns green against the new files.
+iOS snapshot baselines are canonical to the pinned local Xcode and simulator
+runtime. Refresh them only from an exact local result bundle after reviewing
+every rendered image. The replacement is not accepted until the candidate-bound
+local gate reruns green against the new files.
 
 ## Cross-language rules: shared truth tables
 

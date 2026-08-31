@@ -27,6 +27,7 @@ from allocate_identity import (
     list_workflow_metadata,
     main,
     make_proof,
+    pin_test_destination,
     read_build_run_status,
     read_marketing_version,
     read_testflight_build,
@@ -1567,6 +1568,259 @@ def test_set_workflow_enabled_rejects_a_response_that_did_not_take() -> None:
         set_workflow_enabled(client, "workflow-1", enabled=False)
 
 
+PIN_DEVICE_TYPE = "com.apple.CoreSimulator.SimDeviceType.iPhone-16"
+PIN_RUNTIME = "com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+
+
+def _actions_response(actions):
+    return {"data": {"type": "ciWorkflows", "attributes": {"actions": actions}}}
+
+
+def _unpinned_test_action(name="Test - iOS"):
+    return {
+        "actionType": "TEST",
+        "name": name,
+        "scheme": "GradusiOS",
+        "platform": "IOS",
+        "destination": "ANY_IOS_SIMULATOR",
+        "isRequiredToPass": True,
+        "testConfiguration": {
+            "kind": "USE_SCHEME_SETTINGS",
+            "testPlanName": "GradusiOS",
+            "testDestinations": [],
+        },
+    }
+
+
+def _pinned_test_action(name="Test - iOS", **overrides):
+    action = _unpinned_test_action(name)
+    destination = {
+        "kind": "SIMULATOR",
+        "deviceTypeIdentifier": PIN_DEVICE_TYPE,
+        "runtimeIdentifier": PIN_RUNTIME,
+        # Server-rendered display strings: Apple adds these to the response and
+        # the pin must tolerate them without ever sending them back.
+        "deviceTypeName": "iPhone 16",
+        "runtimeName": "iOS 26.5",
+    }
+    destination.update(overrides)
+    action["testConfiguration"] = {**action["testConfiguration"], "testDestinations": [destination]}
+    return action
+
+
+ARCHIVE_ACTION = {
+    "actionType": "ARCHIVE",
+    "name": "Archive - iOS",
+    "scheme": "GradusiOS",
+    "platform": "IOS",
+    "buildDistributionAudience": "APP_STORE_ELIGIBLE",
+}
+
+
+def _pin_client(before, after):
+    return MutationFixtureClient(
+        [_actions_response(before), {"data": {}}, _actions_response(after)]
+    )
+
+
+def test_pin_test_destination_writes_the_exact_simulator_the_local_gate_uses() -> None:
+    """The whole point: make a Cloud render reproducible from a pinned gate."""
+    client = _pin_client(
+        [ARCHIVE_ACTION, _unpinned_test_action()], [ARCHIVE_ACTION, _pinned_test_action()]
+    )
+
+    assert pin_test_destination(
+        client,
+        "workflow-1",
+        action_name="Test - iOS",
+        device_type_id=PIN_DEVICE_TYPE,
+        runtime_id=PIN_RUNTIME,
+    ) == {
+        "workflowId": "workflow-1",
+        "actionName": "Test - iOS",
+        "pinnedDestinations": [
+            {
+                "kind": "SIMULATOR",
+                "deviceTypeIdentifier": PIN_DEVICE_TYPE,
+                "runtimeIdentifier": PIN_RUNTIME,
+                "deviceTypeName": "iPhone 16",
+                "runtimeName": "iOS 26.5",
+            }
+        ],
+    }
+    assert client.methods == ["GET", "PATCH", "GET"]
+
+
+def test_pin_test_destination_round_trips_every_other_action_untouched() -> None:
+    """`PATCH /ciWorkflows` replaces `actions`, so a dropped key is a deletion."""
+    client = _pin_client(
+        [ARCHIVE_ACTION, _unpinned_test_action()], [ARCHIVE_ACTION, _pinned_test_action()]
+    )
+    pin_test_destination(
+        client,
+        "workflow-1",
+        action_name="Test - iOS",
+        device_type_id=PIN_DEVICE_TYPE,
+        runtime_id=PIN_RUNTIME,
+    )
+
+    sent = client.bodies[1]["data"]["attributes"]["actions"]
+    assert sent[0] == ARCHIVE_ACTION
+    test_action = sent[1]
+    # Every non-destination field survives, including the ones this function
+    # has no opinion about.
+    assert test_action["isRequiredToPass"] is True
+    assert test_action["destination"] == "ANY_IOS_SIMULATOR"
+    assert test_action["testConfiguration"]["kind"] == "USE_SCHEME_SETTINGS"
+    assert test_action["testConfiguration"]["testPlanName"] == "GradusiOS"
+
+
+def test_pin_test_destination_sends_only_writable_destination_fields() -> None:
+    """`deviceTypeName`/`runtimeName` are server-rendered; echoing them invents data."""
+    client = _pin_client([_unpinned_test_action()], [_pinned_test_action()])
+    pin_test_destination(
+        client,
+        "workflow-1",
+        action_name="Test - iOS",
+        device_type_id=PIN_DEVICE_TYPE,
+        runtime_id=PIN_RUNTIME,
+    )
+
+    sent = client.bodies[1]["data"]["attributes"]["actions"][0]
+    assert sent["testConfiguration"]["testDestinations"] == [
+        {
+            "kind": "SIMULATOR",
+            "deviceTypeIdentifier": PIN_DEVICE_TYPE,
+            "runtimeIdentifier": PIN_RUNTIME,
+        }
+    ]
+
+
+def test_pin_test_destination_replaces_an_existing_pin_rather_than_appending() -> None:
+    """Re-pinning must leave one destination, not two conflicting ones."""
+    stale = _pinned_test_action(
+        deviceTypeIdentifier="com.apple.CoreSimulator.SimDeviceType.iPhone-15"
+    )
+    client = _pin_client([stale], [_pinned_test_action()])
+    pin_test_destination(
+        client,
+        "workflow-1",
+        action_name="Test - iOS",
+        device_type_id=PIN_DEVICE_TYPE,
+        runtime_id=PIN_RUNTIME,
+    )
+
+    sent = client.bodies[1]["data"]["attributes"]["actions"][0]
+    assert len(sent["testConfiguration"]["testDestinations"]) == 1
+
+
+def test_pin_test_destination_rejects_an_unknown_action_name() -> None:
+    client = MutationFixtureClient([_actions_response([ARCHIVE_ACTION, _unpinned_test_action()])])
+    with pytest.raises(IdentityAllocationError, match="workflow-test-action-not-found"):
+        pin_test_destination(
+            client,
+            "workflow-1",
+            action_name="Test - macOS",
+            device_type_id=PIN_DEVICE_TYPE,
+            runtime_id=PIN_RUNTIME,
+        )
+    assert client.methods == ["GET"]
+
+
+def test_pin_test_destination_refuses_two_test_actions_with_one_name() -> None:
+    """Apple permits duplicate names; picking one would be a silent coin flip."""
+    client = MutationFixtureClient(
+        [_actions_response([_unpinned_test_action(), _unpinned_test_action()])]
+    )
+    with pytest.raises(IdentityAllocationError, match="workflow-test-action-ambiguous"):
+        pin_test_destination(
+            client,
+            "workflow-1",
+            action_name="Test - iOS",
+            device_type_id=PIN_DEVICE_TYPE,
+            runtime_id=PIN_RUNTIME,
+        )
+    assert client.methods == ["GET"]
+
+
+def test_pin_test_destination_will_not_invent_a_test_configuration() -> None:
+    """Guessing `kind` would change which tests run, not just where they run."""
+    action = _unpinned_test_action()
+    del action["testConfiguration"]
+    client = MutationFixtureClient([_actions_response([action])])
+    with pytest.raises(IdentityAllocationError, match="workflow-test-configuration-missing"):
+        pin_test_destination(
+            client,
+            "workflow-1",
+            action_name="Test - iOS",
+            device_type_id=PIN_DEVICE_TYPE,
+            runtime_id=PIN_RUNTIME,
+        )
+    assert client.methods == ["GET"]
+
+
+def test_pin_test_destination_rejects_a_pin_that_did_not_take() -> None:
+    """A silently-ignored pin leaves Cloud choosing the device as before."""
+    client = _pin_client([_unpinned_test_action()], [_unpinned_test_action()])
+    with pytest.raises(IdentityAllocationError, match="workflow-pin-not-applied"):
+        pin_test_destination(
+            client,
+            "workflow-1",
+            action_name="Test - iOS",
+            device_type_id=PIN_DEVICE_TYPE,
+            runtime_id=PIN_RUNTIME,
+        )
+
+
+def test_pin_test_destination_rejects_a_normalised_pin_that_is_not_what_was_asked() -> None:
+    """Apple substituting a nearby runtime must fail loudly, not pass quietly."""
+    other = _pinned_test_action(runtimeIdentifier="com.apple.CoreSimulator.SimRuntime.iOS-26-4")
+    client = _pin_client([_unpinned_test_action()], [other])
+    with pytest.raises(IdentityAllocationError, match="workflow-pin-not-applied"):
+        pin_test_destination(
+            client,
+            "workflow-1",
+            action_name="Test - iOS",
+            device_type_id=PIN_DEVICE_TYPE,
+            runtime_id=PIN_RUNTIME,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    (
+        ("workflow_id", "workflow-id-invalid"),
+        ("action_name", "test-action-name-invalid"),
+        ("device_type_id", "device-type-identifier-invalid"),
+        ("runtime_id", "runtime-identifier-invalid"),
+    ),
+)
+def test_pin_test_destination_rejects_empty_arguments(field: str, expected: str) -> None:
+    kwargs = {
+        "workflow_id": "workflow-1",
+        "action_name": "Test - iOS",
+        "device_type_id": PIN_DEVICE_TYPE,
+        "runtime_id": PIN_RUNTIME,
+    }
+    kwargs[field] = ""
+    workflow_id = kwargs.pop("workflow_id")
+    client = MutationFixtureClient([])
+    with pytest.raises(IdentityAllocationError, match=expected):
+        pin_test_destination(client, workflow_id, **kwargs)
+    assert client.methods == []
+
+
+def test_pin_test_destination_cli_requires_both_simulator_identifiers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Half a pin is not a pin; refuse before spending a credential."""
+    monkeypatch.setattr("allocate_identity.make_token_provider", lambda: None)
+    assert (
+        main(["--pin-test-destination", "workflow-1", "--sim-device-type-id", PIN_DEVICE_TYPE]) == 1
+    )
+    assert "--sim-runtime-id" in capsys.readouterr().err
+
+
 def test_disable_and_enable_workflow_cannot_be_requested_together(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1784,7 +2038,17 @@ def _toolchain_responses(*, xcode_version="26.7", macos_version=None):
                         "scheme": "GradusiOS",
                         "platform": "IOS",
                         "destination": "ANY_IOS_SIMULATOR",
-                        "testConfiguration": {"devices": ["d1", "d2"]},
+                        # The live `Gradus iOS Snapshot Trial` shape as of
+                        # 2026-08-31: a coarse `destination` category and an
+                        # empty `testDestinations`, i.e. Cloud picks the device
+                        # and runtime itself. `kind` is round-tripped as an
+                        # opaque string and never interpreted, so a different
+                        # real value cannot change the pin's behaviour.
+                        "testConfiguration": {
+                            "kind": "USE_SCHEME_SETTINGS",
+                            "testPlanName": "GradusiOS",
+                            "testDestinations": [],
+                        },
                     },
                 ]
             },
@@ -1812,7 +2076,11 @@ def test_resolve_workflow_toolchain_names_the_versions_behind_opaque_ids(
                 "scheme": "GradusiOS",
                 "platform": "IOS",
                 "destination": "ANY_IOS_SIMULATOR",
-                "deviceCount": 2,
+                "kind": "USE_SCHEME_SETTINGS",
+                "testPlanName": "GradusiOS",
+                # The finding this mode exists to surface: nothing is pinned,
+                # so a Cloud-recorded baseline has no reproducible device.
+                "pinnedDestinations": [],
             }
         ],
     }

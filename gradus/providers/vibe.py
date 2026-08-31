@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 from ..parsing import VibeStatus
 from ._base import (
     ProbeFailure,
     _auth_required_message,
     _harden_existing,
+    _private_cache_path,
     _remove_private,
     register,
 )
@@ -19,7 +19,7 @@ from ._base import (
 @register("Vibe")
 class VibeProvider:
     API_URL = "https://console.mistral.ai/api/billing/v2/vibe-usage"
-    _CACHE_PATH = Path(__file__).resolve().parent.parent.parent / ".cache" / "vibe_cookies.json"
+    _CACHE_PATH = _private_cache_path("vibe_cookies.json")
 
     def __init__(self, project_root: str) -> None:
         self._ory_name = ""

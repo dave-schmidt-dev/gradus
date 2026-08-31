@@ -108,7 +108,7 @@ if [[ -x "${BRIDGE}" ]]; then
   # stays in the shape that works.
   /usr/bin/python3 -c 'import subprocess,sys
 try:
-    sys.exit(subprocess.call([sys.argv[1], "--cache-directory", sys.argv[2]],
+    sys.exit(subprocess.call([sys.argv[1], "refresh", "--cache-directory", sys.argv[2]],
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL,
                              timeout=float(sys.argv[3])))
@@ -118,8 +118,7 @@ except subprocess.TimeoutExpired:
   bridge_rc=$?
   if (( bridge_rc == 0 )); then
     missing_cache_providers=()
-    [[ -f "${REPO_ROOT}/.cache/claude_cookies.json" ]] || missing_cache_providers+=("Claude")
-    [[ -f "${REPO_ROOT}/.cache/opencode_go_cookies.json" ]] || missing_cache_providers+=("OpenCode Go")
+    [[ -f "${REPO_ROOT}/.cache/vibe_cookies.json" ]] || missing_cache_providers+=("Vibe")
     if ((${#missing_cache_providers[@]})); then
       bridge_now="degraded"
       bridge_detail="${missing_cache_providers[*]}"

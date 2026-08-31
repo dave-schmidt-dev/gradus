@@ -28,6 +28,7 @@ from rich.console import Console
 from rich.live import Live
 
 from .history import append_history_record, query_history, recent_auth_failure_count
+from .paths import RUNTIME_PATHS
 from .providers import (
     ProviderSnapshot,
     fetch_provider_snapshot,
@@ -75,7 +76,7 @@ AUTH_ACTIONS: dict[str, tuple[str, str]] = {
     ),
     "Antigravity": ("cli", "agy"),
     "Copilot": ("cli", "gh auth login"),
-    "Cursor": ("browser", "https://cursor.sh"),
+    "Cursor": ("cli", "cursor-agent login"),
     "Vibe": ("browser", "https://console.mistral.ai"),
     "OpenCode Go": ("browser", "https://opencode.ai"),
 }
@@ -518,6 +519,16 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of providers to enable (e.g. Claude,Codex,Antigravity).",
     )
     parser.add_argument(
+        "--publisher-watchdog",
+        action="store_true",
+        dest="publisher_watchdog",
+        help=(
+            "Relaunch the macOS CloudKit publisher if it has died while the snapshot "
+            "stayed fresh, then exit. Opt-in: only the launchd producer passes this, so "
+            "no test, hermetic run, or interactive session can ever spawn the app."
+        ),
+    )
+    parser.add_argument(
         "--refresh-snapshot",
         action="store_true",
         dest="refresh_snapshot",
@@ -557,6 +568,19 @@ def parse_args() -> argparse.Namespace:
         help="Mark historical evidence unverified when its match is farther away.",
     )
     args = parser.parse_args()
+    if args.publisher_watchdog:
+        conflicts = [
+            flag
+            for flag, enabled in (
+                ("--once", args.once),
+                ("--json", args.json),
+                ("--refresh-snapshot", args.refresh_snapshot),
+                ("--verify-refresh-health", args.verify_refresh_health),
+            )
+            if enabled
+        ]
+        if conflicts:
+            parser.error("argument --publisher-watchdog: not allowed with " + ", ".join(conflicts))
     if args.refresh_snapshot and (args.once or args.json):
         parser.error("argument --refresh-snapshot: not allowed with --once or --json")
     if args.refresh_snapshot and args.providers:
@@ -900,7 +924,7 @@ def _write_snapshot_versions(
     return v1_ok, v2_ok, history_ok
 
 
-_REFRESH_LOCK_NAME = ".refresh-snapshot.lock"
+_REFRESH_LOCK_NAME = RUNTIME_PATHS.refresh_lock_path.name
 _REFRESH_SNAPSHOT_LOCK_TIMEOUT_SECONDS = 2.0
 _REFRESH_SNAPSHOT_LOCK_POLL_INTERVAL_SECONDS = 0.1
 
@@ -1355,14 +1379,14 @@ def _cbreak_mode():
 # gradus does not control, so a relative `.logs/gradus.log` would scatter log
 # files wherever the job happened to start -- and the one place it would never
 # be is where someone would look for it.
-_LOG_PATH = Path(__file__).resolve().parent.parent / ".logs" / "gradus.log"
+_LOG_PATH = RUNTIME_PATHS.log_path
 
 # Set by the test suite so pytest's own WARNING traffic cannot rotate real
 # production evidence out of the log. An env var rather than an "am I running
 # under pytest?" sniff: the override is a behavior a test can assert on, and
 # a detection branch is not.
 _LOG_PATH_ENV_VAR = "GRADUS_LOG_PATH"
-_TUI_SETTINGS_PATH = Path(__file__).resolve().parent.parent / ".state" / "tui-settings.json"
+_TUI_SETTINGS_PATH = RUNTIME_PATHS.tui_settings_path
 _TUI_SORT_OPTIONS = ("name", "urgent", "reset")
 
 
@@ -1488,6 +1512,10 @@ def _history_query_once(
 
 def main() -> int:
     args = parse_args()
+    if getattr(args, "publisher_watchdog", False):
+        from .publisher_watchdog import main as _publisher_watchdog_main
+
+        return _publisher_watchdog_main()
     if getattr(args, "history_at", None):
         return _history_query_once(
             args.history_at,

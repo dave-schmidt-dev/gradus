@@ -125,9 +125,10 @@ duplicate that invariant's contract.
 Before candidate upload:
 
 1. Identify the producer, consumer, and shared contract in the release notes.
-2. Build and test both GradusMac and GradusiOS with `app/test-gate.sh`. For a
-   pull-request candidate, retain the required passing Xcode Cloud `GradusMacCloud`
-   status as the sole macOS UI runner and exact-head candidate evidence.
+2. Run the candidate-bound local gate, which binds the readiness manifest to the
+   current and checked-tree source digests and streams `app/test-gate.sh`. Retain
+   its passing local-gate proof as the exact-source candidate evidence; the
+   `GradusMacUI` leg launches the exact locally built GradusMac app product.
 3. Run the scripted CloudKit schema-parity check — no manual CloudKit Console
    comparison required:
 

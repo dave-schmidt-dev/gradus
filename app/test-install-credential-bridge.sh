@@ -94,6 +94,21 @@ marker() { cat "$1/Contents/marker" 2>/dev/null || true; }
 
 echo "==> install-credential-bridge.sh"
 
+bridge_target="$(awk '/^  GradusCredentialBridge:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$SCRIPT_DIR/project.yml")"
+mac_target="$(awk '/^  GradusMac:/ { in_t=1; next } in_t && /^  [A-Za-z0-9_]+:/ { exit } in_t { print }' "$SCRIPT_DIR/project.yml")"
+bridge_dependency="$(printf '%s\n' "$mac_target" | awk '
+  /^      - target: GradusCredentialBridge$/ { in_d=1; print; next }
+  in_d && /^      - target:/ { exit }
+  in_d { print }
+')"
+[[ "$bridge_target" == *'PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.credential-bridge'* ]] ||
+  fail "bridge target does not have its distinct bundle identifier"
+[[ "$bridge_dependency" == *'- target: GradusCredentialBridge'* &&
+   "$bridge_dependency" == *'embed: true'* &&
+   "$bridge_dependency" == *'codeSign: true'* &&
+   "$bridge_dependency" == *'subpath: Contents/Helpers'* ]] ||
+  fail "GradusMac does not embed and sign the nested bridge under Contents/Helpers"
+
 setup_case dry-run
 make_bundle "$BUILD_DIR/DerivedData/Build/Products/Release/GradusCredentialBridge.app"
 make_bundle "$INSTALL_DIR/GradusCredentialBridge.app" old

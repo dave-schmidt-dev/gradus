@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .paths import RUNTIME_PATHS
 from .providers._base import ProviderSnapshot
 from .providers.antigravity import (
     HISTORY_CLAUDE_PROVENANCE,
@@ -41,7 +42,7 @@ from .snapshot import (
 log = logging.getLogger(__name__)
 
 HISTORY_SCHEMA_VERSION = 1
-HISTORY_DIR = Path(__file__).resolve().parent.parent / ".state" / "history"
+HISTORY_DIR = RUNTIME_PATHS.history_dir
 HISTORY_LOCK_NAME = ".history.lock"
 HISTORY_RETENTION_DAYS = 7
 

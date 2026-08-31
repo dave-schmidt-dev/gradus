@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import inspect
 import json
 import os
 import stat
@@ -29,7 +30,6 @@ from gradus.providers import (
     ProbeFailure,
     ProviderSnapshot,
     VibeProvider,
-    _AuthRejected,
     _classify_codex_windows,
     _codex_percent_left,
     _format_reset_time,
@@ -282,17 +282,6 @@ class NetworkFailureClassificationTests(unittest.TestCase):
         # offer the user a `login` fix action for a failure logging in cannot fix.
         self.assertFalse(_is_auth_error(snapshot), f"{provider}: misread as an auth error")
 
-    def test_opencode_go_dns_failure_is_transient(self) -> None:
-        provider = OpenCodeGoProvider()
-        provider._auth_cookie = "cookie-value"  # skips _acquire's disk path
-        opener = MagicMock()
-        opener.open.side_effect = self._dns_failure()
-
-        with patch("urllib.request.build_opener", return_value=opener):
-            snapshot = fetch_provider_snapshot("OpenCode Go", provider, debug=False)
-
-        self._assert_transient(snapshot, provider="OpenCode Go")
-
     def test_vibe_dns_failure_is_transient(self) -> None:
         provider = VibeProvider(project_root="/nonexistent")
         provider._ory_name = "ory_session"
@@ -303,82 +292,6 @@ class NetworkFailureClassificationTests(unittest.TestCase):
             snapshot = fetch_provider_snapshot("Vibe", provider, debug=False)
 
         self._assert_transient(snapshot, provider="Vibe")
-
-    def test_cursor_dns_failure_is_transient(self) -> None:
-        """Cursor is already correct; this pins it.
-
-        `cursor.fetch` catches ``(OSError, URLError)`` together, which works
-        because ``URLError`` derives from ``OSError``. Narrowing that handler
-        later would silently reopen the same bug.
-        """
-        provider = CursorProvider()
-        provider._access_token = "token"
-
-        with patch("urllib.request.urlopen", side_effect=self._dns_failure()):
-            snapshot = fetch_provider_snapshot("Cursor", provider, debug=False)
-
-        self._assert_transient(snapshot, provider="Cursor")
-
-    def test_cursor_network_blip_on_the_post_refresh_retry_is_transient(self) -> None:
-        """401 → refresh → blip. The retry sits inside the HTTPError block.
-
-        Its sibling ``except (OSError, URLError)`` cannot catch it, so before
-        this the blip escaped to the catch-all and read as a hard failure.
-        """
-        import urllib.error
-
-        provider = CursorProvider()
-        provider._access_token = "token"
-        provider._refresh_token = "refresh"
-
-        responses = [
-            urllib.error.HTTPError("https://api.cursor.com", 401, "Unauthorized", {}, None),
-            self._dns_failure(),
-        ]
-        with (
-            patch.object(CursorProvider, "_do_token_refresh"),
-            patch.object(CursorProvider, "_can_refresh", True),
-            patch.object(CursorProvider, "_api_post", side_effect=responses),
-        ):
-            snapshot = fetch_provider_snapshot("Cursor", provider, debug=False)
-
-        self._assert_transient(snapshot, provider="Cursor retry")
-        # Two layers now cover this, and they are not equivalent. Without the
-        # retry's own handler the exception still escapes to the catch-all,
-        # where `_safe_probe_error`'s URLError backstop maps it to the generic
-        # "provider probe network error" -- transient, so the merge behavior is
-        # already correct. Asserting the provider-specific wording is what
-        # distinguishes the two, and it is the reason to keep both: the
-        # backstop cannot name the provider or the cause.
-        self.assertIn("Cursor API network error", snapshot.error)
-
-    def test_cursor_401_surviving_the_refresh_is_actionable_not_generic(self) -> None:
-        """A dead session must say so, not collapse to "provider probe failed".
-
-        This is the same escape as above with the opposite required outcome:
-        the user can fix it by signing in, so the message has to reach
-        ``_is_auth_error`` and light up the fix action.
-        """
-        import urllib.error
-
-        provider = CursorProvider()
-        provider._access_token = "token"
-        provider._refresh_token = "refresh"
-
-        unauthorized = lambda: urllib.error.HTTPError(  # noqa: E731
-            "https://api.cursor.com", 401, "Unauthorized", {}, None
-        )
-        with (
-            patch.object(CursorProvider, "_do_token_refresh"),
-            patch.object(CursorProvider, "_can_refresh", True),
-            patch.object(CursorProvider, "_api_post", side_effect=[unauthorized(), unauthorized()]),
-            patch.object(CursorProvider, "_clear_cache"),
-        ):
-            snapshot = fetch_provider_snapshot("Cursor", provider, debug=False)
-
-        self.assertFalse(snapshot.ok)
-        self.assertIn("session expired", snapshot.error.lower())
-        self.assertTrue(_is_auth_error(snapshot), "should offer the sign-in fix action")
 
     def test_catch_all_backstop_maps_urlerror_but_not_httperror(self) -> None:
         """Ordering guard inside ``_safe_probe_error``.
@@ -812,82 +725,6 @@ class VibeProviderTests(unittest.TestCase):
         self.assertIsNone(status.reset_at)
 
 
-class CursorProviderTests(unittest.TestCase):
-    USAGE_RESPONSE = {
-        "billingCycleStart": 1775994366000,
-        "billingCycleEnd": 1778586366000,
-        "planUsage": {
-            "apiPercentUsed": 1.5555555555555556,
-            "autoPercentUsed": 6.644444444444445,
-            "includedSpend": 369,
-            "limit": 2000,
-            "remaining": 1631,
-            "totalPercentUsed": 4.1000000000000005,
-            "totalSpend": 369,
-        },
-    }
-    PLAN_RESPONSE = {
-        "planInfo": {
-            "name": "pro",
-        }
-    }
-
-    def setUp(self) -> None:
-        # Isolate _CACHE_PATH so constructing CursorProvider can't overwrite the
-        # repo's real .cache/cursor_token.json with whatever JWT Safari holds.
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self._cache_path = Path(self._tmpdir.name) / "cursor_token.json"
-        self._patcher = patch.object(CursorProvider, "_CACHE_PATH", self._cache_path)
-        self._patcher.start()
-
-    def tearDown(self) -> None:
-        self._patcher.stop()
-        self._tmpdir.cleanup()
-
-    def test_cursor_nested_plan_usage_mapping(self) -> None:
-        provider = CursorProvider()
-        provider._access_token = "cursor-access-token"
-        provider._refresh_token = "cursor-refresh-token"
-        with patch.object(
-            provider,
-            "_api_post",
-            side_effect=[self.USAGE_RESPONSE, self.PLAN_RESPONSE],
-        ):
-            status = provider.fetch()
-        self.assertAlmostEqual(status.credit_percent_left, 81.55, places=2)
-        self.assertAlmostEqual(status.auto_percent_used, 6.644444444444445)
-        self.assertAlmostEqual(status.api_percent_used, 1.5555555555555556)
-        self.assertEqual(status.remaining_cents, 1631)
-        self.assertEqual(status.limit_cents, 2000)
-        self.assertEqual(status.plan_name, "pro")
-        self.assertEqual(status.billing_cycle_start, "2026-04-12T07:46:06-04:00")
-        self.assertEqual(status.billing_cycle_end_iso, "2026-05-12T07:46:06-04:00")
-        # Round-trip: both values must be tz-aware and subtraction must yield a timedelta
-        start_parsed = datetime.fromisoformat(status.billing_cycle_start)
-        end_parsed = datetime.fromisoformat(status.billing_cycle_end_iso)
-        delta = end_parsed - start_parsed
-        self.assertIsInstance(delta.total_seconds(), float)
-
-    def test_cursor_falls_back_to_total_percent_used_when_cents_missing(self) -> None:
-        provider = CursorProvider()
-        provider._access_token = "cursor-access-token"
-        provider._refresh_token = "cursor-refresh-token"
-        usage_response = {
-            "billingCycleStart": 1775994366000,
-            "billingCycleEnd": 1778586366000,
-            "planUsage": {
-                "totalPercentUsed": 4.1,
-            },
-        }
-        with patch.object(
-            provider,
-            "_api_post",
-            side_effect=[usage_response, self.PLAN_RESPONSE],
-        ):
-            status = provider.fetch()
-        self.assertAlmostEqual(status.credit_percent_left, 95.9, places=1)
-
-
 def _make_jwt(exp_offset_seconds: int) -> str:
     """Build a fake JWT whose `exp` claim is now + offset (no signature)."""
     header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
@@ -914,63 +751,6 @@ class JwtExpiryTests(unittest.TestCase):
         header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
         payload = base64.urlsafe_b64encode(b"{}").rstrip(b"=").decode()
         self.assertFalse(_is_jwt_expired(f"{header}.{payload}."))
-
-
-class CursorTokenCacheTests(unittest.TestCase):
-    """Cursor reads its credential cache; the bridge is the only browser reader."""
-
-    def setUp(self) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self._cache_path = Path(self._tmpdir.name) / "cursor_token.json"
-        # Patch class attribute so provider instances use the tempfile.
-        self._patcher = patch.object(CursorProvider, "_CACHE_PATH", self._cache_path)
-        self._patcher.start()
-
-    def tearDown(self) -> None:
-        self._patcher.stop()
-        self._tmpdir.cleanup()
-
-    def test_cache_is_the_only_credential_source(self) -> None:
-        valid_jwt = _make_jwt(3600)
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(
-            json.dumps({"access_token": valid_jwt, "refresh_token": "rt"}),
-            encoding="utf-8",
-        )
-        provider = CursorProvider()
-        provider._acquire()
-        self.assertEqual(provider._access_token, valid_jwt)
-        self.assertEqual(provider._refresh_token, "rt")
-        self.assertEqual(provider._token_source, "cache")
-
-    def test_expired_cache_is_not_used(self) -> None:
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(
-            json.dumps({"access_token": _make_jwt(-3600)}),
-            encoding="utf-8",
-        )
-        provider = CursorProvider()
-        provider._acquire()
-        self.assertIsNone(provider._access_token)
-
-    def test_missing_cache_does_not_create_credentials(self) -> None:
-        provider = CursorProvider()
-        provider._acquire()
-        self.assertFalse(self._cache_path.exists())
-
-    def test_401_clears_cache(self) -> None:
-        """A rejected token must be evicted so the next startup re-reads from Safari."""
-        import urllib.error as ue
-
-        valid_jwt = _make_jwt(3600)
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(json.dumps({"access_token": valid_jwt}), encoding="utf-8")
-        provider = CursorProvider()
-        err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
-        with patch.object(provider, "_api_post", side_effect=err):
-            with self.assertRaises(ProbeFailure):
-                provider.fetch()
-        self.assertFalse(self._cache_path.exists())
 
 
 class VibeCookieCacheTests(unittest.TestCase):
@@ -1028,10 +808,8 @@ class CacheResilienceTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
-        self._cursor_cache = Path(self._tmpdir.name) / "cursor_token.json"
         self._vibe_cache = Path(self._tmpdir.name) / "vibe_cookies.json"
         self._patchers = [
-            patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
         ]
         for p in self._patchers:
@@ -1042,73 +820,12 @@ class CacheResilienceTests(unittest.TestCase):
             p.stop()
         self._tmpdir.cleanup()
 
-    def test_cursor_corrupted_cache_is_ignored(self) -> None:
-        self._cursor_cache.parent.mkdir(parents=True, exist_ok=True)
-        self._cursor_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
-        provider = CursorProvider()
-        provider._acquire()
-        self.assertIsNone(provider._access_token)
-
     def test_vibe_corrupted_cache_is_ignored(self) -> None:
         self._vibe_cache.parent.mkdir(parents=True, exist_ok=True)
         self._vibe_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
         provider = VibeProvider(project_root=self._tmpdir.name)
         provider._acquire()
         self.assertFalse(provider._has_cookies)
-
-    def test_cursor_refresh_keeps_new_token_in_memory_without_rewriting_bridge_cache(self) -> None:
-        """Provider refreshes must not gain write access to bridge-managed credentials."""
-        import urllib.error as ue
-
-        valid_jwt = _make_jwt(3600)
-        self._cursor_cache.parent.mkdir(parents=True, exist_ok=True)
-        self._cursor_cache.write_text(
-            json.dumps({"access_token": valid_jwt, "refresh_token": "old_rt"}),
-            encoding="utf-8",
-        )
-        provider = CursorProvider()
-
-        # Simulate: first API call → 401, refresh succeeds with new tokens, retry succeeds
-        first_err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
-
-        new_jwt = _make_jwt(7200)
-        refresh_body = json.dumps({"access_token": new_jwt, "refresh_token": "new_rt"}).encode()
-        mock_refresh_resp = MagicMock()
-        mock_refresh_resp.read.return_value = refresh_body
-        mock_refresh_resp.__enter__ = lambda s: s
-        mock_refresh_resp.__exit__ = MagicMock(return_value=False)
-
-        usage_resp = {
-            "billingCycleStart": 1775994366000,
-            "billingCycleEnd": 1778586366000,
-            "planUsage": {"totalPercentUsed": 4.1},
-        }
-        plan_resp = {"planInfo": {"name": "pro"}}
-
-        call_count = 0
-
-        def api_post_side_effect(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise first_err
-            elif call_count == 2:
-                return usage_resp
-            else:
-                return plan_resp
-
-        with (
-            patch.object(provider, "_api_post", side_effect=api_post_side_effect),
-            patch("urllib.request.urlopen", return_value=mock_refresh_resp),
-        ):
-            provider.fetch()
-
-        # The bridge-owned cache remains untouched; the fresh token is only in memory.
-        cached = json.loads(self._cursor_cache.read_text(encoding="utf-8"))
-        self.assertEqual(cached["access_token"], valid_jwt)
-        self.assertEqual(cached["refresh_token"], "old_rt")
-        self.assertEqual(provider._access_token, new_jwt)
-        self.assertEqual(provider._refresh_token, "new_rt")
 
 
 class CodexWindowClassificationTests(unittest.TestCase):
@@ -2750,11 +2467,9 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self._root = Path(self._tmpdir.name)
         self._vibe_cache = self._root / "vibe_cookies.json"
-        self._cursor_cache = self._root / "cursor_token.json"
         self._codex_auth = self._root / "auth.json"
         self._patchers = [
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
-            patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2783,10 +2498,6 @@ class HeadlessReadOnlyTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        self._cursor_cache.write_text(
-            json.dumps({"access_token": _make_jwt(3600), "refresh_token": "rt"}),
-            encoding="utf-8",
-        )
 
     def _construct_and_fetch_all(self) -> None:
         """Construct + fetch all five providers, tolerating expected auth failures.
@@ -2797,7 +2508,7 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         """
         factories = [
             lambda: VibeProvider(str(self._root)),
-            CursorProvider,
+            OpenCodeGoProvider,
             CodexHttpProvider,
             ClaudeHttpProvider,
             AntigravityProvider,
@@ -2811,8 +2522,7 @@ class HeadlessReadOnlyTests(unittest.TestCase):
 
     def test_headless_no_subprocess_any_provider(self) -> None:
         # INV-2 proof: neither Popen nor run may fire across construct+fetch for
-        # all five providers, including the cached-cred → 401 recovery on
-        # Codex/Cursor. If either count is non-zero, a choke-point is ungated.
+        # all providers. If either count is non-zero, a choke-point is ungated.
         self._seed_codex_and_cursor()
         providers.set_headless(True)
         with (
@@ -2828,7 +2538,6 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         # INV-2: no auth.json rewrite and no cache write/eviction, even on 401.
         self._seed_codex_and_cursor()
         original_auth = self._codex_auth.read_text(encoding="utf-8")
-        original_cursor = self._cursor_cache.read_text(encoding="utf-8")
         providers.set_headless(True)
         with (
             patch("gradus.providers.os.replace") as os_replace,
@@ -2840,8 +2549,6 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         # Codex must never mint/persist tokens → no atomic auth.json rewrite.
         os_replace.assert_not_called()
         self.assertEqual(self._codex_auth.read_text(encoding="utf-8"), original_auth)
-        # Cursor's 401 path must NOT evict the cache in headless mode.
-        self.assertEqual(self._cursor_cache.read_text(encoding="utf-8"), original_cursor)
         # No provider may create a fresh cache file from a read.
         self.assertFalse(self._vibe_cache.exists())
 
@@ -2877,11 +2584,9 @@ class LazyAcquireContractTests(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self._root = Path(self._tmpdir.name)
         self._vibe_cache = self._root / "vibe_cookies.json"
-        self._cursor_cache = self._root / "cursor_token.json"
         self._codex_auth = self._root / "auth.json"
         self._patchers = [
             patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
-            patch.object(CursorProvider, "_CACHE_PATH", self._cursor_cache),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2910,6 +2615,7 @@ class LazyAcquireContractTests(unittest.TestCase):
                 ClaudeHttpProvider()
                 AntigravityProvider()
                 CursorProvider()
+                OpenCodeGoProvider()
                 VibeProvider(str(self._root))
             except Exception as exc:  # noqa: BLE001
                 self.fail(f"construction must never raise, got: {exc!r}")
@@ -2966,22 +2672,6 @@ class TestCredentialCachePermissions(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(os.stat(dump_path).st_mode), 0o600)
             # ...but the shared parent dir is left exactly as it was (never chmod'd).
             self.assertEqual(stat.S_IMODE(os.stat(shared).st_mode), 0o777)
-
-    def test_load_from_cache_self_heals_permissions(self) -> None:
-        """A pre-existing 0644 cache file is tightened to 0600 on a successful
-        (non-headless) read — the opportunistic self-heal (1.3)."""
-        with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / "cursor_token.json"
-            cache_path.write_text(
-                json.dumps({"access_token": _make_jwt(3600), "refresh_token": "rt"}),
-                encoding="utf-8",
-            )
-            os.chmod(cache_path, 0o644)
-            with patch.object(CursorProvider, "_CACHE_PATH", cache_path):
-                provider = CursorProvider.__new__(CursorProvider)
-                result = provider._load_from_cache()
-            self.assertTrue(result)
-            self.assertEqual(stat.S_IMODE(os.stat(cache_path).st_mode), 0o600)
 
 
 def _seroval_stream(node_json: str) -> bytes:
@@ -3049,280 +2739,346 @@ class SerovalDecodeTests(unittest.TestCase):
         self.assertEqual(result, [{"id": "wrk_123", "name": "test", "slug": None}])
 
 
-class OpenCodeGoProviderTests(unittest.TestCase):
-    WORKSPACES = [
-        {"id": "wrk_a", "name": "Personal", "slug": "personal"},
-        {"id": "wrk_b", "name": "Team", "slug": "team"},
-    ]
-    SUBSCRIPTION = {
-        "mine": True,
-        "useBalance": False,
-        "rollingUsage": {"status": "ok", "resetInSec": 18000, "usagePercent": 25},
-        "weeklyUsage": {"status": "ok", "resetInSec": 400000, "usagePercent": 10},
-        "monthlyUsage": {"status": "rate-limited", "resetInSec": 1200000, "usagePercent": 100},
-    }
+class SafariFreeProviderTests(unittest.TestCase):
+    def test_cursor_keychain_lookup_uses_cli_item_without_persisting(self) -> None:
+        with patch("gradus.providers.cursor.subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout="cursor-token\n")
+            self.assertEqual(CursorProvider._load_keychain_token(), "cursor-token")
+            args = run.call_args.args[0]
+            self.assertEqual(args[:3], ["security", "find-generic-password", "-w"])
+            self.assertEqual(args[3:], ["-s", "cursor-access-token", "-a", "cursor-user"])
 
-    def setUp(self) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self._cache_path = Path(self._tmpdir.name) / "opencode_go_cookies.json"
-        self._patcher = patch.object(OpenCodeGoProvider, "_CACHE_PATH", self._cache_path)
-        self._patcher.start()
-
-    def tearDown(self) -> None:
-        self._patcher.stop()
-        self._tmpdir.cleanup()
-
-    def _provider(self) -> OpenCodeGoProvider:
-        self._cache_path.write_text(json.dumps({"auth": "cookie-value"}), encoding="utf-8")
-        provider = OpenCodeGoProvider()
-        provider._acquire()
-        return provider
-
-    def test_field_mapping_percent_remaining_and_resets(self) -> None:
-        provider = self._provider()
-        with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
-            patch.object(provider, "_fetch_subscription", return_value=self.SUBSCRIPTION),
+    def test_cursor_never_writes_the_keychain_or_refreshes_the_cli_session(self) -> None:
+        source = Path(inspect.getsourcefile(CursorProvider)).read_text(encoding="utf-8")
+        for forbidden in (
+            "add-generic-password",
+            "delete-generic-password",
+            "oauth/token",
+            "refresh_token",
+            "_clear_cache",
+            "cursor_token.json",
         ):
-            status = provider.fetch()
-        # usagePercent is percent USED of the dollar limit; fields are remaining.
-        self.assertEqual(status.five_hour_percent_left, 75)
-        self.assertEqual(status.weekly_percent_left, 90)
-        # rate-limited window reports usagePercent 100 -> 0% remaining.
-        self.assertEqual(status.monthly_percent_left, 0)
-        for reset in (status.five_hour_reset, status.weekly_reset, status.monthly_reset):
-            self.assertIsNotNone(reset)
-            assert reset is not None
-            self.assertTrue(reset.startswith("Resets "))
+            self.assertNotIn(forbidden, source)
 
-    def test_zen_credit_is_normalized_from_workspace_microcents(self) -> None:
-        html = "payload={balance:1234500000,reload:false,reloadMin:500000000}"
-        self.assertEqual(OpenCodeGoProvider._zen_credit_from_html(html), 12.345)
-
-        provider = self._provider()
-        subscription = {**self.SUBSCRIPTION, "zen_credit": 12.345}
-        with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
-            patch.object(provider, "_fetch_subscription", return_value=subscription),
+    def test_cursor_keychain_failures_are_typed_without_diagnostics(self) -> None:
+        for stderr, expected in (
+            ("security: SecKeychain item not found", "item unavailable"),
+            ("errSecAuthFailed: authorization denied", "Keychain access denied"),
+            ("keychain is locked", "Keychain is locked"),
+            ("User interaction is not allowed", "lookup requires interaction"),
         ):
-            status = provider.fetch()
-        self.assertEqual(status.zen_credit, 12.345)
+            with (
+                self.subTest(stderr=stderr),
+                patch("gradus.providers.cursor.subprocess.run") as run,
+            ):
+                run.return_value = SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+                with self.assertRaisesRegex(FileNotFoundError, expected):
+                    CursorProvider._load_keychain_token()
+            self.assertNotIn(stderr, expected)
 
-    def test_missing_or_malformed_workspace_balance_is_omitted(self) -> None:
-        malformed = (
-            "payload={reload:false,reloadMin:500000000}",
-            'payload={balance:"1234500000",reload:false,reloadMin:500000000}',
-            "payload={balance:-1,reload:false,reloadMin:500000000}",
-            "payload={balance:1234500000,other:true}",
-        )
-        for html in malformed:
-            with self.subTest(html=html):
-                self.assertIsNone(OpenCodeGoProvider._zen_credit_from_html(html))
-
-    def test_percent_left_fields_are_float(self) -> None:
-        provider = self._provider()
+    def test_cursor_missing_keychain_item_becomes_auth_required(self) -> None:
         with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
-            patch.object(provider, "_fetch_subscription", return_value=self.SUBSCRIPTION),
-        ):
-            status = provider.fetch()
-        self.assertIsInstance(status.five_hour_percent_left, float)
-        self.assertIsInstance(status.weekly_percent_left, float)
-        self.assertIsInstance(status.monthly_percent_left, float)
-
-    def test_subscription_usage_accepts_appended_fields(self) -> None:
-        provider = self._provider()
-        subscription_html = (
-            'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:25,'
-            'limit:{amount:100},updatedAt:"2026-08-25T00:00:00Z"}'
-        )
-        with patch.object(provider, "_fetch_page", side_effect=[subscription_html, ""]):
-            subscription = provider._fetch_subscription("wrk_a")
-
-        self.assertEqual(
-            subscription,
-            {
-                "rollingUsage": {"status": "ok", "resetInSec": 100, "usagePercent": 25.0},
-                "weeklyUsage": None,
-                "monthlyUsage": None,
-                "zen_credit": None,
-            },
-        )
-
-    def test_subscription_usage_rejects_malformed_required_fields(self) -> None:
-        provider = self._provider()
-        malformed = (
-            "rollingUsage:$R[1]={resetInSec:100,usagePercent:25,extra:true}",
-            'rollingUsage:$R[1]={status:"ok",usagePercent:25,extra:true}',
-            'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:unknown,extra:true}',
-            'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:25,extra:true',
-        )
-        for html in malformed:
-            with self.subTest(html=html), patch.object(provider, "_fetch_page", return_value=html):
-                self.assertIsNone(provider._fetch_subscription("wrk_a"))
-
-    def test_subscribed_workspace_is_remembered(self) -> None:
-        provider = self._provider()
-        with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
-            patch.object(provider, "_fetch_subscription", side_effect=[None, self.SUBSCRIPTION]),
-        ):
-            provider.fetch()
-        self.assertEqual(provider._workspace_id, "wrk_b")
-        # Next refresh probes the remembered workspace first (two calls total).
-        with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
+            patch("gradus.providers.cursor._is_headless", return_value=False),
             patch.object(
-                provider, "_fetch_subscription", return_value=self.SUBSCRIPTION
-            ) as call_sub,
-        ):
-            provider.fetch()
-        self.assertEqual(call_sub.call_count, 1)
-        self.assertEqual(call_sub.call_args_list[0].args[0], "wrk_b")
-
-    def test_no_subscription_anywhere_raises(self) -> None:
-        provider = self._provider()
-        with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
-            patch.object(provider, "_fetch_subscription", return_value=None),
-        ):
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertIn("No OpenCode Go subscription", str(ctx.exception))
-
-    def test_all_windows_missing_raises(self) -> None:
-        provider = self._provider()
-        with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
-            patch.object(
-                provider,
-                "_fetch_subscription",
-                return_value={"rollingUsage": {}, "weeklyUsage": None},
+                CursorProvider,
+                "_load_keychain_token",
+                side_effect=FileNotFoundError("item unavailable"),
             ),
         ):
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertIn("no recognizable windows", str(ctx.exception))
+            with self.assertRaisesRegex(ProbeFailure, "Keychain item unavailable"):
+                CursorProvider().fetch()
 
-    def test_null_workspaces_is_auth_error_and_evicts_cache(self) -> None:
-        provider = self._provider()
-        self.assertTrue(self._cache_path.exists())
-        with patch.object(provider, "_call_server_fn", return_value=None):
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertIn("session expired", str(ctx.exception).lower())
-        self.assertFalse(self._cache_path.exists())
-        self.assertEqual(provider._auth_cookie, "")
-
-    def test_rejected_cookie_evicts_cache(self) -> None:
-        provider = self._provider()
-        with patch.object(provider, "_call_server_fn", side_effect=_AuthRejected("redirect")):
-            with self.assertRaises(ProbeFailure) as ctx:
-                provider.fetch()
-        self.assertIn("session expired", str(ctx.exception).lower())
-        self.assertFalse(self._cache_path.exists())
-
-    def test_missing_cookie_raises_auth_message(self) -> None:
-        provider = OpenCodeGoProvider()
-        with self.assertRaises(ProbeFailure) as ctx:
-            provider.fetch()
-        self.assertIn("sign in at opencode.ai", str(ctx.exception))
-
-    def test_auth_error_routes_to_fix_action(self) -> None:
-        snap = ProviderSnapshot(
-            name="OpenCode Go",
-            ok=False,
-            source="api",
-            error="OpenCode Go session expired. Sign in at opencode.ai to refresh.",
-        )
-        self.assertTrue(_is_auth_error(snap))
-
-    def test_cache_is_the_only_credential_source(self) -> None:
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(json.dumps({"auth": "cached-cookie"}), encoding="utf-8")
-        provider = OpenCodeGoProvider()
-        provider._acquire()
-        self.assertEqual(provider._auth_cookie, "cached-cookie")
-
-    def test_missing_cache_does_not_create_credentials(self) -> None:
-        provider = OpenCodeGoProvider()
-        provider._acquire()
-        self.assertFalse(self._cache_path.exists())
-
-    def test_missing_cache_fails_then_restored_cache_recovers(self) -> None:
-        provider = OpenCodeGoProvider()
-        with self.assertRaises(ProbeFailure) as missing:
-            provider.fetch()
-        self.assertIn("sign in at opencode.ai", str(missing.exception))
-        self.assertFalse(self._cache_path.exists())
-
-        self._cache_path.write_text(json.dumps({"auth": "restored-cookie"}), encoding="utf-8")
+    def test_cursor_expired_cli_token_asks_for_relogin_before_any_request(self) -> None:
+        expired = _make_jwt(-3600)
         with (
-            patch.object(provider, "_call_server_fn", return_value=self.WORKSPACES),
-            patch.object(provider, "_fetch_subscription", return_value=self.SUBSCRIPTION),
+            patch("gradus.providers.cursor._is_headless", return_value=False),
+            patch.object(CursorProvider, "_load_keychain_token", return_value=expired),
+            patch("urllib.request.urlopen") as open_url,
         ):
-            recovered = provider.fetch()
-        self.assertEqual(recovered.five_hour_percent_left, 75)
-        self.assertEqual(recovered.weekly_percent_left, 90)
+            with self.assertRaisesRegex(ProbeFailure, "run `cursor-agent login`"):
+                CursorProvider().fetch()
+        open_url.assert_not_called()
 
-
-class OpenCodeGoSerovalIntegrationTests(unittest.TestCase):
-    """End-to-end: framed seroval wire bodies -> parsed status fields."""
-
-    def setUp(self) -> None:
-        self._tmpdir = tempfile.TemporaryDirectory()
-        patcher = patch.object(
-            OpenCodeGoProvider,
-            "_CACHE_PATH",
-            Path(self._tmpdir.name) / "opencode_go_cookies.json",
+    def test_cursor_keychain_subprocess_failures_become_safe_typed_errors(self) -> None:
+        secret = "cursor-secret-must-not-escape"
+        failures = (
+            subprocess.TimeoutExpired(["security", secret], timeout=10),
+            OSError(secret),
+            subprocess.SubprocessError(secret),
         )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        self.addCleanup(self._tmpdir.cleanup)
+        for failure in failures:
+            with (
+                self.subTest(failure=type(failure).__name__),
+                patch("gradus.providers.cursor._is_headless", return_value=False),
+                patch("gradus.providers.cursor.subprocess.run", side_effect=failure),
+            ):
+                with self.assertRaises(ProbeFailure) as raised:
+                    CursorProvider().fetch()
+            message = str(raised.exception)
+            self.assertIn("Cursor Keychain", message)
+            self.assertNotIn(secret, message)
 
-    def test_fetch_decodes_wire_payloads(self) -> None:
-        cache_path = OpenCodeGoProvider._CACHE_PATH
-        cache_path.write_text(json.dumps({"auth": "cookie-value"}), encoding="utf-8")
-        provider = OpenCodeGoProvider()
-        bodies = [
-            _seroval_stream(_SEROVAL_WORKSPACES),
-        ]
-
-        class _Resp:
-            def __init__(self, body: bytes) -> None:
-                self.headers: dict[str, str] = {}
-                self._body = body
-
-            def read(self) -> bytes:
-                return self._body
-
-            def __enter__(self) -> _Resp:
-                return self
-
-            def __exit__(self, *args: object) -> bool:
-                return False
-
-        class _RespSub(_Resp):
-            def __init__(self, body: bytes) -> None:
-                super().__init__(body)
-                self.url = "https://opencode.ai/workspace/1/go"
-
-        responses = [_Resp(body) for body in bodies]
-        html_body = b'rollingUsage:$R[1]={status:"ok",resetInSec:100,usagePercent:25}weeklyUsage:$R[2]={status:"ok",resetInSec:100,usagePercent:10}monthlyUsage:$R[3]={status:"rate-limited",resetInSec:1200000,usagePercent:100}'
-
-        with (
-            patch("gradus.providers.urllib.request.build_opener") as build,
-            patch("gradus.providers.urllib.request.urlopen") as urlopen_mock,
-        ):
-            opener = MagicMock()
-            opener.open.side_effect = responses
-            build.return_value = opener
-            urlopen_mock.return_value = _RespSub(html_body)
+    def test_cursor_usage_mapping_and_token_is_not_in_raw_text(self) -> None:
+        usage = {
+            "billingCycleStart": "1786535166000",
+            "billingCycleEnd": "1789213566000",
+            "planUsage": {
+                "limit": 2000,
+                "autoPercentUsed": 93.78,
+                "apiPercentUsed": 6.89,
+                "totalPercentUsed": 50.33,
+            },
+        }
+        plan = {"planInfo": {"planName": "Pro"}}
+        provider = CursorProvider()
+        provider._access_token = "fixture-token"
+        with patch.object(CursorProvider, "_api_post", side_effect=[usage, plan]):
             status = provider.fetch()
+        self.assertEqual(status.credit_percent_left, 49.67)
+        self.assertEqual(status.limit_cents, 2000)
+        self.assertIsNone(status.remaining_cents)
+        self.assertEqual(status.plan_name, "Pro")
+        self.assertTrue(status.billing_cycle_end.startswith("Resets "))
+        self.assertIsNotNone(status.billing_cycle_end_iso)
+        self.assertNotIn("fixture-token", status.raw_text)
 
-        self.assertEqual(status.five_hour_percent_left, 75)
-        self.assertEqual(status.weekly_percent_left, 90)
-        self.assertEqual(status.monthly_percent_left, 0)
+    def test_cursor_prefers_remaining_over_percent_when_present(self) -> None:
+        usage = {"planUsage": {"remaining": 500, "limit": 2000, "totalPercentUsed": 50.33}}
+        provider = CursorProvider()
+        provider._access_token = "fixture-token"
+        with patch.object(CursorProvider, "_api_post", side_effect=[usage, {}]):
+            status = provider.fetch()
+        self.assertEqual(status.credit_percent_left, 25.0)
+
+    def test_cursor_request_is_connect_post_with_bearer(self) -> None:
+        provider = CursorProvider()
+        provider._access_token = "fixture-token"
+        resp = MagicMock()
+        resp.read.return_value = json.dumps({"planUsage": {"totalPercentUsed": 10}}).encode()
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        with patch("urllib.request.urlopen", return_value=resp) as open_url:
+            provider.fetch()
+        request = open_url.call_args_list[0].args[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(request.full_url, CursorProvider._USAGE_URL)
+        self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
+        self.assertEqual(request.get_header("Connect-protocol-version"), "1")
+
+    def test_cursor_plan_endpoint_failure_is_non_fatal(self) -> None:
+        import urllib.error
+
+        usage = {"planUsage": {"totalPercentUsed": 25.0}}
+        provider = CursorProvider()
+        provider._access_token = "fixture-token"
+        plan_error = urllib.error.HTTPError("https://api2.cursor.sh", 500, "boom", {}, None)
+        with patch.object(CursorProvider, "_api_post", side_effect=[usage, plan_error]):
+            status = provider.fetch()
+        self.assertEqual(status.credit_percent_left, 75.0)
+        self.assertIsNone(status.plan_name)
+
+    def test_cursor_rejected_session_asks_for_relogin_and_drops_the_token(self) -> None:
+        import urllib.error
+
+        for code in (401, 403):
+            provider = CursorProvider()
+            provider._access_token = "fixture-token"
+            error = urllib.error.HTTPError("https://api2.cursor.sh", code, "rejected", {}, None)
+            with patch("urllib.request.urlopen", side_effect=error):
+                with self.assertRaisesRegex(ProbeFailure, "run `cursor-agent login`"):
+                    provider.fetch()
+            self.assertEqual(provider._access_token, "")
+
+    def test_cursor_http_and_network_failures_are_typed(self) -> None:
+        import urllib.error
+
+        provider = CursorProvider()
+        provider._access_token = "fixture-token"
+        error = urllib.error.HTTPError("https://api2.cursor.sh", 503, "down", {}, None)
+        with (
+            patch("urllib.request.urlopen", side_effect=error),
+            self.assertRaisesRegex(ProbeFailure, "API error: HTTP 503"),
+        ):
+            provider.fetch()
+        for blip in (urllib.error.URLError("dns failure"), TimeoutError("timed out")):
+            provider = CursorProvider()
+            provider._access_token = "fixture-token"
+            with (
+                self.subTest(blip=type(blip).__name__),
+                patch("urllib.request.urlopen", side_effect=blip),
+                self.assertRaisesRegex(ProbeFailure, "network error"),
+            ):
+                provider.fetch()
+
+    def test_cursor_malformed_or_unrecognizable_usage_fails_closed(self) -> None:
+        provider = CursorProvider()
+        provider._access_token = "fixture-token"
+        resp = MagicMock()
+        resp.read.return_value = b"not-json"
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        with (
+            patch("urllib.request.urlopen", return_value=resp),
+            self.assertRaisesRegex(ProbeFailure, "malformed"),
+        ):
+            provider.fetch()
+        for usage in ({}, {"planUsage": {"totalPercentUsed": "bad"}}):
+            provider = CursorProvider()
+            provider._access_token = "fixture-token"
+            with (
+                self.subTest(usage=usage),
+                patch.object(CursorProvider, "_api_post", side_effect=[usage, {}]),
+                self.assertRaisesRegex(ProbeFailure, "schema changed"),
+            ):
+                provider.fetch()
+
+    def test_opencode_keychain_lookup_uses_fixed_item_without_persisting(self) -> None:
+        with patch("gradus.providers.opencode_go.subprocess.run") as run:
+            run.return_value = SimpleNamespace(returncode=0, stdout="go-key\n")
+            self.assertEqual(OpenCodeGoProvider._load_keychain_api_key(), "go-key")
+            args = run.call_args.args[0]
+            self.assertEqual(args[:3], ["security", "find-generic-password", "-w"])
+            self.assertEqual(args[3:], ["-s", "OpenCode Go", "-a", "default"])
+
+    def test_opencode_keychain_failures_are_typed_without_diagnostics(self) -> None:
+        for stderr, expected in (
+            ("security: SecKeychain item not found", "item unavailable"),
+            ("errSecAuthFailed: authorization denied", "Keychain access denied"),
+            ("keychain is locked", "Keychain is locked"),
+            ("User interaction is not allowed", "lookup requires interaction"),
+        ):
+            with (
+                self.subTest(stderr=stderr),
+                patch("gradus.providers.opencode_go.subprocess.run") as run,
+            ):
+                run.return_value = SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+                with self.assertRaisesRegex(FileNotFoundError, expected):
+                    OpenCodeGoProvider._load_keychain_api_key()
+            self.assertNotIn(stderr, expected)
+
+    def test_opencode_missing_keychain_item_becomes_auth_required(self) -> None:
+        with patch.object(
+            OpenCodeGoProvider,
+            "_load_keychain_api_key",
+            side_effect=FileNotFoundError("item unavailable"),
+        ):
+            with self.assertRaisesRegex(ProbeFailure, "Keychain item unavailable"):
+                OpenCodeGoProvider().fetch()
+
+    def test_opencode_keychain_subprocess_failures_become_safe_typed_errors(self) -> None:
+        secret = "keychain-secret-must-not-escape"
+        failures = (
+            subprocess.TimeoutExpired(["security", secret], timeout=10),
+            OSError(secret),
+            subprocess.SubprocessError(secret),
+        )
+        for failure in failures:
+            with (
+                self.subTest(failure=type(failure).__name__),
+                patch("gradus.providers.opencode_go.subprocess.run", side_effect=failure),
+            ):
+                with self.assertRaises(ProbeFailure) as raised:
+                    OpenCodeGoProvider().fetch()
+            message = str(raised.exception)
+            self.assertIn("OpenCode Go Keychain", message)
+            self.assertNotIn(secret, message)
+
+    def test_opencode_usage_mapping_and_no_credit_balance(self) -> None:
+        response = {
+            "usage": {
+                "rolling": {"status": "ok", "percent": 12, "resetsAt": "2030-01-02T03:04:05Z"},
+                "weekly": {"status": "ok", "percent": 34, "resetsAt": "2030-01-03T03:04:05Z"},
+                "monthly": {"status": "ok", "percent": 56, "resetsAt": "2030-01-04T03:04:05Z"},
+            },
+            "balance": {"usd": 4.10},
+        }
+        provider = OpenCodeGoProvider()
+        provider._api_key = "fixture-key"
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(response).encode()
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        with patch("urllib.request.urlopen", return_value=resp):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 88.0)
+        self.assertEqual(status.weekly_percent_left, 66.0)
+        self.assertEqual(status.monthly_percent_left, 44.0)
+        self.assertIsNone(status.zen_credit)
+
+    def test_opencode_request_is_get_bearer_and_key_is_not_logged(self) -> None:
+        provider = OpenCodeGoProvider()
+        provider._api_key = "fixture-key"
+        response = {"usage": {"rolling": {"percent": 1, "resetsAt": None}}}
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(response).encode()
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        with patch("urllib.request.urlopen", return_value=resp) as open_url:
+            status = provider.fetch()
+        request = open_url.call_args.args[0]
+        self.assertEqual(request.method, "GET")
+        self.assertEqual(request.get_header("Authorization"), "Bearer fixture-key")
+        self.assertNotIn("fixture-key", json.dumps(status.raw_text))
+
+    def test_opencode_http_and_network_failures_are_typed(self) -> None:
+        import urllib.error
+
+        for code in (401, 403):
+            provider = OpenCodeGoProvider()
+            provider._api_key = "fixture-key"
+            error = urllib.error.HTTPError("https://opencode.ai", code, "rejected", {}, None)
+            with (
+                patch("urllib.request.urlopen", side_effect=error),
+                self.assertRaisesRegex(ProbeFailure, "API key rejected"),
+            ):
+                provider.fetch()
+        provider = OpenCodeGoProvider()
+        provider._api_key = "fixture-key"
+        with (
+            patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")),
+            self.assertRaisesRegex(ProbeFailure, "network error"),
+        ):
+            provider.fetch()
+
+    def test_opencode_missing_or_malformed_windows_fail_closed(self) -> None:
+        for usage in ({}, {"rolling": {"percent": "bad"}}):
+            provider = OpenCodeGoProvider()
+            provider._api_key = "fixture-key"
+            response = MagicMock()
+            response.read.return_value = json.dumps({"usage": usage}).encode()
+            response.__enter__.return_value = response
+            response.__exit__.return_value = False
+            with (
+                patch("urllib.request.urlopen", return_value=response),
+                self.assertRaisesRegex(ProbeFailure, "recognizable windows"),
+            ):
+                provider.fetch()
+
+    def test_opencode_malformed_json_fails_closed(self) -> None:
+        provider = OpenCodeGoProvider()
+        provider._api_key = "fixture-key"
+        response = MagicMock()
+        response.read.return_value = b"not-json"
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        with (
+            patch("urllib.request.urlopen", return_value=response),
+            self.assertRaisesRegex(ProbeFailure, "malformed"),
+        ):
+            provider.fetch()
+
+    def test_opencode_schema_without_usage_fails_closed(self) -> None:
+        provider = OpenCodeGoProvider()
+        provider._api_key = "fixture-key"
+        resp = MagicMock()
+        resp.read.return_value = b"{}"
+        resp.__enter__.return_value = resp
+        resp.__exit__.return_value = False
+        with (
+            patch("urllib.request.urlopen", return_value=resp),
+            self.assertRaisesRegex(ProbeFailure, "schema changed"),
+        ):
+            provider.fetch()
 
 
 if __name__ == "__main__":

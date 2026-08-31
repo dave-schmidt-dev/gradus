@@ -14,9 +14,94 @@ from unittest.mock import patch
 
 from gradus import snapshot as snap
 from gradus import ui
+from gradus.paths import (
+    INSTALLED_MODE,
+    SOURCE_MODE,
+    installed_runtime_paths,
+    resolve_runtime_paths,
+    source_runtime_paths,
+)
 from gradus.providers import ProbeFailure, ProviderSnapshot, fetch_provider_snapshot
 
 NOW = datetime(2026, 3, 14, 8, 22, 30)
+
+
+class RuntimePathPolicyTests(unittest.TestCase):
+    def test_installed_mode_is_checkout_independent_and_nonaliasing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = installed_runtime_paths(
+                application_support_root=root / "Application Support" / "Gradus",
+                logs_root=root / "Library" / "Logs" / "Gradus",
+            )
+
+            self.assertEqual(paths.mode, INSTALLED_MODE)
+            self.assertEqual(
+                paths.public_state_root,
+                root / "Application Support" / "Gradus" / "Installed",
+            )
+            self.assertEqual(
+                paths.private_cache_root,
+                root / "Application Support" / "Gradus" / "Private" / ".cache",
+            )
+            self.assertIsNone(paths.legacy_snapshot_v2_mirror)
+            public_text = str(paths.public_state_root)
+            for forbidden in (".state", "/.cache", "/.venv"):
+                self.assertNotIn(forbidden, public_text)
+            self.assertNotEqual(paths.public_state_root, paths.private_cache_root)
+            self.assertEqual(paths.refresh_lock_path.parent, paths.public_state_root)
+
+    def test_source_legacy_mirror_and_installed_canonical_do_not_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_support = root / "Application Support" / "Gradus"
+            source = source_runtime_paths(
+                project_root=root / "checkout",
+                application_support_root=app_support,
+            )
+            installed = installed_runtime_paths(
+                application_support_root=app_support,
+                logs_root=root / "logs",
+            )
+
+            self.assertEqual(source.mode, SOURCE_MODE)
+            self.assertEqual(source.public_state_root, root / "checkout" / ".state")
+            self.assertEqual(source.legacy_snapshot_v2_mirror, app_support / "snapshot-v2.json")
+            self.assertEqual(
+                len(
+                    {
+                        source.snapshot_v2_path,
+                        source.legacy_snapshot_v2_mirror,
+                        installed.snapshot_v2_path,
+                    }
+                ),
+                3,
+            )
+            self.assertNotEqual(source.refresh_lock_path, installed.refresh_lock_path)
+
+    def test_bundled_agent_contract_requires_exact_installed_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app_support = Path(tmp) / "Application Support" / "Gradus"
+            for environment in (
+                {},
+                {"GRADUS_RUNTIME_MODE": "source"},
+                {"GRADUS_RUNTIME_MODE": "future"},
+            ):
+                with self.subTest(environment=environment):
+                    with self.assertRaises(ValueError):
+                        resolve_runtime_paths(
+                            environment,
+                            application_support_root=app_support,
+                            logs_root=Path(tmp) / "logs",
+                            require_installed=True,
+                        )
+            installed = resolve_runtime_paths(
+                {"GRADUS_RUNTIME_MODE": "installed"},
+                application_support_root=app_support,
+                logs_root=Path(tmp) / "logs",
+                require_installed=True,
+            )
+            self.assertEqual(installed.mode, INSTALLED_MODE)
 
 
 def _ps(
@@ -1089,6 +1174,41 @@ class TestTransientMerge(unittest.TestCase):
         prior = self._healthy_prior(NOW)
         codex = next(p for p in prior["providers"] if p["name"] == "Codex")
         self.assertEqual(codex["observed_at"], prior["updated_at"])
+
+    def test_cursor_typed_unavailable_drops_recent_legacy_reading_in_both_schemas(self) -> None:
+        """An expired Cursor session must not retain a previously healthy read."""
+        legacy = _ps(
+            "Cursor",
+            True,
+            data={
+                "credit_percent_left": 45.0,
+                "auto_percent_used": 20.0,
+                "api_percent_used": 30.0,
+                "billing_cycle_start": "2026-03-01T00:00:00",
+                "billing_cycle_end_iso": "2026-04-01T00:00:00+00:00",
+            },
+        )
+
+        class _Expired:
+            def fetch(self) -> None:
+                raise ProbeFailure("Cursor session expired: run `cursor-agent login`", "")
+
+            def close(self) -> None:
+                pass
+
+        unavailable = fetch_provider_snapshot("Cursor", _Expired(), debug=False)
+        self.assertFalse(unavailable.ok)
+        self.assertIn("run `cursor-agent login`", unavailable.error or "")
+
+        for builder in (snap.build_snapshot_payload, snap.build_snapshot_v2_payload):
+            with self.subTest(schema=builder.__name__):
+                prior = builder([legacy], NOW - timedelta(seconds=100))
+                current = builder([unavailable], NOW, prior=prior)
+                cursor = next(entry for entry in current["providers"] if entry["name"] == "Cursor")
+                self.assertFalse(cursor["ok"])
+                self.assertEqual(cursor["windows"], [])
+                self.assertEqual(cursor["data"], {})
+                self.assertIsNone(cursor["observed_at"])
 
     def test_carry_forward_preserves_original_observed_at_across_multiple_hops(
         self,

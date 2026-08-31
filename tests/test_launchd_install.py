@@ -247,7 +247,7 @@ exit 64
         self.assertIn("credential bridge status=degraded", log.read_text(encoding="utf-8"))
         self.assertEqual(
             self.bridge_log.read_text(encoding="utf-8").strip(),
-            f"--cache-directory {isolated_repo / '.cache'}",
+            f"refresh --cache-directory {isolated_repo / '.cache'}",
         )
         self.assertIn("--refresh-snapshot", self.python_log.read_text(encoding="utf-8"))
 
@@ -298,7 +298,7 @@ exit 64
         self.assertEqual(result.returncode, 0, result.stderr)
         log = self.home / "Library/Logs/homelab/gradus-snapshot/gradus-snapshot.log"
         self.assertIn(
-            "credential bridge status=degraded; missing cache providers=Claude OpenCode Go.",
+            "credential bridge status=degraded; missing cache providers=Vibe.",
             log.read_text(encoding="utf-8"),
         )
         self.assertNotIn("Cookies.binarycookies", wrapper.read_text(encoding="utf-8"))
@@ -308,8 +308,7 @@ exit 64
         isolated_repo = self.root / "repo"
         cache = isolated_repo / ".cache"
         cache.mkdir(parents=True)
-        (cache / "claude_cookies.json").touch()
-        (cache / "opencode_go_cookies.json").touch()
+        (cache / "vibe_cookies.json").touch()
         environment["GRADUS_REPO_ROOT"] = str(isolated_repo)
         environment["GRADUS_CREDENTIAL_BRIDGE"] = str(self.bin_dir / "credential-bridge")
         environment["GRADUS_TEST_BRIDGE_STDOUT"] = "credential-payload-must-not-escape"

@@ -95,7 +95,7 @@
       "id": "local-gate",
       "class": "localGate",
       "mode": "nonCredential",
-      "argv": ["python3", "app/release_cloud_gate.py"],
+      "argv": ["python3", "app/release_local_gate.py"],
       "workingDirectory": ".",
       "environment": {
         "inherit": false,

@@ -25,8 +25,13 @@ import SwiftUI
 /// Mac-only, and not a candidate for `Shared/SignalColor.swift`: `rgbHex` is
 /// GradusKit's, iOS renders from the same enum, and both Swift suites plus the
 /// TUI's `_style_for_signal` are pinned together by `signal-levels.json`.
-/// Changing the ramp there would move iOS baselines that are Xcode
-/// Cloud-canonical and cannot be re-recorded from here.
+/// Changing the ramp there would move iOS baselines, which then have to be
+/// re-recorded -- `DASHBOARD_SNAPSHOT_RECORD` and friends, on the destination
+/// each suite is canonical for. An earlier version of this comment claimed
+/// those baselines were "Xcode Cloud-canonical and cannot be re-recorded from
+/// here"; that was wrong, and believing it cost four days in 2026-08. They
+/// re-record locally and the gate goes green. What actually made them fragile
+/// was the unpinned time zone, now fixed in `DashboardSnapshotFixtures.swift`.
 enum MenuSignalPalette {
     static func color(for level: SignalLevel) -> Color {
         switch level {

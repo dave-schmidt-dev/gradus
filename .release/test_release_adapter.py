@@ -44,7 +44,7 @@ class GradusAdapterTests(unittest.TestCase):
         plan = json.loads(PLAN.read_text(encoding="utf-8"))
         self.assertEqual(
             document["operations"][2]["argv"],
-            ["python3", "app/release_cloud_gate.py"],
+            ["python3", "app/release_local_gate.py"],
         )
         evidence_paths = {entry["name"]: entry["path"] for entry in document["evidencePaths"]}
         self.assertEqual(
@@ -97,6 +97,7 @@ class GradusAdapterTests(unittest.TestCase):
             ["bws-secret-exec", "gradus-app-store-connect-bridge", "--", *expected_identity],
         )
         operation_ids = {
+            "buildLookup": "build-lookup",
             "upload": "upload",
             "processing": "processing",
             "compliance": "compliance",
@@ -132,6 +133,7 @@ class GradusAdapterTests(unittest.TestCase):
             ("archive", ["production-build"]),
             ("sign", ["archive"]),
             ("artifactVerify", ["sign"]),
+            ("buildLookup", ["artifact-verify"]),
             ("upload", ["artifact-verify"]),
             ("processing", ["upload"]),
             ("compliance", ["processing"]),
@@ -147,6 +149,15 @@ class GradusAdapterTests(unittest.TestCase):
                 for operation_class, _ in expected
             ],
             expected,
+        )
+
+    def test_exact_build_lookup_gates_upload_in_the_release_plan(self) -> None:
+        plan = json.loads(PLAN.read_text(encoding="utf-8"))
+        obligations = {entry["operationClass"]: entry for entry in plan["obligations"]}
+
+        self.assertEqual(
+            obligations["upload"]["dependencies"],
+            ["artifactVerify", "buildLookup"],
         )
 
     def test_local_gate_declares_only_required_safe_runtime_inputs(self) -> None:
@@ -181,6 +192,8 @@ class GradusAdapterTests(unittest.TestCase):
                 "archiveSha256": artifact,
                 "signedArtifactSha256": artifact,
                 "uploadedBuildIdentifier": uploaded,
+                "lookupResult": "found",
+                "processingState": "VALID",
                 "responseSha256": "c" * 64,
                 "metadataSha256": "d" * 64,
                 "evidenceSha256": "e" * 64,

@@ -28,6 +28,15 @@ repos:
         require_serial: true
         stages: [pre-commit]
 
+      - id: vulture
+        name: vulture (dead code)
+        entry: uv run vulture
+        language: system
+        pass_filenames: false
+        always_run: true
+        require_serial: true
+        stages: [pre-commit]
+
       - id: ruff-lint
         name: ruff lint
         entry: uv run ruff check --force-exclude

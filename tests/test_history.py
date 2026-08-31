@@ -131,7 +131,16 @@ class HistoryRecordTests(unittest.TestCase):
         self.assertEqual(claude["upstream_pool"], "Claude and GPT models")
         self.assertEqual(claude["downstream_policy"], "Sonnet target only")
         opencode = record["provenance"]["OpenCode Go"]
-        self.assertEqual(opencode["workspace_identifiers"], "redacted")
+        self.assertEqual(
+            opencode,
+            {
+                "provenance_available": True,
+                "method": "GET",
+                "route_template": "https://opencode.ai/zen/go/v1/usage",
+                "observation": "host-observed capacity only",
+            },
+        )
+        self.assertNotIn("workspace_identifiers", opencode)
         self.assertNotIn(
             "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f", json.dumps(record)
         )

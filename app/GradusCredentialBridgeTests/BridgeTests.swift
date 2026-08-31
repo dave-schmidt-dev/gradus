@@ -12,14 +12,34 @@ final class BridgeTests: XCTestCase {
 
     func testParserNormalizesSafariDomainAndLegacyFullURLRepresentations() throws {
         let domain = try CredentialBridge.parseCookies(
-            binaryCookies([.init(host: ".claude.ai", name: "sessionKey", value: "sk-ant-domain")])
+            binaryCookies([.init(host: ".cursor.com", name: "fixture", value: "domain")])
         )
-        XCTAssertEqual(domain, [.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-domain")])
+        XCTAssertEqual(domain, [.init(host: "cursor.com", name: "fixture", value: "domain")])
 
         let fullURL = try CredentialBridge.parseCookies(
-            binaryCookies([.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-url")], encodeFullURL: true)
+            binaryCookies([.init(host: "cursor.com", name: "fixture", value: "url")], encodeFullURL: true)
         )
-        XCTAssertEqual(fullURL, [.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-url")])
+        XCTAssertEqual(fullURL, [.init(host: "cursor.com", name: "fixture", value: "url")])
+    }
+
+    func testCommandAcceptsOnlyFixedRefreshAndCheckOperations() {
+        XCTAssertEqual(CredentialBridgeOperation(arguments: ["check"]), .check)
+        let cache = URL(fileURLWithPath: "/tmp/Gradus/Private/.cache", isDirectory: true)
+        XCTAssertEqual(
+            CredentialBridgeOperation(arguments: ["refresh", "--cache-directory", cache.path]),
+            .refresh(cacheDirectory: cache)
+        )
+
+        for arguments in [
+            [String](),
+            ["refresh"],
+            ["refresh", "--cache-directory", "relative/.cache"],
+            ["refresh", "--cache-directory", cache.path, "extra"],
+            ["check", "extra"],
+            ["arbitrary", "/bin/sh"]
+        ] {
+            XCTAssertNil(CredentialBridgeOperation(arguments: arguments), "accepted \(arguments)")
+        }
     }
 
     func testRefreshRejectsNonCacheDirectoryBeforeReadingSafari() {
@@ -27,168 +47,152 @@ final class BridgeTests: XCTestCase {
     }
 
     func testRefreshWritesOnlyAllowedPayloadsWithPrivateModes() throws {
-        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let source = temporary.appendingPathComponent("Cookies.binarycookies")
-        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-        try binaryCookies([
-            .init(host: ".claude.ai", name: "sessionKey", value: "sk-ant-claude-session"),
-            .init(host: ".claude.ai", name: "lastActiveOrg", value: "claude-org"),
-            .init(host: "cursor.com", name: "WorkosCursorSessionToken", value: "user%3A%3Acursor-token"),
-            .init(host: "opencode.ai", name: "auth", value: "opencode-auth"),
+        let fixture = try makeFixture(cookies: [
             .init(host: "console.mistral.ai", name: "ory_session_fixture", value: "mistral-session"),
             .init(host: "console.mistral.ai", name: "csrftoken", value: "mistral-csrf"),
-            .init(host: "evilclaude.ai", name: "sessionKey", value: "must-not-leak")
-        ]).write(to: source)
+            .init(host: "evil.example", name: "example-token", value: "must-not-leak"),
+            .init(host: "claude.ai", name: "sessionKey", value: "unused-keychain-provider-cookie")
+        ])
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+        try CredentialBridge.refresh(cacheDirectory: fixture.cache, cookieFileURL: fixture.source)
 
-        let claude = try payload(named: "claude_cookies.json", in: cache)
-        XCTAssertEqual(claude["sessionKey"], "sk-ant-claude-session")
-        XCTAssertEqual(claude["cf_clearance"], "")
-        let cursor = try payload(named: "cursor_token.json", in: cache)
-        XCTAssertEqual(cursor["access_token"], "cursor-token")
-        let opencode = try payload(named: "opencode_go_cookies.json", in: cache)
-        XCTAssertEqual(opencode["auth"], "opencode-auth")
-        let vibe = try payload(named: "vibe_cookies.json", in: cache)
+        let vibe = try payload(named: "vibe_cookies.json", in: fixture.cache)
         XCTAssertEqual(vibe["ory_session_name"], "ory_session_fixture")
         XCTAssertEqual(vibe["ory_session_value"], "mistral-session")
         XCTAssertEqual(vibe["csrftoken"], "mistral-csrf")
-        for filename in ["claude_cookies.json", "cursor_token.json", "opencode_go_cookies.json", "vibe_cookies.json"] {
+
+        let filenames = try FileManager.default.contentsOfDirectory(atPath: fixture.cache.path).sorted()
+        XCTAssertEqual(filenames, ["vibe_cookies.json"])
+        for filename in filenames {
             let attributes = try FileManager.default.attributesOfItem(
-                atPath: cache.appendingPathComponent(filename).path
+                atPath: fixture.cache.appendingPathComponent(filename).path
             )
             XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         }
-        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: cache.path)
+        let directoryAttributes = try FileManager.default.attributesOfItem(atPath: fixture.cache.path)
         XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
     }
 
-    func testClaudeSessionKeyDoesNotRequireLastActiveOrganizationCookie() throws {
-        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
+    func testRefreshAcceptsInjectedInstalledPrivateCacheRoot() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let source = temporary.appendingPathComponent("Cookies.binarycookies")
-        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-        try binaryCookies([
-            .init(host: "claude.ai", name: "sessionKey", value: "sk-ant-session-only")
-        ]).write(to: source)
+        let source = root.appendingPathComponent("Cookies.binarycookies")
+        let cache = root
+            .appendingPathComponent("Library/Application Support/Gradus/Private", isDirectory: true)
+            .appendingPathComponent(".cache", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try binaryCookies([.init(host: "console.mistral.ai", name: "csrftoken", value: "fixture")]).write(to: source)
 
         try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
 
-        let claude = try payload(named: "claude_cookies.json", in: cache)
-        XCTAssertEqual(claude["sessionKey"], "sk-ant-session-only")
-        XCTAssertNil(claude["lastActiveOrg"])
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: cache.appendingPathComponent("opencode_go_cookies.json").path)
+        )
+        try XCTAssertEqual(
+            (FileManager.default.attributesOfItem(atPath: cache.path)[.posixPermissions] as? NSNumber)?.intValue,
+            0o700
+        )
     }
 
-    func testClaudeInvalidSessionKeyDoesNotCreateCredentialCache() throws {
-        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let source = temporary.appendingPathComponent("Cookies.binarycookies")
-        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-        try binaryCookies([
-            .init(host: "claude.ai", name: "sessionKey", value: "not-a-session-key")
-        ]).write(to: source)
+    func testRefreshRemovesOnlyExactLegacyProviderCaches() throws {
+        let fixture = try makeFixture(cookies: [
+            .init(host: "console.mistral.ai", name: "ory_session_fixture", value: "mistral-session"),
+            .init(host: "console.mistral.ai", name: "csrftoken", value: "mistral-csrf")
+        ])
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+        let legacyCursor = fixture.cache.appendingPathComponent("cursor_token.json")
+        let legacyOpenCode = fixture.cache.appendingPathComponent("opencode_go_cookies.json")
+        let unrelated = fixture.cache.appendingPathComponent("keep-me.json")
+        try FileManager.default.createDirectory(at: fixture.cache, withIntermediateDirectories: true)
+        try Data("legacy-cursor".utf8).write(to: legacyCursor)
+        try Data("legacy-opencode".utf8).write(to: legacyOpenCode)
+        try Data("unrelated".utf8).write(to: unrelated)
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: cache.appendingPathComponent("claude_cookies.json").path))
+        try CredentialBridge.refresh(cacheDirectory: fixture.cache, cookieFileURL: fixture.source)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyCursor.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyOpenCode.path))
+        XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "unrelated")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: fixture.cache.appendingPathComponent("vibe_cookies.json").path)
+        )
     }
 
-    func testRefreshSelectsNewestNonExpiredCookieRegardlessOfRecordOrder() throws {
-        let old = Date(timeIntervalSinceReferenceDate: 100)
-        let newest = Date(timeIntervalSinceReferenceDate: 200)
-        let expires = Date(timeIntervalSinceNow: 3600)
-        for entries in [
-            [
-                CredentialBridge.Cookie(
-                    host: "claude.ai", name: "sessionKey", value: "sk-ant-old", expiresAt: expires, createdAt: old
-                ),
-                CredentialBridge.Cookie(
-                    host: "claude.ai", name: "sessionKey", value: "sk-ant-new", expiresAt: expires, createdAt: newest
-                )
-            ],
-            [
-                CredentialBridge.Cookie(
-                    host: "claude.ai", name: "sessionKey", value: "sk-ant-new", expiresAt: expires, createdAt: newest
-                ),
-                CredentialBridge.Cookie(
-                    host: "claude.ai", name: "sessionKey", value: "sk-ant-old", expiresAt: expires, createdAt: old
-                )
-            ]
-        ] {
-            let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            let source = temporary.appendingPathComponent("Cookies.binarycookies")
-            let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-            try binaryCookies(entries).write(to: source)
+    func testCheckReturnsSuccessWithoutCredentialMaterial() throws {
+        let fixture = try makeFixture(cookies: [
+            .init(host: "example.invalid", name: "example-auth", value: "must-not-escape")
+        ])
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-            try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+        let result = CredentialBridge.check(cookieFileURL: fixture.source)
 
-            let claude = try payload(named: "claude_cookies.json", in: cache)
-            XCTAssertEqual(claude["sessionKey"], "sk-ant-new")
+        XCTAssertEqual(result, CredentialBridgeCheckResult(state: .success))
+        let encoded = try JSONEncoder().encode(result)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), ["schema_version", "operation", "state"])
+        XCTAssertEqual(object["operation"] as? String, "check")
+        XCTAssertEqual(object["state"] as? String, "success")
+        XCTAssertFalse(String(data: encoded, encoding: .utf8)?.contains("must-not-escape") ?? true)
+    }
+
+    func testCheckReturnsDeniedForUnreadableSafariStoreWithoutRawError() throws {
+        let result = CredentialBridge.check(cookieFileURL: URL(fileURLWithPath: "/private/fixture")) { _ in
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
         }
+
+        XCTAssertEqual(result.state, .denied)
+        let text = try XCTUnwrap(String(data: JSONEncoder().encode(result), encoding: .utf8))
+        XCTAssertFalse(text.contains("private"))
+        XCTAssertFalse(text.contains("permission"))
+        XCTAssertFalse(text.contains("error"))
     }
 
-    func testRefreshFallsBackWhenNewestCookieIsExpired() throws {
-        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let source = temporary.appendingPathComponent("Cookies.binarycookies")
-        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-        try binaryCookies([
-            .init(
-                host: "claude.ai", name: "sessionKey", value: "sk-ant-valid",
-                expiresAt: Date(timeIntervalSinceNow: 3600), createdAt: Date(timeIntervalSinceReferenceDate: 100)
-            ),
-            .init(
-                host: "claude.ai", name: "sessionKey", value: "sk-ant-expired",
-                expiresAt: Date(timeIntervalSinceNow: -1), createdAt: Date(timeIntervalSinceReferenceDate: 200)
-            )
-        ]).write(to: source)
+    func testCheckReturnsMissingForAbsentSafariStore() {
+        let result = CredentialBridge.check(cookieFileURL: URL(fileURLWithPath: "/missing/fixture")) { _ in
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
+        }
+        XCTAssertEqual(result.state, .missing)
+    }
 
-        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
+    func testCheckReturnsMalformedForInvalidOrOversizedSafariStore() {
+        let invalid = CredentialBridge.check(cookieFileURL: URL(fileURLWithPath: "/malformed")) { _ in
+            Data("not-a-cookie-store".utf8)
+        }
+        XCTAssertEqual(invalid.state, .malformed)
 
-        let claude = try payload(named: "claude_cookies.json", in: cache)
-        XCTAssertEqual(claude["sessionKey"], "sk-ant-valid")
+        let oversized = CredentialBridge.check(cookieFileURL: URL(fileURLWithPath: "/oversized")) { _ in
+            Data(repeating: 0, count: 16 * 1024 * 1024 + 1)
+        }
+        XCTAssertEqual(oversized.state, .malformed)
     }
 
     func testParserSkipsShortRecordsAndMalformedDates() throws {
-        var shortRecord = binaryCookies([.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-short")])
+        var shortRecord = binaryCookies([.init(host: "example.invalid", name: "example-auth", value: "short")])
         shortRecord.replaceSubrange(24 ..< 28, with: littleEndian(UInt32(48)))
         XCTAssertTrue(try CredentialBridge.parseCookies(shortRecord).isEmpty)
 
-        var malformedDate = binaryCookies([.init(host: "claude.ai", name: "sessionKey", value: "sk-ant-nan")])
+        var malformedDate = binaryCookies([.init(host: "example.invalid", name: "example-auth", value: "nan")])
         malformedDate.replaceSubrange(64 ..< 72, with: littleEndian(Double.nan))
         XCTAssertTrue(try CredentialBridge.parseCookies(malformedDate).isEmpty)
     }
 
-    func testMissingOpenCodeCookieLeavesCacheMissingUntilAUsableCookieReturns() throws {
-        let temporary = URL(fileURLWithPath: NSTemporaryDirectory())
+    private struct BridgeFixture {
+        let root: URL
+        let source: URL
+        let cache: URL
+    }
+
+    private func makeFixture(cookies: [CredentialBridge.Cookie]) throws -> BridgeFixture {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let source = temporary.appendingPathComponent("Cookies.binarycookies")
-        let cache = temporary.appendingPathComponent(".cache", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-
-        try binaryCookies([.init(host: "console.mistral.ai", name: "csrftoken", value: "fixture")]).write(to: source)
-        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: cache.appendingPathComponent("opencode_go_cookies.json").path)
-        )
-
-        try binaryCookies([.init(host: "opencode.ai", name: "auth", value: "restored-cookie")]).write(to: source)
-        try CredentialBridge.refresh(cacheDirectory: cache, cookieFileURL: source)
-        let restored = try payload(named: "opencode_go_cookies.json", in: cache)
-        XCTAssertEqual(restored["auth"], "restored-cookie")
+        let source = root.appendingPathComponent("Cookies.binarycookies")
+        let cache = root.appendingPathComponent(".cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try binaryCookies(cookies).write(to: source)
+        return BridgeFixture(root: root, source: source, cache: cache)
     }
 
     private func payload(named filename: String, in cache: URL) throws -> [String: String] {

@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
     from .providers import ProviderSnapshot
 
+from .paths import RUNTIME_PATHS
 from .providers._base import _canonical_providers
 
 log = logging.getLogger(__name__)
@@ -37,13 +38,11 @@ SCHEMA_VERSION = 1
 SCHEMA_VERSION_V2 = 2
 
 # Contract-mandated, credential-free state directory (NOT `.cache/`).
-SNAPSHOT_PATH = Path(__file__).resolve().parent.parent / ".state" / "snapshot.json"
-SNAPSHOT_V2_PATH = Path(__file__).resolve().parent.parent / ".state" / "snapshot-v2.json"
+SNAPSHOT_PATH = RUNTIME_PATHS.snapshot_path
+SNAPSHOT_V2_PATH = RUNTIME_PATHS.snapshot_v2_path
 # Credential-free v2 mirror read by the installed menu-bar app. Keeping the
 # app out of the Documents-backed repository avoids macOS TCC prompts.
-MAC_APP_SNAPSHOT_V2_PATH = (
-    Path.home() / "Library" / "Application Support" / "Gradus" / "snapshot-v2.json"
-)
+MAC_APP_SNAPSHOT_V2_PATH = RUNTIME_PATHS.legacy_snapshot_v2_mirror
 
 # Stop serving cached data after this many seconds (moved from __main__.py).
 STALE_THRESHOLD_SECONDS = 300  # 5 minutes
@@ -1705,7 +1704,7 @@ def write_snapshot(
                 pass
         return SnapshotWrite.FAILED
 
-    if path == SNAPSHOT_V2_PATH:
+    if path == SNAPSHOT_V2_PATH and MAC_APP_SNAPSHOT_V2_PATH is not None:
         mirror_result = write_snapshot(payload, MAC_APP_SNAPSHOT_V2_PATH)
         if mirror_result is SnapshotWrite.FAILED:
             # The canonical router snapshot is already durable. Keep that

@@ -1,4 +1,4 @@
-"""Contract checks for cloud-only app validation after push."""
+"""Contract checks for local release validation and lightweight hooks."""
 
 from __future__ import annotations
 
@@ -69,18 +69,18 @@ def test_push_does_not_invoke_local_xcode_gate() -> None:
     assert "id: test-gate" not in hook_config
 
 
-def test_docs_name_xcode_cloud_as_post_push_app_gate() -> None:
-    """Docs must describe Xcode Cloud as the post-push app validation gate."""
+def test_docs_name_candidate_bound_local_app_gate() -> None:
+    """Docs must describe the candidate-bound local app validation gate."""
     docs = " ".join((README.read_text() + "\n" + TESTING.read_text()).lower().split())
 
-    assert "required xcode cloud checks" in docs
-    assert "pushes trigger required xcode cloud checks" in docs
-    assert "local hooks stay lightweight and do not run xcode app automation" in docs
-    assert "app-specific evidence is collected by the required xcode cloud checks" in docs
+    assert "candidate-bound local gate" in docs
+    assert "authoritative local app-validation gate" in docs
+    assert "app-specific candidate evidence is collected by the source-bound local" in docs
+    assert "xcode cloud validation is optional and non-gating" in docs
 
 
-def test_required_ios_cloud_scheme_includes_widget_tests() -> None:
-    """The required iOS cloud action must execute the widget test target."""
+def test_ios_scheme_includes_widget_tests_for_local_and_optional_hosted_runs() -> None:
+    """The shared iOS scheme executes widget tests in every environment."""
     project = (ROOT / "app/project.yml").read_text()
     schemes = project.split("schemes:\n", maxsplit=1)[1]
     ios_scheme = schemes.split("  GradusiOS:\n", maxsplit=1)[1].split(

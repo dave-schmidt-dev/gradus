@@ -6,7 +6,7 @@ set -euo pipefail
 # observes tool version output; installation and PATH changes are deliberate
 # operator actions outside the hook.
 readonly REQUIRED_SWIFTLINT="0.65.1"
-readonly REQUIRED_SWIFTFORMAT="0.62.1"
+readonly REQUIRED_SWIFTFORMAT="0.63.0"
 readonly REQUIRED_SHELLCHECK="0.11.0"
 
 check_version() {

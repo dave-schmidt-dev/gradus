@@ -8,14 +8,25 @@ struct GradusCredentialBridgeApp {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
             return
         }
-        guard arguments.count == 2, arguments[0] == "--cache-directory" else {
+        guard let operation = CredentialBridgeOperation(arguments: arguments) else {
             exit(64)
         }
-        do {
-            try CredentialBridge.refresh(cacheDirectory: URL(fileURLWithPath: arguments[1], isDirectory: true))
-        } catch {
-            // This process owns browser credentials. Its callers receive only an exit status.
-            exit(1)
+        switch operation {
+        case let .refresh(cacheDirectory):
+            do {
+                try CredentialBridge.refresh(cacheDirectory: cacheDirectory)
+            } catch {
+                // This process owns browser credentials. Its callers receive only an exit status.
+                exit(1)
+            }
+        case .check:
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(CredentialBridge.check()) else {
+                exit(1)
+            }
+            FileHandle.standardOutput.write(data)
+            FileHandle.standardOutput.write(Data("\n".utf8))
         }
     }
 }

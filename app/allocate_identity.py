@@ -631,20 +631,78 @@ def _read_toolchain_version(
     return resolved
 
 
-def _test_destinations(attributes: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Extract only the allowlisted fields from TEST workflow actions.
+#: `CiTestDestination.kind`; the API documents exactly `SIMULATOR` and `MAC`.
+SIMULATOR_DESTINATION_KIND = "SIMULATOR"
 
-    This is the missing half of "which toolchain does Cloud build with": the
-    Xcode and macOS versions describe the host, while `destination` describes
-    the simulator that actually renders a snapshot. A value such as
-    `ANY_IOS_SIMULATOR` means Cloud chooses the runtime from its own image
-    rather than honouring any pin in the repository -- which is precisely the
-    condition a local gate cannot reproduce.
+#: The writable half of `CiTestDestination`. `deviceTypeName` and `runtimeName`
+#: are server-rendered display strings -- read them, never send them.
+_DESTINATION_WRITABLE_FIELDS = ("kind", "deviceTypeIdentifier", "runtimeIdentifier")
+_DESTINATION_READABLE_FIELDS = _DESTINATION_WRITABLE_FIELDS + ("deviceTypeName", "runtimeName")
+
+
+def _pinned_destinations(configuration: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Extract the concrete simulators a TEST action is pinned to, if any.
+
+    `CiAction.TestConfiguration.testDestinations` is the only field that names a
+    device model and runtime. An empty list here is the finding, not an absence
+    of data: it means Cloud picks the simulator from its own image, so a
+    baseline recorded on Cloud cannot be reproduced from a pinned local gate.
     """
 
+    destinations = configuration.get("testDestinations")
+    if not isinstance(destinations, list):
+        return []
+    pinned: list[dict[str, str]] = []
+    for destination in destinations:
+        if not isinstance(destination, Mapping):
+            raise IdentityAllocationError("workflow-test-destination-invalid")
+        entry = {
+            key: value
+            for key in _DESTINATION_READABLE_FIELDS
+            if isinstance(value := destination.get(key), str) and value
+        }
+        pinned.append(entry)
+    return pinned
+
+
+def _read_workflow_actions(client: ASCClient, workflow_id: str) -> list[Any]:
+    """Read one workflow's complete, unfiltered actions array.
+
+    Unfiltered on purpose, and the only reader that is: `PATCH /ciWorkflows`
+    replaces `actions` wholesale rather than merging, so anything dropped on
+    the way in is deleted on the way out. Every caller that writes must send
+    back exactly what it read.
+    """
+
+    payload = client.request(
+        "GET", f"/ciWorkflows/{quote(workflow_id, safe='')}?fields[ciWorkflows]=actions"
+    )
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
+        raise IdentityAllocationError("workflow-actions-response-invalid")
+    attributes = payload["data"].get("attributes")
+    if not isinstance(attributes, Mapping):
+        raise IdentityAllocationError("workflow-actions-response-invalid")
     actions = attributes.get("actions")
     if not isinstance(actions, list):
         raise IdentityAllocationError("workflow-actions-invalid")
+    return actions
+
+
+def _test_destinations(actions: list[Any]) -> list[dict[str, Any]]:
+    """Extract only the allowlisted fields from TEST workflow actions.
+
+    This is the missing half of "which toolchain does Cloud build with": the
+    Xcode and macOS versions describe the host, while the test configuration
+    describes the simulator that actually renders a snapshot. An action whose
+    `pinnedDestinations` is empty means Cloud chooses the device and runtime
+    from its own image rather than honouring any pin in the repository -- which
+    is precisely the condition a local gate cannot reproduce.
+
+    The coarse `destination` enum (`ANY_IOS_SIMULATOR` and friends) is reported
+    alongside it but does not answer the question: it selects a *category* of
+    destination, never a device model or an OS version.
+    """
+
     tests: list[dict[str, Any]] = []
     for action in actions:
         if not isinstance(action, Mapping):
@@ -658,12 +716,11 @@ def _test_destinations(attributes: Mapping[str, Any]) -> list[dict[str, Any]]:
                 entry[key] = value
         configuration = action.get("testConfiguration")
         if isinstance(configuration, Mapping):
-            kinds = configuration.get("testPlanName")
-            if isinstance(kinds, str) and kinds:
-                entry["testPlanName"] = kinds
-            devices = configuration.get("devices")
-            if isinstance(devices, list):
-                entry["deviceCount"] = len(devices)
+            for key in ("kind", "testPlanName"):
+                value = configuration.get(key)
+                if isinstance(value, str) and value:
+                    entry[key] = value
+            entry["pinnedDestinations"] = _pinned_destinations(configuration)
         tests.append(entry)
     return tests
 
@@ -688,16 +745,98 @@ def resolve_workflow_toolchain(client: ASCClient, workflow_id: str) -> dict[str,
             client, "ciMacOsVersions", str(template["macOsVersionId"])
         ),
     }
-    payload = client.request(
-        "GET", f"/ciWorkflows/{quote(workflow_id, safe='')}?fields[ciWorkflows]=actions"
-    )
-    if not isinstance(payload, Mapping) or not isinstance(payload.get("data"), Mapping):
-        raise IdentityAllocationError("workflow-actions-response-invalid")
-    attributes = payload["data"].get("attributes")
-    if not isinstance(attributes, Mapping):
-        raise IdentityAllocationError("workflow-actions-response-invalid")
-    resolved["testDestinations"] = _test_destinations(attributes)
+    resolved["testDestinations"] = _test_destinations(_read_workflow_actions(client, workflow_id))
     return resolved
+
+
+def pin_test_destination(
+    client: ASCClient,
+    workflow_id: str,
+    *,
+    action_name: str,
+    device_type_id: str,
+    runtime_id: str,
+) -> dict[str, Any]:
+    """Pin one TEST action to an exact simulator, touching nothing else.
+
+    Without this, a Cloud TEST action carries no `testDestinations` and Apple
+    selects the device and runtime from whatever its build image ships that
+    week. Snapshot baselines recorded under that selection silently stop
+    matching a local gate that pins its own simulator, and the divergence
+    presents as a snapshot diff rather than as a configuration drift.
+
+    The write is deliberately narrow. `PATCH /ciWorkflows` replaces the whole
+    `actions` array, so this reads every action, edits the single named TEST
+    action in place, and sends the rest back byte-identical. It refuses to
+    invent a `testConfiguration`: a TEST action without one is a workflow shape
+    this function has never seen, and guessing `kind` would rewrite which tests
+    Cloud runs rather than merely where it runs them.
+    """
+
+    for label, value in (
+        ("workflow-id-invalid", workflow_id),
+        ("test-action-name-invalid", action_name),
+        ("device-type-identifier-invalid", device_type_id),
+        ("runtime-identifier-invalid", runtime_id),
+    ):
+        if not isinstance(value, str) or not value:
+            raise IdentityAllocationError(label)
+
+    actions = _read_workflow_actions(client, workflow_id)
+    matches = [
+        index
+        for index, action in enumerate(actions)
+        if isinstance(action, Mapping)
+        and action.get("actionType") == "TEST"
+        and action.get("name") == action_name
+    ]
+    if not matches:
+        raise IdentityAllocationError("workflow-test-action-not-found")
+    if len(matches) > 1:
+        # Apple permits duplicate action names; editing "the" one would be a
+        # coin flip, and the wrong flip silently pins the action nobody meant.
+        raise IdentityAllocationError("workflow-test-action-ambiguous")
+
+    index = matches[0]
+    action = dict(actions[index])
+    configuration = action.get("testConfiguration")
+    if not isinstance(configuration, Mapping):
+        raise IdentityAllocationError("workflow-test-configuration-missing")
+    pinned = {
+        "kind": SIMULATOR_DESTINATION_KIND,
+        "deviceTypeIdentifier": device_type_id,
+        "runtimeIdentifier": runtime_id,
+    }
+    action["testConfiguration"] = {**configuration, "testDestinations": [pinned]}
+    updated = list(actions)
+    updated[index] = action
+
+    body = {
+        "data": {
+            "type": "ciWorkflows",
+            "id": workflow_id,
+            "attributes": {"actions": updated},
+        }
+    }
+    client.request("PATCH", f"/ciWorkflows/{quote(workflow_id, safe='')}", body, idempotent=False)
+
+    # Verify from a fresh read rather than from the PATCH echo: the echo is the
+    # request restated, so it agrees with itself even when Apple rejected or
+    # normalised the value.
+    observed = _test_destinations(_read_workflow_actions(client, workflow_id))
+    applied = [entry for entry in observed if entry.get("name") == action_name]
+    if len(applied) != 1:
+        raise IdentityAllocationError("workflow-pin-response-invalid")
+    destinations = applied[0].get("pinnedDestinations")
+    if not isinstance(destinations, list) or len(destinations) != 1:
+        raise IdentityAllocationError("workflow-pin-not-applied")
+    if any(destinations[0].get(key) != pinned[key] for key in _DESTINATION_WRITABLE_FIELDS):
+        raise IdentityAllocationError("workflow-pin-not-applied")
+    return {
+        "workflowId": workflow_id,
+        "actionName": action_name,
+        "pinnedDestinations": destinations,
+    }
 
 
 def create_internal_testflight_workflow(
@@ -1837,6 +1976,23 @@ def main(argv: list[str] | None = None) -> int:
         metavar="BUILD_ID",
         help="Print whether one TestFlight build belongs to the fixed Gradus iOS app",
     )
+    parser.add_argument(
+        "--pin-test-destination",
+        help="Workflow ID whose TEST action is pinned to one exact simulator",
+    )
+    parser.add_argument(
+        "--test-action-name",
+        default="Test - iOS",
+        help="Exact TEST action name to pin (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--sim-device-type-id",
+        help="CoreSimulator device type, e.g. com.apple.CoreSimulator.SimDeviceType.iPhone-16",
+    )
+    parser.add_argument(
+        "--sim-runtime-id",
+        help="CoreSimulator runtime, e.g. com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+    )
     parser.add_argument("--assign-internal-testflight-build", action="store_true")
     parser.add_argument("--inspect-internal-testflight-build", action="store_true")
     parser.add_argument("--ensure-widget-profile", action="store_true")
@@ -1871,6 +2027,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.list_build_run_actions
         or args.disable_workflow
         or args.enable_workflow
+        or args.pin_test_destination
         or args.inspect_testflight_build_app
         or args.assign_internal_testflight_build
         or args.inspect_internal_testflight_build
@@ -2271,6 +2428,30 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except ASCError as exc:
             print(f"FAIL: build lookup failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+
+    if args.pin_test_destination:
+        if not args.sim_device_type_id or not args.sim_runtime_id:
+            print(
+                "FAIL: --pin-test-destination requires --sim-device-type-id and --sim-runtime-id",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            pinned = pin_test_destination(
+                ASCClient(make_token_provider()),
+                args.pin_test_destination,
+                action_name=args.test_action_name,
+                device_type_id=args.sim_device_type_id,
+                runtime_id=args.sim_runtime_id,
+            )
+            print(json.dumps(pinned, sort_keys=True, separators=(",", ":")))
+            return 0
+        except ASCError as exc:
+            print(f"FAIL: destination pin failed ({exc.outcome.error_class})", file=sys.stderr)
+            return 1
+        except IdentityAllocationError as exc:
+            print(f"FAIL: destination pin failed ({exc})", file=sys.stderr)
             return 1
 
     if args.disable_workflow or args.enable_workflow:

@@ -7,9 +7,8 @@ queue mapping and explicit future exclusions remain in `TASKS.md`.
 The latest confirmed internal TestFlight build remains **1.8.0 (20)**.
 Candidate **1.9.0-24** reached readiness only: its local preparation attempts
 failed before archive creation, signing, artifact verification, or upload, so
-Apple never received it. Future iOS releases are cloud-only. The current local
-archive/sign implementation is paused until the release adapter is bound to a
-confirmed Xcode Cloud distribution workflow. App Store submission remains
+Apple never received it. Future candidates use the source-bound local release
+gate before archive and signing. App Store submission remains
 separately gated; the publication roadmap is in `RELEASE_CHECKLIST.md`, and the
 live queue is in `TASKS.md`.
 
@@ -44,15 +43,15 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors Claude usage through Claude Code's OAuth token and Anthropic's structured `https://api.anthropic.com/api/oauth/usage` endpoint — no PTY, terminal scraping, Safari cookies, or status-line cache
 - Monitors Antigravity (`agy`) usage via the Cloud Code `retrieveUserQuotaSummary` API — the same grouped quota `agy`'s own Models & Quota panel shows. Authenticates read-only with `agy`'s OAuth token from the macOS Keychain (service `gemini`, account `antigravity`); the monitor never refreshes or rewrites that token, so it can't disturb `agy`'s own auth.
 - Monitors Copilot usage via the GitHub REST API (using `gh` CLI credentials)
-- Monitors Cursor credit usage via the Cursor Dashboard API
+- Monitors Cursor usage via its dashboard API, authenticating read-only with the Cursor CLI's OAuth token from the macOS Keychain (service `cursor-access-token`, account `cursor-user`); the monitor never refreshes or rewrites that token, so it can't disturb the CLI's own session
 - Monitors Vibe usage via the Mistral billing API
-- Monitors OpenCode Go usage via the opencode.ai SolidStart console (5h/1w/monthly quota)
+- Monitors OpenCode Go usage via its API-key endpoint (5h/1w/monthly quota), without Safari
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position. The Codex 5-hour limit row is hidden entirely when the upstream API omits it (as OpenAI has done since 2026-07) and reappears automatically once the API reports it again.
 - Shows Codex (Spark) as a separate quota bucket on the same OpenAI account, with independently duration-classified 5-hour (`sp5h`) and weekly (`sp1w`) rows, reset times, and pace indicators
 - Shows Antigravity Gemini-group 5-hour and 1-week quota remaining, reset times, and pace indicators (matching `agy`'s Models & Quota panel), plus Claude+GPT (`cg5`, `cg1w`) rows whenever the canonical v2 snapshot contains valid tracked values. Rows render independently, including at exactly 100%; missing or malformed sibling rows are omitted. The TUI hydrates these rows from the internal `Antigravity (Claude)` synthetic entry at read time.
 - Shows Copilot monthly remaining (`mo`), reset, and billing-cycle pace
-- Shows Cursor Auto + Composer and API remaining capacity, reset, and billing-cycle pace
+- Shows Cursor Auto + Composer (`ac`) and API (`ap`) remaining capacity, billing-cycle reset, and pace
 - Shows Vibe monthly remaining (`mo`), reset, and billing-cycle pace
 - Shows OpenCode Go 5h/1w/monthly remaining quota, reset times, and pace indicators
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
@@ -73,9 +72,10 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Claude: Claude Code authenticated with `claude auth login`; Gradus reads the OAuth access token read-only from the macOS Keychain (service `Claude Code-credentials`) and sends it only to Anthropic's usage endpoint. If Claude Code reports its OAuth session expired, re-authenticate with `claude auth login`; Gradus defers its next read-only retry for one hour so Claude Code remains the only refresh owner.
 - Antigravity (`agy`): signed in via `agy` (stores its OAuth token in the macOS Keychain). The monitor reads it read-only; the first read may prompt for Keychain access — choose "Always Allow" so background refreshes stay silent. The token expires ~hourly and only `agy` refreshes it, so when the token lapses the monitor **nudges `agy` to refresh its own token** by running `agy models` (a non-interactive, quota-free authenticated command) and re-reads the Keychain — the card self-heals without manual action. If that nudge can't recover (e.g. `agy` isn't installed on `PATH`, or `agy`'s own refresh token is dead), the card falls back to an auth error; run `agy` to re-authenticate. The nudge is available only to the credential-aware producer, never to reader commands (INV-2).
 - Copilot: `gh` CLI authenticated (`gh auth login` or OAuth token present)
-- Cursor: app or browser session authenticated
+- Cursor: signed in via the Cursor CLI (`cursor-agent login`), which stores its session in fixed macOS Keychain items; the monitor reads them read-only. The token is long-lived and only the CLI refreshes it, so when it lapses the card reports an actionable re-login instead of going stale
 - Mistral console session authenticated (the macOS credential bridge reads Safari cookies)
-- OpenCode Go: opencode.ai console session authenticated (Safari `auth` cookie)
+- OpenCode Go: API key stored in the fixed macOS Keychain item; authenticate with `opencode /connect`
+  The item uses service `OpenCode Go` and account `default`; Gradus reads it transiently and never persists or logs the key. The API exposes rolling, weekly, and monthly windows; Zen credit balance remains unavailable to key-authenticated clients.
 - `rich>=15.0` (installed automatically via `pip install` or `uv sync`)
 - A terminal that supports ANSI color
 
@@ -157,7 +157,7 @@ stacks with a one-cell horizontal gutter and no empty vertical-row gutter. The
 two-column layout holds down to 79 columns — the width at which two bar-less cards
 still fit a full `reset` and `pace` cell — so a narrowing terminal shrinks the usage
 bars to nothing and stays compact instead of stacking early and re-widening the bars.
-Below 79 columns the dashboard automatically switches to a compact single/double-line layout: each active provider gets 1–2 lines (max 2 windows per line, continuation lines indented), blank lines separate providers, and exhausted (0%) providers are dropped entirely. Window labels (`5h:`, `1w:`, `ac:`, etc.) show percentage and pace arrows (`↑`/`↓`/`=`). Cursor and Vibe get special compact handling converting percent-used to percent-remaining with billing-cycle pace. No `--compact` flag is needed — the switch is fully automatic and responsive to terminal width.
+Below 79 columns the dashboard automatically switches to a compact single/double-line layout: each active provider gets 1–2 lines (max 2 windows per line, continuation lines indented), blank lines separate providers, and exhausted (0%) providers are dropped entirely. Window labels (`5h:`, `1w:`, etc.) show percentage and pace arrows (`↑`/`↓`/`=`). Vibe gets special compact handling converting percent-used to percent-remaining with billing-cycle pace. No `--compact` flag is needed — the switch is fully automatic and responsive to terminal width.
 
 Codex and Claude cards show:
 
@@ -178,8 +178,7 @@ The TUI hydrates the C+G rows from the canonical schema-v2 `Antigravity (Claude)
 Copilot / Cursor / Vibe cards show:
 
 - `mo`: monthly remaining percentage, billing-cycle reset, pace indicator
-- `ac`: Cursor Auto + Composer remaining percentage, derived from `autoPercentUsed`
-- `ap`: Cursor API pool remaining percentage, derived from `apiPercentUsed`
+- Cursor: `ac` and `ap` remaining percentages, billing-cycle reset, pace indicator
 
 Reset displays are normalized before rendering:
 
@@ -242,6 +241,22 @@ The repository-owned templates in `launchd/` invoke the explicit credential-awar
 `--refresh-snapshot` observer. After installing or changing the wrapper or plist,
 run `gradus --verify-refresh-health --duration 360` and require a successful result
 before relying on unattended refresh.
+
+**Publisher watchdog.** launchd supervises the producer; nothing supervises the macOS
+CloudKit publisher, which is an ordinary GUI app. When it exits, the snapshot goes on
+refreshing while iOS silently freezes on the last publication — that failure ran for
+fourteen hours on 2026-08-30. Each successful refresh cycle therefore ends with one
+bounded `gradus --publisher-watchdog` check: if the snapshot is fresh, publish evidence
+is more than five minutes behind, and no process is running the publisher's exact
+executable path, it relaunches the bundle by absolute path. A publisher that *is*
+running but not publishing is a wedged app or a CloudKit outage, so that case is logged
+and left alone; repeated relaunches inside an hour are throttled and reported as a crash
+loop rather than retried forever. The check prints only when it has something to say, so
+a healthy pipeline adds nothing to the producer log. `--publisher-watchdog` is opt-in and
+passed only by the launchd wrapper, so no test, hermetic run, or interactive session can
+launch an app; set `GRADUS_DISABLE_PUBLISHER_WATCHDOG=1` to suppress it entirely. This is
+interim: once publishing moves into the background agent, launchd supervises it directly
+and the watchdog is removed.
 
 **Credential bridge (macOS only).** The launchd job never reads Safari directly.
 `GradusCredentialBridge.app` is the single-purpose, Developer-ID-signed app that reads
@@ -331,20 +346,20 @@ The compact JSON result reports `history_status`, the nearest prior observation,
 
 - Antigravity probing reads `agy`'s Keychain token and POSTs an empty body to `retrieveUserQuotaSummary` (the endpoint rejects a non-empty body with HTTP 400 and the default `Python-urllib` User-Agent with HTTP 403; the provider sets an explicit User-Agent). On an expired token it first nudges `agy` to refresh its own token via `agy models`, then re-reads the Keychain; only if that fails does it surface the "run `agy`" re-authenticate message. The monitor never handles `agy`'s client secret or refresh token — `agy` refreshes its own token via its own OAuth client — so the read-only-toward-`agy`'s-stored-credentials guarantee holds.
 - Claude's interactive provider reads Claude Code's `claudeAiOauth.accessToken` from the macOS Keychain item `Claude Code-credentials` without persisting or logging it, then calls Anthropic's structured `/api/oauth/usage` endpoint. It maps `five_hour`, `seven_day`, and `seven_day_opus` utilization and reset fields into remaining-capacity windows. The provider never launches Claude, parses a PTY, reads Safari cookies, or consumes a status-line cache. Headless paths report `auth required: no cached credentials`; an expired OAuth session reports `Claude Code session expired: run \`claude auth login\``.
-- The live TUI watches the canonical snapshot during its countdown; it does not probe automatically. Full and compact rows append valid supplemental provider credits without turning them into quota windows or alert inputs: Codex count credits, OpenCode Zen dollars, and Claude/Cursor dollar balances.
+- The live TUI watches the canonical snapshot during its countdown; it does not probe automatically. Full and compact rows append valid supplemental provider credits without turning them into quota windows or alert inputs.
 - Live rendering uses the `rich` library's `Live` display with alt-screen mode, eliminating scrollback buffer growth.
 - In live mode, press `q` to quit, `r` to trigger an immediate refresh, or `s` to cycle Most urgent, Reset soonest, and Name A-Z. The sort choice is local to this TUI and persists in `.state/tui-settings.json`.
-- The macOS credential bridge reads Safari's binary cookie store for Cursor, OpenCode Go, and Vibe. Python providers only consume the resulting local caches; there is no Chrome-cookie decryption path. Cookies are cached locally at `.cache/<provider>_cookies.json` (gitignored) to survive Safari disk-sync lag and reduce spurious re-auth prompts; the cache is evicted on API 400/401/403 errors. Claude usage is not part of this bridge: it uses Claude Code's Keychain OAuth token directly.
-- **Credential storage.** `GradusCredentialBridge.app` writes the Safari-derived `.cache/` credential files (provider cookies/tokens) at mode `0600` in a `0700` directory via an atomic temporary-file rename; Python providers only read and opportunistically tighten them. Claude's OAuth token remains in Claude Code's macOS Keychain and is never persisted by Gradus. The Codex `~/.codex/auth.json` continues to use the Python private-write helper. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The caches live under `~/Documents/Projects/gradus/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync — e.g. a `.nosync`-suffixed directory is not synced — so live credentials are not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
-- A normalized window warns when the usage-signal ramp classifies it **orange or red** — the same rule that colors the row, not a parallel one. In practice that means depleted, or a finite pace delta below `-0.10`, or (for a window whose payload carries no reset timestamp, so no pace can be computed) below 40% remaining. Every window spec defines a pace source, so the third case is a degraded-data path rather than a normal one. `[!]` badges, one-shot macOS notifications, the Mac menu's "N low" count, the iPhone's warning tier and the CloudKit push subscription all read this one predicate, aggregated the same way: a provider warns when **any** of its windows does. iOS warning notifications identify the provider and triggering window, then state the remaining percentage and configured local threshold; the generic provider-warning fallback does not invent a threshold when no valid warning window supplies one. Antigravity's conditional C+G rows (`cg5`, `cg1w`) participate in this membership. Cursor's `ac` and `ap` pools are evaluated independently in-process and in schema v2, while v1 continues to publish only its `billing_cycle` window.
+- The macOS credential bridge reads Safari's binary cookie store only for Vibe. Cursor reads the Cursor CLI's OAuth token and OpenCode Go its API key, each from a fixed macOS Keychain item. Claude usage is not part of this bridge: it uses Claude Code's Keychain OAuth token directly.
+- **Credential storage.** `GradusCredentialBridge.app` writes only Vibe's Safari-derived `.cache/vibe_cookies.json` at mode `0600` in a `0700` directory via an atomic temporary-file rename; the Vibe provider only reads and opportunistically tightens it. Claude and OpenCode Go credentials remain in fixed macOS Keychain items and are never persisted by Gradus. The Codex `~/.codex/auth.json` continues to use the Python private-write helper. Note that `0600` protects against *other local users*; it does **not** stop iCloud replication. The cache lives under `~/Documents/Projects/gradus/.cache/`; if you ever enable **Desktop & Documents** iCloud sync, exclude this project (or its `.cache/`) from sync so the Vibe session is not copied to Apple's cloud. (Desktop & Documents sync is off by default.)
+- A normalized window warns when the usage-signal ramp classifies it **orange or red** — the same rule that colors the row, not a parallel one. In practice that means depleted, or a finite pace delta below `-0.10`, or (for a window whose payload carries no reset timestamp, so no pace can be computed) below 40% remaining. Every window spec defines a pace source, so the third case is a degraded-data path rather than a normal one. `[!]` badges, one-shot macOS notifications, the Mac menu's "N low" count, the iPhone's warning tier and the CloudKit push subscription all read this one predicate, aggregated the same way: a provider warns when **any** of its windows does. iOS warning notifications identify the provider and triggering window, then state the remaining percentage and configured local threshold; the generic provider-warning fallback does not invent a threshold when no valid warning window supplies one. Antigravity's conditional C+G rows (`cg5`, `cg1w`) participate in this membership.
 - Vibe uses Mistral's `usage_percentage` field as percent used directly. If Mistral shows `1.08% used`, Gradus will render about `99%` remaining after rounding.
-- Cursor reads billing-cycle and usage data from the nested `planUsage` payload. `planUsage` carries three numbers but Cursor only has two real usage pools: `autoPercentUsed` (first-party Auto + Composer) and `apiPercentUsed` (API/third-party pool) are both percent-USED for their own pool; `remaining`/`limit` cents are a dollar-denominated spend meter, not a third pool. The card shows Cursor's two real usage pools: `ac` is the Auto + Composer pool, converted from `autoPercentUsed` (percent used) to remaining capacity; `ap` is the API pool, converted from `apiPercentUsed` (percent used) to remaining capacity the same way. The cents-derived percentage (`credit_percent_left`) remains internal and never becomes a capacity window or alert input. The producer separately normalizes valid `remaining` cents to `credit_balance` dollars so iOS can show an optional supplemental credit line.
+- Cursor's dashboard API is private and undocumented, so the shape it returns can change without notice. Gradus reads it as a consumer only — Keychain token in, usage out, no refresh, no write-back, no browser cookie. A rejected or expired session fails closed with an actionable `cursor-agent login` message rather than a fabricated zero.
 
 ## Limitations
 
 - This depends on current local CLI/API behavior across `codex`, `claude`, `agy`, `copilot`, `cursor`, `vibe`, and `opencode.ai`.
 - Reset windows are only shown when the provider's structured response exposes them.
-- OpenCode Go uses content-hash server-function IDs from the deployed opencode.ai console build. If opencode rebuilds the console, these hashes change and the probe returns an error until the IDs are updated in the provider. The probe gracefully surfaces this as a clear error message.
+- OpenCode Go uses the fixed API-key usage endpoint; no console server-function IDs or browser session are required. Zen credit balance is unavailable through key authentication.
 
 ## Known Issues
 
@@ -380,15 +395,16 @@ redline across the TUI, Mac, and iOS surfaces.
 - The expected-pace marker is defined once per concern: `expectedRemaining()` in GradusKit says *where* it goes, and `markerOffset(fraction:barWidth:markerWidth:)` beside it says how that maps to a leading-edge offset. Both apps call both. The offset moved into the kit after the two drifted — iOS clamped the marker inside its bar and the Mac did not, so a Mac window at 0% or 100% drew half a marker hanging off the end. Its colour is shared the same way, as `SignalColor.paceMarker` (`#005FD7`, matching the TUI's `bar.marker`) — deliberately outside the four-tier ramp, because the marker is a reference line rather than a signal level, and blue is the one hue no tier uses. Only the marker's *size* stays per-app, because the two bars are different heights. The TUI shares the colour but not the shape: it draws the marker as one whole cell of the bar's own fill glyph rather than a thin line. That is a constraint of the character grid, not a style choice — a thin stroke there has to change glyph to move within a cell, which changes its width, and can never ink as much of its cell as the fill does, so the terminal background shows through around it. The Swift bars position a real rectangle at a continuous offset and have neither problem.
 - Sync is opt-in per device (off by default) and independent per device — pairing two devices doesn't couple them beyond both reading the same published snapshot.
 
-Cloud validation:
+Optional hosted diagnostics:
 
 ```bash
 git push
 gh pr checks --watch
 ```
 
-The required Xcode Cloud workflows `Gradus macOS UI Trial` and `Gradus iOS
-Snapshot Trial` validate each pull-request head after push. Their hosted runners
+The Xcode Cloud workflows `Gradus macOS UI Trial` and `Gradus iOS Snapshot
+Trial` may validate a pull-request head after push, but they are optional and
+do not provide release authority. Their hosted runners
 derive checked-out source and snapshot roots from `CI_WORKSPACE_PATH`; they never
 ask a local Mac for Automation Mode. `app/Gradus.xcodeproj` is generated from
 `project.yml`, but shared
@@ -462,18 +478,20 @@ separate upload counter. A new TestFlight build is reserved for a completed,
 gate-green release candidate or a release-blocking correction; small
 non-blocking tweaks are batched into the next patch release.
 
-**Current release policy:** Xcode Cloud performs the source-bound validation
-checks; `app/prepare-testflight-candidate` performs production archive and
-signing, then `app/deploy-testflight --attended` performs upload, processing,
-and internal-tester assignment against the Gradus iOS App Store Connect record.
+**Current release policy:** `app/release_local_gate.py` binds the readiness
+manifest to both the current source and checked Git tree, streams
+`app/test-gate.sh`, and emits the candidate's local-gate proof only after all
+local app tests pass. `app/prepare-testflight-candidate` then performs
+production archive and signing, and `app/deploy-testflight --attended` performs
+upload, processing, and internal-tester assignment against the Gradus iOS App
+Store Connect record.
 Do not use the `Gradus iOS Internal TestFlight` Cloud workflow for delivery: the
 account's Cloud product is attached to the GradusMac app record, so its iOS
 builds cannot reach the Gradus AI beta group.
 
-The exact release commit must pass `Gradus macOS UI Trial` and `Gradus iOS
-Snapshot Trial` before candidate preparation. Those workflows use manual
-`main`-branch starts and remain disabled between releases to prevent automatic
-billable runs. The credential-brokered
+Xcode Cloud validation is optional and non-gating. Its workflows use manual
+`main`-branch starts and remain disabled between diagnostics to prevent
+automatic billable runs. The credential-brokered
 `allocate_identity.py --convert-validation-workflow-to-manual` mode performs the
 one-time fail-closed conversion from each workflow's exact name-specific
 automatic condition to manual `main`. The `--start-validation-build` mode can
@@ -482,6 +500,19 @@ them again after the runs are accepted. The read-only
 `--read-validation-workflow-conditions` diagnostic
 emits only those workflows' identity, enabled state, and seven start-condition
 fields. `app/release-status` remains the safe read-only status command.
+
+Cloud renders snapshots on whichever simulator its TEST action names, which is
+not automatically the one `app/test-gate.sh` pins. The read-only
+`--resolve-workflow-toolchain` mode reports that device under
+`pinnedDestinations`; `--pin-test-destination` writes it, taking the exact
+action name plus `--sim-device-type-id` and `--sim-runtime-id`. The pin reads
+the workflow's whole `actions` array and sends it back with only the named TEST
+action's destinations replaced, because `PATCH /ciWorkflows` overwrites that
+array rather than merging into it, and re-reads afterwards so a rejected or
+silently normalised pin fails rather than reporting success. A runtime of
+`default` means "latest from the selected Xcode" and is what Apple's own
+interface writes; it is a floating value, so it tracks the Xcode pin rather
+than a fixed iOS release.
 
 New candidates' readiness and local-gate evidence is content-bound rather than
 time-bound: source or proof-contract drift invalidates it; elapsed time alone
@@ -511,10 +542,10 @@ they are not additional public release routes. A prepared upload rechecks the
 checkout revision and clean status against its candidate record before any
 upload work, and source drift fails closed.
 
-The central fleet audit reports Gradus as adopted. Pushes trigger required Xcode
-Cloud checks for app validation; local hooks stay lightweight and do not run Xcode
-app automation. Cloud check results remain separate from candidate-bound canary
-evidence.
+The central fleet audit reports Gradus as adopted. Local hooks stay lightweight
+and do not run Xcode app automation; the candidate-bound local gate is the
+authoritative app-validation path. Optional hosted results remain separate from
+candidate-bound canary evidence.
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
 its release summary and test-focus text into App Store Connect's “What to
@@ -675,9 +706,8 @@ Decision gates follow the G/A/R autonomy contract: `~/.agent/prompts/_shared/gar
 
 ### Git hooks (enforcement)
 
-The local hooks and required Xcode Cloud PR status form the primary gate. Pushes
-trigger required Xcode Cloud checks for app validation; local hooks keep only
-lightweight, non-app automation checks.
+Local hooks provide fast feedback, while the candidate-bound local gate provides
+authoritative app validation before release preparation.
 Python hooks run through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
 tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
 enforced by `scripts/check-static-tool-versions.sh`.
@@ -689,7 +719,7 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
 ```
 
 - **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files,
-  plus a fail-closed check requiring SwiftLint 0.65.1, SwiftFormat 0.62.1, and
+  plus a fail-closed check requiring SwiftLint 0.65.1, SwiftFormat 0.63.0, and
   ShellCheck 0.11.0,
   plus strict SwiftLint and non-mutating SwiftFormat checks on changed Swift
   files, plus ShellCheck on changed shell scripts. SwiftLint uses the committed `.swiftlint-baseline.json` for the
@@ -699,14 +729,12 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **pre-push** (~40s): the whole Python suite via `uv run pytest -q`. `467227f`
-  moved app validation to Xcode Cloud and removed the previous pre-push app
-  gate, which left the Python producer suite gated by nothing; this restores
-  that one leg. The hook is `always_run` with `pass_filenames: false`, so a push
+- **pre-push** (~40s): the whole Python suite via `uv run pytest -q`. The hook
+  is `always_run` with `pass_filenames: false`, so a push
   containing no Python change still runs it.
-- **local only**: hooks run fast Python/Swift lint at commit and the Python test
-  suite at push. Neither stage runs Xcode app automation; the simulator and
-  device legs stay in the required cloud checks.
+- **release gate**: `app/test-gate.sh` runs the local macOS and simulator app
+  automation against candidate-bound source. Physical-device acceptance remains
+  a separate owner gate.
 
 Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
 `.swiftformat`, Swift source scope and generated directory exclusions in

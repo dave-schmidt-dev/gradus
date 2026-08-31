@@ -20,9 +20,11 @@ build-backend = "setuptools.build_meta"
 [dependency-groups]
 dev = [
     "hypothesis>=6",
+    "pyinstaller==6.22.2",
     "pytest>=9.0.3",
     "ruff>=0.9",
     "pre-commit>=4",
+    "vulture>=2.14",
 ]
 
 [tool.pytest.ini_options]
@@ -33,6 +35,19 @@ pythonpath = ["."]
 # all). Widen collection rather than rename them, so the pre-push gate is the
 # whole Python suite and not the subset that happens to match one glob.
 python_files = ["test_*.py", "*-tests.py", "test-*.py"]
+
+# Dead-code detection ranks with lint and tests, but it had no gate here until
+# 2026-08-31. Confidence 80 is the working threshold: at 60 the report is 35
+# lines and almost entirely dataclass fields that `parsing.py` populates by
+# name, plus `__getattr__` lazy-import shims. `self_inner` is the repository's
+# deliberate name for the inner `self` of a nested test stub, so it is never a
+# finding. `app/build/` holds a vendored CPython framework for the single-bundle
+# runtime; scanning it costs 40s and reports only CPython's own test corpus.
+[tool.vulture]
+paths = ["gradus", "tests", "launchd", "app", ".release"]
+min_confidence = 80
+ignore_names = ["self_inner"]
+exclude = ["*/build/*", "*/.venv/*", "*/DerivedData/*", "*/node_modules/*"]
 
 [tool.ruff]
 line-length = 100

@@ -35,14 +35,71 @@ targets:
         INFOPLIST_KEY_LSUIElement: YES
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
+        SKIP_INSTALL: YES
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          PROVISIONING_PROFILE_SPECIFIER: ""
+
+  GradusRefreshAgentCore:
+    type: library.static
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: GradusRefreshAgent
+        includes: [RefreshAgent.swift, RefreshAgentCollaborators.swift]
+
+  GradusRefreshAgent:
+    type: tool
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: GradusRefreshAgent
+        includes: [GradusRefreshAgentApp.swift]
+    dependencies:
+      - target: GradusRefreshAgentCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.refresh-agent
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        SKIP_INSTALL: YES
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          PROVISIONING_PROFILE_SPECIFIER: ""
 
   GradusMac:
     type: application
     platform: macOS
     deploymentTarget: "13.0"
-    sources: [GradusMac, Shared]
+    sources:
+      - GradusMac
+      - Shared
+      - path: GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
     dependencies:
       - package: GradusKit
+      - target: GradusCredentialBridge
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
+      - target: GradusRefreshAgent
+        embed: true
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac
@@ -316,6 +373,19 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 4CJ49V6QHW
 
+  GradusRefreshAgentTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources: [GradusRefreshAgentTests]
+    dependencies:
+      - target: GradusRefreshAgentCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 4CJ49V6QHW
+
   GradusMacUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -414,6 +484,14 @@ schemes:
       targets:
         - GradusCredentialBridgeTests
 
+  GradusRefreshAgent:
+    build:
+      targets:
+        GradusRefreshAgent: all
+    test:
+      targets:
+        - GradusRefreshAgentTests
+
   GradusMac:
     build:
       targets:
@@ -421,7 +499,7 @@ schemes:
     test:
       targets:
         - GradusMacTests
-        - GradusCredentialBridgeTests
+        - GradusMacUITests
       # `GradusMacTests` is a hosted bundle, so every test run launches the
       # real app. Without this it starts the live pipeline: it publishes to
       # CloudKit Production and reads the snapshot out of `~/Documents`, which
@@ -433,8 +511,8 @@ schemes:
       # and watching a test run rewrite it with a live `Date()`.
       environmentVariables:
         GRADUS_DISABLE_PIPELINE: "1"
-  # Cloud runs a separate scheme so the local gate keeps its DerivedData-staged
-  # INV-7 inputs and never reads the checkout from a hosted app process.
+  # Retained only for optional hosted diagnostics. Candidate release authority
+  # comes from the local GradusMac scheme and app/test-gate.sh.
   GradusMacCloud:
     build:
       targets:

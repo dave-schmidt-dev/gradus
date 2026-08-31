@@ -16,6 +16,13 @@ log = logging.getLogger(__name__)
 _HEADLESS = False
 
 
+def _private_cache_path(filename: str) -> Path:
+    """Return one provider cache path from the process runtime policy."""
+    from ..paths import RUNTIME_PATHS
+
+    return RUNTIME_PATHS.private_cache_path(filename)
+
+
 def set_headless(value: bool) -> None:
     global _HEADLESS
     _HEADLESS = bool(value)

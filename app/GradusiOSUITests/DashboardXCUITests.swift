@@ -80,15 +80,17 @@ final class DashboardXCUITests: XCTestCase {
     }
 
     func testNormalSettingsExplainsWidgetSizingAndOmitsSampleEntry() {
-        let app = launch(.noAccount)
+        let app = launch(.noAccount, cardColumns: 3)
         openSettings(in: app)
 
         XCTAssertFalse(app.buttons["explore-sample-settings"].exists)
         XCTAssertFalse(app.staticTexts["Explore Sample"].exists)
         XCTAssertTrue(app.staticTexts["Dashboard card size"].exists)
-        XCTAssertTrue(staticText(containing: "automatic on this device", in: app).exists)
-        XCTAssertTrue(staticText(containing: "This screen only chooses providers", in: app).exists)
-        XCTAssertTrue(staticText(containing: "iOS Home Screen widget gallery", in: app).exists)
+        let automatic = app.switches["Automatic"]
+        XCTAssertTrue(automatic.waitForExistence(timeout: 5))
+        XCTAssertEqual(automatic.value as? String, "1")
+        assertStaticTextAfterScrolling(containing: "This screen only chooses providers", in: app)
+        assertStaticTextAfterScrolling(containing: "iOS Home Screen widget gallery", in: app)
     }
 
     func testWarningAlertsRequestingShowsProgressWithoutSystemPrompt() {
@@ -148,9 +150,12 @@ final class DashboardXCUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sample Cursor"].waitForExistence(timeout: 5))
     }
 
-    private func launch(_ fixture: Fixture) -> XCUIApplication {
+    private func launch(_ fixture: Fixture, cardColumns: Int? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["GRADUS_UITEST_FIXTURE"] = fixture.rawValue
+        if let cardColumns {
+            app.launchEnvironment["GRADUS_UITEST_CARD_COLUMNS"] = String(cardColumns)
+        }
         app.launch()
         return app
     }
@@ -170,6 +175,14 @@ final class DashboardXCUITests: XCTestCase {
 
     private func staticText(containing text: String, in app: XCUIApplication) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    private func assertStaticTextAfterScrolling(containing text: String, in app: XCUIApplication) {
+        let element = staticText(containing: text, in: app)
+        for _ in 0 ..< 4 where !element.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(element.waitForExistence(timeout: 2), "Missing Settings copy containing: \(text)")
     }
 
     private func element(identifier: String, in app: XCUIApplication) -> XCUIElement {

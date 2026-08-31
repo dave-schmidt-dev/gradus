@@ -22,11 +22,11 @@ build/
 .github/
 .superpowers/
 .antigravitycli/
-=0.9
 HISTORY.md
 TASKS.md
 history.md
 tasks.md
+handoff.md
 
 # Design mocks rendered from live runtime state. `.state/` is ignored above, so
 # anything derived from it (real provider names, percentages, reset timestamps,

@@ -842,12 +842,24 @@ class BuildFixActionsTests(unittest.TestCase):
 
     def test_browser_action_type(self) -> None:
         snaps = [
+            ProviderSnapshot(name="Vibe", ok=False, source="api", error="please login to continue"),
+        ]
+        actions = _build_fix_actions(snaps)
+        self.assertEqual(actions["1"], ("Vibe", "browser", "https://console.mistral.ai"))
+
+    def test_cursor_remediation_matches_the_provider_relogin_message(self) -> None:
+        """The fix action must name the same CLI the provider tells you to run."""
+        snaps = [
             ProviderSnapshot(
-                name="Cursor", ok=False, source="api", error="please login to continue"
+                name="Cursor",
+                ok=False,
+                source="api",
+                error="Cursor session expired: run `cursor-agent login`",
             ),
         ]
         actions = _build_fix_actions(snaps)
-        self.assertEqual(actions["1"], ("Cursor", "browser", "https://cursor.sh"))
+        self.assertEqual(actions["1"], ("Cursor", "cli", "cursor-agent login"))
+        self.assertIn(actions["1"][2], snaps[0].error)
 
 
 class LaunchFixTests(unittest.TestCase):

@@ -27,6 +27,43 @@ func iosSnapshotDirectory(
         .appendingPathComponent(testFileName, isDirectory: true)
 }
 
+/// The zone every iOS snapshot baseline is rendered in.
+///
+/// Arbitrary but fixed, and it must stay fixed: changing it means re-recording
+/// every baseline that renders a date. US Eastern because that is already this
+/// codebase's date convention -- `GradusKit`'s `FriendlyDateTests` assert
+/// against an `easternCalendar`, and the fixtures below carry `-04:00` offsets.
+///
+/// Measured 2026-08-31, and the reason this constant exists: the committed
+/// baselines were split across two zones. `ProviderDetailViewSnapshotTests`
+/// had been recorded in US Eastern and `DashboardSnapshotTests` in US Pacific,
+/// so no single unpinned host could ever satisfy both.
+let snapshotTimeZoneIdentifier = "America/New_York"
+
+/// Pins the process's default time zone before any snapshot renders.
+///
+/// Baselines are compared byte-for-byte across machines, so nothing they draw
+/// may depend on the host. `friendlyResetDate` resolves through
+/// `Calendar.current`, which follows `NSTimeZone.default`, so an unpinned host
+/// bakes its own zone into every reset label. Found 2026-08-31, after four days
+/// of the iOS gate failing: the fixture instant `2026-08-05T00:00:00-04:00`
+/// renders as "Aug 4, 9:00 PM" in US Pacific and "Aug 5, 12:00 AM" in US
+/// Eastern, the committed baselines held the former, and this machine is the
+/// latter -- so nine tests failed for a reason that had nothing to do with the
+/// code under test. `GradusKit`'s own `FriendlyDateTests` already pass an
+/// explicit calendar; the snapshot suite was the surface that did not.
+///
+/// A `let` rather than a `setUp` so it runs exactly once per process, and so
+/// every suite that routes through `assertIOSSnapshot` gets it without having
+/// to remember to.
+let snapshotTimeZoneIsPinned: Bool = {
+    guard let zone = TimeZone(identifier: snapshotTimeZoneIdentifier) else {
+        preconditionFailure("unknown snapshot time zone \(snapshotTimeZoneIdentifier)")
+    }
+    NSTimeZone.default = zone
+    return true
+}()
+
 func assertIOSSnapshot<Value>(
     of value: @autoclosure () throws -> Value,
     as snapshotting: Snapshotting<Value, some Any>,
@@ -39,6 +76,7 @@ func assertIOSSnapshot<Value>(
     line: UInt = #line,
     column: UInt = #column
 ) {
+    precondition(snapshotTimeZoneIsPinned)
     let directory = iosSnapshotDirectory(file: file)
     let failure: String?
     do {

@@ -1,6 +1,51 @@
 import Darwin
 import Foundation
 
+public enum CredentialBridgeOperation: Equatable {
+    case refresh(cacheDirectory: URL)
+    case check
+
+    public init?(arguments: [String]) {
+        if arguments == ["check"] {
+            self = .check
+            return
+        }
+        guard arguments.count == 3,
+              arguments[0] == "refresh",
+              arguments[1] == "--cache-directory",
+              arguments[2].hasPrefix("/")
+        else {
+            return nil
+        }
+        self = .refresh(cacheDirectory: URL(fileURLWithPath: arguments[2], isDirectory: true))
+    }
+}
+
+public struct CredentialBridgeCheckResult: Codable, Equatable {
+    public enum State: String, Codable {
+        case success
+        case denied
+        case missing
+        case malformed
+    }
+
+    public let schemaVersion: Int
+    public let operation: String
+    public let state: State
+
+    init(state: State) {
+        schemaVersion = 1
+        operation = "check"
+        self.state = state
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case operation
+        case state
+    }
+}
+
 public enum CredentialBridge {
     static let safariCookiesURL = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: "Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies")
@@ -27,6 +72,33 @@ public enum CredentialBridge {
         try refresh(cacheDirectory: cacheDirectory, cookieFileURL: safariCookiesURL)
     }
 
+    public static func check() -> CredentialBridgeCheckResult {
+        check(cookieFileURL: safariCookiesURL) {
+            try Data(contentsOf: $0, options: [.mappedIfSafe])
+        }
+    }
+
+    static func check(
+        cookieFileURL: URL,
+        reader: (URL) throws -> Data = { try Data(contentsOf: $0, options: [.mappedIfSafe]) }
+    ) -> CredentialBridgeCheckResult {
+        let data: Data
+        do {
+            data = try reader(cookieFileURL)
+        } catch {
+            return CredentialBridgeCheckResult(state: readFailureState(error))
+        }
+        guard data.count <= maximumCookieFileBytes else {
+            return CredentialBridgeCheckResult(state: .malformed)
+        }
+        do {
+            _ = try parseCookies(data)
+            return CredentialBridgeCheckResult(state: .success)
+        } catch {
+            return CredentialBridgeCheckResult(state: .malformed)
+        }
+    }
+
     static func refresh(cacheDirectory: URL, cookieFileURL: URL) throws {
         guard cacheDirectory.lastPathComponent == ".cache" else {
             throw BridgeError.invalidCacheDirectory
@@ -39,179 +111,11 @@ public enum CredentialBridge {
         let cookies = try parseCookies(data)
         let cachedAt = ISO8601DateFormatter().string(from: Date())
 
-        if let claude = claudePayload(cookies, cachedAt: cachedAt) {
-            try write(claude, named: "claude_cookies.json", to: cacheDirectory)
-        }
-        if let cursor = cursorPayload(cookies, cachedAt: cachedAt) {
-            try write(cursor, named: "cursor_token.json", to: cacheDirectory)
-        }
-        if let opencode = openCodePayload(cookies, cachedAt: cachedAt) {
-            try write(opencode, named: "opencode_go_cookies.json", to: cacheDirectory)
-        }
+        try removeLegacyProviderCaches(from: cacheDirectory)
+
         if let vibe = vibePayload(cookies, cachedAt: cachedAt) {
-            try write(vibe, named: "vibe_cookies.json", to: cacheDirectory)
+            try write(vibe, named: .vibe, to: cacheDirectory)
         }
-    }
-
-    static func parseCookies(_ data: Data) throws -> [Cookie] {
-        guard data.count >= 8, data.prefix(4) == Data("cook".utf8) else {
-            throw BridgeError.invalidCookieFile
-        }
-        let pageCount = try data.uint32BE(at: 4)
-        guard pageCount <= 1024 else { throw BridgeError.invalidCookieFile }
-
-        let pageSizes = try readPageSizes(count: pageCount, in: data)
-        return try readCookies(fromPages: pageSizes, in: data)
-    }
-
-    /// Reads the page-size table that follows the file header, one big-endian
-    /// `UInt32` per page, starting at offset 8.
-    private static func readPageSizes(count: UInt32, in data: Data) throws -> [Int] {
-        var offset = 8
-        var pageSizes: [Int] = []
-        for _ in 0 ..< count {
-            let pageSize = try data.uint32BE(at: offset)
-            guard pageSize >= 8, pageSize <= data.count else { throw BridgeError.invalidCookieFile }
-            pageSizes.append(Int(pageSize))
-            offset += 4
-        }
-        return pageSizes
-    }
-
-    /// Walks the pages described by `pageSizes`, starting immediately after the
-    /// page-size table, and collects the cookies parsed from each page.
-    private static func readCookies(fromPages pageSizes: [Int], in data: Data) throws -> [Cookie] {
-        var offset = 8 + pageSizes.count * 4
-        var cookies: [Cookie] = []
-        for pageSize in pageSizes {
-            guard offset + pageSize <= data.count else { throw BridgeError.invalidCookieFile }
-            let page = data.subdata(in: offset ..< offset + pageSize)
-            offset += pageSize
-            try cookies.append(contentsOf: readCookies(inPage: page))
-        }
-        return cookies
-    }
-
-    /// Parses every cookie record referenced by a single page's offset table.
-    private static func readCookies(inPage page: Data) throws -> [Cookie] {
-        guard page.count >= 8 else { return [] }
-        let cookieCount = try page.uint32LE(at: 4)
-        guard cookieCount <= 4096, 8 + Int(cookieCount) * 4 <= page.count else {
-            throw BridgeError.invalidCookieFile
-        }
-        var cookies: [Cookie] = []
-        for index in 0 ..< cookieCount {
-            let cookieOffset = try Int(page.uint32LE(at: 8 + Int(index) * 4))
-            guard cookieOffset >= 0, cookieOffset < page.count else { continue }
-            if let cookie = try readCookie(at: cookieOffset, in: page) {
-                cookies.append(cookie)
-            }
-        }
-        return cookies
-    }
-
-    /// Decodes a single cookie record starting at `cookieOffset` within `page`,
-    /// or returns `nil` if any required field is missing, unparseable, or empty.
-    private static func readCookie(at cookieOffset: Int, in page: Data) throws -> Cookie? {
-        guard cookieOffset + 4 <= page.count else { return nil }
-        let recordSize = try Int(page.uint32LE(at: cookieOffset))
-        guard recordSize >= 56,
-              recordSize <= page.count - cookieOffset
-        else { return nil }
-        let cookie = page.subdata(in: cookieOffset ..< cookieOffset + recordSize)
-        let expiresAt: Date?
-        let createdAt: Date?
-        do {
-            expiresAt = try macAbsoluteDate(in: cookie, at: 40)
-            createdAt = try macAbsoluteDate(in: cookie, at: 48)
-        } catch {
-            return nil
-        }
-        let rawDomain: String?
-        let name: String?
-        let value: String?
-        do {
-            rawDomain = try cookie.cString(at: cookie.uint32LE(at: 16))
-            name = try cookie.cString(at: cookie.uint32LE(at: 20))
-            value = try cookie.cString(at: cookie.uint32LE(at: 28))
-        } catch {
-            return nil
-        }
-        guard let rawDomain,
-              let name,
-              let value,
-              let host = normalizedHost(rawDomain),
-              !name.isEmpty,
-              !value.isEmpty
-        else { return nil }
-        return Cookie(host: host, name: name, value: value, expiresAt: expiresAt, createdAt: createdAt)
-    }
-
-    /// Safari stores cookie dates as seconds since the Mac absolute epoch.
-    /// Zero denotes a session cookie; non-finite or negative values are malformed.
-    private static func macAbsoluteDate(in cookie: Data, at offset: Int) throws -> Date? {
-        let seconds = try cookie.doubleLE(at: offset)
-        guard seconds.isFinite, seconds >= 0 else { throw BridgeError.invalidCookieFile }
-        return seconds == 0 ? nil : Date(timeIntervalSinceReferenceDate: seconds)
-    }
-
-    /// WebKit stores a cookie's domain in the URL field. Current Safari jars
-    /// use a bare domain (often with a leading dot), while older fixtures and
-    /// defensive callers may provide a full URL. Normalize both forms without
-    /// accepting malformed or whitespace-bearing hosts.
-    private static func normalizedHost(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let candidate = if let parsed = URLComponents(string: trimmed), let host = parsed.host {
-            host
-        } else {
-            trimmed
-        }
-        let host = candidate.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
-        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
-        guard !host.isEmpty,
-              host.count <= 253,
-              labels.allSatisfy({ label in
-                  guard !label.isEmpty,
-                        label.first != "-",
-                        label.last != "-"
-                  else { return false }
-                  return label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
-              })
-        else { return nil }
-        return host
-    }
-
-    private static func claudePayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {
-        let values = values(for: "claude.ai", in: cookies)
-        guard let sessionKey = values["sessionKey"],
-              sessionKey.hasPrefix("sk-ant-")
-        else { return nil }
-        var payload = [
-            "sessionKey": sessionKey,
-            "cf_clearance": values["cf_clearance"] ?? "",
-            "cached_at": cachedAt
-        ]
-        if let org = values["lastActiveOrg"], !org.isEmpty {
-            payload["lastActiveOrg"] = org
-        }
-        return payload
-    }
-
-    private static func cursorPayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {
-        let values = values(for: "cursor.com", in: cookies)
-        guard let rawToken = values["WorkosCursorSessionToken"],
-              let decoded = rawToken.removingPercentEncoding,
-              let token = decoded.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false).last,
-              decoded.contains("::"),
-              !token.isEmpty
-        else { return nil }
-        return ["access_token": String(token), "cached_at": cachedAt]
-    }
-
-    private static func openCodePayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {
-        guard let auth = values(for: "opencode.ai", in: cookies)["auth"] else { return nil }
-        return ["auth": auth, "cached_at": cachedAt]
     }
 
     private static func vibePayload(_ cookies: [Cookie], cachedAt: String) -> [String: String]? {
@@ -260,7 +164,41 @@ public enum CredentialBridge {
         }
     }
 
-    private static func write(_ payload: [String: String], named filename: String, to directory: URL) throws {
+    private enum CacheFileName: String {
+        case vibe = "vibe_cookies.json"
+    }
+
+    /// Remove only credential caches owned by providers that no longer read
+    /// Safari-derived material. Other files in the approved cache directory
+    /// are intentionally left untouched.
+    private static func removeLegacyProviderCaches(from directory: URL) throws {
+        let manager = FileManager.default
+        try manager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        for filename in ["cursor_token.json", "opencode_go_cookies.json"] {
+            let path = directory.appendingPathComponent(filename)
+            if manager.fileExists(atPath: path.path) {
+                try manager.removeItem(at: path)
+            }
+        }
+    }
+
+    private static func readFailureState(_ error: Error) -> CredentialBridgeCheckResult.State {
+        let cocoa = error as NSError
+        if cocoa.domain == NSCocoaErrorDomain, cocoa.code == NSFileReadNoSuchFileError {
+            return .missing
+        }
+        if cocoa.domain == NSPOSIXErrorDomain, cocoa.code == Int(ENOENT) {
+            return .missing
+        }
+        return .denied
+    }
+
+    private static func write(_ payload: [String: String], named filename: CacheFileName, to directory: URL) throws {
         let manager = FileManager.default
         try manager.createDirectory(
             at: directory,
@@ -269,8 +207,8 @@ public enum CredentialBridge {
         )
         try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-        let target = directory.appendingPathComponent(filename)
-        let temporary = directory.appendingPathComponent("." + filename + "." + UUID().uuidString)
+        let target = directory.appendingPathComponent(filename.rawValue)
+        let temporary = directory.appendingPathComponent("." + filename.rawValue + "." + UUID().uuidString)
         let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
         guard descriptor >= 0 else { throw BridgeError.cacheWriteFailed }
         defer {
@@ -291,31 +229,4 @@ enum BridgeError: Error {
     case cookieFileTooLarge
     case invalidCookieFile
     case cacheWriteFailed
-}
-
-private extension Data {
-    func uint32BE(at offset: Int) throws -> UInt32 {
-        guard offset >= 0, offset + 4 <= count else { throw BridgeError.invalidCookieFile }
-        return self[offset ..< offset + 4].reduce(0) { ($0 << 8) | UInt32($1) }
-    }
-
-    func uint32LE(at offset: Int) throws -> UInt32 {
-        guard offset >= 0, offset + 4 <= count else { throw BridgeError.invalidCookieFile }
-        return self[offset ..< offset + 4].enumerated().reduce(0) { $0 | (UInt32($1.element) << UInt32($1.offset * 8)) }
-    }
-
-    func doubleLE(at offset: Int) throws -> Double {
-        guard offset >= 0, offset + 8 <= count else { throw BridgeError.invalidCookieFile }
-        let bits = self[offset ..< offset + 8].enumerated().reduce(UInt64(0)) {
-            $0 | (UInt64($1.element) << UInt64($1.offset * 8))
-        }
-        return Double(bitPattern: bits)
-    }
-
-    func cString(at offset: UInt32) -> String? {
-        let start = Int(offset)
-        guard start >= 0, start < count else { return nil }
-        let end = self[start...].firstIndex(of: 0) ?? endIndex
-        return String(data: self[start ..< end], encoding: .utf8)
-    }
 }

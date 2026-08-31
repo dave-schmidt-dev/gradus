@@ -55,9 +55,9 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D06D52273502B7569707F818"
-               BuildableName = "GradusCredentialBridgeTests.xctest"
-               BlueprintName = "GradusCredentialBridgeTests"
+               BlueprintIdentifier = "E2D75CD2EC6E40C876974810"
+               BuildableName = "GradusMacUITests.xctest"
+               BlueprintName = "GradusMacUITests"
                ReferencedContainer = "container:Gradus.xcodeproj">
             </BuildableReference>
          </TestableReference>
