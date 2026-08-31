@@ -96,6 +96,12 @@ rationale: Safari-derived provider cookies are read only by the Developer-ID-sig
   tests tripwire prohibited browser paths, and `tests/test_snapshot.py::RuntimePathPolicyTests` rejects
   aliasing between public state and private caches. Prevents private browser state from becoming available to
   arbitrary Python processes or world-readable at rest.
+  Retiring the OpenCode Go and Cursor browser transports is one-way by construction: the bridge deletes any
+  legacy `cursor_token.json` or `opencode_go_cookies.json` it finds rather than reading it, so the rollback shape
+  is a new bridge release plus a fresh Full Disk Access grant, never a flag flip on a dormant browser path.
+  Automated tests stub the `security` command and never touch a live Keychain item, because identity-bound
+  Keychain ACLs cannot be exercised by an unsigned test binary; live signed-Keychain validation is therefore a
+  separate human-executed gate against a signed installed candidate, deliberately outside `app/test-gate.sh`.
 
 ### INV-7 — The CloudKit publisher takes its snapshot data through a single injected snapshot-path dependency, and its source references no credential path
 area: ["app/GradusMac/**", "app/GradusKit/**"]

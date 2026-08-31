@@ -3081,5 +3081,44 @@ class SafariFreeProviderTests(unittest.TestCase):
             provider.fetch()
 
 
+class KeychainDocumentationContractTests(unittest.TestCase):
+    """Docs must state the Keychain contract the automated suite cannot prove."""
+
+    @staticmethod
+    def _docs(*names: str) -> str:
+        root = Path(__file__).parents[1]
+        joined = "\n".join((root / name).read_text(encoding="utf-8") for name in names)
+        return " ".join(joined.lower().split())
+
+    def test_docs_describe_the_read_only_keychain_boundary(self) -> None:
+        docs = self._docs("README.md", "INVARIANTS.md")
+
+        self.assertIn("read fixed macos keychain generic-password items read-only", docs)
+        self.assertIn("no refresh, no write-back, and no browser cookie", docs)
+
+    def test_docs_describe_the_cursor_limitation(self) -> None:
+        docs = self._docs("README.md")
+
+        self.assertIn("cursor's dashboard api is private and undocumented", docs)
+        self.assertIn("fails closed with an actionable `cursor-agent login` message", docs)
+        self.assertIn("rather than a fabricated zero", docs)
+
+    def test_docs_describe_the_one_way_rollback_shape(self) -> None:
+        docs = self._docs("README.md", "INVARIANTS.md")
+
+        self.assertIn("cursor_token.json", docs)
+        self.assertIn("opencode_go_cookies.json", docs)
+        self.assertIn("a new bridge release plus a fresh full disk access grant", docs)
+        self.assertIn("dormant browser path", docs)
+
+    def test_docs_name_the_separate_live_signed_keychain_validation_gate(self) -> None:
+        docs = self._docs("README.md", "INVARIANTS.md", "RELEASE_CHECKLIST.md")
+
+        self.assertIn("live signed-keychain validation", docs)
+        self.assertIn("separate human-executed gate", docs)
+        self.assertIn("outside `app/test-gate.sh`", docs)
+        self.assertIn("live signed-keychain validation gate (human-executed)", docs)
+
+
 if __name__ == "__main__":
     unittest.main()

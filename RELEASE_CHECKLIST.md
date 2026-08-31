@@ -268,3 +268,26 @@ regression coverage in the same change:
    `app/test-gate.sh`; manual-only validation requires a documented exception.
 
 The full testing matrix and exception rule are in [`TESTING.md`](TESTING.md).
+
+## Live signed-Keychain validation gate (human-executed)
+
+Identity-bound Keychain ACLs cannot be exercised by an unsigned test binary, so
+`app/test-gate.sh` stubs the `security` command and never touches a live Keychain
+item. Before shipping a candidate that changes Claude, Cursor, or OpenCode Go
+credential reads, the release owner runs this gate by hand against the signed,
+installed candidate:
+
+1. Install the signed candidate and confirm its Developer ID identity with
+   `codesign -dv --verbose=4` before granting anything.
+2. Run one refresh and confirm each Keychain-backed provider returns real windows
+   without a Keychain prompt loop, using the fixed items `Claude Code-credentials`,
+   `cursor-access-token`, and `OpenCode Go`.
+3. Confirm the reads stay read-only: no `add-generic-password` or
+   `delete-generic-password`, no token refresh, and no write-back to the item.
+4. Confirm a revoked or expired session fails closed with the actionable
+   re-authentication message rather than a fabricated zero.
+5. Record the result in `HISTORY.md`. A failure here blocks the release even when
+   the automated gate is green.
+
+This gate is deliberately separate from the automated suite; it is evidence a
+signed binary produced, not something a unit test can assert.
