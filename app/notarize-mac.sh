@@ -39,7 +39,6 @@ PYTHON="${NOTARY_PYTHON:-python3}"
 ARCHIVE_PATH="build/GradusMac.xcarchive"
 EXPORT_PATH="build/export"
 APP_PATH="$EXPORT_PATH/Gradus.app"
-ENTITLEMENTS_PATH="GradusMac/GradusMacProduction.entitlements"
 RUNTIME_APP="build/gradus-runtime/dist/GradusRuntime.app"
 MANIFEST_PATH="build/gradus-mac-bundle-manifest.json"
 ALLOWED_UNTRACKED_SOURCE_REPORT="verifications/2026-08-09-internal-testflight-candidate-migration-verification.md"
@@ -193,10 +192,16 @@ fi
 # PyInstaller leaves ad-hoc signed -- an ad-hoc nested binary is rejected by
 # the notary service. Sign the whole tree explicitly, leaves first. Extended
 # attributes are stripped inside that pass, before any signature is computed.
+#
+# `--preserve-entitlements` re-applies each item's existing blob rather than
+# the source .entitlements file: Xcode injects com.apple.application-identifier
+# and com.apple.developer.team-identifier from the provisioning profile, and
+# re-signing from the source file alone would drop both and break CloudKit at
+# runtime while every signature check still passed.
 echo "==> Signing embedded code from the leaves inward"
 "$SIGN_SCRIPT" "$APP_PATH" \
   --identity "$SIGNING_IDENTITY" \
-  --entitlements "$ENTITLEMENTS_PATH"
+  --preserve-entitlements
 
 # The audit runs before the zip, so a bundle that fails it is never uploaded.
 # It repeats `codesign --verify --deep --strict` itself, and adds the checks a

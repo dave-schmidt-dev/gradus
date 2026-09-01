@@ -364,6 +364,20 @@ while IFS= read -r macho; do
     fi
   done <<< "$entitlements"
 
+  # Subset is the wrong test for the wrapper's own executable. Four of its six
+  # keys come from GradusMacProduction.entitlements and two are injected from
+  # the provisioning profile; a re-sign that rebuilds the blob from the source
+  # file alone drops the injected pair and passes every check above -- signed,
+  # hardened, timestamped, no *extra* privileges -- while the shipped app can
+  # no longer reach CloudKit. Missing keys have to fail as loudly as extra ones.
+  if [[ "$relative" == "Contents/MacOS/$BUNDLE_EXECUTABLE" ]]; then
+    for key in "${WRAPPER_ENTITLEMENTS[@]}"; do
+      if ! printf '%s\n' "$entitlements" | grep -Fxq -- "$key"; then
+        fail "missing required entitlement on $relative: $key"
+      fi
+    done
+  fi
+
   digest="$("$SHASUM" -a 256 "$macho" | awk '{print $1}')"
   hardened=false
   grep -q 'flags=.*runtime' "$WORK_DIR/codesign.out" && hardened=true

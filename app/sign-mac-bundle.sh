@@ -38,9 +38,22 @@
 # which verifies as "a sealed resource is missing or invalid" -- a message that
 # names the resource, not the ordering mistake that caused it.
 #
+# ## Entitlements are preserved, not reconstructed
+#
+# Re-signing must not quietly change what a binary is allowed to do. Measured
+# on a real Developer ID export, `exportArchive` signs the wrapper with six
+# keys: the four in GradusMacProduction.entitlements plus
+# `com.apple.application-identifier` and `com.apple.developer.team-identifier`,
+# which Xcode injects from the provisioning profile. Re-signing the wrapper
+# from the source file alone drops those two, and nothing complains -- the
+# bundle still verifies strictly, still notarizes, and then cannot reach
+# CloudKit on the customer's Mac because it no longer matches the profile
+# embedded beside it. `--preserve-entitlements` re-applies each item's own
+# existing blob instead, so a re-sign is a re-sign and not a silent demotion.
+#
 # Usage:
 #   ./sign-mac-bundle.sh <app-bundle> --identity <identity> \
-#       [--entitlements <plist>]
+#       [--preserve-entitlements | --entitlements <plist>]
 #
 # Environment:
 #   CODESIGN         codesign executable (default /usr/bin/codesign)
@@ -59,6 +72,7 @@ SIGN_TIMESTAMP="${SIGN_TIMESTAMP:-1}"
 APP=""
 IDENTITY=""
 ENTITLEMENTS=""
+PRESERVE_ENTITLEMENTS=0
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -70,8 +84,13 @@ while [[ "$#" -gt 0 ]]; do
       ENTITLEMENTS="${2:-}"
       shift 2
       ;;
+    --preserve-entitlements)
+      PRESERVE_ENTITLEMENTS=1
+      shift
+      ;;
     --help)
-      echo "Usage: sign-mac-bundle.sh <app-bundle> --identity <identity> [--entitlements <plist>]"
+      echo "Usage: sign-mac-bundle.sh <app-bundle> --identity <identity>" \
+        "[--preserve-entitlements | --entitlements <plist>]"
       exit 0
       ;;
     -*)
@@ -105,6 +124,13 @@ if [[ -n "$ENTITLEMENTS" && ! -f "$ENTITLEMENTS" ]]; then
   echo "FAIL: no entitlements file at $ENTITLEMENTS" >&2
   exit 66
 fi
+if [[ -n "$ENTITLEMENTS" && "$PRESERVE_ENTITLEMENTS" == "1" ]]; then
+  echo "FAIL: --entitlements and --preserve-entitlements are mutually exclusive" >&2
+  exit 2
+fi
+
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gradus-sign.XXXXXX")"
+trap 'rm -rf "$WORK_DIR"' EXIT
 
 progress() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$1" >&2
@@ -117,6 +143,16 @@ progress() {
 # and the frozen runtime alone is forty-odd of them. Without a line per item
 # this is several silent network-bound minutes, which is indistinguishable from
 # a hang -- so the counter is part of the contract, not decoration.
+# Writes `target`'s current entitlement blob to `out`. Fails when the item has
+# none, which is the normal case for a helper and an error for the wrapper --
+# the two callers below draw that distinction rather than this function.
+preserved_entitlements() {
+  local target="$1" out="$2"
+  "$CODESIGN" -d --entitlements - --xml "$target" >"$out" 2>/dev/null || return 1
+  [[ -s "$out" ]] || return 1
+  grep -q '<key>' "$out" || return 1
+}
+
 SIGNED_COUNT=0
 sign_one() {
   local target="$1"
@@ -126,6 +162,23 @@ sign_one() {
   local args=(--force --options runtime --sign "$IDENTITY")
   if [[ "$SIGN_TIMESTAMP" == "1" ]]; then
     args+=(--timestamp)
+  fi
+  if [[ "$PRESERVE_ENTITLEMENTS" == "1" ]]; then
+    local dump="$WORK_DIR/entitlements-$SIGNED_COUNT.plist"
+    if preserved_entitlements "$target" "$dump"; then
+      args+=(--entitlements "$dump")
+    fi
+  fi
+  # The sweep before the work list is built is not enough on its own. Measured
+  # on a real export: com.apple.FinderInfo -- the Finder bundle bit -- is back
+  # on the .app directories partway through this pass, and codesign then
+  # refuses the item with "resource fork, Finder information, or similar
+  # detritus not allowed". Clearing in the moment before each signature closes
+  # the window instead of racing whatever re-stamps it.
+  if [[ -d "$target" ]]; then
+    "$XATTR_TOOL" -cr "$target" 2>/dev/null || true
+  else
+    "$XATTR_TOOL" -c "$target" 2>/dev/null || true
   fi
   args+=("$@" "$target")
   if ! "$CODESIGN" "${args[@]}"; then
@@ -183,11 +236,29 @@ inside_other_bundle() {
   return 1
 }
 
-# codesign re-tags files with com.apple.provenance as it runs, and a strict
-# verify rejects the result ("resource fork, Finder information, or similar
-# detritus not allowed"). Clear before signing; the verifier clears again
-# before it checks, because this pass creates fresh ones.
+# codesign refuses any item carrying Finder information or a resource fork
+# ("resource fork, Finder information, or similar detritus not allowed"), and
+# a fresh export arrives with com.apple.FinderInfo on every .app directory --
+# the Finder bundle bit. This sweep clears the tree once; sign_one clears each
+# item again immediately before signing it, because the bit comes back partway
+# through the pass. com.apple.provenance is deliberately left alone: it is
+# restricted, `xattr -c` cannot remove it, and it does not affect a strict
+# verify (measured -- see verify-mac-bundle.sh).
 "$XATTR_TOOL" -cr "$APP"
+
+# Checked before anything is signed, because the failure it catches is a bad
+# export rather than a bad signature: a wrapper with no entitlement blob would
+# be signed with none, ship, and lose CloudKit on first launch.
+if [[ "$PRESERVE_ENTITLEMENTS" == "1" ]] &&
+  ! preserved_entitlements "$APP" "$WORK_DIR/wrapper-entitlements.plist"; then
+  echo "FAIL: $APP carries no entitlements to preserve." >&2
+  echo "      A Release export is signed with the CloudKit and push grants from" >&2
+  echo "      GradusMacProduction.entitlements plus the identifiers Xcode injects" >&2
+  echo "      from the provisioning profile. An empty blob means the export is" >&2
+  echo "      wrong, and signing it would ship an app that notarizes and then" >&2
+  echo "      cannot reach CloudKit." >&2
+  exit 65
+fi
 
 NESTED_BUNDLES="$(list_nested_bundles "$APP")"
 

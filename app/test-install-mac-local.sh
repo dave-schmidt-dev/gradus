@@ -351,7 +351,13 @@ setup_case sign-then-verify
 make_bundle "$BUILD_DIR/export/Gradus.app"
 run_install --skip-build || fail "install exited non-zero"
 grep -q -- "--identity" "$FAKE_RUNTIME/sign-calls" || fail "signing ran without an explicit identity"
-grep -q -- "--entitlements" "$FAKE_RUNTIME/sign-calls" || fail "the wrapper was signed without entitlements"
+# Preserved, not reconstructed: re-signing from the source .entitlements file
+# would drop the two identifiers Xcode injects from the provisioning profile.
+grep -q -- "--preserve-entitlements" "$FAKE_RUNTIME/sign-calls" ||
+  fail "the wrapper was re-signed without preserving its entitlements"
+if grep -q -- "--entitlements " "$FAKE_RUNTIME/sign-calls"; then
+  fail "the wrapper's entitlement blob was rebuilt from the source file"
+fi
 grep -q -- "--manifest" "$FAKE_RUNTIME/verify-calls" || fail "the audit did not emit a manifest"
 grep -q "export/Gradus.app" "$FAKE_RUNTIME/verify-calls" || fail "the audit did not run on the export"
 # Signing must precede the copy into the destination, or an unsigned bundle is

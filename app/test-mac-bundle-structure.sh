@@ -72,6 +72,33 @@ if contains "--sign" "${args[@]}"; then
   if [[ -n "${MOCK_SIGN_LOG:-}" ]]; then
     printf '%s\n' "$*" >>"$MOCK_SIGN_LOG"
   fi
+  # Keep whatever entitlement blob was handed in. The signing script writes
+  # preserved blobs to a temp dir it deletes on exit, so a test that wants to
+  # know *which keys* were re-applied has to grab the file as it goes past.
+  if [[ -n "${MOCK_ENT_CAPTURE_DIR:-}" ]]; then
+    for ((i = 0; i < ${#args[@]} - 1; i++)); do
+      if [[ "${args[i]}" == "--entitlements" ]]; then
+        mkdir -p "$MOCK_ENT_CAPTURE_DIR"
+        cp "${args[i + 1]}" "$MOCK_ENT_CAPTURE_DIR/$(basename "$target").plist"
+      fi
+    done
+  fi
+  # Reproduces the failure this pass hit on a real export: something re-applies
+  # the Finder bundle bit to .app directories while the pass is running, and
+  # codesign refuses any item still carrying it. The up-front sweep alone does
+  # not survive this; clearing each item immediately before signing does.
+  if [[ "${MOCK_RESTAMP_FINDERINFO:-0}" == "1" ]]; then
+    if /usr/bin/xattr "$target" 2>/dev/null | grep -q 'com.apple.FinderInfo'; then
+      echo "$target: resource fork, Finder information, or similar detritus not allowed" >&2
+      exit 1
+    fi
+    while IFS= read -r bundle; do
+      [[ -n "$bundle" ]] || continue
+      /usr/bin/xattr -wx com.apple.FinderInfo \
+        "00000000000000002000000000000000 00000000000000000000000000000000" \
+        "$bundle" 2>/dev/null || true
+    done < <(find "${MOCK_RESTAMP_ROOT:-$target}" -name '*.app' -type d 2>/dev/null)
+  fi
   exit 0
 fi
 
@@ -89,13 +116,35 @@ if contains "--entitlements" "${args[@]}"; then
   printf '<?xml version="1.0" encoding="UTF-8"?>'
   printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">'
   printf '<plist version="1.0"><dict>'
-  if [[ "$target" == *"/Contents/MacOS/Gradus" && "$target" != *Runtime* ]]; then
-    printf '<key>com.apple.application-identifier</key><string>%s.com.zerodelta.gradus.mac</string>' "$team"
-    printf '<key>com.apple.developer.aps-environment</key><string>production</string>'
-    printf '<key>com.apple.developer.icloud-container-environment</key><string>Production</string>'
-    printf '<key>com.apple.developer.icloud-container-identifiers</key><array><string>iCloud.com.zerodelta.gradus</string></array>'
-    printf '<key>com.apple.developer.icloud-services</key><array><string>CloudKit</string></array>'
-    printf '<key>com.apple.developer.team-identifier</key><string>%s</string>' "$team"
+  # Real codesign answers for a bundle path and for its main executable alike,
+  # and both are asked here: the verifier walks Mach-O files, the signing pass
+  # asks the bundle before re-applying what it finds.
+  is_wrapper=0
+  case "$target" in
+    */Gradus.app | */Gradus.app/Contents/MacOS/Gradus) is_wrapper=1 ;;
+  esac
+  if [[ "${MOCK_NO_ENTITLEMENTS:-0}" == "1" ]]; then
+    is_wrapper=0
+  fi
+  emit_key() {
+    [[ "$1" == "${MOCK_DROP_ENTITLEMENT:-}" ]] && return 0
+    printf '<key>%s</key>%s' "$1" "$2"
+  }
+  if ((is_wrapper == 1)); then
+    emit_key com.apple.application-identifier \
+      "$(printf '<string>%s.com.zerodelta.gradus.mac</string>' "$team")"
+    emit_key com.apple.developer.aps-environment '<string>production</string>'
+    emit_key com.apple.developer.icloud-container-environment '<string>Production</string>'
+    emit_key com.apple.developer.icloud-container-identifiers \
+      '<array><string>iCloud.com.zerodelta.gradus</string></array>'
+    emit_key com.apple.developer.icloud-services '<array><string>CloudKit</string></array>'
+    emit_key com.apple.developer.team-identifier "$(printf '<string>%s</string>' "$team")"
+  fi
+  # Measured on a real export: the refresh agent has no entitlements file and
+  # still carries the identifier Xcode injects from the profile.
+  if [[ "$target" == *"/GradusRefreshAgent" && "${MOCK_NO_ENTITLEMENTS:-0}" != "1" ]]; then
+    emit_key com.apple.application-identifier \
+      "$(printf '<string>%s.com.zerodelta.gradus.mac</string>' "$team")"
   fi
   if [[ -n "${MOCK_EXTRA_ENTITLEMENT:-}" && "$target" == *"$extra_path"* ]]; then
     printf '<key>%s</key><array><string>group.com.zerodelta.gradus</string></array>' "$extra_key"
@@ -522,8 +571,10 @@ run_sign() {
   local app="$1"
   shift
   : >"$TEST_ROOT/sign.log"
+  rm -rf "$TEST_ROOT/ent-capture"
   set +e
   env CODESIGN="$MOCK_BIN/codesign" MOCK_SIGN_LOG="$TEST_ROOT/sign.log" \
+    MOCK_ENT_CAPTURE_DIR="$TEST_ROOT/ent-capture" \
     "$SIGN_SCRIPT" "$app" "$@" >"$TEST_ROOT/sign.out" 2>&1
   SIGN_STATUS=$?
   set -e
@@ -654,5 +705,137 @@ if ((SIGN_STATUS != 0)); then
 fi
 run_verify "$app"
 assert_verify_passes "a bundle from the signing pass passes verification unchanged"
+
+# 27. A *missing* wrapper entitlement has to fail as loudly as an extra one.
+#     This is the defect the allowlist alone cannot see: re-signing the wrapper
+#     from GradusMacProduction.entitlements drops the two keys Xcode injects
+#     from the provisioning profile, and the result is signed, hardened,
+#     timestamped, free of extra privileges -- and unable to reach CloudKit on
+#     the customer's Mac.
+fixture="$TEST_ROOT/missing-entitlement"
+app="$(make_bundle "$fixture")"
+run_verify "$app" MOCK_DROP_ENTITLEMENT="com.apple.developer.icloud-services"
+assert_verify_fails_with "missing required entitlement on Contents/MacOS/Gradus: com.apple.developer.icloud-services" \
+  "a wrapper missing one of its own entitlements is named"
+
+# 28. Preservation is the point: the wrapper is re-signed with the blob it
+#     already had, all six keys, not the four in the source file.
+fixture="$TEST_ROOT/preserve-entitlements"
+app="$(make_bundle "$fixture")"
+run_sign "$app" --identity "$IDENTITY" --preserve-entitlements
+if ((SIGN_STATUS != 0)); then
+  echo "FAIL: signing with --preserve-entitlements failed" >&2
+  sed -n '1,40p' "$TEST_ROOT/sign.out" >&2
+  exit 1
+fi
+captured="$TEST_ROOT/ent-capture/Gradus.app.plist"
+if [[ ! -f "$captured" ]]; then
+  echo "FAIL: the wrapper was signed without preserving its entitlements" >&2
+  ls -R "$TEST_ROOT/ent-capture" >&2 2>/dev/null || true
+  exit 1
+fi
+for key in com.apple.application-identifier com.apple.developer.aps-environment \
+  com.apple.developer.icloud-container-environment \
+  com.apple.developer.icloud-container-identifiers \
+  com.apple.developer.icloud-services com.apple.developer.team-identifier; do
+  if ! grep -Fq "<key>$key</key>" "$captured"; then
+    echo "FAIL: re-signing dropped the wrapper entitlement $key" >&2
+    exit 1
+  fi
+done
+echo "  ✓ the wrapper keeps every entitlement it was exported with"
+((tests_run += 1))
+
+# 29. Preservation is per item, not one blob applied everywhere: the refresh
+#     agent keeps the single identifier it really carries, and the bridge --
+#     which has none -- is signed with none rather than inheriting CloudKit.
+if ! grep -Fq "<key>com.apple.application-identifier</key>" \
+  "$TEST_ROOT/ent-capture/GradusRefreshAgent.plist" 2>/dev/null; then
+  echo "FAIL: the refresh agent lost the identifier Xcode injected" >&2
+  exit 1
+fi
+if grep -Fq "icloud" "$TEST_ROOT/ent-capture/GradusRefreshAgent.plist"; then
+  echo "FAIL: a helper inherited the wrapper's CloudKit entitlements" >&2
+  exit 1
+fi
+if [[ -f "$TEST_ROOT/ent-capture/GradusCredentialBridge.app.plist" ]]; then
+  echo "FAIL: a helper with no entitlements was signed with some" >&2
+  exit 1
+fi
+echo "  ✓ each item is re-signed with its own entitlements and no others"
+((tests_run += 1))
+
+# 30. An export with no wrapper entitlements is a broken export. Signing it
+#     would produce an app that notarizes and then cannot reach CloudKit, so
+#     the pass stops before it signs anything at all.
+fixture="$TEST_ROOT/preserve-empty"
+app="$(make_bundle "$fixture")"
+: >"$TEST_ROOT/sign.log"
+set +e
+env CODESIGN="$MOCK_BIN/codesign" MOCK_SIGN_LOG="$TEST_ROOT/sign.log" \
+  MOCK_NO_ENTITLEMENTS=1 \
+  "$SIGN_SCRIPT" "$app" --identity "$IDENTITY" --preserve-entitlements \
+  >"$TEST_ROOT/sign.out" 2>&1
+empty_status=$?
+set -e
+if ((empty_status == 0)); then
+  echo "FAIL: signing a wrapper with no entitlements succeeded" >&2
+  exit 1
+fi
+if ! grep -Fq "carries no entitlements to preserve" "$TEST_ROOT/sign.out"; then
+  echo "FAIL: the empty-entitlements refusal did not explain itself" >&2
+  cat "$TEST_ROOT/sign.out" >&2
+  exit 1
+fi
+if [[ -s "$TEST_ROOT/sign.log" ]]; then
+  echo "FAIL: a bad export was partly signed before the refusal" >&2
+  exit 1
+fi
+echo "  ✓ a wrapper with no entitlements to preserve is refused before signing"
+((tests_run += 1))
+
+# 31. com.apple.FinderInfo comes back on .app directories part way through a
+#     real pass, and codesign refuses any item still carrying it. Clearing once
+#     up front is not enough; each item is cleared in the moment before it is
+#     signed. The mock re-stamps after every signature, so this fails if that
+#     per-item clear is ever removed.
+fixture="$TEST_ROOT/finderinfo-restamp"
+app="$(make_bundle "$fixture")"
+: >"$TEST_ROOT/sign.log"
+set +e
+env CODESIGN="$MOCK_BIN/codesign" MOCK_SIGN_LOG="$TEST_ROOT/sign.log" \
+  MOCK_RESTAMP_FINDERINFO=1 MOCK_RESTAMP_ROOT="$app" \
+  "$SIGN_SCRIPT" "$app" --identity "$IDENTITY" --preserve-entitlements \
+  >"$TEST_ROOT/sign.out" 2>&1
+restamp_status=$?
+set -e
+if ((restamp_status != 0)); then
+  echo "FAIL: signing gave up when Finder information reappeared mid-pass" >&2
+  sed -n '1,40p' "$TEST_ROOT/sign.out" >&2
+  exit 1
+fi
+echo "  ✓ signing clears Finder information immediately before each signature"
+((tests_run += 1))
+
+# 32. Two ways of deciding the same thing is a way to ship the wrong one.
+fixture="$TEST_ROOT/entitlement-conflict"
+app="$(make_bundle "$fixture")"
+set +e
+env CODESIGN="$MOCK_BIN/codesign" "$SIGN_SCRIPT" "$app" --identity "$IDENTITY" \
+  --preserve-entitlements \
+  --entitlements "$SCRIPT_DIR/GradusMac/GradusMacProduction.entitlements" \
+  >"$TEST_ROOT/sign.out" 2>&1
+conflict_status=$?
+set -e
+if ((conflict_status == 0)); then
+  echo "FAIL: both entitlement modes were accepted at once" >&2
+  exit 1
+fi
+if ! grep -Fq "mutually exclusive" "$TEST_ROOT/sign.out"; then
+  echo "FAIL: the conflicting entitlement modes were not explained" >&2
+  exit 1
+fi
+echo "  ✓ --entitlements and --preserve-entitlements cannot both be given"
+((tests_run += 1))
 
 echo "==> test-mac-bundle-structure.sh: $tests_run behavior assertions passed"

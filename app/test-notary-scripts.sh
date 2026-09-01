@@ -803,10 +803,18 @@ grep -q -- '--identity' "$FAKE_RUNTIME/sign-calls" || {
   echo "FAIL: release did not sign the export with an explicit identity" >&2
   exit 1
 }
-grep -q -- '--entitlements' "$FAKE_RUNTIME/sign-calls" || {
-  echo "FAIL: release did not apply the production entitlements to the wrapper" >&2
+# Preserved, not reconstructed. Xcode injects com.apple.application-identifier
+# and com.apple.developer.team-identifier from the provisioning profile, so
+# re-signing from GradusMacProduction.entitlements alone would silently drop
+# both and ship an app that notarizes and cannot reach CloudKit.
+grep -q -- '--preserve-entitlements' "$FAKE_RUNTIME/sign-calls" || {
+  echo "FAIL: release re-signed the wrapper without preserving its entitlements" >&2
   exit 1
 }
+if grep -q -- '--entitlements ' "$FAKE_RUNTIME/sign-calls"; then
+  echo "FAIL: release rebuilt the entitlement blob from the source file" >&2
+  exit 1
+fi
 grep -q 'export/Gradus.app' "$FAKE_RUNTIME/sign-calls" || {
   echo "FAIL: release signed something other than the exported Gradus.app" >&2
   exit 1

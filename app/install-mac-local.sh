@@ -66,7 +66,6 @@ EXPORT_PATH="$BUILD_DIR/export"
 APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
 ARCHIVE_APP_PATH="$ARCHIVE_PATH/Products/Applications/$PRODUCT_NAME.app"
 RUNTIME_APP="$BUILD_DIR/gradus-runtime/dist/GradusRuntime.app"
-ENTITLEMENTS_PATH="GradusMac/GradusMacProduction.entitlements"
 MANIFEST_PATH="$BUILD_DIR/gradus-mac-bundle-manifest.json"
 SIGN_SCRIPT="${INSTALL_SIGN_SCRIPT:-./sign-mac-bundle.sh}"
 VERIFY_SCRIPT="${INSTALL_VERIFY_SCRIPT:-./verify-mac-bundle.sh}"
@@ -269,10 +268,16 @@ fi
 # `exportArchive` does not sign Contents/Helpers/GradusRuntime.app: a run
 # script copies it in, and PyInstaller leaves it ad-hoc signed. Sign the whole
 # tree explicitly, leaves first, before anything verifies or installs it.
+#
+# `--preserve-entitlements` re-applies each item's existing blob rather than
+# the source .entitlements file: Xcode injects com.apple.application-identifier
+# and com.apple.developer.team-identifier from the provisioning profile, and
+# re-signing from the source file alone would drop both and break CloudKit at
+# runtime while every signature check still passed.
 echo "==> Signing embedded code from the leaves inward"
 if ! "$SIGN_SCRIPT" "$APP_PATH" \
   --identity "$SIGNING_IDENTITY" \
-  --entitlements "$ENTITLEMENTS_PATH"; then
+  --preserve-entitlements; then
   echo "FAIL: inside-out signing of the exported bundle failed." >&2
   exit 65
 fi
