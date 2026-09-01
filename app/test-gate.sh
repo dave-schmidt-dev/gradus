@@ -90,7 +90,7 @@ COUNTING_LEG_REPORTERS=(
 # `GradusMacUI` (index 3) is pinned exactly, like index 6: it is a fixed
 # scenario set (menu, required-iCloud, quit lifecycle), so losing one is a lost
 # behavior rather than ordinary churn.
-COUNTING_LEG_MINIMUMS=(95 1000 130 3 15 12 177 3 9 10 12 6 5 5 15 5 5 4 31 12)
+COUNTING_LEG_MINIMUMS=(95 1000 160 3 15 12 177 3 9 10 12 6 5 5 15 5 5 4 31 12)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"

@@ -167,7 +167,7 @@ final class PublishPipeline {
 
     /// Local display state + required-iCloud status -- the menu content view's
     /// single source of truth.
-    let viewModel = PublisherViewModel()
+    let viewModel = PublisherViewModel(legacyMigrator: LegacyRuntimeMigratorFactory.make())
 
     /// The one canonical installed-mode snapshot, shared with the refresh
     /// agent (`AgentPaths.installed`), the frozen runtime, and `--json`

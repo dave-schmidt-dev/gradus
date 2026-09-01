@@ -84,6 +84,27 @@ struct MacSettingsView: View {
                 .foregroundStyle(.secondary)
             }
 
+            // Absent entirely on a Mac that never ran the old launchd job --
+            // an empty "nothing to migrate" section is noise for everyone who
+            // installed Gradus as one app in the first place.
+            if viewModel.legacyMigration != .notApplicable {
+                Section("Legacy Background Job") {
+                    Text(viewModel.legacyMigration.headline)
+                        .font(.callout)
+                        .accessibilityIdentifier("settings-legacy-headline")
+                    Text(viewModel.legacyMigration.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings-legacy-explanation")
+                    if viewModel.legacyMigration.canStartMigration {
+                        Button("Move Refresh into Gradus") {
+                            viewModel.startLegacyMigration()
+                        }
+                        .accessibilityIdentifier("settings-legacy-migrate")
+                    }
+                }
+            }
+
             Section("Display") {
                 Picker("Sort providers by", selection: $viewModel.providerSortOption) {
                     ForEach(ProviderSortOption.allCases) { option in
@@ -132,6 +153,9 @@ struct MacSettingsView: View {
         .formStyle(.grouped)
         .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
+        // Read when Settings opens, not on every snapshot: this is the only
+        // screen that renders it, and it costs two `launchctl` calls.
+        .onAppear { viewModel.refreshLegacyMigration() }
     }
 
     static func wholePercent(_ value: Double) -> Double {

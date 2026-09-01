@@ -77,6 +77,10 @@ public final class PublisherViewModel: ObservableObject {
     /// "Monitor in Background" -- the nested `SMAppService` refresh agent.
     @Published public private(set) var monitorInBackgroundEnabled: Bool
     @Published public private(set) var backgroundAgentState: BackgroundAgentState = .notRegistered
+
+    /// The legacy-runtime cutover, as Settings renders it. Starts at
+    /// `.notApplicable` so a Mac that never ran the old job shows nothing.
+    @Published public private(set) var legacyMigration: LegacyMigrationPresentation = .notApplicable
     @Published public private(set) var syncState: CloudSyncState = .idle
     /// When the last publish actually succeeded. Persisted, because the state
     /// enum above resets to `.idle` on every launch: a menu-bar agent that has
@@ -149,6 +153,12 @@ public final class PublisherViewModel: ObservableObject {
     private let defaults: UserDefaults
     private let backgroundAgent: BackgroundAgentManager
 
+    /// `nil` on a Mac with no legacy runtime and in every fixture, which is why
+    /// the whole section disappears rather than rendering an empty state.
+    private let legacyMigrator: LegacyRuntimeMigrator?
+    private let legacyWrapperURL: URL
+    private let legacyBridgeURL: URL
+
     /// `backgroundAgent` resolves to `nil` rather than defaulting to a live
     /// manager directly: a default-argument expression is evaluated in a
     /// nonisolated context, which Swift 6 rejects for a MainActor-isolated
@@ -156,11 +166,18 @@ public final class PublisherViewModel: ObservableObject {
     /// optional.
     public init(
         defaults: UserDefaults = .standard,
-        backgroundAgent: BackgroundAgentManager? = nil
+        backgroundAgent: BackgroundAgentManager? = nil,
+        legacyMigrator: LegacyRuntimeMigrator? = nil,
+        legacyWrapperURL: URL? = nil,
+        legacyBridgeURL: URL? = nil
     ) {
         let backgroundAgent = backgroundAgent ?? BackgroundAgentManager()
+        let home = FileManager.default.homeDirectoryForCurrentUser
         self.defaults = defaults
         self.backgroundAgent = backgroundAgent
+        self.legacyMigrator = legacyMigrator
+        self.legacyWrapperURL = legacyWrapperURL ?? LegacyRuntimePaths.legacyWrapper(homeDirectory: home)
+        self.legacyBridgeURL = legacyBridgeURL ?? LegacyRuntimePaths.standaloneBridge()
         monitorInBackgroundEnabled = backgroundAgent.isMonitoringEnabled
         let migratedMode = RequiredICloudMigration.migrate(
             defaults: defaults, legacyKey: Self.syncEnabledKey
@@ -244,6 +261,57 @@ public final class PublisherViewModel: ObservableObject {
 
     public func performBackgroundAgentRecovery(_ action: BackgroundAgentRecovery) {
         backgroundAgent.perform(action)
+        refreshBackgroundAgentState()
+    }
+
+    /// Reads the legacy runtime and the consumer gate without changing either.
+    ///
+    /// Synchronous, and called when Settings opens rather than on every
+    /// snapshot: it shells out to `launchctl` twice, which is fast but is not
+    /// free, and nothing about a new provider reading changes whether the old
+    /// launchd job exists.
+    public func refreshLegacyMigration() {
+        guard let legacyMigrator else {
+            legacyMigration = .notApplicable
+            return
+        }
+        if case .running = legacyMigration {
+            return
+        }
+        let inventory = legacyMigrator.inventory(
+            wrapperURL: legacyWrapperURL, standaloneBridgeURL: legacyBridgeURL
+        )
+        guard inventory.needsMigration else {
+            legacyMigration = .notApplicable
+            return
+        }
+        let rejections = legacyMigrator.consumerRejections()
+        legacyMigration = rejections.isEmpty ? .ready : .waitingOnConsumers(rejections)
+    }
+
+    /// Runs the cutover off the main actor and reports every step it waits in
+    /// (INV-1). Refuses to start from any state but `.ready`, so a second click
+    /// cannot start a second migration.
+    public func startLegacyMigration() {
+        guard let legacyMigrator, legacyMigration.canStartMigration else { return }
+        legacyMigration = .running(LegacyMigrationPhase.checkingConsumers.progressDescription)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let outcome = legacyMigrator.migrate { step in
+                Task { @MainActor [weak self] in self?.legacyMigration = .running(step) }
+            }
+            await MainActor.run { [weak self] in
+                self?.applyMigrationOutcome(outcome)
+            }
+        }
+    }
+
+    private func applyMigrationOutcome(_ outcome: LegacyMigrationOutcome) {
+        switch outcome {
+        case .notNeeded: legacyMigration = .notApplicable
+        case let .blocked(rejections): legacyMigration = .waitingOnConsumers(rejections)
+        case .migrated: legacyMigration = .migrated
+        case let .rolledBack(failure): legacyMigration = .rolledBack(failure)
+        }
         refreshBackgroundAgentState()
     }
 

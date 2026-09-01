@@ -310,3 +310,14 @@ fi
 echo "==> Done. $APP_NAME $incoming_version installed at $INSTALLED_APP"
 echo "    GradusMac reads its credential-free snapshot from Application Support."
 echo "    It does not require Documents access for ordinary monitoring."
+
+# The installer deliberately does not stop, disable, or delete the legacy
+# launchd job. Cutover is a decision with a rollback, and it belongs to the app
+# -- which can put the job back -- not to a script that has already exited.
+LEGACY_HOME="${GRADUS_LEGACY_HOME:-$HOME}"
+if [[ -f "$LEGACY_HOME/Library/LaunchAgents/local.gradus-snapshot.plist" ]] ||
+   [[ -x "$LEGACY_HOME/.launchd/scripts/gradus_snapshot.sh" ]]; then
+  echo "    The legacy local.gradus-snapshot job is still installed and untouched."
+  echo "    Move refresh into Gradus from Settings > Legacy Background Job when"
+  echo "    the other tools have switched to the installed snapshot path."
+fi

@@ -29,6 +29,7 @@ class LaunchdInstallTests(unittest.TestCase):
         self.bridge_log = self.root / "bridge.log"
         self.run_at_load_counter = self.root / "run-at-load-counter"
         self.snapshot_path = self.root / "state" / "snapshot-v2.json"
+        self.bundled_agent_state = self.root / "bundled-agent-registered"
         self._write_executable(
             "launchctl",
             """#!/usr/bin/env bash
@@ -41,6 +42,13 @@ case \"$1\" in
            -f \"${GRADUS_TEST_BOOTOUT_MARKER}\") ]]; then
       echo \"launchctl test transport failure\" >&2
       exit 71
+    fi
+    if [[ \"${2:-}\" == *com.zerodelta.gradus.refresh-agent ]]; then
+      test -f \"${GRADUS_TEST_BUNDLED_AGENT_STATE:-/nonexistent}\" || {
+        echo \"Could not find service\" >&2
+        exit 113
+      }
+      exit 0
     fi
     test -f \"$GRADUS_TEST_LAUNCHCTL_STATE\" || {
       echo \"Could not find service\" >&2
@@ -154,6 +162,7 @@ exit 64
                 "GRADUS_TEST_VERIFY_EXIT": str(verify_exit),
                 "GRADUS_TEST_PYTHON_SLEEP": python_sleep,
                 "GRADUS_TEST_PRINT_MODE": print_mode,
+                "GRADUS_TEST_BUNDLED_AGENT_STATE": str(self.bundled_agent_state),
                 # The shell timeout loop uses Bash's integer SECONDS counter,
                 # so the durations it compares stay integral. The progress
                 # quantum is only ever passed to `sleep`, so it can be
@@ -187,6 +196,41 @@ exit 64
             capture_output=True,
             check=False,
         )
+
+    def test_install_refuses_while_the_bundled_agent_is_registered(self) -> None:
+        """Two producers writing provider state is the outcome the migration prevents."""
+        self.bundled_agent_state.write_text("registered", encoding="utf-8")
+        result = self._run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("would run two producers", result.stderr)
+        self.assertIn("Monitor in Background", result.stderr)
+        # Refused before anything was rendered or bootstrapped.
+        self.assertFalse((self.home / "Library/LaunchAgents/local.gradus-snapshot.plist").exists())
+        self.assertFalse(self.state.exists())
+
+    def test_a_deliberate_rollback_can_override_the_bundled_agent_refusal(self) -> None:
+        """Rollback to the legacy job has to stay possible for one release."""
+        self.bundled_agent_state.write_text("registered", encoding="utf-8")
+        environment = self._environment()
+        environment["GRADUS_ALLOW_LEGACY_ALONGSIDE_AGENT"] = "1"
+        result = subprocess.run(
+            ["bash", str(INSTALLER), "install"],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("installing anyway on request", result.stderr)
+
+    def test_install_is_unaffected_when_no_bundled_agent_is_registered(self) -> None:
+        self.assertFalse(self.bundled_agent_state.exists())
+        self.assertEqual(self._run().returncode, 0)
+        # And still refuses on a second run once the agent appears, rather than
+        # treating "already installed" as permission to overlap.
+        self.bundled_agent_state.write_text("registered", encoding="utf-8")
+        self.assertNotEqual(self._run().returncode, 0)
 
     def test_install_is_idempotent_in_files_and_launchctl_state(self) -> None:
         first = self._run()

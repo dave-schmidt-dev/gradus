@@ -13,6 +13,7 @@ readonly REPO_ROOT="${GRADUS_REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 readonly INSTALL_HOME="${GRADUS_HOME:-$HOME}"
 readonly PYTHON_PATH="${GRADUS_PYTHON_PATH:-$REPO_ROOT/.venv/bin/python3}"
 readonly LAUNCHCTL="${GRADUS_LAUNCHCTL:-launchctl}"
+readonly BUNDLED_AGENT_LABEL="com.zerodelta.gradus.refresh-agent"
 # shellcheck disable=SC2155
 readonly DOMAIN="gui/$(id -u)"
 readonly JOB="$DOMAIN/$LABEL"
@@ -222,9 +223,27 @@ verify_health_with_progress() {
   progress "refresh-health verification passed"
 }
 
+# Two producers writing provider state is the one outcome the single-bundle
+# migration exists to prevent, and launchd will happily run both. Refuse rather
+# than warn: a warning scrolls past, and the overlap is silent afterwards.
+refuse_if_bundled_agent_registered() {
+  local target="$DOMAIN/$BUNDLED_AGENT_LABEL"
+  "$LAUNCHCTL" print "$target" >/dev/null 2>&1 || return 0
+  if [[ "${GRADUS_ALLOW_LEGACY_ALONGSIDE_AGENT:-0}" == "1" ]]; then
+    progress "WARNING: bundled agent $BUNDLED_AGENT_LABEL is registered; installing anyway on request"
+    return 0
+  fi
+  printf 'FAIL: the bundled agent %s is registered; installing %s would run two producers.\n' \
+    "$BUNDLED_AGENT_LABEL" "$LABEL" >&2
+  printf '      Turn off Monitor in Background in Gradus Settings first, or set\n' >&2
+  printf '      GRADUS_ALLOW_LEGACY_ALONGSIDE_AGENT=1 to override for a deliberate rollback.\n' >&2
+  return 78
+}
+
 install_agent() {
   local state before_bootstrap
   require_tools
+  refuse_if_bundled_agent_registered
   mkdir -p "$(dirname "$WRAPPER")" "$(dirname "$PLIST")" "$LOG_DIR"
   install_helpers
   render_if_changed "$SCRIPT_DIR/gradus_snapshot.sh.in" "$WRAPPER" 755

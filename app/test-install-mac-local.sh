@@ -247,6 +247,18 @@ setup_case() {
   unset FAKE_ARCHIVE_SOURCE_REVISION FAKE_ARCHIVE_PROJECT_SHA256
   unset FAKE_INCOMING_SOURCE_REVISION FAKE_INCOMING_PROJECT_SHA256
   unset FAKE_OPEN_EXIT FAKE_PKILL_EXIT
+  # The legacy-job notice must not depend on whether this developer's own Mac
+  # still runs local.gradus-snapshot.
+  export GRADUS_LEGACY_HOME="$CASE_ROOT/legacy-home"
+  mkdir -p "$GRADUS_LEGACY_HOME"
+}
+
+install_legacy_job_fixture() {
+  mkdir -p "$GRADUS_LEGACY_HOME/Library/LaunchAgents"
+  printf 'legacy plist\n' > "$GRADUS_LEGACY_HOME/Library/LaunchAgents/local.gradus-snapshot.plist"
+  mkdir -p "$GRADUS_LEGACY_HOME/.launchd/scripts"
+  printf '#!/bin/sh\n' > "$GRADUS_LEGACY_HOME/.launchd/scripts/gradus_snapshot.sh"
+  chmod 755 "$GRADUS_LEGACY_HOME/.launchd/scripts/gradus_snapshot.sh"
 }
 
 make_bundle() {
@@ -430,6 +442,31 @@ grep -q "archive" "$FAKE_RUNTIME/xcodebuild-calls" || fail "no archive step"
 grep -q "exportArchive" "$FAKE_RUNTIME/xcodebuild-calls" || fail "no export step"
 [[ -d "$INSTALL_DIR/GradusMac.app" ]] || fail "build path did not install"
 no_staging_artifacts
+end
+
+begin "leaves a detected legacy job installed, untouched, and named"
+setup_case legacy-present
+install_legacy_job_fixture
+make_bundle "$BUILD_DIR/export/GradusMac.app"
+run_install --skip-build || fail "install exited non-zero with a legacy job present"
+grep -q "still installed and untouched" "$FAKE_RUNTIME/stdout" ||
+  fail "did not say the legacy job was left alone"
+grep -q "Legacy Background Job" "$FAKE_RUNTIME/stdout" ||
+  fail "did not point at the one place that can migrate it"
+# The cutover is the app's decision, with a rollback. An installer that has
+# already exited cannot put anything back, so it deletes nothing.
+[[ -f "$GRADUS_LEGACY_HOME/Library/LaunchAgents/local.gradus-snapshot.plist" ]] ||
+  fail "installer deleted the legacy plist"
+[[ -x "$GRADUS_LEGACY_HOME/.launchd/scripts/gradus_snapshot.sh" ]] ||
+  fail "installer deleted the legacy wrapper"
+end
+
+begin "says nothing about a legacy job that is not installed"
+setup_case legacy-absent
+make_bundle "$BUILD_DIR/export/GradusMac.app"
+run_install --skip-build || fail "install exited non-zero"
+grep -q "still installed and untouched" "$FAKE_RUNTIME/stdout" &&
+  fail "invented a legacy job that is not there"
 end
 
 # ------------------------------------------------------------------- summary
