@@ -10,6 +10,16 @@ public enum LegacyJobState: Equatable, Sendable, Codable {
     case absent
     case installedNotLoaded
     case loaded(enabled: Bool)
+
+    /// True whenever the job is bootstrapped into a launchd domain, disabled or
+    /// not. A disabled job is still loaded and one `launchctl enable` from
+    /// running, which is why the cutover refuses it.
+    public var isLoaded: Bool {
+        if case .loaded = self {
+            return true
+        }
+        return false
+    }
 }
 
 /// Existence only. Nothing here opens a plist body, a wrapper script, a cookie

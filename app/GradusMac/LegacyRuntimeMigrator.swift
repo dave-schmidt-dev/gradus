@@ -169,7 +169,11 @@ public final class LegacyRuntimeMigrator {
         } catch {
             return rollBack(.legacyStillRunning, prior: prior, digests: digests, advance: advance)
         }
-        guard job.currentState() != .loaded(enabled: true), job.runningLegacyProcessPaths().isEmpty else {
+        // Not `!= .loaded(enabled: true)`: a job left loaded-but-disabled is
+        // still bootstrapped into the domain, so `launchctl enable` or a logout
+        // would start it again alongside the agent. Only "out of the domain
+        // entirely" counts as stopped.
+        guard job.currentState().isLoaded == false, job.runningLegacyProcessPaths().isEmpty else {
             return rollBack(.legacyStillRunning, prior: prior, digests: digests, advance: advance)
         }
 

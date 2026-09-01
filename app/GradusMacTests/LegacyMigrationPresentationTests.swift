@@ -7,9 +7,13 @@ import Testing
 @Suite("Legacy migration presentation")
 @MainActor
 struct LegacyMigrationPresentationTests {
-    private func viewModel(_ migrator: LegacyRuntimeMigrator?, wrapper: URL) -> PublisherViewModel {
+    /// `suite` is the caller's scope: `scratchDefaults` clears the domain on
+    /// entry, so two tests sharing a name would wipe each other mid-run.
+    private func viewModel(
+        _ migrator: LegacyRuntimeMigrator?, wrapper: URL, suite: String
+    ) -> PublisherViewModel {
         PublisherViewModel(
-            defaults: UserDefaults(suiteName: "com.zerodelta.gradus.mac.migration-tests")!,
+            defaults: scratchDefaults("com.zerodelta.gradus.mac.migration.\(suite)")!,
             legacyMigrator: migrator,
             legacyWrapperURL: wrapper,
             legacyBridgeURL: URL(fileURLWithPath: "/nonexistent/GradusCredentialBridge.app")
@@ -21,7 +25,8 @@ struct LegacyMigrationPresentationTests {
         defer { fixture.cleanUp() }
         let model = viewModel(
             makeMigrator(fixture, job: FakeLegacyJob(state: .absent)),
-            wrapper: fixture.root.appendingPathComponent("absent.sh")
+            wrapper: fixture.root.appendingPathComponent("absent.sh"),
+            suite: "presentation-none"
         )
 
         model.refreshLegacyMigration()
@@ -33,7 +38,7 @@ struct LegacyMigrationPresentationTests {
     @Test func aMissingMigratorIsNotApplicableRatherThanEmpty() {
         let fixture = MigrationFixture("presentation-nil")
         defer { fixture.cleanUp() }
-        let model = viewModel(nil, wrapper: fixture.root)
+        let model = viewModel(nil, wrapper: fixture.root, suite: "presentation-nil")
 
         model.refreshLegacyMigration()
 
@@ -46,7 +51,9 @@ struct LegacyMigrationPresentationTests {
         let wrapper = fixture.root.appendingPathComponent("gradus_snapshot.sh")
         try Data("legacy".utf8).write(to: wrapper)
         let model = viewModel(
-            makeMigrator(fixture, job: FakeLegacyJob(state: .loaded(enabled: true))), wrapper: wrapper
+            makeMigrator(fixture, job: FakeLegacyJob(state: .loaded(enabled: true))),
+            wrapper: wrapper,
+            suite: "presentation-blocked"
         )
 
         model.refreshLegacyMigration()
@@ -65,7 +72,9 @@ struct LegacyMigrationPresentationTests {
         let wrapper = fixture.root.appendingPathComponent("gradus_snapshot.sh")
         try Data("legacy".utf8).write(to: wrapper)
         let model = viewModel(
-            makeMigrator(fixture, job: FakeLegacyJob(state: .loaded(enabled: true))), wrapper: wrapper
+            makeMigrator(fixture, job: FakeLegacyJob(state: .loaded(enabled: true))),
+            wrapper: wrapper,
+            suite: "presentation-ready"
         )
 
         model.refreshLegacyMigration()
