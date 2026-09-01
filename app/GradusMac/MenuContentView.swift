@@ -184,26 +184,45 @@ struct MenuBarContentRoot: View {
     }
 }
 
-/// Deterministic DEBUG-only host for Mac XCUITests. It exercises the same
-/// MenuContentView used by MenuBarExtra, without making the production
-/// status-item path test-dependent or reading a user's snapshot/defaults.
-struct MenuUITestFixtureView: View {
-    @StateObject private var viewModel: PublisherViewModel
+// Deterministic DEBUG-only host for Mac XCUITests. It exercises the same
+// MenuContentView used by MenuBarExtra, without making the production
+// status-item path test-dependent or reading a user's snapshot/defaults.
+//
+// The `#if DEBUG` matters twice over: the fixture reaches for
+// `FileBackedBackgroundAgentService`, which is itself DEBUG-only, and a Release
+// build has no business carrying a test seam at all.
+#if DEBUG
+    struct MenuUITestFixtureView: View {
+        @StateObject private var viewModel: PublisherViewModel
 
-    init() {
-        let suiteName = "com.zerodelta.gradus.mac.ui-tests"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        let viewModel = PublisherViewModel(
-            defaults: defaults,
-            // Present only when GradusMacUITests supplies a state file. Absent,
-            // the fixture falls back to the ordinary manager, which reads the
-            // live registration and never writes it.
-            backgroundAgent: FileBackedBackgroundAgentService.fromEnvironment().map {
-                BackgroundAgentManager(service: $0)
-            }
-        )
-        viewModel.apply(
+        init() {
+            let suiteName = "com.zerodelta.gradus.mac.ui-tests"
+            let defaults = UserDefaults(suiteName: suiteName)!
+            defaults.removePersistentDomain(forName: suiteName)
+            // Never the live registration or the installed agent's status file: a
+            // developer running this fixture while their own agent is mid-refresh
+            // would otherwise see a different menu than CI does. The harness owns
+            // the state file when it supplies one; absent that, the fixture reads a
+            // path that does not exist, which is `.notRegistered`.
+            let agentService = FileBackedBackgroundAgentService.fromEnvironment()
+                ?? FileBackedBackgroundAgentService(
+                    fileURL: FileManager.default.temporaryDirectory
+                        .appendingPathComponent("gradus-ui-test-agent-unset.state")
+                )
+            let viewModel = PublisherViewModel(
+                defaults: defaults,
+                backgroundAgent: BackgroundAgentManager(
+                    service: agentService,
+                    statusFileURL: agentService.absentStatusFileURL
+                )
+            )
+            viewModel.apply(Self.fixturePayload)
+            _viewModel = StateObject(wrappedValue: viewModel)
+        }
+
+        /// The fixture's fixed reading. Deliberately a stale `updatedAt`:
+        /// a registered agent must still not let the UI claim current data.
+        private static var fixturePayload: SnapshotPayload {
             SnapshotPayload(
                 schemaVersion: supportedSchemaVersion,
                 updatedAt: "2026-08-10T12:00:00-04:00",
@@ -241,19 +260,18 @@ struct MenuUITestFixtureView: View {
                     )
                 ]
             )
-        )
-        _viewModel = StateObject(wrappedValue: viewModel)
-    }
+        }
 
-    var body: some View {
-        MenuContentView(viewModel: viewModel)
-            // The fixture must leave room for the bottom controls' hit
-            // targets. A 680-point minimum in a 720-point host intermittently
-            // exposed the toggle but clipped its clickable bounds.
-            .frame(minHeight: 760, alignment: .top)
-            .padding(.top, 1)
+        var body: some View {
+            MenuContentView(viewModel: viewModel)
+                // The fixture must leave room for the bottom controls' hit
+                // targets. A 680-point minimum in a 720-point host intermittently
+                // exposed the toggle but clipped its clickable bounds.
+                .frame(minHeight: 760, alignment: .top)
+                .padding(.top, 1)
+        }
     }
-}
+#endif
 
 // DEBUG-only window host for the Mac UI-test fixture. A status-item app has
 // no normal root window for XCUITest to launch, so the test seam owns one

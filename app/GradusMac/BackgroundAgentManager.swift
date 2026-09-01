@@ -72,6 +72,13 @@ public final class SMAppServiceBackgroundAgent: BackgroundAgentServicing {
             self.fileURL = fileURL
         }
 
+        /// A sibling the harness never writes, so a fixture reading agent
+        /// status reads *nothing* rather than whatever the developer's own
+        /// installed agent happens to be doing at that second.
+        var absentStatusFileURL: URL {
+            fileURL.appendingPathExtension("status")
+        }
+
         /// `nil` outside the harness, so the production path can never pick
         /// this up by accident.
         static func fromEnvironment(
