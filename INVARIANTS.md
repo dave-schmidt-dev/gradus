@@ -5,7 +5,7 @@
 > in this project's CLAUDE.md/README, not globally.
 
 ### INV-1 — Canonical public state contains no credential material or account PII and has one nonaliasing root per runtime mode
-area: ["gradus/paths.py", "gradus/snapshot.py", "gradus/parsing.py", "gradus/history.py"]
+area: ["gradus/paths.py", "gradus/snapshot.py", "gradus/parsing.py", "gradus/history.py", "gradus/providers/*.py"]
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
 rationale: The snapshot files are read by a separate repo (review-plugin router). They are written to
@@ -31,7 +31,7 @@ rationale: The snapshot files are read by a separate repo (review-plugin router)
   no legacy mirror. `tests/test_snapshot.py::RuntimePathPolicyTests` gates mode selection and nonaliasing.
 
 ### INV-2 — The machine-safe (--json / --write-snapshot) paths have zero credential side effects
-area: ["gradus/providers/*.py", "gradus/__main__.py"]
+area: ["gradus/providers/*.py", "gradus/__main__.py", "app/build-gradus-runtime.sh", "app/test-build-gradus-runtime.sh"]
 gate_test: tests/test_main.py::test_write_snapshot_is_read_only_no_side_effects
 threshold: 3
 rationale: Machine-readable --json and headless --write-snapshot surfaces must never spawn a browser,
@@ -40,7 +40,13 @@ rationale: Machine-readable --json and headless --write-snapshot surfaces must n
   The gate asserts neither subprocess.Popen nor subprocess.run runs and no cred/cache file is written,
   INCLUDING on the cached-cred→HTTP-401 recovery path. --write-snapshot writes only its declared v1/v2
   snapshot outputs plus the credential-free history journal after schema-v2 read-back; --json and historical
-  queries are read-only. Credential-aware launchd refresh is governed by INV-8.
+  queries are read-only. Credential-aware background refresh is governed by INV-8.
+  The frozen `GradusRuntime.app` ships these same surfaces, so the hermetic runtime build and
+  relocation suite is part of this area: it runs the frozen binary with no host Python on PATH
+  and with `_MEIPASS2`/`PYTHONHOME`/`PYTHONPATH`/`DYLD_*` poisoned, and fails if a provider child
+  inherits any of them. A signed candidate additionally has to be executed, not only verified —
+  hardened-runtime restrictions can break the PyInstaller bootstrap in ways no signature check
+  can see.
 
 ### INV-3 — percent_left is always *remaining*, 0–100, normalized exactly once
 area: ["gradus/snapshot.py"]
@@ -76,7 +82,7 @@ rationale: The router asserts schema_version. Both versioned files always carry 
   drift that a version-asserting consumer cannot detect.
 
 ### INV-6 — Browser-derived credentials cross one app boundary and stay private at rest
-area: ["app/GradusCredentialBridge/**", "app/GradusCredentialBridgeCore/**", "app/GradusCredentialBridgeTests/**", "app/project.yml", "gradus/paths.py", "gradus/providers/*.py", "launchd/*", "gradus/history.py"]
+area: ["app/GradusCredentialBridge/**", "app/GradusCredentialBridgeCore/**", "app/GradusCredentialBridgeTests/**", "app/project.yml", "app/sign-mac-bundle.sh", "app/verify-mac-bundle.sh", "app/test-mac-bundle-structure.sh", "gradus/paths.py", "gradus/providers/*.py", "launchd/*", "gradus/history.py"]
 gate_test: app/test-gate.sh::GradusCredentialBridge
 threshold: 3
 rationale: Safari-derived provider cookies are read only by the Developer-ID-signed
@@ -102,6 +108,16 @@ rationale: Safari-derived provider cookies are read only by the Developer-ID-sig
   Automated tests stub the `security` command and never touch a live Keychain item, because identity-bound
   Keychain ACLs cannot be exercised by an unsigned test binary; live signed-Keychain validation is therefore a
   separate human-executed gate against a signed installed candidate, deliberately outside `app/test-gate.sh`.
+  The bridge's separate identity is a signing property, not only a project-structure one, so the
+  bundle auditor is in this area: it proves every nested Mach-O carries the Developer ID identity,
+  the expected Team ID, and the hardened runtime, and that the bridge holds no entitlement of its
+  own. `exportArchive` does not sign what a run script copies in, so signing walks an explicit
+  inventory deepest-first and never relies on `codesign --deep`, which remains verification-only.
+  Full Disk Access is granted to the nested bridge alone; granting it to `Gradus.app` does not
+  reach the bridge, because the grant is per-executable.
+  The standalone `~/Applications/GradusCredentialBridge.app` installed by
+  `app/install-credential-bridge.sh` is retained for one release as the rollback shape only, and
+  holds its own separate TCC grant.
 
 ### INV-7 — The CloudKit publisher takes its snapshot data through a single injected snapshot-path dependency, and its source references no credential path
 area: ["app/GradusMac/**", "app/GradusKit/**"]
@@ -129,7 +145,7 @@ rationale: The Mac app runs on the same machine holding live credentials in `.ca
   `iCloud.com.zerodelta.gradus` container exactly as they were.
 
 ### INV-8 — Credential-aware background refresh is explicit, single-flight, and progress-visible
-area: ["gradus/paths.py", "gradus/__main__.py", "gradus/publisher_watchdog.py", "gradus/providers/*.py", "launchd/*", "app/GradusRefreshAgent/**", "app/GradusRefreshAgentTests/**", "app/GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist"]
+area: ["gradus/paths.py", "gradus/__main__.py", "gradus/publisher_watchdog.py", "gradus/providers/*.py", "launchd/*", "app/GradusRefreshAgent/**", "app/GradusRefreshAgentTests/**", "app/GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist", "app/verify-mac-bundle.sh", "app/GradusMac/LegacyRuntimeMigrator.swift"]
 gate_test: app/test-gate.sh
 threshold: 3
 rationale: Only the explicit --refresh-snapshot command may use non-headless provider behavior for
@@ -160,6 +176,18 @@ rationale: Only the explicit --refresh-snapshot command may use non-headless pro
   The command is never reached except from the launchd wrapper, so no test, hermetic run, machine-safe path, or
   interactive session can launch an application, and it is advisory only — it cannot fail the refresh. This is
   interim until the publisher moves inside the supervised agent, after which launchd owns its liveness.
+  The agent's fixed executables are bundle-relative by construction and by audit: the bundle
+  verifier rejects an absolute `Program` or a non-bundle-relative `BundleProgram` in the agent's
+  LaunchAgent plist, and rejects a missing nested helper, so a bundle that could only refresh on
+  the machine that built it cannot ship.
+  Cutover between the two modes is one-way and gated. `LegacyRuntimeMigrator` moves refresh from
+  the launchd job to the bundled agent only after every named consumer has produced a receipt
+  proving it reads the installed canonical snapshot and the legacy job is observed quiescent with
+  no running wrapper or producer process; on any failure it restores the legacy job to exactly the
+  state it found, including "installed but not loaded". It has no filesystem-removal dependency at
+  all, so no legacy plist, wrapper, or snapshot mirror is deletable on any path through it — a
+  stronger guarantee than a rule saying it must not. The gate is implemented and currently
+  refusing: no receipt exists yet (`router-consumer-migration`), and no cutover has been performed.
 
 ### INV-9 — A cross-platform feature ships its producer and consumer as one compatibility unit
 area: ["app/GradusMac/**", "app/GradusiOS/**", "app/GradusKit/**", "app/project.yml", "app/test-gate.sh", "app/archive-upload-ios.sh", "app/release_candidate/**", "app/testflight-assign.py", "app/testflight-setup.py", "app/_asc_api.py", "RELEASE_CHECKLIST.md"]

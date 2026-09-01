@@ -74,8 +74,10 @@ flows, and swift-snapshot-testing for visual regression. `app/test-gate.sh` is
 the authoritative local app-validation gate used by `app/release_local_gate.py`.
 It runs, in order:
 
-1. the hermetic notarization and iOS-upload script tests (including inside-out
-   nested signing, separate App Store profile verification, and version/build parity),
+1. the hermetic script suites — Mac notarization and signing, Mac bundle
+   structure, local Mac install, credential-bridge install, frozen-runtime build
+   and relocation, and iOS upload (inside-out nested signing, separate App Store
+   profile verification, and version/build parity),
 2. `swift test` over the **GradusKit** package (including atomic widget snapshot models),
 3. `pytest` over the **Python producer** suite,
 4. `xcodebuild test` for **GradusMac** unit tests and **GradusMacUITests** against
@@ -125,6 +127,46 @@ Local hooks are kept free of app automation: pre-commit runs fast lint and
 formatting checks, and pre-push runs the whole Python suite (`uv run pytest -q`,
 ~40s). App-specific candidate evidence is collected by the source-bound local
 release gate.
+
+### Mac bundle signing: hermetic tests are necessary and not sufficient
+
+`test-mac-bundle-structure.sh` (34 assertions), `test-notary-scripts.sh` (80
+assertions), and `test-install-mac-local.sh` (21 cases) fake every Xcode and system
+tool, so they run anywhere and touch nothing. They carry negative fixtures for
+unsigned nested code, an ad-hoc signature, a wrong Team ID, a non-Developer-ID
+identity, a missing hardened runtime, an absent secure timestamp, an unexpected
+entitlement on a helper, a *missing* entitlement on the wrapper, a wrong
+architecture, a group- or world-writable file, executable drift inside the frozen
+runtime, an absolute LaunchAgent program path, a missing helper, a misnamed wrapper,
+a platform suffix in a customer-facing name, a strict-verification failure, and
+present quarantine or resource-fork metadata.
+
+They still did not catch either defect that mattered. Both were found by running the
+real thing and measuring the artifact:
+
+- `exportArchive` sealed the run-script-copied `GradusRuntime.app` as a *resource*,
+  so all 53 code items inside it shipped ad-hoc — invisible to a fixture that builds
+  its own bundle.
+- Re-signing the wrapper from `GradusMacProduction.entitlements` dropped the two keys
+  Xcode injects from the provisioning profile. The result is signed, hardened,
+  timestamped, and holds no extra privilege; it simply cannot reach CloudKit.
+
+So a Mac release requires one real `./install-mac-local.sh --dry-run` against the
+host's actual Developer ID identity in addition to the hermetic suites, and the
+`build/gradus-mac-bundle-manifest.json` it emits is the evidence — every code item's
+identity, Team ID, hardened-runtime flag, architectures, and entitlement set. Check
+that the wrapper's entitlement set is the expected six keys and that no helper has
+acquired an iCloud entitlement.
+
+The hardened runtime also has to be *executed*, not just verified. A signature check
+cannot tell you whether hardened-runtime restrictions break the PyInstaller bootstrap
+or its subprocess boundary. Run the signed `GradusRuntime.app` from the staged export
+under `env -i` with an isolated `HOME`, a `PATH` containing no Python, and
+`_MEIPASS2`/`PYTHONHOME`/`PYTHONPATH`/`DYLD_*` poisoned, then assert
+`--refresh-snapshot`, `--json`, and `--once` all work and that no provider child
+inherited a forbidden loader variable. `test-build-gradus-runtime.sh` does this
+against the unsigned build output; the signed copy needs its own run because signing
+is what changes.
 
 iOS snapshot baselines are canonical to the pinned local Xcode and simulator
 runtime. Refresh them only from an exact local result bundle after reviewing

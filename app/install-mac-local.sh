@@ -32,9 +32,11 @@
 #   ./install-mac-local.sh --skip-build    reuse the existing export
 #
 # Environment:
-#   INSTALL_DIR   destination (default /Applications)
-#   BUILD_DIR     archive/export scratch directory (default build)
-#   PLIST_BUDDY   path to PlistBuddy
+#   INSTALL_DIR          destination (default /Applications)
+#   BUILD_DIR            archive scratch directory (default build)
+#   GRADUS_EXPORT_ROOT   where the export is staged, signed, and audited
+#                        (default $TMPDIR/gradus-mac-export -- see Staging)
+#   PLIST_BUDDY          path to PlistBuddy
 set -euo pipefail
 
 unset HISTFILE

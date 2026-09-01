@@ -218,9 +218,25 @@ Example:
 
 A sibling process or router can read `.state/snapshot-v2.json` (schema v2) instantly — no probing, no browser, no credential I/O. The canonical file is credential-free and gitignored (deliberately not `.cache/`, which holds auth cookies/tokens that a consuming router must never read).
 
-Every committed schema-v2 snapshot is also atomically mirrored to `~/Library/Application Support/Gradus/snapshot-v2.json`. This is the credential-free input for the installed GradusMac app, so opening the menu never requires access to this Documents-backed checkout.
+There are two canonical public roots, one per runtime mode, and they never alias
+(INV-1). Source mode writes `.state/snapshot-v2.json` in the checkout. Installed
+mode — everything inside `Gradus.app` — writes
+`~/Library/Application Support/Gradus/Installed/snapshot-v2.json`, and that is the
+single path the Mac app, the frozen runtime, and `--json` all resolve to, so opening
+the menu never requires access to this Documents-backed checkout.
 
-The launchd job and explicit credential-aware `--refresh-snapshot` command are the only snapshot producers. The TUI, `--once`, and `--json` read and render the committed snapshot; they never probe providers or write it.
+Source mode *additionally* mirrors the same allowlisted payload to
+`~/Library/Application Support/Gradus/snapshot-v2.json`. That legacy mirror is not a
+router input and is not read by the installed app: it exists only so a rollback to the
+retired launchd job has a writable path for one release. Installed mode writes no
+mirror. Reading it from the installed pipeline would let a stale snapshot from a dead
+producer present as fresh data, so there is deliberately no fallback to it (INV-7).
+
+The explicit credential-aware `--refresh-snapshot` command is the only snapshot
+producer, whether it is invoked by the bundled `GradusRefreshAgent` (installed mode,
+the normal path) or by the legacy launchd job (source mode, retained for rollback).
+The TUI, `--once`, and `--json` read and render the committed snapshot; they never
+probe providers or write it.
 
 **Read-only guarantee.** Consumer surfaces never open a browser, spawn a subprocess, refresh a token, evict a cookie cache, or send notifications. The producer writes canonical v2 atomically. History journaling is a separate best-effort output: it is attempted only after a read-back confirms that schema v2 committed, and a history failure never rolls back a valid snapshot.
 
@@ -235,65 +251,97 @@ Claude cooldown cycles preserve the prior observation and its original probe
 timestamp exactly. A response containing no usable usage buckets is transient,
 not a successful empty reading, so it cannot erase valid displayed windows.
 
-**launchd refresher.** A ~120 s background job keeps the snapshot current without the TUI running.
+**Background refresh (normal path).** Everything the unattended refresh needs ships
+inside one Developer-ID-signed bundle, `/Applications/Gradus.app`:
 
-The repository-owned templates in `launchd/` invoke the explicit credential-aware
-`--refresh-snapshot` observer. After installing or changing the wrapper or plist,
-run `gradus --verify-refresh-health --duration 360` and require a successful result
-before relying on unattended refresh.
+| Nested item | What it is |
+| --- | --- |
+| `Contents/Helpers/GradusRefreshAgent` | the `SMAppService` agent that supervises one refresh cycle |
+| `Contents/Helpers/GradusCredentialBridge.app` | the only code that reads Safari's cookie store |
+| `Contents/Helpers/GradusRuntime.app` | the frozen universal2 Python producer (no host Python, no venv) |
 
-**Publisher watchdog.** launchd supervises the producer; nothing supervises the macOS
-CloudKit publisher, which is an ordinary GUI app. When it exits, the snapshot goes on
-refreshing while iOS silently freezes on the last publication — that failure ran for
-fourteen hours on 2026-08-30. Each successful refresh cycle therefore ends with one
-bounded `gradus --publisher-watchdog` check: if the snapshot is fresh, publish evidence
-is more than five minutes behind, and no process is running the publisher's exact
-executable path, it relaunches the bundle by absolute path. A publisher that *is*
-running but not publishing is a wedged app or a CloudKit outage, so that case is logged
-and left alone; repeated relaunches inside an hour are throttled and reported as a crash
-loop rather than retried forever. The check prints only when it has something to say, so
-a healthy pipeline adds nothing to the producer log. `--publisher-watchdog` is opt-in and
-passed only by the launchd wrapper, so no test, hermetic run, or interactive session can
-launch an app; set `GRADUS_DISABLE_PUBLISHER_WATCHDOG=1` to suppress it entirely. This is
-interim: once publishing moves into the background agent, launchd supervises it directly
-and the watchdog is removed.
+Setup is three steps and no shell script:
 
-**Credential bridge (macOS only).** The launchd job never reads Safari directly.
-`GradusCredentialBridge.app` is the single-purpose, Developer-ID-signed app that reads
-Safari's cookie jar and atomically refreshes the local caches for the remaining
-browser-backed providers; Python only consumes those caches. Claude usage is not part
-of this bridge path. Install it before the launchd job:
+1. Install the app (`cd app && ./install-mac-local.sh`, or open a distributed build).
+2. Open **Gradus → Settings** and turn on **Monitor in Background**. That registers the
+   nested agent through `SMAppService`; if macOS holds it, the same panel says so and
+   offers **Open Login Items Settings**.
+3. When a Safari-backed provider first needs a credential, Settings shows
+   *Full Disk Access is denied* with **Reveal Credential Bridge** followed by **Open Full
+   Disk Access Settings**. Grant FDA to the revealed
+   `Gradus.app/Contents/Helpers/GradusCredentialBridge.app` — **granting it to `Gradus.app`
+   itself does nothing**, because the grant is per-executable and the bridge is a separately
+   identified nested app (INV-6).
 
-```bash
-./app/install-credential-bridge.sh
-# Then manually enable only ~/Applications/GradusCredentialBridge.app in
-# System Settings > Privacy & Security > Full Disk Access.
-./launchd/install.sh
-```
+The agent holds its own `~/Library/Application Support/Gradus/Installed/.refresh-agent.lock`
+while it runs the bridge and then the frozen producer, each under its own bounded deadline,
+and writes credential-free progress to `Installed/agent-status.json` before every subprocess
+wait. A denied, missing, malformed, timed-out, or failed bridge is a *degraded success*, not a
+failure: the producer still runs against whatever caches remain. Producer failure or
+cancellation restores the prior complete snapshots (INV-8). Settings renders exactly one of
+ten states, and only `running` is allowed to claim the data is current.
 
-Do not grant Full Disk Access to the repository Python, its virtual environment, the
-launchd wrapper, or GradusMac. The bridge is intentionally installed at
-`~/Applications/GradusCredentialBridge.app` so its approval survives Python/venv rebuilds.
-Because macOS can invalidate this app-only TCC approval when the installed bundle is replaced,
-finish bridge code changes and its automated tests before running the installer; install and approve
-the final bundle once, rather than reinstalling it during intermediate validation.
-`./app/install-credential-bridge.sh --dry-run` builds, Developer-ID signs, and verifies
-the bridge without changing `~/Applications`.
-
-The bridge may exit successfully after reading Safari without finding a recognized session;
-the launchd wrapper therefore reports `credential_bridge cache=missing provider=...` for a
-missing browser cache instead of treating that exit as proof of authentication. After changing
-bridge code, rerun the installer and re-enable Full Disk Access for the replaced app if Safari
-reads are denied; a healthy `local.gradus-snapshot` exit alone proves only that the snapshot
-refresh completed.
+**Legacy launchd job (rollback only, one release).** The `launchd/` templates and
+`app/install-credential-bridge.sh` still work and are still tested, but they are no longer the
+setup path — they exist so a machine can go back to the previous shape for one release. They
+install a standalone `~/Applications/GradusCredentialBridge.app` plus a
+`~/Library/LaunchAgents/local.gradus-snapshot.plist` job that invokes the checkout's
+`--refresh-snapshot` every ~120 s, writing source-mode state.
 
 - Wrapper: `~/.launchd/scripts/gradus_snapshot.sh`
 - Plist: `~/Library/LaunchAgents/local.gradus-snapshot.plist` (StartInterval 120, RunAtLoad, Background)
 - Logs: `~/Library/Logs/homelab/gradus-snapshot/`
-- Install from the repository checkout: `./launchd/install.sh`. It renders both files,
-  idempotently reloads the job, and visibly verifies refresh health for six minutes before
-  reporting success.
+- Install: `./app/install-credential-bridge.sh`, approve `~/Applications/GradusCredentialBridge.app`
+  for Full Disk Access, then `./launchd/install.sh`. It renders both files, idempotently reloads
+  the job, and visibly verifies refresh health for six minutes before reporting success.
 - Uninstall: `./launchd/install.sh uninstall`.
+- After installing or changing the wrapper or plist, run
+  `gradus --verify-refresh-health --duration 360` and require a successful result before
+  relying on unattended refresh.
+
+The two modes never share a canonical writer and their single-flight locks are deliberately
+independent, because serializing the migration requires *verified* legacy quiescence rather than
+an inferred one (INV-8).
+
+**Cutover status: not performed.** `LegacyRuntimeMigrator` is implemented, tested, and
+currently *refusing*. It moves refresh from the launchd job to the bundled agent only after
+every named consumer has produced a receipt proving it reads the installed canonical snapshot,
+and after the legacy job is observed quiescent with no running wrapper or producer process; on
+any failure it restores the legacy job to exactly the state it found, including "installed but
+not loaded". It has no filesystem-removal dependency at all, so no legacy plist, wrapper, or
+snapshot mirror can be deleted on any path through it, including rollback. No receipt exists on
+any machine yet (`router-consumer-migration`), so this repository still runs the legacy job.
+
+**Publisher watchdog (legacy path only).** launchd supervises the producer; nothing supervises
+the macOS CloudKit publisher, which is an ordinary GUI app. When it exits, the snapshot goes on
+refreshing while iOS silently freezes on the last publication — that failure ran for fourteen
+hours on 2026-08-30. Each successful legacy refresh cycle therefore ends with one bounded
+`gradus --publisher-watchdog` check: if the snapshot is fresh, publish evidence is more than
+five minutes behind, and no process is running the publisher's exact executable path, it
+relaunches the bundle by absolute path. A publisher that *is* running but not publishing is a
+wedged app or a CloudKit outage, so that case is logged and left alone; repeated relaunches
+inside an hour are throttled and reported as a crash loop rather than retried forever. The check
+prints only when it has something to say. `--publisher-watchdog` is opt-in and passed only by the
+launchd wrapper, so no test, hermetic run, or interactive session can launch an app; set
+`GRADUS_DISABLE_PUBLISHER_WATCHDOG=1` to suppress it entirely. It is removed once the cutover
+completes and the agent supervises publishing directly.
+
+**Credential bridge.** Neither the agent nor the launchd job reads Safari directly.
+`GradusCredentialBridge.app` is the single-purpose, Developer-ID-signed, separately identified
+app that reads Safari's cookie jar and atomically refreshes the local caches for the remaining
+browser-backed providers at mode `0600` inside a `0700` cache directory; Python only consumes
+those caches. Claude, OpenCode Go, and Cursor are Keychain-backed and have no Safari path at
+all. Do not grant Full Disk Access to the repository Python, its virtual environment, the
+launchd wrapper, `Gradus.app`, or the agent — only the bridge.
+
+Because macOS can invalidate an app-only TCC approval when the installed bundle is replaced,
+finish bridge code changes and their automated tests before installing; install and approve the
+final bundle once rather than reinstalling during intermediate validation. The bridge may exit
+successfully after reading Safari without finding a recognized session, so a missing browser
+cache is reported as `credential_bridge cache=missing provider=...` rather than treated as proof
+of authentication; a healthy refresh exit alone proves only that the snapshot refresh completed.
+`./app/install-credential-bridge.sh --dry-run` builds, signs, and verifies the standalone legacy
+bridge without changing `~/Applications`.
 
 **Schema** (`schema_version: 2`):
 
@@ -379,7 +427,7 @@ active-first provider sorting, compact exhausted grouping, selectable bucket
 badges, Settings controls for sorting/visibility, and the shared expected-pace
 redline across the TUI, Mac, and iOS surfaces.
 
-- **GradusMac** — a menu-bar app that reads the credential-free schema-v2 mirror in `~/Library/Application Support/Gradus/` and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/`, any credential path, or the Documents-backed checkout (INV-7) — its only input is the monitor-owned snapshot copy, threaded through a single injected path dependency. Each publish also carries the Mac's user-visible computer name, short local username, and publish timestamp so iOS can show the connected computer and when it last reported; it never sends an email, serial number, path, or credential. The dropdown shows active providers as name + percentage + usage bar (metadata only where it needs attention), appends the same valid supplemental credit text as iOS and the TUI, and follows with a compact exhausted section — name and earliest reset, one line each. With no provider data, its header says `usage unavailable` rather than claiming all providers are healthy. The menu's Settings… row opens a settings window holding the same device-local display preferences iOS has — sort mode, warning threshold, and Show exhausted — alongside the sync and launch-at-login toggles. That window is an `NSWindow` this app builds itself (`SettingsWindow`) rather than SwiftUI's `Settings` scene: on macOS 26.5.2 `showSettingsWindow:` returns `true` and opens nothing, so the idiomatic route fails silently. See `SettingsWindow.swift` for the measurements.
+- **GradusMac** — the menu-bar app that ships as `Gradus.app`. It reads the credential-free installed canonical snapshot at `~/Library/Application Support/Gradus/Installed/snapshot-v2.json` — the same file its own nested `GradusRefreshAgent` writes — and publishes provider status to a private CloudKit database (`GradusZone`, one record per provider, last-writer-wins). It never touches `.cache/`, any credential path, or the Documents-backed checkout (INV-7) — its only input is the monitor-owned snapshot copy, threaded through a single injected path dependency. Each publish also carries the Mac's user-visible computer name, short local username, and publish timestamp so iOS can show the connected computer and when it last reported; it never sends an email, serial number, path, or credential. The dropdown shows active providers as name + percentage + usage bar (metadata only where it needs attention), appends the same valid supplemental credit text as iOS and the TUI, and follows with a compact exhausted section — name and earliest reset, one line each. With no provider data, its header says `usage unavailable` rather than claiming all providers are healthy. The menu's Settings… row opens a settings window holding the same device-local display preferences iOS has — sort mode, warning threshold, and Show exhausted — alongside the sync and launch-at-login toggles. That window is an `NSWindow` this app builds itself (`SettingsWindow`) rather than SwiftUI's `Settings` scene: on macOS 26.5.2 `showSettingsWindow:` returns `true` and opens nothing, so the idiomatic route fails silently. See `SettingsWindow.swift` for the measurements.
 - A failed CloudKit publish records only the safe operation-level error code/name in the Mac log; record contents, localized error text, and other metadata are deliberately excluded. A successful publish updates local evidence that the CloudKit write completed.
   - **Debug safety:** Debug GradusMac builds do not read the snapshot mirror or contact CloudKit unless launched with `GRADUS_ENABLE_PIPELINE=1`. This keeps hosted `xcodebuild test` runs hermetic even when a command bypasses the Xcode scheme; `app/test-gate.sh` additionally exports `GRADUS_DISABLE_PIPELINE=1` for its Mac leg. Release/distribution builds start the pipeline normally.
 - Provider ordering is defined **once**, in `app/Shared/ProviderRanking.swift`, which is compiled into both app targets. `rankedPartition()` splits active from exhausted before applying any presentation comparator — so no sort mode can pull a depleted provider back among the actionable ones — then tiers each partition errored → attention-needed → normal and sorts by the chosen mode with a deterministic name tie-break. Each app conforms its own model (`ProviderEntry` on the Mac, `ProviderStatus` on iOS) to `RankableProvider`; the Mac recomputes depletion locally because, unlike the CloudKit model, the snapshot model has no stored `isDepleted`. This lives in `Shared/` rather than `GradusKit` deliberately: the rules are device-local presentation, so putting them in the kit would widen its INV-7-governed scope.
@@ -564,15 +612,22 @@ The source checkout must be clean for upload, local installation, and
 notarization. The only allowed untracked path is the exact internal verification
 report `verifications/2026-08-09-internal-testflight-candidate-migration-verification.md`.
 
-### Installing GradusMac locally
+### Installing Gradus locally
 
-`install-mac-local.sh` archives, exports, installs into `/Applications`, and relaunches. This is the path for putting a build on this machine; notarization is only for handing the app to someone else, since Gatekeeper enforces it on quarantined files and a bundle built here never carries `com.apple.quarantine`.
+`install-mac-local.sh` archives, exports, signs inside out, audits, installs into
+`/Applications`, and relaunches. This is the path for putting a build on this machine;
+notarization is only for handing the app to someone else, since Gatekeeper enforces it on
+quarantined files and a bundle built here never carries `com.apple.quarantine`.
+
+The shipped wrapper is `Gradus.app`. `GradusMac` survives as the scheme name and the archive
+name (`build/GradusMac.xcarchive`); those are internal engineering identifiers and no user ever
+sees them.
 
 **Mac UI handoff rule.** After a change to `app/GradusMac/` that needs visual
 validation on this Mac, the normal finalization step is `./install-mac-local.sh`
 before requesting a screenshot or manual check. Test builds in DerivedData are
 not visual-validation artifacts, and a matching marketing/build version does
-not prove `/Applications/GradusMac.app` contains the current source. Keep the
+not prove `/Applications/Gradus.app` contains the current source. Keep the
 test gate hermetic; the installer is the explicit post-test handoff that
 replaces and relaunches the local app. Do this automatically unless David asks
 to defer installation.
@@ -585,13 +640,58 @@ cd app
 ./install-mac-local.sh --skip-build  # reuse the existing export
 ```
 
-The bundle is verified **twice**, and the second one is the reason the script exists: `ditto` into `/Applications` re-applies `com.apple.provenance` to the copy, so a bundle that passed `codesign --verify --deep --strict` on export can fail it once installed. The new copy is therefore staged beside the old one as `.GradusMac.app.incoming`, stripped and verified *there*, and swapped in by rename only if it passes — a failed verify leaves the working install untouched rather than having already destroyed it. `INSTALL_DIR` and `BUILD_DIR` override the destination and scratch directory.
+**Signing.** `exportArchive` does not sign what a run script copied in, so the exported
+`Contents/Helpers/GradusRuntime.app` and everything under it arrives ad-hoc — which Apple's
+notary service rejects. `sign-mac-bundle.sh` therefore walks an explicit inventory deepest-first
+(nested bundles, then loose Mach-O, then the wrapper last) and re-signs every code item with a
+secure timestamp and the hardened runtime. `codesign --deep` is never the signing algorithm; it
+appears only on the verify side as defense in depth. The re-sign *preserves* each item's existing
+entitlement blob rather than rebuilding it from `GradusMacProduction.entitlements`, because Xcode
+injects `com.apple.application-identifier` and `com.apple.developer.team-identifier` from the
+provisioning profile: the exported wrapper carries six keys where the source file declares four,
+and an app rebuilt from the file alone is signed, hardened, timestamped, holds no *extra*
+privilege, passes every subset check, and cannot reach CloudKit. `verify-mac-bundle.sh` matches
+the wrapper's entitlement set **exactly** for that reason.
+
+**Where the export lives.** The archive stays in `build/`, but the export, the signing pass, and
+the audit run under `$TMPDIR/gradus-mac-export` — outside the checkout. `~/Documents` is synced
+by the iCloud Drive file provider, which re-stamps `com.apple.FinderInfo` onto `.app` directories
+within about two seconds of it being cleared; `codesign` refuses any item carrying that
+attribute, and `ditto` would copy it straight into the zip sent to Apple. `GRADUS_EXPORT_ROOT`
+overrides the location, and the signer refuses outright — with no override flag — if the
+destination turns out to be file-provider managed too.
+
+**Verification.** The audit checks shipped names, the embedded helper inventory, a
+bundle-relative LaunchAgent program path, every Mach-O's signature/identity/architecture, file
+modes and frozen-runtime drift, quarantine and resource-fork metadata, and the strict deep seal,
+then writes `build/gradus-mac-bundle-manifest.json` (code identities, architectures,
+entitlements, versions, the source revision, and opaque digests — nothing else). A current build
+audits 56 code items.
+
+The bundle is then verified a **second** time after installation, and that is the reason this
+script exists rather than a two-line `ditto`: copying into `/Applications` re-applies
+`com.apple.provenance`, so a bundle that passed `codesign --verify --deep --strict` on export can
+fail it once installed. The new copy is staged beside the old one as `.Gradus.app.incoming`,
+stripped and verified *there*, and swapped in by rename only if it passes — a failed verify
+leaves the working install untouched rather than having already destroyed it. `INSTALL_DIR`,
+`BUILD_DIR`, and `GRADUS_EXPORT_ROOT` override the destination, the archive directory, and the
+staging root.
 
 It exports with Developer ID rather than development signing on purpose: the installed app holds the `~/Documents` TCC grant, and that grant records the signing requirement of whichever build was approved. Expect the next Mac test gate after an install to prompt, and run it attended — see the TCC row in `TASKS.md` for why the two signing identities cannot both hold the grant.
 
-### Notarizing GradusMac
+### Notarizing Gradus
 
-`notarize-mac.sh` archives, Developer-ID signs, verifies, uploads, waits for Apple, staples, and packages GradusMac. The upload stays visible, and the submission ID is recorded before polling in the gitignored `.state/notary-submissions.tsv` ledger.
+`notarize-mac.sh` archives, exports, signs inside out, audits, uploads, waits for Apple,
+staples, and packages `Gradus.app`. It uses the same signer, the same auditor, and the same
+`$TMPDIR` staging as the local installer; the audit runs *before* the zip, so a bundle that fails
+it is never uploaded. **Submission is opt-in**: without `--attended` the script stops after the
+audit and uploads nothing. The upload stays visible, and the submission ID is recorded before
+polling in the gitignored `.state/notary-submissions.tsv` ledger.
+
+`spctl -a -vv -t install` — the Gatekeeper *acceptance* check — runs here, after stapling, where
+it means something. It is deliberately not part of the local audit: an un-notarized bundle is
+rejected by `spctl` by design, so running it earlier would only produce a failure that proves
+nothing.
 
 ```bash
 cd app
@@ -612,7 +712,7 @@ If polling is interrupted, resume the existing submission without uploading agai
 
 For a dashboard that should stay open while Apple processes the queue, use
 `--monitor`. It refreshes Apple history every cycle, discovers newly submitted
-`GradusMac.app.zip` jobs even when the local ledger is absent or changing, and
+`Gradus.app.zip` jobs even when the local ledger is absent or changing, and
 keeps running through empty, accepted, pending, terminal, and transient request
 failures. `--interval SECONDS` controls the delay. Interactive Terminal output
 redraws in place; redirected stdout emits complete ANSI-free snapshots. Press

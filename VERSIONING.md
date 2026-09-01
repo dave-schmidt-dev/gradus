@@ -93,3 +93,11 @@ Because the Mac is installed by local republish rather than by Apple, a bump
 only reaches the running app when the bundle is rebuilt and swapped into
 `/Applications`. Bump and rebuild together, or the repo and the menu bar
 disagree.
+
+The Mac version now covers more than the menu bar. `Gradus.app` carries the
+background agent, the credential bridge, and the frozen Python producer as nested
+helpers, all sharing the wrapper's `CFBundleShortVersionString`/`CFBundleVersion`, so a
+Mac bump is a statement about the whole refresh pipeline rather than the UI alone.
+`install-mac-local.sh` prints the installed and incoming versions before it swaps, and
+`build/gradus-mac-bundle-manifest.json` records them beside every code item's identity —
+that manifest, not the menu bar's About string, is what a release record should cite.

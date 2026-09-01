@@ -205,8 +205,9 @@ Before candidate upload:
    temporary directory instead (`GRADUS_MAC_LOG_DIR` overrides the location).
 5. Confirm `archive-upload-ios.sh` accepts the current machine-written producer
    evidence for INV-9 before preparing/uploading the iOS artifact.
-6. If the Mac artifact itself is being distributed, run the notarization gate
-   too; local publisher verification alone is not a distribution artifact.
+6. If the Mac artifact itself is being distributed, run the Mac bundle gate below
+   and then the notarization gate; local publisher verification alone is not a
+   distribution artifact.
 7. Record the matching Mac build, iOS build, schema state, and candidate
    preparation/upload results in local `HISTORY.md`; keep the user-facing
    `CHANGELOG.md` limited to concise tester-facing notes.
@@ -268,6 +269,53 @@ regression coverage in the same change:
    `app/test-gate.sh`; manual-only validation requires a documented exception.
 
 The full testing matrix and exception rule are in [`TESTING.md`](TESTING.md).
+
+## Mac single-bundle signing and audit gate
+
+`Gradus.app` ships as one Developer-ID-signed bundle carrying three nested helpers:
+`GradusRefreshAgent`, `GradusCredentialBridge.app`, and the frozen
+`GradusRuntime.app`. `exportArchive` does **not** sign what a run script copies in, so
+the export arrives with its entire frozen runtime ad-hoc and would be rejected by the
+notary service. Every Mac release therefore runs this gate before notarization.
+
+1. `bash app/test-mac-bundle-structure.sh`, `bash app/test-notary-scripts.sh`, and
+   `bash app/test-install-mac-local.sh` — hermetic, no Apple tooling touched.
+2. `cd app && ./install-mac-local.sh --dry-run` against this machine's real Developer
+   ID identity. It archives, exports to `$TMPDIR/gradus-mac-export`, signs every code
+   item deepest-first, audits, writes the manifest, and stops before `/Applications`.
+   `codesign --deep` is never the signing algorithm; it appears only on the verify
+   side.
+3. Read `app/build/gradus-mac-bundle-manifest.json` and confirm, for every code item:
+   `Developer ID Application: Zero Delta LLC (US) (4CJ49V6QHW)`, Team ID `4CJ49V6QHW`,
+   hardened runtime on, and `arm64` + `x86_64`. A current build has 56 items.
+4. Confirm the entitlement distribution *exactly*: six keys on `Contents/MacOS/Gradus`
+   (`application-identifier`, `aps-environment`, `icloud-container-environment`,
+   `icloud-container-identifiers`, `icloud-services`, `team-identifier`), one on
+   `Contents/Helpers/GradusRefreshAgent`, and none on anything else. Two of the
+   wrapper's six are injected by Xcode from the provisioning profile and are not in
+   `GradusMacProduction.entitlements`; a build missing them is signed, hardened,
+   timestamped, holds no extra privilege, and cannot reach CloudKit. A helper that has
+   *gained* an iCloud entitlement is the mirror-image failure.
+5. Execute the signed runtime — signature verification cannot tell you whether the
+   hardened runtime broke the PyInstaller bootstrap. Run
+   `Contents/Helpers/GradusRuntime.app` from the staged export under `env -i` with an
+   isolated `HOME`, no Python on `PATH`, and the loader variables poisoned; require
+   `--refresh-snapshot`, `--json`, and `--once` to succeed with no provider child
+   inheriting a forbidden variable.
+6. Preserve the dry-run log and the manifest under
+   `.release-state/evidence/<slug>/`. `$TMPDIR` ages out and the next run's clean step
+   deletes the manifest.
+
+The export is staged outside the checkout because `~/Documents` is synced by the
+iCloud Drive file provider, which re-stamps `com.apple.FinderInfo` onto `.app`
+directories within about two seconds of it being cleared; `codesign` refuses such an
+item and `ditto` would copy it into the zip sent to Apple. `GRADUS_EXPORT_ROOT`
+overrides the staging root. The signer refuses any file-provider-managed destination
+and has no override flag — if it refuses, move the destination, do not defeat it.
+
+`spctl -a -vv -t install` runs in `notarize-mac.sh` after stapling, not here: an
+un-notarized bundle is rejected by Gatekeeper by design, so an earlier run proves
+nothing.
 
 ## Live signed-Keychain validation gate (human-executed)
 

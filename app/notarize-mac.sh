@@ -17,6 +17,13 @@
 #    key — a known-flaky Apple service for Developer ID exports (see
 #    developer.apple.com/forums/thread/688626) — so this deliberately avoids
 #    it in favor of a manually-installed profile.
+#
+# Environment:
+#   GRADUS_EXPORT_ROOT   where the export is staged, signed, and audited
+#                        (default $TMPDIR/gradus-mac-export). The archive stays
+#                        in build/; only the export leaves the checkout, because
+#                        ~/Documents is file-provider synced -- see the comment
+#                        on EXPORT_ROOT below.
 set -euo pipefail
 
 unset HISTFILE
