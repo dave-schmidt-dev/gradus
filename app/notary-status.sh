@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shows GradusMac notarization submissions without exposing credentials.
+# Shows Gradus notarization submissions without exposing credentials.
 # Credentials remain in the named macOS Keychain profile used by notarytool.
 set -euo pipefail
 
@@ -83,11 +83,11 @@ Exit status:
   70  notarytool or its Keychain profile could not be used
 
 With no --id, the command checks every ID in the local submission ledger. If
-the ledger is empty, it falls back to GradusMac.app.zip entries from Apple's
+the ledger is empty, it falls back to Gradus.app.zip entries from Apple's
 notary history. --watch polls while submissions remain pending, then exits when
 all are accepted or as soon as any terminal failure appears. --monitor stays
 running until Ctrl-C/TERM, refreshes history every cycle to discover new
-GradusMac.app.zip submissions, and tolerates empty, terminal, accepted, and
+Gradus.app.zip submissions (and pre-rename GradusMac.app.zip ones), and tolerates empty, terminal, accepted, and
 transient Apple-request states.
 EOF
 }
@@ -290,9 +290,16 @@ if mode == "history":
 else:
     records = [payload]
 
+# The shipped artifact is Gradus.app.zip. `GradusMac.app.zip` is kept as an
+# accepted name because every submission made before the Release rename is
+# still in Apple's history under it, and a filter that dropped those would
+# silently hide an in-flight legacy submission -- the exact state this command
+# exists to make visible.
+GRADUS_ARTIFACT_NAMES = {"Gradus.app.zip", "GradusMac.app.zip"}
+
 for record in records:
     name = str(record.get("name", "(unknown)"))
-    if mode == "history" and name != "GradusMac.app.zip":
+    if mode == "history" and name not in GRADUS_ARTIFACT_NAMES:
         continue
     values = (
         name,
@@ -479,7 +486,7 @@ check_once() {
     echo "Status source: $status_source"
   fi
   if [[ ! -s "$records_file" ]]; then
-    echo "No GradusMac.app.zip submissions were returned."
+    echo "No Gradus.app.zip submissions were returned."
     [[ ! -f "$STATE_FILE" ]] || echo "Local submission ledger: $STATE_FILE"
     return "$EXIT_EMPTY"
   fi

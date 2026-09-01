@@ -383,6 +383,13 @@ validate_density_image_snapshot_selectors
 echo "==> Hermetic notarization script behavior tests"
 ./test-notary-scripts.sh
 
+# Not a counting leg: the counting legs are the four test-*framework* reporters
+# (swift-testing, pytest, xctest, aggregate-xctest-swift), and this is a shell
+# suite like the ones around it. It fails loudly on its own, which is what the
+# floors exist to guarantee for the framework runners.
+echo "==> Hermetic Mac bundle signing and structure tests"
+./test-mac-bundle-structure.sh
+
 echo "==> Hermetic test-count gate behavior tests"
 ./test-gate-selfcheck.sh
 

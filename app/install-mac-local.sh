@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Archives, exports, installs and relaunches GradusMac in /Applications.
+# Archives, exports, signs, verifies, installs and relaunches Gradus in /Applications.
 #
 # This is the local-install counterpart to notarize-mac.sh, which covers the
 # *distribution* path. Local installs need no notarization: Gatekeeper only
@@ -43,14 +43,34 @@ umask 077
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-APP_NAME="GradusMac"
+# Three names, not one. They were the same string until the Release wrapper was
+# renamed, and collapsing them again is how this script broke: `xcodebuild`
+# wants the SCHEME (`GradusMac`, an engineering identifier that is not going
+# anywhere), while the archived product, the exported bundle, the installed app
+# and the process to quit are all the PRODUCT name (`Gradus`, set by the
+# Release configuration in project.yml). A single APP_NAME made the archive
+# look for `Products/Applications/GradusMac.app`, which Release has not
+# produced since the rename.
+SCHEME_NAME="${SCHEME_NAME:-GradusMac}"
+PRODUCT_NAME="${PRODUCT_NAME:-Gradus}"
+# The pre-rename installed bundle. Two apps sharing one bundle identifier is
+# not a state LaunchServices resolves sensibly, so the operator is told about
+# it -- but removing an app from /Applications is their call, not a side effect
+# of running an installer.
+LEGACY_PRODUCT_NAME="GradusMac"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 PLIST_BUDDY="${PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 BUILD_DIR="${BUILD_DIR:-build}"
 ARCHIVE_PATH="$BUILD_DIR/GradusMac.xcarchive"
 EXPORT_PATH="$BUILD_DIR/export"
-APP_PATH="$EXPORT_PATH/$APP_NAME.app"
-ARCHIVE_APP_PATH="$ARCHIVE_PATH/Products/Applications/$APP_NAME.app"
+APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
+ARCHIVE_APP_PATH="$ARCHIVE_PATH/Products/Applications/$PRODUCT_NAME.app"
+RUNTIME_APP="$BUILD_DIR/gradus-runtime/dist/GradusRuntime.app"
+ENTITLEMENTS_PATH="GradusMac/GradusMacProduction.entitlements"
+MANIFEST_PATH="$BUILD_DIR/gradus-mac-bundle-manifest.json"
+SIGN_SCRIPT="${INSTALL_SIGN_SCRIPT:-./sign-mac-bundle.sh}"
+VERIFY_SCRIPT="${INSTALL_VERIFY_SCRIPT:-./verify-mac-bundle.sh}"
+SIGNING_IDENTITY="${INSTALL_SIGNING_IDENTITY:-Developer ID Application}"
 ALLOWED_UNTRACKED_SOURCE_REPORT="verifications/2026-08-09-internal-testflight-candidate-migration-verification.md"
 assert_source_checkout_clean() {
   local root="$1" status_output status_line dirty=0
@@ -87,9 +107,9 @@ resolve_source_revision() {
 SOURCE_REVISION="$(resolve_source_revision)"
 PROJECT_SHA256="$(/usr/bin/shasum -a 256 project.yml | /usr/bin/awk '{print $1}')"
 
-INSTALLED_APP="$INSTALL_DIR/$APP_NAME.app"
-STAGED_APP="$INSTALL_DIR/.$APP_NAME.app.incoming"
-PREVIOUS_APP="$INSTALL_DIR/.$APP_NAME.app.previous"
+INSTALLED_APP="$INSTALL_DIR/$PRODUCT_NAME.app"
+STAGED_APP="$INSTALL_DIR/.$PRODUCT_NAME.app.incoming"
+PREVIOUS_APP="$INSTALL_DIR/.$PRODUCT_NAME.app.previous"
 
 dry_run=0
 skip_build=0
@@ -122,7 +142,7 @@ restore_previous() {
   if [[ -d "$PREVIOUS_APP" ]]; then
     if [[ ! -d "$INSTALLED_APP" ]]; then
       mv "$PREVIOUS_APP" "$INSTALLED_APP" 2>/dev/null || true
-      echo "     Previous $APP_NAME.app restored." >&2
+      echo "     Previous $PRODUCT_NAME.app restored." >&2
     else
       rm -rf "$PREVIOUS_APP" 2>/dev/null || true
     fi
@@ -152,9 +172,11 @@ strip_and_verify() {
   fi
   if ! codesign --verify --deep --strict "$target"; then
     echo "FAIL: strict signature verification failed on the $label bundle." >&2
-    echo "      If this is the installed copy, com.apple.provenance was re-applied" >&2
-    echo "      by the copy itself and could not be stripped. The install has been" >&2
-    echo "      rolled back; the previously installed app is untouched." >&2
+    echo "      If this is the installed copy, the copy itself re-applied metadata" >&2
+    echo "      codesign rejects -- com.apple.FinderInfo or a resource fork; note" >&2
+    echo "      that com.apple.provenance is restricted, unstrippable, and NOT" >&2
+    echo "      what fails here. The install has been rolled back; the previously" >&2
+    echo "      installed app is untouched." >&2
     return 1
   fi
   return 0
@@ -189,24 +211,38 @@ verify_provenance() {
 }
 
 if ((skip_build == 0)); then
+  # The frozen Python runtime is a prerequisite, not a build step: producing it
+  # downloads a pinned CPython package. Xcode hard-fails the Release embed
+  # phase without it, but minutes into the archive and naming a build setting
+  # rather than the command to run.
+  if [[ ! -d "$RUNTIME_APP" ]]; then
+    echo "FAIL: the frozen Python runtime is missing at $RUNTIME_APP." >&2
+    echo "      Build it first (it downloads a pinned CPython, so it is deliberately" >&2
+    echo "      not run for you):" >&2
+    echo "      ./build-gradus-runtime.sh" >&2
+    exit 66
+  fi
+
   echo "==> Regenerating Xcode project from project.yml"
   xcodegen generate
 
-  rm -rf "$BUILD_DIR"
+  # Deliberately not `rm -rf "$BUILD_DIR"`: it holds gradus-runtime, the
+  # prerequisite checked for immediately above.
+  rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$MANIFEST_PATH"
   mkdir -p "$BUILD_DIR"
 
-  echo "==> Archiving $APP_NAME (this takes a few minutes; output stays visible)"
-  progress "Starting xcodebuild archive for $APP_NAME"
+  echo "==> Archiving $SCHEME_NAME (this takes a few minutes; output stays visible)"
+  progress "Starting xcodebuild archive for $SCHEME_NAME"
   xcodebuild archive \
     -project Gradus.xcodeproj \
-    -scheme "$APP_NAME" \
+    -scheme "$SCHEME_NAME" \
     -archivePath "$ARCHIVE_PATH" \
     -destination "generic/platform=macOS" \
     GRADUS_SOURCE_REVISION="$SOURCE_REVISION" \
     GRADUS_PROJECT_SHA256="$PROJECT_SHA256"
 
   if [[ ! -d "$ARCHIVE_APP_PATH" ]]; then
-    echo "FAIL: archive did not contain $APP_NAME.app." >&2
+    echo "FAIL: archive did not contain $PRODUCT_NAME.app." >&2
     exit 66
   fi
   verify_provenance "$ARCHIVE_APP_PATH" "archived" || exit 65
@@ -230,11 +266,28 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 66
 fi
 
+# `exportArchive` does not sign Contents/Helpers/GradusRuntime.app: a run
+# script copies it in, and PyInstaller leaves it ad-hoc signed. Sign the whole
+# tree explicitly, leaves first, before anything verifies or installs it.
+echo "==> Signing embedded code from the leaves inward"
+if ! "$SIGN_SCRIPT" "$APP_PATH" \
+  --identity "$SIGNING_IDENTITY" \
+  --entitlements "$ENTITLEMENTS_PATH"; then
+  echo "FAIL: inside-out signing of the exported bundle failed." >&2
+  exit 65
+fi
+
 echo "==> Verifying the exported bundle"
 if ! strip_and_verify "$APP_PATH" "exported"; then
   exit 65
 fi
 verify_provenance "$APP_PATH" "exported" || exit 65
+# The same structural audit the notarized release path runs, so a locally
+# installed build and a distributed one are held to one contract.
+if ! SOURCE_REVISION="$SOURCE_REVISION" "$VERIFY_SCRIPT" "$APP_PATH" --manifest "$MANIFEST_PATH"; then
+  echo "FAIL: the exported bundle did not pass the structural audit." >&2
+  exit 65
+fi
 
 incoming_version="$(bundle_version "$APP_PATH")"
 if [[ -d "$INSTALLED_APP" ]]; then
@@ -257,18 +310,18 @@ if [[ ! -w "$INSTALL_DIR" ]]; then
   exit 77
 fi
 
-echo "==> Quitting any running $APP_NAME"
+echo "==> Quitting any running $PRODUCT_NAME"
 # pkill exits 1 when nothing matched, which is the normal case and not an
 # error. Under `set -e` an unguarded call would end the script here.
-pkill -x "$APP_NAME" 2>/dev/null || true
+pkill -x "$PRODUCT_NAME" 2>/dev/null || true
 quit_timeout="${QUIT_TIMEOUT_SECONDS:-15}"
 quit_deadline=$((SECONDS + quit_timeout))
-while pgrep -x "$APP_NAME" >/dev/null 2>&1; do
+while pgrep -x "$PRODUCT_NAME" >/dev/null 2>&1; do
   if ((SECONDS >= quit_deadline)); then
-    echo "FAIL: $APP_NAME still running after ${quit_timeout}s; refusing to swap a live bundle." >&2
+    echo "FAIL: $PRODUCT_NAME still running after ${quit_timeout}s; refusing to swap a live bundle." >&2
     exit 75
   fi
-  progress "Waiting for $APP_NAME to exit"
+  progress "Waiting for $PRODUCT_NAME to exit"
   sleep 0.5
 done
 
@@ -307,8 +360,17 @@ if ! open -a "$INSTALLED_APP"; then
   echo "WARN: installed cleanly but could not relaunch; start it from Finder." >&2
 fi
 
-echo "==> Done. $APP_NAME $incoming_version installed at $INSTALLED_APP"
-echo "    GradusMac reads its credential-free snapshot from Application Support."
+legacy_installed="$INSTALL_DIR/$LEGACY_PRODUCT_NAME.app"
+if [[ -d "$legacy_installed" ]]; then
+  echo "WARN: $legacy_installed is still present and carries the same bundle" >&2
+  echo "      identifier as the app just installed. LaunchServices picks between" >&2
+  echo "      two such copies unpredictably. Remove the old one when you are" >&2
+  echo "      satisfied with this install:" >&2
+  echo "      rm -rf \"$legacy_installed\"" >&2
+fi
+
+echo "==> Done. $PRODUCT_NAME $incoming_version installed at $INSTALLED_APP"
+echo "    Gradus reads its credential-free snapshot from Application Support."
 echo "    It does not require Documents access for ordinary monitoring."
 
 # The installer deliberately does not stop, disable, or delete the legacy

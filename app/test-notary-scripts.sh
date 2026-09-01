@@ -53,11 +53,11 @@ case "${2:-}" in
           exit 0
           ;;
         2)
-          printf '{"history":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"GradusMac.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"In Progress"}]}\n'
+          printf '{"history":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"Gradus.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"In Progress"}]}\n'
           exit 0
           ;;
         3)
-          printf '{"history":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"GradusMac.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"Invalid"},{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","name":"GradusMac.app.zip","createdDate":"2026-08-04T13:00:00Z","status":"Accepted"}]}\n'
+          printf '{"history":[{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","name":"Gradus.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"Invalid"},{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","name":"Gradus.app.zip","createdDate":"2026-08-04T13:00:00Z","status":"Accepted"}]}\n'
           exit 0
           ;;
         4)
@@ -65,7 +65,7 @@ case "${2:-}" in
           exit 1
           ;;
         *)
-          printf '{"history":[{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","name":"GradusMac.app.zip","createdDate":"2026-08-04T13:00:00Z","status":"Accepted"}]}\n'
+          printf '{"history":[{"id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb","name":"Gradus.app.zip","createdDate":"2026-08-04T13:00:00Z","status":"Accepted"}]}\n'
           exit 0
           ;;
       esac
@@ -79,7 +79,7 @@ case "${2:-}" in
       terminal) status="Invalid" ;;
       *) status="Accepted" ;;
     esac
-    printf '{"history":[{"id":"11111111-1111-1111-1111-111111111111","name":"GradusMac.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"%s"},{"id":"99999999-9999-9999-9999-999999999999","name":"Other.app.zip","createdDate":"2026-08-04T11:00:00Z","status":"Accepted"}]}\n' "$status"
+    printf '{"history":[{"id":"11111111-1111-1111-1111-111111111111","name":"Gradus.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"%s"},{"id":"99999999-9999-9999-9999-999999999999","name":"Other.app.zip","createdDate":"2026-08-04T11:00:00Z","status":"Accepted"}]}\n' "$status"
     ;;
   info)
     if [[ "$scenario" == "auth" || "$scenario" == "service" || "$scenario" == "unknown" ]]; then
@@ -119,7 +119,7 @@ case "${2:-}" in
     else
       status="Accepted"
     fi
-    printf '{"id":"%s","name":"GradusMac.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"%s"}\n' "$3" "$status"
+    printf '{"id":"%s","name":"Gradus.app.zip","createdDate":"2026-08-04T12:00:00Z","status":"%s"}\n' "$3" "$status"
     ;;
   submit)
     printf '%s\n' "$*" >"$runtime/submit-args"
@@ -127,7 +127,7 @@ case "${2:-}" in
       echo "Simulated upload failure" >&2
       exit 55
     fi
-    echo "Conducting pre-submission checks for GradusMac.app.zip"
+    echo "Conducting pre-submission checks for Gradus.app.zip"
     echo "Upload progress: 100.00%"
     if [[ "$scenario" != "submit-no-id" ]]; then
       echo "  id: 22222222-2222-2222-2222-222222222222"
@@ -148,6 +148,9 @@ FAKE
 cat >"$FAKE_BIN/xcodebuild" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FAKE_NOTARY_RUNTIME:-}" ]]; then
+  printf '%s\n' "$*" >>"$FAKE_NOTARY_RUNTIME/xcodebuild-calls"
+fi
 export_path=""
 while (($#)); do
   if [[ "$1" == "-exportPath" ]]; then
@@ -158,8 +161,8 @@ while (($#)); do
   fi
 done
 if [[ -n "$export_path" ]]; then
-  mkdir -p "$export_path/GradusMac.app/Contents"
-  printf 'fixture\n' >"$export_path/GradusMac.app/Contents/Info.plist"
+  mkdir -p "$export_path/Gradus.app/Contents"
+  printf 'fixture\n' >"$export_path/Gradus.app/Contents/Info.plist"
 fi
 FAKE
 
@@ -181,6 +184,22 @@ FAKE
 cat >"$FAKE_BIN/PlistBuddy" <<'FAKE'
 #!/usr/bin/env bash
 echo "1.2.3"
+FAKE
+
+# sign-mac-bundle.sh and verify-mac-bundle.sh are exercised for real by
+# test-mac-bundle-structure.sh. What matters here is the release workflow's
+# ordering contract: both run on the export, and both run before anything is
+# zipped or uploaded.
+cat >"$FAKE_BIN/sign-stub" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_NOTARY_RUNTIME:?}/sign-calls"
+exit "${FAKE_SIGN_EXIT:-0}"
+FAKE
+
+cat >"$FAKE_BIN/verify-stub" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_NOTARY_RUNTIME:?}/verify-calls"
+exit "${FAKE_VERIFY_EXIT:-0}"
 FAKE
 
 chmod 700 "$FAKE_BIN"/*
@@ -271,7 +290,7 @@ assert_contains "Status:        Invalid" "terminal status is visible"
 
 run_status "$TEST_ROOT/empty.tsv" empty
 assert_status 4 "empty Apple history exits 4 rather than looking accepted"
-assert_contains "No GradusMac.app.zip submissions were returned" "empty history is explicit"
+assert_contains "No Gradus.app.zip submissions were returned" "empty history is explicit"
 
 rm -f "$FAKE_RUNTIME/info-count"
 run_status "$TEST_ROOT/watch.tsv" watch --watch --interval 1 --id 22222222-2222-2222-2222-222222222222
@@ -342,7 +361,7 @@ if find "$TEST_ROOT/tmp" -maxdepth 1 -name 'gradus-notary-status.*' -print -quit
 fi
 monitor_stdout="$(<"$TEST_ROOT/monitor.stdout")"
 monitor_stderr="$(<"$TEST_ROOT/monitor.stderr")"
-[[ "$monitor_stdout" == *"No GradusMac.app.zip submissions were returned"* ]] || {
+[[ "$monitor_stdout" == *"No Gradus.app.zip submissions were returned"* ]] || {
   echo "FAIL: monitor did not report the empty first history cycle" >&2
   exit 1
 }
@@ -471,7 +490,7 @@ echo "  ✓ monitor uses fresh history rows without redundant info requests"
 # A tracked submission omitted from the current history still gets an info
 # lookup, so a temporarily incomplete history response does not hide it.
 fallback_ledger="$TEST_ROOT/monitor-fallback.tsv"
-printf '2026-08-04T12:00:00Z\tcccccccc-cccc-cccc-cccc-cccccccccccc\tGradusMac.app.zip\tfixture.zip\tdeadbeef\n' >"$fallback_ledger"
+printf '2026-08-04T12:00:00Z\tcccccccc-cccc-cccc-cccc-cccccccccccc\tGradus.app.zip\tfixture.zip\tdeadbeef\n' >"$fallback_ledger"
 rm -f "$FAKE_RUNTIME/history-count" "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/info-ids"
 : >"$TEST_ROOT/monitor-fallback.stdout"
 : >"$TEST_ROOT/monitor-fallback.stderr"
@@ -655,15 +674,15 @@ set -e
 assert_status 69 "missing xcrun dependency exits 69"
 assert_contains "required tool is missing: missing-xcrun-for-test" "missing dependency names the tool"
 
-artifact="$TEST_ROOT/GradusMac.app.zip"
+artifact="$TEST_ROOT/Gradus.app.zip"
 printf 'artifact fixture\n' >"$artifact"
 ledger="$TEST_ROOT/concurrent/notary-submissions.tsv"
 record_one="$TEST_ROOT/record-one.out"
 record_two="$TEST_ROOT/record-two.out"
 set +e
-GRADUS_NOTARY_STATE_FILE="$ledger" "$STATUS_SCRIPT" --record 33333333-3333-3333-3333-333333333333 --name GradusMac.app.zip --artifact "$artifact" >"$record_one" 2>&1 &
+GRADUS_NOTARY_STATE_FILE="$ledger" "$STATUS_SCRIPT" --record 33333333-3333-3333-3333-333333333333 --name Gradus.app.zip --artifact "$artifact" >"$record_one" 2>&1 &
 pid_one=$!
-GRADUS_NOTARY_STATE_FILE="$ledger" "$STATUS_SCRIPT" --record 33333333-3333-3333-3333-333333333333 --name GradusMac.app.zip --artifact "$artifact" >"$record_two" 2>&1 &
+GRADUS_NOTARY_STATE_FILE="$ledger" "$STATUS_SCRIPT" --record 33333333-3333-3333-3333-333333333333 --name Gradus.app.zip --artifact "$artifact" >"$record_two" 2>&1 &
 pid_two=$!
 wait "$pid_one"
 status_one=$?
@@ -699,7 +718,7 @@ assert_status 0 "default command refreshes IDs from a nonempty ledger"
 assert_contains "Submission ID: 33333333-3333-3333-3333-333333333333" "ledger-driven output shows the recorded ID"
 assert_contains "Status source: local ledger" "output identifies the ledger-driven live query"
 
-run_status "$TEST_ROOT/missing-artifact.tsv" accepted --record 44444444-4444-4444-4444-444444444444 --name GradusMac.app.zip --artifact "$TEST_ROOT/does-not-exist.zip"
+run_status "$TEST_ROOT/missing-artifact.tsv" accepted --record 44444444-4444-4444-4444-444444444444 --name Gradus.app.zip --artifact "$TEST_ROOT/does-not-exist.zip"
 assert_status 64 "missing record artifact exits 64 without a partial ledger"
 [[ ! -e "$TEST_ROOT/missing-artifact.tsv" ]] || {
   echo "FAIL: invalid record left a partial ledger" >&2
@@ -721,7 +740,10 @@ mkdir -p "$release_app" "$release_root/.state" "$TEST_ROOT/release-tmp"
 cp "$SCRIPT_DIR/notarize-mac.sh" "$SCRIPT_DIR/notary-status.sh" "$release_app/"
 cp "$SCRIPT_DIR/project.yml" "$release_app/"
 chmod 700 "$release_app/notarize-mac.sh" "$release_app/notary-status.sh"
-rm -f "$FAKE_RUNTIME/info-count"
+# The frozen runtime is a prerequisite of archiving, not something the release
+# path builds: producing it downloads a pinned CPython.
+mkdir -p "$release_app/build/gradus-runtime/dist/GradusRuntime.app/Contents/MacOS"
+rm -f "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/sign-calls" "$FAKE_RUNTIME/verify-calls"
 set +e
 (
   cd "$release_app"
@@ -731,9 +753,11 @@ set +e
   FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
   FAKE_EXPECT_LEDGER="$release_root/.state/notary-submissions.tsv" \
   PLIST_BUDDY="$FAKE_BIN/PlistBuddy" \
+  NOTARY_SIGN_SCRIPT="$FAKE_BIN/sign-stub" \
+  NOTARY_VERIFY_SCRIPT="$FAKE_BIN/verify-stub" \
   NOTARY_POLL_INTERVAL=1 \
   TMPDIR="$TEST_ROOT/release-tmp" \
-  ./notarize-mac.sh
+  ./notarize-mac.sh --attended
 ) >"$TEST_ROOT/release.stdout" 2>"$TEST_ROOT/release.stderr"
 last_status=$?
 set -e
@@ -756,7 +780,7 @@ echo "  ✓ release submission explicitly returns after upload for status handof
   echo "FAIL: release workflow did not record the submission ID exactly once" >&2
   exit 1
 }
-[[ -f "$release_app/build/GradusMac-1.2.3.zip" ]] || {
+[[ -f "$release_app/build/Gradus-1.2.3.zip" ]] || {
   echo "FAIL: release workflow did not reach final packaging after acceptance" >&2
   exit 1
 }
@@ -770,6 +794,59 @@ if find "$TEST_ROOT/release-tmp" -maxdepth 1 \
   exit 1
 fi
 echo "  ✓ release records before polling, packages only after acceptance, and cleans its capture file"
+((tests_run += 1))
+
+# `exportArchive` leaves Contents/Helpers/GradusRuntime.app ad-hoc signed, so
+# the release path has to sign the tree itself -- and audit it -- before a
+# single byte goes to Apple.
+grep -q -- '--identity' "$FAKE_RUNTIME/sign-calls" || {
+  echo "FAIL: release did not sign the export with an explicit identity" >&2
+  exit 1
+}
+grep -q -- '--entitlements' "$FAKE_RUNTIME/sign-calls" || {
+  echo "FAIL: release did not apply the production entitlements to the wrapper" >&2
+  exit 1
+}
+grep -q 'export/Gradus.app' "$FAKE_RUNTIME/sign-calls" || {
+  echo "FAIL: release signed something other than the exported Gradus.app" >&2
+  exit 1
+}
+grep -q -- '--manifest' "$FAKE_RUNTIME/verify-calls" || {
+  echo "FAIL: release did not emit a bundle manifest during verification" >&2
+  exit 1
+}
+grep -q 'export/Gradus.app' "$FAKE_RUNTIME/verify-calls" || {
+  echo "FAIL: release audited something other than the exported Gradus.app" >&2
+  exit 1
+}
+echo "  ✓ release signs the export inside out and audits it before packaging"
+((tests_run += 1))
+
+# The clean step used to be `rm -rf build`, which deleted the frozen runtime
+# the archive then hard-failed without.
+[[ -d "$release_app/build/gradus-runtime/dist/GradusRuntime.app" ]] || {
+  echo "FAIL: the release clean step deleted the frozen runtime it depends on" >&2
+  exit 1
+}
+echo "  ✓ the release clean step preserves the frozen runtime"
+((tests_run += 1))
+
+# Naming: the shipped wrapper, the notary artifact and the distributable all
+# carry the customer-facing product name; only the archive keeps `GradusMac`,
+# which is a scheme and an engineering identifier.
+[[ -f "$release_app/build/Gradus.app.zip" ]] || {
+  echo "FAIL: the notary submission artifact is not named Gradus.app.zip" >&2
+  exit 1
+}
+grep -q $'\tGradus.app.zip\t' "$release_root/.state/notary-submissions.tsv" || {
+  echo "FAIL: the ledger recorded a submission name other than Gradus.app.zip" >&2
+  exit 1
+}
+grep -Fq 'ARCHIVE_PATH="build/GradusMac.xcarchive"' "$release_app/notarize-mac.sh" || {
+  echo "FAIL: the archive stopped using the internal GradusMac identifier" >&2
+  exit 1
+}
+echo "  ✓ shipped, submitted and packaged names are Gradus; only the archive stays GradusMac"
 ((tests_run += 1))
 
 cat >"$FAKE_BIN/false-status-helper" <<'FAKE'
@@ -786,6 +863,7 @@ for adversarial_scenario in pending terminal; do
   cp "$SCRIPT_DIR/notarize-mac.sh" "$adversarial_app/"
   cp "$SCRIPT_DIR/project.yml" "$adversarial_app/"
   chmod 700 "$adversarial_app/notarize-mac.sh"
+  mkdir -p "$adversarial_app/build/gradus-runtime/dist/GradusRuntime.app/Contents/MacOS"
   rm -f "$FAKE_RUNTIME/stapled" "$FAKE_RUNTIME/info-count"
   set +e
   last_output="$(
@@ -796,8 +874,10 @@ for adversarial_scenario in pending terminal; do
     FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
     NOTARY_STATUS_SCRIPT="$FAKE_BIN/false-status-helper" \
     PLIST_BUDDY="$FAKE_BIN/PlistBuddy" \
+    NOTARY_SIGN_SCRIPT="$FAKE_BIN/sign-stub" \
+    NOTARY_VERIFY_SCRIPT="$FAKE_BIN/verify-stub" \
     TMPDIR="$TEST_ROOT/adversarial-tmp-$adversarial_scenario" \
-    ./notarize-mac.sh 2>&1
+    ./notarize-mac.sh --attended 2>&1
   )"
   last_status=$?
   set -e
@@ -813,7 +893,7 @@ for adversarial_scenario in pending terminal; do
     echo "FAIL: $adversarial_scenario defense reached stapling" >&2
     exit 1
   }
-  if find "$adversarial_app/build" -maxdepth 1 -name 'GradusMac-*.zip' -print -quit | grep -q .; then
+  if find "$adversarial_app/build" -maxdepth 1 -name 'Gradus-*.zip' -print -quit | grep -q .; then
     echo "FAIL: $adversarial_scenario defense reached distributable packaging" >&2
     exit 1
   fi
@@ -826,16 +906,27 @@ for adversarial_scenario in pending terminal; do
   ((tests_run += 1))
 done
 
+# `label` defaults to the scenario, but two cases can share an Apple scenario
+# while differing in local state (a missing runtime, a failing audit). Giving
+# those distinct directories keeps one case's ledger out of the next one's
+# assertions.
 run_release_audit_case() {
   local scenario="$1"
-  local case_root="$TEST_ROOT/audit-$scenario"
+  local label="${2:-$scenario}"
+  local case_root="$TEST_ROOT/audit-$label"
   local case_app="$case_root/app"
-  local case_tmp="$TEST_ROOT/audit-tmp-$scenario"
+  local case_tmp="$TEST_ROOT/audit-tmp-$label"
   mkdir -p "$case_app" "$case_tmp"
   cp "$SCRIPT_DIR/notarize-mac.sh" "$SCRIPT_DIR/notary-status.sh" "$case_app/"
   cp "$SCRIPT_DIR/project.yml" "$case_app/"
   chmod 700 "$case_app/notarize-mac.sh" "$case_app/notary-status.sh"
-  rm -f "$FAKE_RUNTIME/stapled" "$FAKE_RUNTIME/info-count"
+  if [[ "${CASE_OMIT_RUNTIME:-0}" != "1" ]]; then
+    mkdir -p "$case_app/build/gradus-runtime/dist/GradusRuntime.app/Contents/MacOS"
+  fi
+  # submit-args included: these files are shared across cases, and a leftover
+  # from an earlier submission would read as "this case uploaded".
+  rm -f "$FAKE_RUNTIME/stapled" "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/submit-args" \
+    "$FAKE_RUNTIME/sign-calls" "$FAKE_RUNTIME/verify-calls" "$FAKE_RUNTIME/xcodebuild-calls"
   set +e
   last_output="$(
     cd "$case_app" && \
@@ -844,9 +935,11 @@ run_release_audit_case() {
     FAKE_NOTARY_SCENARIO="$scenario" \
     FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
     PLIST_BUDDY="$FAKE_BIN/PlistBuddy" \
+    NOTARY_SIGN_SCRIPT="$FAKE_BIN/sign-stub" \
+    NOTARY_VERIFY_SCRIPT="$FAKE_BIN/verify-stub" \
     NOTARY_POLL_INTERVAL=1 \
     TMPDIR="$case_tmp" \
-    ./notarize-mac.sh 2>&1
+    ./notarize-mac.sh ${CASE_NOTARY_ARGS-"--attended"} 2>&1
   )"
   last_status=$?
   set -e
@@ -861,7 +954,8 @@ assert_no_release_downstream() {
     echo "FAIL: $label reached stapling" >&2
     exit 1
   }
-  if find "$audit_app/build" -maxdepth 1 -name 'GradusMac-*.zip' -print -quit | grep -q .; then
+  if [[ -d "$audit_app/build" ]] &&
+    find "$audit_app/build" -maxdepth 1 -name 'Gradus-*.zip' -print -quit | grep -q .; then
     echo "FAIL: $label reached distributable packaging" >&2
     exit 1
   fi
@@ -910,6 +1004,77 @@ assert_status 3 "honest rejected status exits 3 after recording"
 }
 assert_no_release_downstream "rejected recorded submission"
 echo "  ✓ rejected submission stays recorded and cannot staple or package"
+((tests_run += 1))
+
+
+# A missing frozen runtime is caught before Xcode starts, because otherwise the
+# failure arrives minutes into an archive and names a build setting rather than
+# the command that fixes it.
+CASE_OMIT_RUNTIME=1 run_release_audit_case accepted missing-runtime
+unset CASE_OMIT_RUNTIME
+assert_status 66 "a missing frozen runtime stops the release before archiving"
+assert_contains "./build-gradus-runtime.sh" "the refusal names the command that produces the runtime"
+[[ ! -e "$FAKE_RUNTIME/xcodebuild-calls" ]] || {
+  echo "FAIL: xcodebuild ran before the frozen-runtime prerequisite was checked" >&2
+  exit 1
+}
+assert_no_release_downstream "missing frozen runtime"
+echo "  ✓ a missing frozen runtime stops the release before Xcode is invoked"
+((tests_run += 1))
+
+# The audit is upstream of the upload on purpose: a bundle Apple would reject
+# must never leave the machine, and a submission that was never made needs no
+# recovery.
+export FAKE_VERIFY_EXIT=1
+run_release_audit_case accepted failed-audit
+unset FAKE_VERIFY_EXIT
+if ((last_status == 0)); then
+  echo "FAIL: a failed structural audit still completed the release" >&2
+  exit 1
+fi
+[[ ! -f "$audit_app/build/Gradus.app.zip" ]] || {
+  echo "FAIL: a bundle that failed the audit was zipped for submission" >&2
+  exit 1
+}
+[[ ! -e "$audit_root/.state/notary-submissions.tsv" ]] || {
+  echo "FAIL: a bundle that failed the audit was recorded as submitted" >&2
+  exit 1
+}
+assert_no_release_downstream "failed structural audit"
+echo "  ✓ a failed structural audit blocks zipping, submission and packaging"
+((tests_run += 1))
+
+
+# Submission is the one irreversible external step in this script, so it is
+# opt-in. A run that was not asked to submit must do the whole local job and
+# then stop, having sent nothing.
+CASE_NOTARY_ARGS="" run_release_audit_case accepted unattended
+assert_status 0 "an unattended run completes the local work without failing"
+assert_contains "Stopping before submission" "an unattended run says it stopped short of Apple"
+assert_contains "./notarize-mac.sh --attended" "an unattended run names the flag that submits"
+[[ ! -f "$audit_app/build/Gradus.app.zip" ]] || {
+  echo "FAIL: an unattended run packaged a submission artifact" >&2
+  exit 1
+}
+[[ ! -e "$audit_root/.state/notary-submissions.tsv" ]] || {
+  echo "FAIL: an unattended run recorded a submission" >&2
+  exit 1
+}
+[[ ! -e "$FAKE_RUNTIME/submit-args" ]] || {
+  echo "FAIL: an unattended run uploaded to Apple" >&2
+  exit 1
+}
+# It still did the local work it is useful for.
+grep -q 'export/Gradus.app' "$FAKE_RUNTIME/sign-calls" || {
+  echo "FAIL: an unattended run skipped the signing pass" >&2
+  exit 1
+}
+grep -q -- '--manifest' "$FAKE_RUNTIME/verify-calls" || {
+  echo "FAIL: an unattended run skipped the structural audit" >&2
+  exit 1
+}
+assert_no_release_downstream "unattended run"
+echo "  ✓ an unattended run signs and audits but never submits"
 ((tests_run += 1))
 
 echo "==> test-notary-scripts.sh: $tests_run behavior assertions passed"

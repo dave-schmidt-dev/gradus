@@ -157,8 +157,8 @@ if [[ "${1:-}" == "-exportArchive" ]]; then
     fi
     shift
   done
-  mkdir -p "$export_path/GradusMac.app/Contents/MacOS"
-  : >"$export_path/GradusMac.app/Contents/Info.plist"
+  mkdir -p "$export_path/Gradus.app/Contents/MacOS"
+  : >"$export_path/Gradus.app/Contents/Info.plist"
 fi
 if [[ "${1:-}" == "archive" ]]; then
   archive_path=""
@@ -166,8 +166,8 @@ if [[ "${1:-}" == "archive" ]]; then
     if [[ "$1" == "-archivePath" ]]; then archive_path="$2"; fi
     shift
   done
-  mkdir -p "$archive_path/Products/Applications/GradusMac.app/Contents"
-  : >"$archive_path/Products/Applications/GradusMac.app/Contents/Info.plist"
+  mkdir -p "$archive_path/Products/Applications/Gradus.app/Contents"
+  : >"$archive_path/Products/Applications/Gradus.app/Contents/Info.plist"
 fi
 exit 0
 FAKE
@@ -207,6 +207,22 @@ case "$key" in
 esac
 FAKE
 
+# The signing pass and the structural audit are separate scripts with their own
+# hermetic suite (test-mac-bundle-structure.sh). What this file tests is the
+# wiring: that the installer calls them, on the right bundle, before it stages
+# anything, and stops when either says no.
+cat >"$FAKE_BIN/sign-stub" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_RUNTIME:?}/sign-calls"
+exit "${FAKE_SIGN_EXIT:-0}"
+FAKE
+
+cat >"$FAKE_BIN/verify-stub" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${FAKE_RUNTIME:?}/verify-calls"
+exit "${FAKE_VERIFY_EXIT:-0}"
+FAKE
+
 chmod +x "$FAKE_BIN"/*
 
 # ------------------------------------------------------------------- harness
@@ -242,7 +258,13 @@ setup_case() {
   FAKE_PROJECT_SHA256="$(/usr/bin/shasum -a 256 "$CASE_ROOT/project.yml" | /usr/bin/awk '{print $1}')"
   export FAKE_PROJECT_SHA256
   export PLIST_BUDDY="$FAKE_BIN/plistbuddy"
+  export INSTALL_SIGN_SCRIPT="$FAKE_BIN/sign-stub"
+  export INSTALL_VERIFY_SCRIPT="$FAKE_BIN/verify-stub"
   export QUIT_TIMEOUT_SECONDS=1
+  # Present by default because the build path refuses to archive without it.
+  # The case that removes it is the one testing that refusal.
+  mkdir -p "$BUILD_DIR/gradus-runtime/dist/GradusRuntime.app/Contents/MacOS"
+  unset FAKE_SIGN_EXIT FAKE_VERIFY_EXIT
   unset FAKE_CODESIGN_FAIL_SUBSTR FAKE_XATTR_FAIL_SUBSTR FAKE_APP_RUNNING_FLAG
   unset FAKE_ARCHIVE_SOURCE_REVISION FAKE_ARCHIVE_PROJECT_SHA256
   unset FAKE_INCOMING_SOURCE_REVISION FAKE_INCOMING_PROJECT_SHA256
@@ -266,7 +288,7 @@ make_bundle() {
   local marker="${2:-}"
   mkdir -p "$path/Contents/MacOS"
   : >"$path/Contents/Info.plist"
-  printf 'binary\n' >"$path/Contents/MacOS/GradusMac"
+  printf 'binary\n' >"$path/Contents/MacOS/Gradus"
   if [[ -n "$marker" ]]; then
     printf '%s\n' "$marker" >"$path/Contents/marker"
   fi
@@ -289,7 +311,7 @@ marker_is() {
 
 no_staging_artifacts() {
   local count
-  count="$(find "$INSTALL_DIR" -maxdepth 1 -name '.GradusMac.app.*' | wc -l | tr -d ' ')"
+  count="$(find "$INSTALL_DIR" -maxdepth 1 -name '.Gradus.app.*' | wc -l | tr -d ' ')"
   expect_eq "$count" "0" "staging artifacts were left in the destination"
 }
 
@@ -310,13 +332,104 @@ end() {
 
 echo "==> install-mac-local.sh"
 
+begin "the shipped wrapper is Gradus.app while the scheme stays GradusMac"
+setup_case release-naming
+make_bundle "$BUILD_DIR/export/Gradus.app"
+run_install --skip-build --dry-run || fail "dry run exited non-zero"
+grep -q "export/Gradus.app" "$FAKE_RUNTIME/sign-calls" 2>/dev/null ||
+  fail "the installer did not act on the exported Gradus.app"
+grep -Fq 'ARCHIVE_PATH="$BUILD_DIR/GradusMac.xcarchive"' "$CASE_INSTALL_SCRIPT" ||
+  fail "the archive name stopped being the internal GradusMac identifier"
+grep -Fq 'SCHEME_NAME="${SCHEME_NAME:-GradusMac}"' "$CASE_INSTALL_SCRIPT" ||
+  fail "the xcodebuild scheme stopped being GradusMac"
+grep -Fq 'PRODUCT_NAME="${PRODUCT_NAME:-Gradus}"' "$CASE_INSTALL_SCRIPT" ||
+  fail "the shipped product name is not Gradus"
+end
+
+begin "signs the export inside out and audits it before staging"
+setup_case sign-then-verify
+make_bundle "$BUILD_DIR/export/Gradus.app"
+run_install --skip-build || fail "install exited non-zero"
+grep -q -- "--identity" "$FAKE_RUNTIME/sign-calls" || fail "signing ran without an explicit identity"
+grep -q -- "--entitlements" "$FAKE_RUNTIME/sign-calls" || fail "the wrapper was signed without entitlements"
+grep -q -- "--manifest" "$FAKE_RUNTIME/verify-calls" || fail "the audit did not emit a manifest"
+grep -q "export/Gradus.app" "$FAKE_RUNTIME/verify-calls" || fail "the audit did not run on the export"
+# Signing must precede the copy into the destination, or an unsigned bundle is
+# briefly staged in /Applications.
+[[ -s "$FAKE_RUNTIME/sign-calls" ]] || fail "nothing was signed"
+end
+
+begin "a failed structural audit stops the install with the old app in place"
+setup_case audit-fails
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "untouched"
+export FAKE_VERIFY_EXIT=1
+if run_install --skip-build; then
+  fail "install succeeded despite a failed structural audit"
+fi
+marker_is "$INSTALL_DIR/Gradus.app" "untouched" || fail "a failed audit still replaced the installed app"
+no_staging_artifacts
+unset FAKE_VERIFY_EXIT
+end
+
+begin "a failed signing pass stops the install with the old app in place"
+setup_case sign-fails
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "untouched"
+export FAKE_SIGN_EXIT=1
+if run_install --skip-build; then
+  fail "install succeeded despite a failed signing pass"
+fi
+marker_is "$INSTALL_DIR/Gradus.app" "untouched" || fail "a failed signing pass still replaced the installed app"
+[[ ! -e "$FAKE_RUNTIME/verify-calls" ]] || fail "the audit ran on a bundle that failed to sign"
+no_staging_artifacts
+unset FAKE_SIGN_EXIT
+end
+
+begin "the build path refuses to archive without the frozen runtime"
+setup_case missing-runtime
+rm -rf "$BUILD_DIR/gradus-runtime"
+if run_install; then
+  fail "the build path archived without the frozen runtime"
+fi
+grep -q "build-gradus-runtime.sh" "$FAKE_RUNTIME/stderr" ||
+  fail "the refusal did not name the command that produces the runtime"
+[[ ! -e "$FAKE_RUNTIME/xcodebuild-calls" ]] || fail "xcodebuild ran before the prerequisite check"
+end
+
+begin "the build path keeps the frozen runtime it was told to check for"
+setup_case runtime-survives-clean
+run_install || fail "build path exited non-zero"
+[[ -d "$BUILD_DIR/gradus-runtime/dist/GradusRuntime.app" ]] ||
+  fail "the clean step deleted the frozen runtime the archive depends on"
+end
+
+begin "a pre-rename GradusMac.app is reported, never removed"
+setup_case legacy-wrapper
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/GradusMac.app" "legacy"
+run_install --skip-build || fail "install exited non-zero with a legacy wrapper present"
+marker_is "$INSTALL_DIR/GradusMac.app" "legacy" || fail "the installer removed the pre-rename app"
+grep -q "same bundle" "$FAKE_RUNTIME/stderr" || fail "did not explain why two copies are a problem"
+grep -q "rm -rf .*GradusMac.app" "$FAKE_RUNTIME/stderr" || fail "did not give the exact removal command"
+end
+
+begin "says nothing about a pre-rename app that is not installed"
+setup_case no-legacy-wrapper
+make_bundle "$BUILD_DIR/export/Gradus.app"
+run_install --skip-build || fail "install exited non-zero"
+if grep -q "same bundle" "$FAKE_RUNTIME/stderr"; then
+  fail "warned about a pre-rename app that does not exist"
+fi
+end
+
 begin "--dry-run verifies without touching the destination"
 setup_case dry-run
-make_bundle "$BUILD_DIR/export/GradusMac.app"
-make_bundle "$INSTALL_DIR/GradusMac.app" "untouched"
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "untouched"
 run_install --skip-build --dry-run || fail "dry run exited non-zero"
-marker_is "$INSTALL_DIR/GradusMac.app" "untouched" || fail "dry run modified the installed app"
-grep -q "export/GradusMac.app" "$FAKE_RUNTIME/codesign-calls" 2>/dev/null ||
+marker_is "$INSTALL_DIR/Gradus.app" "untouched" || fail "dry run modified the installed app"
+grep -q "export/Gradus.app" "$FAKE_RUNTIME/codesign-calls" 2>/dev/null ||
   fail "dry run did not verify the exported bundle"
 [[ ! -e "$FAKE_RUNTIME/open-calls" ]] || fail "dry run relaunched the app"
 [[ ! -e "$FAKE_RUNTIME/pkill-calls" ]] || fail "dry run quit the running app"
@@ -325,14 +438,14 @@ end
 
 begin "installs, strips both copies, relaunches, leaves no artifacts"
 setup_case happy
-make_bundle "$BUILD_DIR/export/GradusMac.app"
-make_bundle "$INSTALL_DIR/GradusMac.app" "old"
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "old"
 run_install --skip-build || fail "install exited non-zero"
-[[ -d "$INSTALL_DIR/GradusMac.app" ]] || fail "app is not installed"
-marker_is "$INSTALL_DIR/GradusMac.app" "" || fail "old bundle was not replaced"
+[[ -d "$INSTALL_DIR/Gradus.app" ]] || fail "app is not installed"
+marker_is "$INSTALL_DIR/Gradus.app" "" || fail "old bundle was not replaced"
 # The strip must happen twice: once on the export, once on the copy sitting in
 # the destination. The second is the one the manual sequence kept forgetting.
-grep -q "export/GradusMac.app" "$FAKE_RUNTIME/xattr-calls" || fail "exported bundle was not stripped"
+grep -q "export/Gradus.app" "$FAKE_RUNTIME/xattr-calls" || fail "exported bundle was not stripped"
 grep -q "incoming" "$FAKE_RUNTIME/xattr-calls" || fail "staged copy was not stripped"
 grep -q "incoming" "$FAKE_RUNTIME/codesign-calls" || fail "staged copy was not verified in place"
 [[ -s "$FAKE_RUNTIME/open-calls" ]] || fail "app was not relaunched"
@@ -343,14 +456,14 @@ end
 
 begin "a staged-verify failure leaves the installed app untouched"
 setup_case staged-verify-fails
-make_bundle "$BUILD_DIR/export/GradusMac.app"
-make_bundle "$INSTALL_DIR/GradusMac.app" "keep-me"
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "keep-me"
 export FAKE_CODESIGN_FAIL_SUBSTR="incoming"
 if run_install --skip-build; then
   fail "install succeeded despite the staged copy failing verification"
 fi
-[[ -d "$INSTALL_DIR/GradusMac.app" ]] || fail "the previously installed app was destroyed"
-marker_is "$INSTALL_DIR/GradusMac.app" "keep-me" ||
+[[ -d "$INSTALL_DIR/Gradus.app" ]] || fail "the previously installed app was destroyed"
+marker_is "$INSTALL_DIR/Gradus.app" "keep-me" ||
   fail "the installed app was replaced by the unverified copy"
 [[ ! -e "$FAKE_RUNTIME/open-calls" ]] || fail "relaunched an app that failed verification"
 no_staging_artifacts
@@ -358,13 +471,13 @@ end
 
 begin "an unverifiable export never reaches the destination"
 setup_case export-verify-fails
-make_bundle "$BUILD_DIR/export/GradusMac.app"
-make_bundle "$INSTALL_DIR/GradusMac.app" "keep-me"
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "keep-me"
 export FAKE_CODESIGN_FAIL_SUBSTR="export"
 if run_install --skip-build; then
   fail "install succeeded despite the export failing verification"
 fi
-marker_is "$INSTALL_DIR/GradusMac.app" "keep-me" ||
+marker_is "$INSTALL_DIR/Gradus.app" "keep-me" ||
   fail "the installed app was touched despite an unverifiable export"
 [[ ! -e "$FAKE_RUNTIME/pkill-calls" ]] || fail "quit the running app before knowing the build was good"
 no_staging_artifacts
@@ -372,13 +485,13 @@ end
 
 begin "a provenance-mismatched export never reaches the destination"
 setup_case export-provenance-fails
-make_bundle "$BUILD_DIR/export/GradusMac.app"
-make_bundle "$INSTALL_DIR/GradusMac.app" "keep-me"
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "keep-me"
 export FAKE_INCOMING_SOURCE_REVISION="wrong-revision"
 if run_install --skip-build; then
   fail "install succeeded despite mismatched exported provenance"
 fi
-marker_is "$INSTALL_DIR/GradusMac.app" "keep-me" || fail "provenance mismatch touched installed app"
+marker_is "$INSTALL_DIR/Gradus.app" "keep-me" || fail "provenance mismatch touched installed app"
 grep -q "source revision" "$FAKE_RUNTIME/stderr" || fail "provenance mismatch was not reported"
 no_staging_artifacts
 end
@@ -396,24 +509,24 @@ end
 
 begin "refuses to swap a bundle that is still running"
 setup_case will-not-quit
-make_bundle "$BUILD_DIR/export/GradusMac.app"
-make_bundle "$INSTALL_DIR/GradusMac.app" "keep-me"
+make_bundle "$BUILD_DIR/export/Gradus.app"
+make_bundle "$INSTALL_DIR/Gradus.app" "keep-me"
 touch "$CASE_ROOT/still-running"
 export FAKE_APP_RUNNING_FLAG="$CASE_ROOT/still-running"
 if run_install --skip-build; then
   fail "install proceeded while the app was still running"
 fi
-marker_is "$INSTALL_DIR/GradusMac.app" "keep-me" || fail "swapped the bundle of a running app"
+marker_is "$INSTALL_DIR/Gradus.app" "keep-me" || fail "swapped the bundle of a running app"
 no_staging_artifacts
 end
 
 begin "rejects an unknown argument instead of doing the default thing"
 setup_case unknown-arg
-make_bundle "$INSTALL_DIR/GradusMac.app" "keep-me"
+make_bundle "$INSTALL_DIR/Gradus.app" "keep-me"
 status=0
 run_install --no-such-flag || status=$?
 expect_eq "$status" "64" "unknown argument should exit 64"
-marker_is "$INSTALL_DIR/GradusMac.app" "keep-me" || fail "acted on an unparsed command line"
+marker_is "$INSTALL_DIR/Gradus.app" "keep-me" || fail "acted on an unparsed command line"
 end
 
 begin "--skip-build with no exported app fails instead of installing nothing"
@@ -421,7 +534,7 @@ setup_case missing-export
 status=0
 run_install --skip-build || status=$?
 expect_eq "$status" "66" "a missing export should exit 66"
-[[ ! -e "$INSTALL_DIR/GradusMac.app" ]] || fail "installed something with no export present"
+[[ ! -e "$INSTALL_DIR/Gradus.app" ]] || fail "installed something with no export present"
 end
 
 begin "a non-Git fixture without provenance fails closed"
@@ -440,14 +553,14 @@ run_install || fail "full build path exited non-zero"
 [[ -s "$FAKE_RUNTIME/xcodegen-calls" ]] || fail "project was not regenerated"
 grep -q "archive" "$FAKE_RUNTIME/xcodebuild-calls" || fail "no archive step"
 grep -q "exportArchive" "$FAKE_RUNTIME/xcodebuild-calls" || fail "no export step"
-[[ -d "$INSTALL_DIR/GradusMac.app" ]] || fail "build path did not install"
+[[ -d "$INSTALL_DIR/Gradus.app" ]] || fail "build path did not install"
 no_staging_artifacts
 end
 
 begin "leaves a detected legacy job installed, untouched, and named"
 setup_case legacy-present
 install_legacy_job_fixture
-make_bundle "$BUILD_DIR/export/GradusMac.app"
+make_bundle "$BUILD_DIR/export/Gradus.app"
 run_install --skip-build || fail "install exited non-zero with a legacy job present"
 grep -q "still installed and untouched" "$FAKE_RUNTIME/stdout" ||
   fail "did not say the legacy job was left alone"
@@ -463,7 +576,7 @@ end
 
 begin "says nothing about a legacy job that is not installed"
 setup_case legacy-absent
-make_bundle "$BUILD_DIR/export/GradusMac.app"
+make_bundle "$BUILD_DIR/export/Gradus.app"
 run_install --skip-build || fail "install exited non-zero"
 grep -q "still installed and untouched" "$FAKE_RUNTIME/stdout" &&
   fail "invented a legacy job that is not there"
