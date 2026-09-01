@@ -835,7 +835,10 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
   containing no Python change still runs it.
 - **release gate**: `app/test-gate.sh` runs the local macOS and simulator app
   automation against candidate-bound source. Physical-device acceptance remains
-  a separate owner gate.
+  a separate owner gate. Run it bare — `caffeinate -disu bash app/test-gate.sh`.
+  Its three UI legs each take the machine-wide `apple-ui-test-lock` themselves,
+  and that lock is not re-entrant, so launching the gate underneath an outer
+  hold hangs those legs on a lock their own ancestor owns.
 
 Config lives in `.pre-commit-config.yaml`, with SwiftFormat policy in
 `.swiftformat`, Swift source scope and generated directory exclusions in

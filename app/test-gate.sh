@@ -448,6 +448,12 @@ echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
 assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
+# Three legs take this machine-wide lock -- GradusMacUI and both simulator UI
+# legs. `flock` is per open-file-description, so a *nested* acquisition is not
+# re-entrant: running this gate underneath an outer `apple-ui-test-lock` hold
+# makes each of those legs wait forever on a lock its own ancestor owns. Run
+# the gate bare -- `caffeinate -disu bash app/test-gate.sh` -- and let the legs
+# take the lock themselves.
 APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"
 GRADUS_MAC_TEST_TIMEOUT_SECONDS="${GRADUS_MAC_TEST_TIMEOUT_SECONDS:-600}"
 if ! [[ "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
