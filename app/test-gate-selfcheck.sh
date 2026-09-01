@@ -487,6 +487,38 @@ for leg in GradusMac GradusRefreshAgent GradusiOS-iPhone GradusWidget; do
     fail "$leg unit leg must not use apple-ui-test-lock"
 done
 
+# GradusMacUI drives real HID automation against the host's focused window, so
+# it takes the machine-wide lock too -- with the lock OUTSIDE the deadline, so
+# an unbounded wait for a contending Apple UI test is not charged against the
+# 600s budget (measured: it is, and the leg fails spuriously, when the order is
+# reversed). apple-ui-test-lock execvp's in place and cannot exec a shell
+# function, so `run_with_deadline` is re-entered through `bash -c` and reaches
+# that shell via `export -f`. The leg's range terminator is the `-only-testing`
+# flag because, unlike the unit legs, it does not end at CODE_SIGNING_ALLOWED=NO.
+# Line continuations are folded so one fixed string pins presence, order, and
+# composition together.
+validate_gradus_mac_ui_lock_contract() {
+  local gate_path="$1" ui_leg_block
+  ui_leg_block="$(sed -n '/assert_counting_leg "GradusMacUI"/,/-only-testing:GradusMacUITests/p' "$gate_path" |
+    sed 's/[[:space:]]*\\$//' | tr '\n' ' ' | tr -s ' ')"
+  [[ "$ui_leg_block" == *'assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- bash -c '\''run_with_deadline "$@"'\'' gradus-mac-ui-leg "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test'* ]] || return 1
+  grep -Fq 'export -f run_with_deadline' "$gate_path" || return 1
+}
+
+validate_gradus_mac_ui_lock_contract "$GATE_SCRIPT" ||
+  fail "GradusMacUI leg is not serialized by apple-ui-test-lock outside its deadline"
+
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-mac-ui-lock-contract.XXXXXX")"
+sed 's/"\$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- //' "$GATE_SCRIPT" > "$mutated_gate"
+if validate_gradus_mac_ui_lock_contract "$mutated_gate"; then
+  fail "GradusMacUI lock contract accepted an unserialized leg"
+fi
+sed '/^export -f run_with_deadline$/d' "$GATE_SCRIPT" > "$mutated_gate"
+if validate_gradus_mac_ui_lock_contract "$mutated_gate"; then
+  fail "GradusMacUI lock contract accepted a leg whose deadline cannot cross the exec"
+fi
+rm -f "$mutated_gate"
+
 ipad_ui_line="$(grep -nF 'assert_counting_leg "GradusiOS-iPad"' "$GATE_SCRIPT" | cut -d: -f1)"
 iphone_ui_line="$(grep -nF 'assert_counting_leg "GradusiOSUI"' "$GATE_SCRIPT" | cut -d: -f1)"
 if ! (( ipad_ui_line < iphone_ui_line )); then

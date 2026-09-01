@@ -624,7 +624,22 @@ assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECO
   CODE_SIGNING_ALLOWED=NO
 
 echo "==> xcodebuild test — GradusMacUITests (platform=macOS; exact GradusMac product)"
-assert_counting_leg "GradusMacUI" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env \
+# This leg drives real HID automation against the host's focused window, so it
+# takes the same machine-wide lock the simulator UI legs take; without it a
+# concurrent Apple UI test in another project and this one fight over focus and
+# both fail. The lock is deliberately the OUTER wrapper: waiting for it is
+# unbounded, exactly as on the iOS UI legs, and must not be charged against the
+# deadline. Measured 2026-09-01 -- with the deadline outside instead, a
+# contending run in another repository held the lock past 600s and this leg
+# reported a spurious `exceeded 600s` failure without ever starting xcodebuild.
+# The lock execvp's in place, so `run_with_deadline` still runs as its own
+# process, still governs only xcodebuild, and its TERM still reaches it;
+# `export -f` is what carries the function across that exec.
+export -f run_with_deadline
+assert_counting_leg "GradusMacUI" \
+  "$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- \
+  bash -c 'run_with_deadline "$@"' gradus-mac-ui-leg \
+  "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env \
   GRADUS_DISABLE_PIPELINE=1 \
   xcodebuild test \
   -project Gradus.xcodeproj \
