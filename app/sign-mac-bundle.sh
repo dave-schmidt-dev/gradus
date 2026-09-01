@@ -29,6 +29,19 @@
 # an omission nobody notices until Apple rejects the upload.
 # `--deep` remains legitimate on the *verify* side as defense in depth.
 #
+# ## Why a synced folder cannot hold the artifact
+#
+# macOS file providers -- iCloud Drive's Desktop & Documents sync, OneDrive,
+# and friends -- stamp `com.apple.FinderInfo` on every `.app` directory they
+# manage, and re-apply it within about two seconds of it being cleared.
+# Measured on this checkout, which lives under a synced ~/Documents. codesign
+# refuses to sign or verify anything carrying that attribute ("resource fork,
+# Finder information, or similar detritus not allowed"), so a bundle signed
+# inside a managed folder loses that race no matter how carefully it is
+# cleaned -- and `ditto` would copy the attribute straight into the zip that
+# goes to Apple. This script refuses to sign under a file-provider domain
+# rather than produce an artifact that cannot be verified.
+#
 # ## Ordering contract
 #
 # A bundle's seal covers its nested code, so the nested code must be final
@@ -131,6 +144,21 @@ fi
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/gradus-sign.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
+
+# Walks up from `path` and prints the first ancestor carrying a file-provider
+# domain id, which is how macOS marks a managed tree.
+file_provider_root() {
+  local path
+  path="$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"
+  while [[ "$path" != "/" && -n "$path" ]]; do
+    if "$XATTR_TOOL" "$path" 2>/dev/null | grep -q 'com.apple.file-provider-domain-id'; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+    path="$(dirname "$path")"
+  done
+  return 1
+}
 
 progress() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$1" >&2
@@ -245,6 +273,16 @@ inside_other_bundle() {
 # restricted, `xattr -c` cannot remove it, and it does not affect a strict
 # verify (measured -- see verify-mac-bundle.sh).
 "$XATTR_TOOL" -cr "$APP"
+
+if provider_root="$(file_provider_root "$APP")"; then
+  echo "FAIL: $APP is inside a file-provider-managed folder ($provider_root)." >&2
+  echo "      The provider re-applies com.apple.FinderInfo to .app directories" >&2
+  echo "      seconds after it is cleared, and codesign refuses to sign or" >&2
+  echo "      verify anything carrying it. Export somewhere outside that tree" >&2
+  echo "      -- the release scripts stage under \$TMPDIR, overridable with" >&2
+  echo "      GRADUS_EXPORT_ROOT -- and sign there." >&2
+  exit 66
+fi
 
 # Checked before anything is signed, because the failure it catches is a bad
 # export rather than a bad signature: a wrapper with no entitlement blob would

@@ -222,6 +222,7 @@ run_status() {
   FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
   GRADUS_NOTARY_STATE_FILE="$state_file" \
   TMPDIR="$TEST_ROOT/tmp" \
+  GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
   "$STATUS_SCRIPT" "$@" >"$TEST_ROOT/run.stdout" 2>"$TEST_ROOT/run.stderr"
   last_status=$?
   set -e
@@ -321,6 +322,7 @@ FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
 GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/monitor.tsv" \
 NOTARY_POLL_INTERVAL=1 \
 TMPDIR="$TEST_ROOT/tmp" \
+GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
 "$STATUS_SCRIPT" --monitor >"$TEST_ROOT/monitor.stdout" 2>"$TEST_ROOT/monitor.stderr" &
 monitor_pid=$!
 set -e
@@ -408,6 +410,7 @@ FAKE_BLOCK_DIR="$blocked_monitor_dir" \
 GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/blocked-monitor.tsv" \
 NOTARY_POLL_INTERVAL=1 \
 TMPDIR="$TEST_ROOT/tmp" \
+GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
 "$STATUS_SCRIPT" --monitor >"$TEST_ROOT/blocked-monitor.stdout" 2>"$TEST_ROOT/blocked-monitor.stderr" &
 blocked_monitor_pid=$!
 set -e
@@ -461,6 +464,7 @@ FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
 GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/monitor-known.tsv" \
 NOTARY_POLL_INTERVAL=1 \
 TMPDIR="$TEST_ROOT/tmp" \
+GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
 "$STATUS_SCRIPT" --monitor >"$TEST_ROOT/monitor-known.stdout" 2>"$TEST_ROOT/monitor-known.stderr" &
 known_pid=$!
 set -e
@@ -501,6 +505,7 @@ FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
 GRADUS_NOTARY_STATE_FILE="$fallback_ledger" \
 NOTARY_POLL_INTERVAL=1 \
 TMPDIR="$TEST_ROOT/tmp" \
+GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
 "$STATUS_SCRIPT" --monitor >"$TEST_ROOT/monitor-fallback.stdout" 2>"$TEST_ROOT/monitor-fallback.stderr" &
 fallback_pid=$!
 set -e
@@ -544,6 +549,7 @@ FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
 GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/monitor-explicit.tsv" \
 NOTARY_POLL_INTERVAL=1 \
 TMPDIR="$TEST_ROOT/tmp" \
+GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
 "$STATUS_SCRIPT" --monitor --id "$explicit_id" >"$TEST_ROOT/monitor-explicit.stdout" 2>"$TEST_ROOT/monitor-explicit.stderr" &
 explicit_pid=$!
 set -e
@@ -618,6 +624,7 @@ FAKE_NOTARY_RUNTIME="$FAKE_RUNTIME" \
 FAKE_BLOCK_DIR="$block_dir" \
 GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/blocked.tsv" \
 TMPDIR="$TEST_ROOT/tmp" \
+GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
 "$STATUS_SCRIPT" >"$TEST_ROOT/blocked.stdout" 2>"$TEST_ROOT/blocked.stderr" &
 blocked_pid=$!
 set -e
@@ -667,6 +674,7 @@ last_output="$(
   NOTARY_PYTHON=python3 \
   GRADUS_NOTARY_STATE_FILE="$TEST_ROOT/missing.tsv" \
   TMPDIR="$TEST_ROOT/tmp" \
+  GRADUS_EXPORT_ROOT="$TEST_ROOT/tmp/stage" \
   "$STATUS_SCRIPT" 2>&1
 )"
 last_status=$?
@@ -757,6 +765,7 @@ set +e
   NOTARY_VERIFY_SCRIPT="$FAKE_BIN/verify-stub" \
   NOTARY_POLL_INTERVAL=1 \
   TMPDIR="$TEST_ROOT/release-tmp" \
+  GRADUS_EXPORT_ROOT="$TEST_ROOT/release-tmp/stage" \
   ./notarize-mac.sh --attended
 ) >"$TEST_ROOT/release.stdout" 2>"$TEST_ROOT/release.stderr"
 last_status=$?
@@ -885,6 +894,7 @@ for adversarial_scenario in pending terminal; do
     NOTARY_SIGN_SCRIPT="$FAKE_BIN/sign-stub" \
     NOTARY_VERIFY_SCRIPT="$FAKE_BIN/verify-stub" \
     TMPDIR="$TEST_ROOT/adversarial-tmp-$adversarial_scenario" \
+    GRADUS_EXPORT_ROOT="$TEST_ROOT/adversarial-tmp-$adversarial_scenario/stage" \
     ./notarize-mac.sh --attended 2>&1
   )"
   last_status=$?
@@ -947,6 +957,7 @@ run_release_audit_case() {
     NOTARY_VERIFY_SCRIPT="$FAKE_BIN/verify-stub" \
     NOTARY_POLL_INTERVAL=1 \
     TMPDIR="$case_tmp" \
+    GRADUS_EXPORT_ROOT="$case_tmp/stage" \
     ./notarize-mac.sh ${CASE_NOTARY_ARGS-"--attended"} 2>&1
   )"
   last_status=$?

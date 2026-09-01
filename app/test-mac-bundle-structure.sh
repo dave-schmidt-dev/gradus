@@ -838,4 +838,42 @@ fi
 echo "  ✓ --entitlements and --preserve-entitlements cannot both be given"
 ((tests_run += 1))
 
+# 33. Signing inside a file-provider-managed folder cannot produce a verifiable
+#     artifact: the provider re-applies com.apple.FinderInfo to .app
+#     directories seconds after any clear, so the bundle fails strict verify
+#     however carefully the pass cleans it, and ditto would copy the attribute
+#     into the zip sent to Apple. Refuse up front instead.
+fixture="$TEST_ROOT/file-provider"
+mkdir -p "$fixture"
+xattr -w com.apple.file-provider-domain-id \
+  "com.apple.CloudDocs.iCloudDriveFileProvider/00000000-0000-0000-0000-000000000000" \
+  "$fixture"
+app="$(make_bundle "$fixture/inner")"
+: >"$TEST_ROOT/sign.log"
+set +e
+env CODESIGN="$MOCK_BIN/codesign" MOCK_SIGN_LOG="$TEST_ROOT/sign.log" \
+  "$SIGN_SCRIPT" "$app" --identity "$IDENTITY" --preserve-entitlements \
+  >"$TEST_ROOT/sign.out" 2>&1
+provider_status=$?
+set -e
+if ((provider_status == 0)); then
+  echo "FAIL: signing inside a file-provider-managed folder succeeded" >&2
+  exit 1
+fi
+if ! grep -Fq "file-provider-managed folder" "$TEST_ROOT/sign.out"; then
+  echo "FAIL: the file-provider refusal did not explain itself" >&2
+  cat "$TEST_ROOT/sign.out" >&2
+  exit 1
+fi
+if ! grep -Fq "$fixture" "$TEST_ROOT/sign.out"; then
+  echo "FAIL: the file-provider refusal did not name the managed directory" >&2
+  exit 1
+fi
+if [[ -s "$TEST_ROOT/sign.log" ]]; then
+  echo "FAIL: a bundle in a managed folder was partly signed before the refusal" >&2
+  exit 1
+fi
+echo "  ✓ signing refuses inside a file-provider-managed folder and names it"
+((tests_run += 1))
+
 echo "==> test-mac-bundle-structure.sh: $tests_run behavior assertions passed"

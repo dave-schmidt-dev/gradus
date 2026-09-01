@@ -62,7 +62,21 @@ INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 PLIST_BUDDY="${PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 BUILD_DIR="${BUILD_DIR:-build}"
 ARCHIVE_PATH="$BUILD_DIR/GradusMac.xcarchive"
-EXPORT_PATH="$BUILD_DIR/export"
+# The export is staged outside the checkout on purpose. This repository lives
+# under ~/Documents, which macOS syncs through the iCloud Drive file provider,
+# and that provider re-applies com.apple.FinderInfo to every .app directory it
+# manages within about two seconds of it being cleared. codesign refuses to
+# sign or verify an item carrying that attribute, so a bundle signed inside the
+# synced tree loses the race however carefully it is cleaned -- and `ditto`
+# would copy the attribute straight into the zip that goes to Apple. The
+# archive stays in build/ (it is only ever read back by exportArchive); the
+# export, the signing pass, and the audit run in $TMPDIR. GRADUS_EXPORT_ROOT
+# overrides the location, and sign-mac-bundle.sh refuses either way if the
+# destination turns out to be managed too.
+STAGE_BASE="${TMPDIR:-/tmp}"
+STAGE_BASE="${STAGE_BASE%/}"
+EXPORT_ROOT="${GRADUS_EXPORT_ROOT:-$STAGE_BASE/gradus-mac-export}"
+EXPORT_PATH="$EXPORT_ROOT/export"
 APP_PATH="$EXPORT_PATH/$PRODUCT_NAME.app"
 ARCHIVE_APP_PATH="$ARCHIVE_PATH/Products/Applications/$PRODUCT_NAME.app"
 RUNTIME_APP="$BUILD_DIR/gradus-runtime/dist/GradusRuntime.app"

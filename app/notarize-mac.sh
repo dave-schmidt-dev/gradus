@@ -37,7 +37,21 @@ PYTHON="${NOTARY_PYTHON:-python3}"
 # Release configuration sets PRODUCT_NAME to `Gradus` (project.yml) and that is
 # the only name a user ever sees.
 ARCHIVE_PATH="build/GradusMac.xcarchive"
-EXPORT_PATH="build/export"
+# The export is staged outside the checkout on purpose. This repository lives
+# under ~/Documents, which macOS syncs through the iCloud Drive file provider,
+# and that provider re-applies com.apple.FinderInfo to every .app directory it
+# manages within about two seconds of it being cleared. codesign refuses to
+# sign or verify an item carrying that attribute, so a bundle signed inside the
+# synced tree loses the race however carefully it is cleaned -- and `ditto`
+# would copy the attribute straight into the zip that goes to Apple. The
+# archive stays in build/ (it is only ever read back by exportArchive); the
+# export, the signing pass, and the audit run in $TMPDIR. GRADUS_EXPORT_ROOT
+# overrides the location, and sign-mac-bundle.sh refuses either way if the
+# destination turns out to be managed too.
+STAGE_BASE="${TMPDIR:-/tmp}"
+STAGE_BASE="${STAGE_BASE%/}"
+EXPORT_ROOT="${GRADUS_EXPORT_ROOT:-$STAGE_BASE/gradus-mac-export}"
+EXPORT_PATH="$EXPORT_ROOT/export"
 APP_PATH="$EXPORT_PATH/Gradus.app"
 RUNTIME_APP="build/gradus-runtime/dist/GradusRuntime.app"
 MANIFEST_PATH="build/gradus-mac-bundle-manifest.json"
