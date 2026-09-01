@@ -100,10 +100,45 @@ targets:
         copy:
           destination: wrapper
           subpath: Contents/Helpers
+    postBuildScripts:
+      # The frozen Python runtime is produced by `app/build-gradus-runtime.sh`,
+      # never by Xcode: a cold build downloads the pinned CPython pkg, and
+      # `app/test-gate.sh` has no network dependency and must keep it that way.
+      # So this phase copies a prebuilt bundle rather than building one. Release
+      # refuses to emit a wrapper without it -- a `Gradus.app` whose refresh
+      # agent points at a missing `Contents/Helpers/GradusRuntime.app` would
+      # install and then fail at first refresh. Debug copies it when present so
+      # a local run matches the shipped layout, and warns when it does not.
+      - name: Embed GradusRuntime.app
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          runtime_source="${SRCROOT}/build/gradus-runtime/dist/GradusRuntime.app"
+          helpers_dir="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Helpers"
+          if [ ! -d "$runtime_source" ]; then
+            if [ "${CONFIGURATION}" = "Release" ]; then
+              echo "error: ${runtime_source} is missing; run app/build-gradus-runtime.sh before archiving" >&2
+              exit 1
+            fi
+            echo "warning: GradusRuntime.app absent; this Debug bundle omits Contents/Helpers/GradusRuntime.app"
+            exit 0
+          fi
+          mkdir -p "$helpers_dir"
+          rm -rf "${helpers_dir}/GradusRuntime.app"
+          /usr/bin/ditto "$runtime_source" "${helpers_dir}/GradusRuntime.app"
+          # `com.apple.provenance` xattrs make codesign reject the bundle with
+          # "resource fork, Finder information, or similar detritus not allowed".
+          # Strip them at copy time so the inside-out signing pass has a clean tree.
+          /usr/bin/xattr -cr "${helpers_dir}/GradusRuntime.app"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac
         DEVELOPMENT_TEAM: 4CJ49V6QHW
+        # PRODUCT_NAME is set per configuration below, so the Swift module name
+        # has to be pinned here: PRODUCT_NAME silently drives PRODUCT_MODULE_NAME
+        # otherwise, and the shipped wrapper being renamed to `Gradus` must not
+        # rename the module that the tests, schemes, and source directory use.
+        PRODUCT_MODULE_NAME: GradusMac
         # Matches GradusiOS's MARKETING_VERSION (VERSIONING.md, "Coupled
         # platform releases"): one product version names one state of the
         # system, and the Mac is not exempt for being undistributed -- a
@@ -137,6 +172,11 @@ targets:
         CODE_SIGN_ENTITLEMENTS: GradusMac/GradusMac.entitlements
       configs:
         Debug:
+          # The Debug build stays `GradusMac.app`: it is an internal engineering
+          # artifact with its own bundle id and its own TCC row, and the
+          # exact-PID GradusMacUITests harness launches it by that literal path.
+          # Only the customer-facing Release wrapper is renamed.
+          PRODUCT_NAME: GradusMac
           # XCUITest needs a regular app process so Accessibility can enumerate
           # the DEBUG-only fixture window. Release remains a menu-bar agent.
           INFOPLIST_KEY_LSUIElement: NO
@@ -169,6 +209,12 @@ targets:
           # signature; Release retains its Developer ID archive settings.
           CODE_SIGN_STYLE: Manual
         Release:
+          # The single shipped bundle is `Gradus.app` with an executable named
+          # `Gradus`; `GradusMac` survives only as the target, scheme, module,
+          # source-directory, and test identifier. The bundle identifier
+          # (`com.zerodelta.gradus.mac`, from base) is deliberately unchanged --
+          # renaming it would drop every existing TCC grant and defaults domain.
+          PRODUCT_NAME: Gradus
           INFOPLIST_KEY_LSUIElement: YES
           INFOPLIST_FILE: GradusMac/Info-Release.plist
           CODE_SIGN_ENTITLEMENTS: GradusMac/GradusMacProduction.entitlements
@@ -262,6 +308,12 @@ targets:
         # got reverted back to a literal by the very next `generate` call).
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The customer-facing name is `Gradus`, literal rather than
+        # $(PRODUCT_NAME): PRODUCT_NAME stays `GradusiOS` so the built product,
+        # module, scheme, and archive tooling keep their internal identifier
+        # and the bundle id `com.zerodelta.gradus.ios` is untouched.
+        CFBundleName: Gradus
+        CFBundleDisplayName: Gradus
         UIBackgroundModes: [remote-notification]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UISupportedInterfaceOrientations~ipad:
@@ -359,6 +411,16 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 4CJ49V6QHW
+      configs:
+        # XcodeGen writes TEST_HOST once, as a literal derived from the host
+        # target's name, into every configuration. GradusMac's PRODUCT_NAME is
+        # per-config (`GradusMac` in Debug, `Gradus` in Release), so the Release
+        # host has to be named explicitly or a Release-configuration test run
+        # would look for a bundle that is no longer built under that name.
+        Debug:
+          TEST_HOST: $(BUILT_PRODUCTS_DIR)/GradusMac.app/Contents/MacOS/GradusMac
+        Release:
+          TEST_HOST: $(BUILT_PRODUCTS_DIR)/Gradus.app/Contents/MacOS/Gradus
 
   GradusCredentialBridgeTests:
     type: bundle.unit-test

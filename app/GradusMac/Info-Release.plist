@@ -4,6 +4,12 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<!-- Release ships as Gradus.app with PRODUCT_NAME `Gradus`, so CFBundleName
+	     already resolves to `Gradus`. The literal display name is stated anyway:
+	     it is what Finder, Login Items, notifications, and TCC prompts show, and
+	     it must never silently follow a build setting back to `GradusMac`. -->
+	<key>CFBundleDisplayName</key>
+	<string>Gradus</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

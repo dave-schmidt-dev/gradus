@@ -169,8 +169,16 @@ final class PublishPipeline {
     /// single source of truth.
     let viewModel = PublisherViewModel()
 
+    /// The one canonical installed-mode snapshot, shared with the refresh
+    /// agent (`AgentPaths.installed`), the frozen runtime, and `--json`
+    /// (`gradus.paths.installed_runtime_paths`). Deliberately no fallback to
+    /// the legacy `Gradus/snapshot-v2.json` mirror: that file is kept only so a
+    /// rollback to the old launchd job has somewhere to write, and silently
+    /// reading it would let a stale legacy snapshot masquerade as a fresh one
+    /// while the agent is failing. An empty Installed directory is the honest
+    /// answer, and the setup/health UI is what explains it.
     static let defaultSnapshotPath = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library/Application Support/Gradus/snapshot-v2.json")
+        .appendingPathComponent("Library/Application Support/Gradus/Installed/snapshot-v2.json")
 
     static func publishEvidencePath(for snapshotPath: URL) -> URL {
         snapshotPath

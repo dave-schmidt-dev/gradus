@@ -1404,6 +1404,7 @@
 				CB6EF7737470D0C775F7CDDF /* CopyFiles */,
 				E8F8CBCCCC289F75BA776106 /* Frameworks */,
 				C7EB4748A1B3F4E827137209 /* Embed Dependencies */,
+				5C15BD1142A3C8335C185F30 /* Embed GradusRuntime.app */,
 			);
 			buildRules = (
 			);
@@ -1726,6 +1727,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "ditto \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+		};
+		5C15BD1142A3C8335C185F30 /* Embed GradusRuntime.app */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed GradusRuntime.app";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nruntime_source=\"${SRCROOT}/build/gradus-runtime/dist/GradusRuntime.app\"\nhelpers_dir=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Helpers\"\nif [ ! -d \"$runtime_source\" ]; then\n  if [ \"${CONFIGURATION}\" = \"Release\" ]; then\n    echo \"error: ${runtime_source} is missing; run app/build-gradus-runtime.sh before archiving\" >&2\n    exit 1\n  fi\n  echo \"warning: GradusRuntime.app absent; this Debug bundle omits Contents/Helpers/GradusRuntime.app\"\n  exit 0\nfi\nmkdir -p \"$helpers_dir\"\nrm -rf \"${helpers_dir}/GradusRuntime.app\"\n/usr/bin/ditto \"$runtime_source\" \"${helpers_dir}/GradusRuntime.app\"\n# `com.apple.provenance` xattrs make codesign reject the bundle with\n# \"resource fork, Finder information, or similar detritus not allowed\".\n# Strip them at copy time so the inside-out signing pass has a clean tree.\n/usr/bin/xattr -cr \"${helpers_dir}/GradusRuntime.app\"\n";
 		};
 		C85C4C9A7FC88376BEB5FAB8 /* Copy Swift Objective-C Interface Header */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -2232,6 +2252,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.10.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.mac.dev;
+				PRODUCT_MODULE_NAME = GradusMac;
+				PRODUCT_NAME = GradusMac;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = macosx;
 			};
@@ -2415,6 +2437,8 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 1.10.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.mac;
+				PRODUCT_MODULE_NAME = GradusMac;
+				PRODUCT_NAME = Gradus;
 				PROVISIONING_PROFILE_SPECIFIER = "Gradus Mac Developer ID (API-created)";
 				SDKROOT = macosx;
 			};
@@ -2636,7 +2660,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.zerodelta.gradus.GradusMacTests;
 				SDKROOT = macosx;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/GradusMac.app/Contents/MacOS/GradusMac";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Gradus.app/Contents/MacOS/Gradus";
 			};
 			name = Release;
 		};

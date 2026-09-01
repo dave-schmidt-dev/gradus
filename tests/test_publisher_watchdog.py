@@ -240,7 +240,9 @@ class PublisherWatchdogTests(unittest.TestCase):
         self.assertEqual(wd.PUBLISHER_SNAPSHOT.name, "snapshot-v2.json")
         self.assertEqual(wd.PUBLISHER_EVIDENCE.name, "publish-evidence.json")
         self.assertEqual(wd.PUBLISHER_EVIDENCE.parent, wd.PUBLISHER_SNAPSHOT.parent)
-        self.assertIn("Application Support/Gradus", str(wd.PUBLISHER_SNAPSHOT))
+        self.assertIn("Application Support/Gradus/Installed", str(wd.PUBLISHER_SNAPSHOT))
+        # The bare `Gradus/snapshot-v2.json` is the legacy rollback mirror.
+        self.assertNotEqual(wd.PUBLISHER_SNAPSHOT.parent.name, "Gradus")
 
     def test_evaluate_defaults_to_wall_clock(self) -> None:
         """Omitting `now` must read the real clock, not leave the comparison unanchored."""

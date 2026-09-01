@@ -29,8 +29,14 @@ from pathlib import Path
 
 # The publisher watches this exact file (GradusMacApp.swift `defaultSnapshotPath`)
 # and writes its evidence beside it. Both are absolute and mode-independent
-# because the *publisher* resolves them that way, not the producer.
-PUBLISHER_SNAPSHOT = Path.home() / "Library" / "Application Support" / "Gradus" / "snapshot-v2.json"
+# because the *publisher* resolves them that way, not the producer. `Installed/`
+# is the one canonical installed-mode public state root, shared with the refresh
+# agent and `gradus.paths.installed_runtime_paths`; the bare
+# `Gradus/snapshot-v2.json` beside it is the legacy rollback mirror and is
+# deliberately not watched.
+PUBLISHER_SNAPSHOT = (
+    Path.home() / "Library" / "Application Support" / "Gradus" / "Installed" / "snapshot-v2.json"
+)
 PUBLISHER_EVIDENCE = PUBLISHER_SNAPSHOT.parent / "publish-evidence.json"
 
 # Launch by absolute path, never by name or bundle identifier. Two bundles in

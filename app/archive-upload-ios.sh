@@ -1344,7 +1344,10 @@ resolve_producer_evidence_path() {
 
   local user_home
   user_home="$(resolve_user_home)" || return 1
-  printf '%s\n' "$user_home/Library/Application Support/Gradus/$PRODUCER_EVIDENCE_FILENAME"
+  # `Installed/` is the canonical installed-mode state root the single-bundle
+  # publisher writes into; the bare `Gradus/` directory beside it now holds only
+  # the legacy rollback mirror.
+  printf '%s\n' "$user_home/Library/Application Support/Gradus/Installed/$PRODUCER_EVIDENCE_FILENAME"
 }
 
 resolve_uv() {

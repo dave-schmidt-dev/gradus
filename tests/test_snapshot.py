@@ -26,6 +26,84 @@ from gradus.providers import ProbeFailure, ProviderSnapshot, fetch_provider_snap
 NOW = datetime(2026, 3, 14, 8, 22, 30)
 
 
+ROOT = Path(__file__).resolve().parents[1]
+INSTALLED_SNAPSHOT_SUFFIX = "Library/Application Support/Gradus/Installed/snapshot-v2.json"
+LEGACY_MIRROR_SUFFIX = "Library/Application Support/Gradus/snapshot-v2.json"
+
+
+class InstalledSnapshotParityTests(unittest.TestCase):
+    """One canonical installed snapshot across every surface that names one.
+
+    GradusMac, the refresh agent, the frozen TUI, and `--json` each resolve a
+    snapshot path independently. Nothing in the build makes them agree, so the
+    only thing that keeps them from drifting apart is this assertion.
+    """
+
+    @staticmethod
+    def _text(relative: str) -> str:
+        return (ROOT / relative).read_text(encoding="utf-8")
+
+    def test_python_producer_and_json_share_the_installed_canonical_path(self) -> None:
+        """The frozen TUI and `--json` both read `snapshot.SNAPSHOT_V2_PATH`."""
+        paths = installed_runtime_paths(
+            application_support_root=Path("/fixture/Library/Application Support/Gradus"),
+            logs_root=Path("/fixture/Library/Logs/Gradus"),
+        )
+
+        self.assertEqual(
+            paths.snapshot_v2_path,
+            Path("/fixture/Library/Application Support/Gradus/Installed/snapshot-v2.json"),
+        )
+        # Both entry points bind to the resolved paths object, never a literal.
+        self.assertIn(
+            "SNAPSHOT_V2_PATH = RUNTIME_PATHS.snapshot_v2_path", self._text("gradus/snapshot.py")
+        )
+        self.assertIn("SNAPSHOT_V2_PATH,", self._text("gradus/__main__.py"))
+        self.assertNotIn("Application Support", self._text("gradus/__main__.py"))
+
+    def test_gradusmac_watches_the_installed_canonical_path(self) -> None:
+        source = self._text("app/GradusMac/GradusMacApp.swift")
+
+        self.assertIn(f'"{INSTALLED_SNAPSHOT_SUFFIX}"', source)
+        # No silent legacy fallback: reading the rollback mirror would let a
+        # stale snapshot from the retired launchd job look like fresh data.
+        self.assertNotIn(f'"{LEGACY_MIRROR_SUFFIX}"', source)
+
+    def test_refresh_agent_writes_the_installed_canonical_path(self) -> None:
+        source = self._text("app/GradusRefreshAgent/RefreshAgent.swift")
+
+        self.assertIn('path: "Installed", directoryHint: .isDirectory', source)
+        self.assertIn('publicRoot.appending(path: "snapshot-v2.json")', source)
+        self.assertNotIn("legacy", source.lower())
+
+    def test_publisher_watchdog_agrees_with_gradusmac(self) -> None:
+        from gradus import publisher_watchdog
+
+        snapshot = publisher_watchdog.PUBLISHER_SNAPSHOT
+        evidence = publisher_watchdog.PUBLISHER_EVIDENCE
+
+        self.assertTrue(str(snapshot).endswith(INSTALLED_SNAPSHOT_SUFFIX), snapshot)
+        self.assertEqual(evidence.parent, snapshot.parent)
+
+    def test_installed_pipeline_names_no_checkout_venv_wrapper_or_legacy_job(self) -> None:
+        """The installed pipeline is bundle-relative; nothing points at a checkout."""
+        forbidden = (
+            "/Documents/Projects/gradus",
+            ".venv",
+            "gradus_snapshot.sh",
+            "local.gradus-snapshot",
+        )
+        for relative in (
+            "app/GradusRefreshAgent/RefreshAgent.swift",
+            "app/GradusMac/GradusMacApp.swift",
+            "app/GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist",
+        ):
+            source = self._text(relative)
+            for needle in forbidden:
+                with self.subTest(file=relative, needle=needle):
+                    self.assertNotIn(needle, source)
+
+
 class RuntimePathPolicyTests(unittest.TestCase):
     def test_installed_mode_is_checkout_independent_and_nonaliasing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

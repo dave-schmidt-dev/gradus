@@ -56,22 +56,23 @@ struct PipelineGuardTests {
         #expect(!GradusMacApp.isTestHost(environment: [:]))
     }
 
-    @Test func installedAppReadsTheApplicationSupportSnapshotMirror() {
+    @Test func installedAppReadsTheInstalledCanonicalSnapshot() {
         #expect(
             PublishPipeline.defaultSnapshotPath.path ==
-                NSHomeDirectory() + "/Library/Application Support/Gradus/snapshot-v2.json"
+                NSHomeDirectory() + "/Library/Application Support/Gradus/Installed/snapshot-v2.json"
         )
         #expect(!PublishPipeline.defaultSnapshotPath.path.contains("/Documents/"))
+        #expect(!PublishPipeline.defaultSnapshotPath.path.contains("/.state/"))
     }
 
     @MainActor
-    @Test func installedAppWritesPublishEvidenceBesideTheApplicationSupportSnapshotMirror() {
+    @Test func installedAppWritesPublishEvidenceBesideTheInstalledSnapshot() {
         let evidencePath = PublishPipeline.publishEvidencePath(for: PublishPipeline.defaultSnapshotPath)
-        let applicationSupportEvidencePath = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Application Support/Gradus/publish-evidence.json")
+        let installedEvidencePath = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/Gradus/Installed/publish-evidence.json")
 
-        #expect(evidencePath == applicationSupportEvidencePath)
-        #expect(evidencePath.path.hasSuffix("/Library/Application Support/Gradus/publish-evidence.json"))
+        #expect(evidencePath == installedEvidencePath)
+        #expect(evidencePath.path.hasSuffix("/Library/Application Support/Gradus/Installed/publish-evidence.json"))
         #expect(!evidencePath.path.contains("/.state/"))
     }
 }

@@ -115,6 +115,18 @@ rationale: The Mac app runs on the same machine holding live credentials in `.ca
   (`PublishPipeline.defaultSnapshotPath` in GradusMacApp.swift) and threaded through `start(snapshotPath:)` —
   not a proof that every filesystem read in GradusMac is confined to that one path. PM-15's fs_usage
   runtime canary check is deferred beta-hardening, not this gate.
+  That one construction site names the installed canonical snapshot,
+  `~/Library/Application Support/Gradus/Installed/snapshot-v2.json`, which is the same file the nested
+  GradusRefreshAgent writes (`AgentPaths.installed`) and the same file the frozen runtime and `--json`
+  resolve through `gradus.paths.installed_runtime_paths`; `publish-evidence.json` is its sibling.
+  There is deliberately no fallback to the legacy `Gradus/snapshot-v2.json` mirror, which exists only so a
+  rollback to the retired launchd job has a writable path — reading it would let a stale snapshot from a
+  dead producer present as fresh data. `tests/test_snapshot.py::InstalledSnapshotParityTests` holds the four
+  surfaces to one path and tripwires any checkout, `.venv`, loose-wrapper, or legacy-job reference in the
+  installed pipeline. The publish boundary itself is unchanged by the single-bundle migration: the publisher
+  still carries only SnapshotPayload provider/window fields to CloudKit and never a credential, and renaming
+  the shipped wrapper to `Gradus.app` leaves the `com.zerodelta.gradus.mac` bundle identifier and the
+  `iCloud.com.zerodelta.gradus` container exactly as they were.
 
 ### INV-8 — Credential-aware background refresh is explicit, single-flight, and progress-visible
 area: ["gradus/paths.py", "gradus/__main__.py", "gradus/publisher_watchdog.py", "gradus/providers/*.py", "launchd/*", "app/GradusRefreshAgent/**", "app/GradusRefreshAgentTests/**", "app/GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist"]

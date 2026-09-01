@@ -21,8 +21,8 @@ failure_hook allocation >/dev/null 2>&1 || {
 }
 
 default_evidence_path="$(HOME="$TEST_ROOT" env -u GRADUS_PRODUCER_EVIDENCE_PATH /bin/bash -c 'source "$1"; resolve_producer_evidence_path' bash "$UPLOAD_SCRIPT")"
-[[ "$default_evidence_path" == "$TEST_ROOT/Library/Application Support/Gradus/publish-evidence.json" ]] || {
-  echo "FAIL: default producer evidence path did not target Application Support" >&2
+[[ "$default_evidence_path" == "$TEST_ROOT/Library/Application Support/Gradus/Installed/publish-evidence.json" ]] || {
+  echo "FAIL: default producer evidence path did not target the installed state root" >&2
   exit 1
 }
 override_evidence_path="$TEST_ROOT/override/publish-evidence.json"

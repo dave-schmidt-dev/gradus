@@ -55,3 +55,75 @@ def test_debug_bundle_id_stays_separate_from_the_installed_app() -> None:
 
     assert "PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac.dev" in project
     assert "PRODUCT_BUNDLE_IDENTIFIER: com.zerodelta.gradus.mac\n" in project
+
+
+IOS_PLIST = ROOT / "app" / "GradusiOS" / "Info.plist"
+
+
+def _project() -> dict:
+    import yaml
+
+    with (ROOT / "app" / "project.yml").open(encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def test_shipped_mac_wrapper_is_named_gradus() -> None:
+    """Release ships `Gradus.app`; the internal target name is not customer-facing."""
+    mac = _project()["targets"]["GradusMac"]["settings"]
+
+    assert mac["configs"]["Release"]["PRODUCT_NAME"] == "Gradus"
+    assert _plist(RELEASE_PLIST)["CFBundleName"] == "$(PRODUCT_NAME)"
+    assert _plist(RELEASE_PLIST)["CFBundleDisplayName"] == "Gradus"
+
+
+def test_debug_wrapper_keeps_the_internal_name_the_ui_harness_launches() -> None:
+    """The exact-PID harness launches `Debug/GradusMac.app/Contents/MacOS/GradusMac`."""
+    mac = _project()["targets"]["GradusMac"]["settings"]
+    harness = (ROOT / "app" / "GradusMacUITests" / "GradusMacUITests.swift").read_text()
+
+    assert mac["configs"]["Debug"]["PRODUCT_NAME"] == "GradusMac"
+    assert 'appendingPathComponent("GradusMac.app", isDirectory: true)' in harness
+
+
+def test_renaming_the_product_does_not_rename_the_swift_module() -> None:
+    """PRODUCT_NAME silently drives PRODUCT_MODULE_NAME unless it is pinned."""
+    mac = _project()["targets"]["GradusMac"]["settings"]
+
+    assert mac["base"]["PRODUCT_MODULE_NAME"] == "GradusMac"
+
+
+def test_ios_bundle_presents_gradus_without_renaming_the_product() -> None:
+    """iOS needs the display name only; the archive tooling keeps `GradusiOS`."""
+    ios = _project()["targets"]["GradusiOS"]
+
+    assert ios["info"]["properties"]["CFBundleName"] == "Gradus"
+    assert ios["info"]["properties"]["CFBundleDisplayName"] == "Gradus"
+    assert "PRODUCT_NAME" not in ios["settings"]["base"]
+    assert _plist(IOS_PLIST)["CFBundleName"] == "Gradus"
+    assert _plist(IOS_PLIST)["CFBundleDisplayName"] == "Gradus"
+
+
+def test_no_shipped_bundle_presents_an_internal_target_name_to_users() -> None:
+    """`GradusMac`/`GradusiOS` stay internal identifiers, never user-visible text."""
+    for plist_path in (RELEASE_PLIST, IOS_PLIST):
+        plist = _plist(plist_path)
+        for key in ("CFBundleName", "CFBundleDisplayName"):
+            value = plist.get(key)
+            if value is None or value.startswith("$("):
+                continue
+            assert value == "Gradus", f"{plist_path.name}:{key} is customer-facing"
+
+
+def test_the_rename_does_not_touch_either_bundle_identifier() -> None:
+    """TCC grants and defaults domains are keyed on these; they must not move."""
+    targets = _project()["targets"]
+
+    assert (
+        targets["GradusMac"]["settings"]["base"]["PRODUCT_BUNDLE_IDENTIFIER"]
+        == "com.zerodelta.gradus.mac"
+    )
+    assert (
+        targets["GradusiOS"]["settings"]["base"]["PRODUCT_BUNDLE_IDENTIFIER"]
+        == "com.zerodelta.gradus.ios"
+    )
+    assert _plist(RELEASE_PLIST)["CFBundleIdentifier"] == "$(PRODUCT_BUNDLE_IDENTIFIER)"
