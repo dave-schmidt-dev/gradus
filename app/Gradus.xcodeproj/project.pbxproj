@@ -27,6 +27,7 @@
 		1AA9BBCD44700EDC81EC28F4 /* listRowToggleOffDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = F33CB6B4179DC3886881E21B /* listRowToggleOffDark.1.png */; };
 		1ADC47D3FE5DFF034ED74BB6 /* WindowRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6FB520E5C2035AE7E6123F /* WindowRow.swift */; };
 		1AE4CC516278A62DAEE116DF /* settingsViewWarnsWhenSystemNotificationsAreDeniedDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = A0201CEA84A97BC6AF44F9C4 /* settingsViewWarnsWhenSystemNotificationsAreDeniedDark.1.png */; };
+		1C8D8622BC984AFF78785215 /* BackgroundAgentManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB3221560456B2F060269B91 /* BackgroundAgentManagerTests.swift */; };
 		1C9B2973B487A726B2AC6F65 /* DashboardViewModel+Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC61613C19DAE6DF59BE17C0 /* DashboardViewModel+Notifications.swift */; };
 		1CA4F2B8B243DBE5CB71AC17 /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439B36D7F7A5680EF367C768 /* EmptyStateView.swift */; };
 		1D6E46A26CDA015CCE780A21 /* NotificationAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44483A7421F5192C4A92F9C4 /* NotificationAuthorization.swift */; };
@@ -106,6 +107,7 @@
 		764281472A18C0DDFE55F2D9 /* GradusWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 531644979102F233D15AFA32 /* GradusWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		76A832343DC8C29AAE7CA141 /* DensityLayoutXCUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7CEF22E360E7772B0118758 /* DensityLayoutXCUITests.swift */; };
 		77609988B7BB7A4F9C218070 /* densityStandardPadPortraitLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = DEBF453D28532A7764F4836A /* densityStandardPadPortraitLight.1.png */; };
+		77629B5E60B5C8D269848EF0 /* BackgroundAgentState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90239FA0742DE7DA02568F0C /* BackgroundAgentState.swift */; };
 		791954F32D5C10E9F5BBC8FE /* INV7Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82A6E1D8FCE98B4A702AC9AB /* INV7Tests.swift */; };
 		79DC3F1F2550E67966A39713 /* GradusiOSAppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6147B3E0BD8061C88B39930A /* GradusiOSAppConfiguration.swift */; };
 		7ABAB591929F484B8F2820A3 /* DashboardView+DenseGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851236AC3CD7E98AA7FEDB69 /* DashboardView+DenseGrid.swift */; };
@@ -169,6 +171,7 @@
 		BA20CF540AF52BD7E807B60F /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 48E0B2155A2C5FFEF4AC001A /* PrivacyInfo.xcprivacy */; };
 		BB2F936207A8E2DBF74122EE /* MenuSignalPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01E503CFACE6B4E2EBDA00A9 /* MenuSignalPalette.swift */; };
 		BC0EEAB37BF868ED6C6D1907 /* NotificationAuthorizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A243A4032EE2931153022DB /* NotificationAuthorizationTests.swift */; };
+		BC643296330DFFC4EBB27A1F /* BackgroundAgentManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BC417687FB84DB7CB8AFB6 /* BackgroundAgentManager.swift */; };
 		BD4AEAFB82732A00898AF589 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = E9A89EB3708A9F91A6839FF7 /* Localizable.strings */; };
 		BD68006E61A0BF0CF8B91BE3 /* DashboardSnapshotFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3356F25C38F5AEAF81AE2AF1 /* DashboardSnapshotFixtures.swift */; };
 		BD84D6ED86617F9336BDF28A /* mobileNavBarTitleWithTrailingIconButtonLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 87C08CD1C8DC992111B793AF /* mobileNavBarTitleWithTrailingIconButtonLight.1.png */; };
@@ -234,6 +237,7 @@
 		F4DEB8A575D26197A7BD7B20 /* GradusWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6823FF052589D70CBF925382 /* GradusWidget.swift */; };
 		F5D62CAAD5156AA9028E5089 /* settingsViewNotificationsOffDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 2AFD892CA7D419209595FEEE /* settingsViewNotificationsOffDark.1.png */; };
 		F6F166A6EA7A708C9634405E /* SettingsView+WarningThreshold.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B7A600554BA48E9DA66F65A /* SettingsView+WarningThreshold.swift */; };
+		F746774B8295ECCB2302FD67 /* GradusMacUITestsBackgroundAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821BC5443F77B570F909A794 /* GradusMacUITestsBackgroundAgent.swift */; };
 		F7E05B729282014DECBA36E5 /* providerDetailRendersAllWindowsLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 577C1A12EE87B547E6604318 /* providerDetailRendersAllWindowsLight.1.png */; };
 		FA6A699C1475A0C27500DAA1 /* WidgetSnapshotProviderSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0B970EBAA5F0EC01A1BF396 /* WidgetSnapshotProviderSelectionTests.swift */; };
 		FAF2AFC377B12F0025DD341A /* CKSubscriptionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F128D0C6FE35003BFFD93F9B /* CKSubscriptionManagerTests.swift */; };
@@ -395,6 +399,7 @@
 		12B11684A5D92598B5F73002 /* GradusRefreshAgentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusRefreshAgentApp.swift; sourceTree = "<group>"; };
 		13A5FC8850CE01888DD7CDA7 /* listRowValueLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = listRowValueLight.1.png; sourceTree = "<group>"; };
 		16339AD680532557DEFD7C37 /* PublisherViewModelSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublisherViewModelSyncTests.swift; sourceTree = "<group>"; };
+		18BC417687FB84DB7CB8AFB6 /* BackgroundAgentManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAgentManager.swift; sourceTree = "<group>"; };
 		1960918353724BF3C9BA2E0D /* SyncTimestampTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTimestampTests.swift; sourceTree = "<group>"; };
 		1A463D106EC7152AB2953C6B /* RefreshAgentTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefreshAgentTestDoubles.swift; sourceTree = "<group>"; };
 		1CC55D88A35E02B0DF269FF1 /* SnapshotWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotWatcher.swift; sourceTree = "<group>"; };
@@ -497,6 +502,7 @@
 		7FB4C9056931FA6B47D052C6 /* densePadPortraitLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densePadPortraitLight.1.png; sourceTree = "<group>"; };
 		7FDE0EEA5731FD11EC5D0B49 /* dashboardTruncatesPercentagesRatherThanRounding.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = dashboardTruncatesPercentagesRatherThanRounding.1.png; sourceTree = "<group>"; };
 		80F4C794354A1E33E39E3540 /* MenuProviderList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuProviderList.swift; sourceTree = "<group>"; };
+		821BC5443F77B570F909A794 /* GradusMacUITestsBackgroundAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusMacUITestsBackgroundAgent.swift; sourceTree = "<group>"; };
 		82A6E1D8FCE98B4A702AC9AB /* INV7Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = INV7Tests.swift; sourceTree = "<group>"; };
 		82CE53ECE5DCA3935261F821 /* MobileNavBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileNavBar.swift; sourceTree = "<group>"; };
 		8358542B85F7C19C2AB315C6 /* GradusLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusLogTests.swift; sourceTree = "<group>"; };
@@ -511,6 +517,7 @@
 		8ED6766F6F7743891278FE15 /* GradusWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GradusWidget.entitlements; sourceTree = "<group>"; };
 		8F78B2281A33F00201D8C80D /* GradusMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GradusMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9004F0EF8EEFF279EFC6DF4E /* GradusCredentialBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GradusCredentialBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		90239FA0742DE7DA02568F0C /* BackgroundAgentState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAgentState.swift; sourceTree = "<group>"; };
 		916CBC47B8228AFD5B2DBA17 /* PublishCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishCoordinator.swift; sourceTree = "<group>"; };
 		933C353023EBD56F520FB33B /* GradusMacProduction.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GradusMacProduction.entitlements; sourceTree = "<group>"; };
 		93FA3B5A1065DD371B063C93 /* PublishCoordinatorFailureDescriptionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishCoordinatorFailureDescriptionTests.swift; sourceTree = "<group>"; };
@@ -540,6 +547,7 @@
 		A796B92E8F239359556CD5C0 /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
 		A88EBD6C3985C15E8F6F3C8F /* DashboardViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModelTests.swift; sourceTree = "<group>"; };
 		A99A71D9657EB01A6253C253 /* UsageBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageBar.swift; sourceTree = "<group>"; };
+		AB3221560456B2F060269B91 /* BackgroundAgentManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAgentManagerTests.swift; sourceTree = "<group>"; };
 		AB74C41B03495C5ACC1F4A27 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AC42989F2614BF0DFE121C06 /* WidgetSnapshotPublisherFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotPublisherFixtures.swift; sourceTree = "<group>"; };
 		AC70DFCC7F8F1B737CFC5EC7 /* CKSubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CKSubscriptionManager.swift; sourceTree = "<group>"; };
@@ -905,6 +913,7 @@
 			children = (
 				1E43293520B5F8A2D1382371 /* GradusMacUITests.swift */,
 				F50380578D95B0D46064A546 /* GradusMacUITestsAccessibility.swift */,
+				821BC5443F77B570F909A794 /* GradusMacUITestsBackgroundAgent.swift */,
 			);
 			path = GradusMacUITests;
 			sourceTree = "<group>";
@@ -961,6 +970,8 @@
 			isa = PBXGroup;
 			children = (
 				2D56B2090BDA7E7E5B4DFCFF /* Assets.xcassets */,
+				18BC417687FB84DB7CB8AFB6 /* BackgroundAgentManager.swift */,
+				90239FA0742DE7DA02568F0C /* BackgroundAgentState.swift */,
 				22E9EDCA74D938789D0FD71D /* CloudKitDatabase.swift */,
 				FD2348F4826277A5AE85395E /* GradusLog.swift */,
 				A3DC2A523C9A7B712CEE390D /* GradusMac.entitlements */,
@@ -1087,6 +1098,7 @@
 			isa = PBXGroup;
 			children = (
 				BE6A984FC7F10EE34E91165C /* AppIconTests.swift */,
+				AB3221560456B2F060269B91 /* BackgroundAgentManagerTests.swift */,
 				D6F8EAC96579D0F02407DB83 /* DevicePresenceSettingsTests.swift */,
 				4EF211C0B300EF36E2B452FB /* DisplayPreferenceTests.swift */,
 				9665FE92F94D2664633B9A36 /* ExpectedPaceTests.swift */,
@@ -1786,6 +1798,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BC643296330DFFC4EBB27A1F /* BackgroundAgentManager.swift in Sources */,
+				77629B5E60B5C8D269848EF0 /* BackgroundAgentState.swift in Sources */,
 				88C8C9343FE8013A26314410 /* CardLayoutSolver.swift in Sources */,
 				CB7750BAC229F6B6CBDAE612 /* CloudKitDatabase.swift in Sources */,
 				3798F17A91B64A768EABF612 /* CloudKitSpike.swift in Sources */,
@@ -1932,6 +1946,7 @@
 			files = (
 				A8FF20C82CF24ED7986C0927 /* GradusMacUITests.swift in Sources */,
 				CBDC959B456321E5076E0EB1 /* GradusMacUITestsAccessibility.swift in Sources */,
+				F746774B8295ECCB2302FD67 /* GradusMacUITestsBackgroundAgent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1959,6 +1974,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE47DB8C0C26AB5FC4C4B0D1 /* AppIconTests.swift in Sources */,
+				1C8D8622BC984AFF78785215 /* BackgroundAgentManagerTests.swift in Sources */,
 				CD0A112EB79A1395ED67610E /* DevicePresenceSettingsTests.swift in Sources */,
 				CB600D719F68959CC6026991 /* DisplayPreferenceTests.swift in Sources */,
 				C1F588D55FDDDC0A63604114 /* ExpectedPaceTests.swift in Sources */,

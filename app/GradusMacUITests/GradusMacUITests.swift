@@ -5,10 +5,11 @@ import Foundation
 import XCTest
 
 final class GradusMacUITests: XCTestCase {
-    // Read from the Accessibility extension in `GradusMacUITestsAccessibility.swift`,
-    // so these two cannot be file-private.
+    // Read from the extensions in `GradusMacUITestsAccessibility.swift` and
+    // `GradusMacUITestsBackgroundAgent.swift`, so the fixture plumbing below
+    // cannot be file-private.
     static let axWindowNumberAttribute = "AXWindowNumber"
-    private static var requestedAccessibilityTrust = false
+    static var requestedAccessibilityTrust = false
 
     enum HarnessError: LocalizedError {
         case failed(String)
@@ -20,14 +21,14 @@ final class GradusMacUITests: XCTestCase {
         }
     }
 
-    private struct RunningFixture {
+    struct RunningFixture {
         let process: Process
         let pid: pid_t
         let executablePath: String
         let application: AXUIElement
     }
 
-    private var runningFixture: RunningFixture?
+    var runningFixture: RunningFixture?
 
     override func setUp() {
         super.setUp()
@@ -97,13 +98,15 @@ final class GradusMacUITests: XCTestCase {
         let login = try requiredElement(
             descendingFrom: menuWindow,
             role: kAXCheckBoxRole as String,
-            title: "Launch at Login"
+            title: "Open Menu at Login"
         )
+        // The two controls are deliberately distinct: this one is the main app.
+        XCTAssertNil(findElement(descendingFrom: menuWindow, title: "Launch at Login"))
         XCTAssertEqual(attribute(login, kAXEnabledAttribute as String) as Bool?, true)
         XCTAssertNil(findElement(descendingFrom: menuWindow, title: "Enable iCloud Sync"))
     }
 
-    private func launchMenuFixture() throws -> RunningFixture {
+    func launchMenuFixture(agentStateFile: URL? = nil) throws -> RunningFixture {
         XCTAssertNil(runningFixture, "Each scenario must own exactly one retained GradusMac PID")
         let executableURL = try builtDebugExecutableURL()
         let executablePath = canonicalPath(executableURL.path)
@@ -113,6 +116,12 @@ final class GradusMacUITests: XCTestCase {
         environment.removeValue(forKey: "XCTestConfigurationFilePath")
         environment["GRADUS_DISABLE_PIPELINE"] = "1"
         environment["GRADUS_UI_TEST_MENU_FIXTURE"] = "1"
+        if let agentStateFile {
+            // Registration state the harness owns outright. Nothing in this
+            // suite may register a real launch agent: `SMAppService.register()`
+            // mutates this machine and an approved agent outlives the run.
+            environment["GRADUS_UI_TEST_AGENT_STATE"] = agentStateFile.path
+        }
 
         let process = Process()
         process.executableURL = executableURL
@@ -191,7 +200,7 @@ final class GradusMacUITests: XCTestCase {
         URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
     }
 
-    private func terminateRunningFixture() throws {
+    func terminateRunningFixture() throws {
         guard let fixture = runningFixture else { return }
         guard fixture.process.processIdentifier == fixture.pid else {
             throw HarnessError.failed("Retained Process changed PID before teardown")
@@ -225,61 +234,5 @@ final class GradusMacUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.05)
         }
         XCTAssertFalse(fixture.process.isRunning, "Retained GradusMac PID survived teardown")
-    }
-
-    private func waitForElement(
-        descendingFrom root: AXUIElement,
-        role: String? = nil,
-        title: String,
-        timeout: TimeInterval
-    ) throws -> AXUIElement {
-        try requireAccessibilityTrust()
-        let deadline = Date().addingTimeInterval(timeout)
-        print("STATUS GradusMacAXHarness waiting role=\(role ?? "any") title=\(title)")
-        repeat {
-            if let element = findElement(descendingFrom: root, role: role, title: title) {
-                return element
-            }
-            Thread.sleep(forTimeInterval: 0.1)
-        } while Date() < deadline
-        throw HarnessError.failed("Timed out waiting for Accessibility element \(title)")
-    }
-
-    private func requireAccessibilityTrust() throws {
-        guard !AXIsProcessTrusted() else { return }
-        if !Self.requestedAccessibilityTrust {
-            Self.requestedAccessibilityTrust = true
-            let options = [
-                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
-            ] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-        }
-        throw HarnessError.failed(
-            "GradusMacUITests-Runner is not enabled in System Settings > Privacy & Security > Accessibility"
-        )
-    }
-
-    private func requiredElement(
-        descendingFrom root: AXUIElement,
-        role: String? = nil,
-        title: String
-    ) throws -> AXUIElement {
-        guard let element = findElement(descendingFrom: root, role: role, title: title) else {
-            throw HarnessError.failed("Missing Accessibility element role=\(role ?? "any") title=\(title)")
-        }
-        return element
-    }
-
-    private func findElement(
-        descendingFrom root: AXUIElement,
-        role: String? = nil,
-        title: String
-    ) -> AXUIElement? {
-        descendants(of: root).first { element in
-            if let role, attribute(element, kAXRoleAttribute as String) as String? != role {
-                return false
-            }
-            return accessibleStrings(of: element).contains(title)
-        }
     }
 }

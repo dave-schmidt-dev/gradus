@@ -177,8 +177,19 @@ final class PublishPipeline {
     /// reading it would let a stale legacy snapshot masquerade as a fresh one
     /// while the agent is failing. An empty Installed directory is the honest
     /// answer, and the setup/health UI is what explains it.
-    static let defaultSnapshotPath = URL(fileURLWithPath: NSHomeDirectory())
+    /// `nonisolated` so the one construction site stays the one construction
+    /// site: the background-agent UI needs the same directory, and the only
+    /// alternative to reading it from here is a second `NSHomeDirectory()`.
+    nonisolated static let defaultSnapshotPath = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Application Support/Gradus/Installed/snapshot-v2.json")
+
+    /// The refresh agent's credential-free status file, which it writes beside
+    /// the snapshot it produces (`AgentPaths.installed`).
+    nonisolated static func agentStatusPath(for snapshotPath: URL) -> URL {
+        snapshotPath
+            .deletingLastPathComponent()
+            .appendingPathComponent("agent-status.json")
+    }
 
     static func publishEvidencePath(for snapshotPath: URL) -> URL {
         snapshotPath

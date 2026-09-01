@@ -25,6 +25,37 @@ extension GradusMacUITests {
         return Set(names.compactMap { attribute(element, $0 as String) as String? })
     }
 
+    /// Finds a control by its `accessibilityIdentifier`.
+    ///
+    /// Title matching does not work for `Form` rows: SwiftUI renders the label
+    /// as a sibling `AXStaticText` and leaves the control's `AXTitle` empty, so
+    /// a checkbox in Settings is unreachable by name. The identifier is set in
+    /// the view and is the same string in both places.
+    func findElement(
+        descendingFrom root: AXUIElement,
+        role: String? = nil,
+        identifier: String
+    ) -> AXUIElement? {
+        descendants(of: root).first { element in
+            guard attribute(element, "AXIdentifier") as String? == identifier else { return false }
+            guard let role else { return true }
+            return attribute(element, kAXRoleAttribute as String) as String? == role
+        }
+    }
+
+    func requiredElement(
+        descendingFrom root: AXUIElement,
+        role: String? = nil,
+        identifier: String
+    ) throws -> AXUIElement {
+        guard let element = findElement(descendingFrom: root, role: role, identifier: identifier) else {
+            throw HarnessError.failed(
+                "Missing Accessibility element id=\(identifier) role=\(role ?? "any")"
+            )
+        }
+        return element
+    }
+
     func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else {
@@ -193,5 +224,61 @@ extension GradusMacUITests {
             return nil
         }
         return (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+    }
+
+    func waitForElement(
+        descendingFrom root: AXUIElement,
+        role: String? = nil,
+        title: String,
+        timeout: TimeInterval
+    ) throws -> AXUIElement {
+        try requireAccessibilityTrust()
+        let deadline = Date().addingTimeInterval(timeout)
+        print("STATUS GradusMacAXHarness waiting role=\(role ?? "any") title=\(title)")
+        repeat {
+            if let element = findElement(descendingFrom: root, role: role, title: title) {
+                return element
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        } while Date() < deadline
+        throw HarnessError.failed("Timed out waiting for Accessibility element \(title)")
+    }
+
+    private func requireAccessibilityTrust() throws {
+        guard !AXIsProcessTrusted() else { return }
+        if !Self.requestedAccessibilityTrust {
+            Self.requestedAccessibilityTrust = true
+            let options = [
+                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+            ] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        }
+        throw HarnessError.failed(
+            "GradusMacUITests-Runner is not enabled in System Settings > Privacy & Security > Accessibility"
+        )
+    }
+
+    func requiredElement(
+        descendingFrom root: AXUIElement,
+        role: String? = nil,
+        title: String
+    ) throws -> AXUIElement {
+        guard let element = findElement(descendingFrom: root, role: role, title: title) else {
+            throw HarnessError.failed("Missing Accessibility element role=\(role ?? "any") title=\(title)")
+        }
+        return element
+    }
+
+    func findElement(
+        descendingFrom root: AXUIElement,
+        role: String? = nil,
+        title: String
+    ) -> AXUIElement? {
+        descendants(of: root).first { element in
+            if let role, attribute(element, kAXRoleAttribute as String) as String? != role {
+                return false
+            }
+            return accessibleStrings(of: element).contains(title)
+        }
     }
 }

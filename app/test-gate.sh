@@ -82,11 +82,15 @@ COUNTING_LEG_REPORTERS=(
 # commits, and an exact floor there would make every added test a gate edit.
 # Slack of a few tests still fails a leg that collapses.
 #
-# `GradusMac` (index 2) keeps its floor of 2 pending an observed count: it is
-# an app-hosted XCTest bundle, and no full gate has run since the owner's
-# UI-testing pause. Raise it from the next full gate run; the static source
-# count is 119.
-COUNTING_LEG_MINIMUMS=(95 1000 2 2 15 12 177 3 9 10 12 6 5 5 15 5 5 4 31 12)
+# `GradusMac` (index 2) is now sized: the 2026-08-31 full gate observed 119,
+# and the Task 3.1 background-agent suites took it to 138. Sized like index 0
+# rather than pinned -- this bundle grows on most commits -- with enough slack
+# that an added suite is not a gate edit and a collapsed one still fails.
+#
+# `GradusMacUI` (index 3) is pinned exactly, like index 6: it is a fixed
+# scenario set (menu, required-iCloud, quit lifecycle), so losing one is a lost
+# behavior rather than ordinary churn.
+COUNTING_LEG_MINIMUMS=(95 1000 130 3 15 12 177 3 9 10 12 6 5 5 15 5 5 4 31 12)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"

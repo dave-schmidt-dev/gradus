@@ -39,14 +39,49 @@ struct MacSettingsView: View {
                 )
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            }
+
+            Section("Background Refresh") {
+                Toggle(
+                    "Monitor in Background",
+                    isOn: Binding(
+                        get: { viewModel.monitorInBackgroundEnabled },
+                        set: { viewModel.setMonitorInBackground($0) }
+                    )
+                )
+                .accessibilityIdentifier("settings-monitor-in-background")
+
+                Text(viewModel.backgroundAgentState.headline)
+                    .font(.callout)
+                    .accessibilityIdentifier("settings-agent-headline")
+                Text(viewModel.backgroundAgentState.explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings-agent-explanation")
+
+                ForEach(viewModel.backgroundAgentState.recoveryActions) { action in
+                    Button(action.title) {
+                        viewModel.performBackgroundAgentRecovery(action)
+                    }
+                    .accessibilityIdentifier("settings-agent-action-\(action.id)")
+                }
 
                 Toggle(
-                    "Launch at Login",
+                    "Open Menu at Login",
                     isOn: Binding(
                         get: { viewModel.launchAtLoginEnabled },
                         set: { viewModel.setLaunchAtLogin($0) }
                     )
                 )
+                .accessibilityIdentifier("settings-open-menu-at-login")
+                Text(
+                    """
+                    These are separate. Monitor in Background keeps usage current while Gradus is closed. \
+                    Open Menu at Login only puts the menu-bar icon back after you restart this Mac.
+                    """
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
             }
 
             Section("Display") {

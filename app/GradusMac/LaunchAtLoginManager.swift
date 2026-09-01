@@ -2,9 +2,15 @@ import Foundation
 import ServiceManagement
 
 /// Thin wrapper around `SMAppService.mainApp` for the macOS publisher's
-/// "Launch at Login" toggle (T2b.2) -- the app has no Background Modes
+/// "Open Menu at Login" toggle (T2b.2) -- the app has no Background Modes
 /// capability, so a launch-at-login affordance is how the publisher stays
 /// realistically alive to receive snapshot file-change events.
+///
+/// Not the refresh agent. This registers the *main app* (`SMAppService.mainApp`)
+/// so the menu-bar icon comes back after a restart; `BackgroundAgentManager`
+/// registers the nested `SMAppService.agent(plistName:)` that keeps refreshing
+/// with the menu quit. Both appear in Login Items, and the UI states which is
+/// which, because "I turned that on" otherwise means two different things.
 public enum LaunchAtLoginManager {
     public enum State: Equatable, Sendable {
         case enabled

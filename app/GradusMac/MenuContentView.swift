@@ -55,13 +55,15 @@ struct MenuContentView: View {
             Divider()
 
             cloudSyncStatus
+            backgroundAgentStatus
             Toggle(
-                "Launch at Login",
+                "Open Menu at Login",
                 isOn: Binding(
                     get: { viewModel.launchAtLoginEnabled },
                     set: { viewModel.setLaunchAtLogin($0) }
                 )
             )
+            .accessibilityIdentifier("menu-open-menu-at-login")
 
             Divider()
 
@@ -140,6 +142,25 @@ struct MenuContentView: View {
         }
     }
 
+    /// The background-refresh half of "is what I'm looking at current".
+    /// `cloudSyncStatus` above answers whether the *phone* has this data;
+    /// this answers whether *this Mac* still collects it. A healthy agent says
+    /// nothing -- the row exists to name a problem, not to congratulate itself.
+    @ViewBuilder
+    private var backgroundAgentStatus: some View {
+        if !viewModel.backgroundAgentState.claimsCurrentData {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(viewModel.backgroundAgentState.headline)
+                    .foregroundStyle(SignalColor.forLevel(.orange))
+                Button("Fix in Settings…") { SettingsWindow.show(viewModel: viewModel) }
+                    .buttonStyle(.link)
+                    .accessibilityIdentifier("menu-agent-fix-button")
+            }
+            .font(.caption)
+            .accessibilityIdentifier("menu-agent-status")
+        }
+    }
+
     /// Uses `friendlyDateLabel` -- the same helper behind the "resets …" copy
     /// on each row -- so the menu never shows two date vocabularies at once.
     static func lastSyncLabel(_ date: Date?, now: Date = Date()) -> String? {
@@ -173,7 +194,15 @@ struct MenuUITestFixtureView: View {
         let suiteName = "com.zerodelta.gradus.mac.ui-tests"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
-        let viewModel = PublisherViewModel(defaults: defaults)
+        let viewModel = PublisherViewModel(
+            defaults: defaults,
+            // Present only when GradusMacUITests supplies a state file. Absent,
+            // the fixture falls back to the ordinary manager, which reads the
+            // live registration and never writes it.
+            backgroundAgent: FileBackedBackgroundAgentService.fromEnvironment().map {
+                BackgroundAgentManager(service: $0)
+            }
+        )
         viewModel.apply(
             SnapshotPayload(
                 schemaVersion: supportedSchemaVersion,

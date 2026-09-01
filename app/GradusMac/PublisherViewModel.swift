@@ -67,7 +67,16 @@ public final class PublisherViewModel: ObservableObject {
         }
     }
 
+    /// "Open Menu at Login" -- the *main app*. Deliberately not the same
+    /// switch as `monitorInBackgroundEnabled` below: one puts the menu-bar icon
+    /// back after a restart, the other keeps usage current while the app is
+    /// closed. Presenting them as one control is what made "Gradus is running"
+    /// and "Gradus is refreshing" indistinguishable.
     @Published public var launchAtLoginEnabled: Bool
+
+    /// "Monitor in Background" -- the nested `SMAppService` refresh agent.
+    @Published public private(set) var monitorInBackgroundEnabled: Bool
+    @Published public private(set) var backgroundAgentState: BackgroundAgentState = .notRegistered
     @Published public private(set) var syncState: CloudSyncState = .idle
     /// When the last publish actually succeeded. Persisted, because the state
     /// enum above resets to `.idle` on every launch: a menu-bar agent that has
@@ -138,9 +147,21 @@ public final class PublisherViewModel: ObservableObject {
     /// an existing sync test silently began stamping a live timestamp into them
     /// the moment `cloudSyncDidSucceed` started persisting one.
     private let defaults: UserDefaults
+    private let backgroundAgent: BackgroundAgentManager
 
-    public init(defaults: UserDefaults = .standard) {
+    /// `backgroundAgent` resolves to `nil` rather than defaulting to a live
+    /// manager directly: a default-argument expression is evaluated in a
+    /// nonisolated context, which Swift 6 rejects for a MainActor-isolated
+    /// type. Same reason `PublishPipeline.start(snapshotPath:)` takes an
+    /// optional.
+    public init(
+        defaults: UserDefaults = .standard,
+        backgroundAgent: BackgroundAgentManager? = nil
+    ) {
+        let backgroundAgent = backgroundAgent ?? BackgroundAgentManager()
         self.defaults = defaults
+        self.backgroundAgent = backgroundAgent
+        monitorInBackgroundEnabled = backgroundAgent.isMonitoringEnabled
         let migratedMode = RequiredICloudMigration.migrate(
             defaults: defaults, legacyKey: Self.syncEnabledKey
         )
@@ -191,6 +212,39 @@ public final class PublisherViewModel: ObservableObject {
     public func apply(_ payload: SnapshotPayload) {
         providers = payload.providers
         updatedAt = payload.updatedAt
+        refreshBackgroundAgentState()
+    }
+
+    /// The ISO timestamp the producer stamped, as a `Date`. Absent rather than
+    /// defaulted: an unparseable timestamp must read as "no known refresh", not
+    /// as 1970 (which would be reported as stale, correctly, but for the wrong
+    /// reason) and never as now.
+    public var updatedAtDate: Date? {
+        updatedAt.flatMap(ISO8601DateFormatter().date(from:))
+    }
+
+    /// Recomputes the one state the setup/health UI renders. Called after every
+    /// snapshot, every toggle, and every recovery action, so nothing on screen
+    /// can outlive the condition that produced it.
+    public func refreshBackgroundAgentState() {
+        monitorInBackgroundEnabled = backgroundAgent.isMonitoringEnabled
+        backgroundAgentState = backgroundAgent.state(
+            providers: providers,
+            snapshotUpdatedAt: updatedAtDate
+        )
+    }
+
+    /// Reflects what `SMAppService` actually reports afterwards. A first
+    /// registration lands on `requiresApproval`, and a toggle that snapped to
+    /// "on" there would be claiming a refresh that macOS is still holding.
+    public func setMonitorInBackground(_ enabled: Bool) {
+        _ = backgroundAgent.setMonitoringEnabled(enabled)
+        refreshBackgroundAgentState()
+    }
+
+    public func performBackgroundAgentRecovery(_ action: BackgroundAgentRecovery) {
+        backgroundAgent.perform(action)
+        refreshBackgroundAgentState()
     }
 
     public func updateConnectedDevices(_ devices: [DevicePresence]) {
