@@ -101,9 +101,6 @@ CLAUDE_MIN_PROBE_INTERVAL_SECONDS = 600
 # A real 429 means the endpoint's rolling allowance has not recovered yet.
 # Back off for an hour instead of retrying every normal Claude interval.
 CLAUDE_RATE_LIMIT_BACKOFF_SECONDS = 3600
-# Claude Code alone owns its OAuth refresh. Avoid repeated read-only retries
-# while its provider-authored session-expired result remains canonical.
-CLAUDE_AUTH_FAILURE_BACKOFF_SECONDS = 3600
 
 
 class _CanonicalProviderDeferred:
@@ -183,9 +180,7 @@ def _provider_next_probe_at(
     error = entry.get("error")
     lower_error = error.lower() if isinstance(error, str) else ""
     interval = (
-        CLAUDE_AUTH_FAILURE_BACKOFF_SECONDS
-        if "claude code session expired" in lower_error
-        else CLAUDE_RATE_LIMIT_BACKOFF_SECONDS
+        CLAUDE_RATE_LIMIT_BACKOFF_SECONDS
         if "http 429" in lower_error or "rate limited" in lower_error or "rate-limit" in lower_error
         else CLAUDE_MIN_PROBE_INTERVAL_SECONDS
     )

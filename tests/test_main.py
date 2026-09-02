@@ -1680,10 +1680,10 @@ class TestProviderRefreshSchedule(unittest.TestCase):
         self.assertTrue(_claude_probe_is_due(limited, self.BASE + timedelta(seconds=3600)))
         self.assertEqual(
             _provider_next_probe_at(expired, "Claude", self.BASE),
-            self.BASE + timedelta(seconds=3600),
+            self.BASE + timedelta(seconds=600),
         )
-        self.assertFalse(_claude_probe_is_due(expired, self.BASE + timedelta(seconds=3599)))
-        self.assertTrue(_claude_probe_is_due(expired, self.BASE + timedelta(seconds=3600)))
+        self.assertFalse(_claude_probe_is_due(expired, self.BASE + timedelta(seconds=599)))
+        self.assertTrue(_claude_probe_is_due(expired, self.BASE + timedelta(seconds=600)))
 
     def test_rate_limited_claude_is_deferred_safely_before_one_hour(self) -> None:
         raw_detail = "HTTP 429 rate limited raw-account-detail"
@@ -1705,14 +1705,14 @@ class TestProviderRefreshSchedule(unittest.TestCase):
         self.assertEqual(snapshots[0].source, "snapshot")
         self.assertNotIn("raw-account-detail", repr(statuses))
 
-    def test_claude_cooldown_defers_session_expiry_before_one_hour(self) -> None:
+    def test_claude_cooldown_defers_session_expiry_before_normal_interval(self) -> None:
         payload = self._payload(claude_error="Claude Code session expired: run `claude auth login`")
         provider = MagicMock()
         statuses: list[tuple[str, int]] = []
         scheduled = _schedule_refresh_providers(
             [("Claude", provider)],
             payload,
-            self.BASE + timedelta(seconds=3599),
+            self.BASE + timedelta(seconds=599),
             on_deferred=lambda name, seconds: statuses.append((name, seconds)),
         )
 
