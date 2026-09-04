@@ -476,15 +476,23 @@ rm -f "$mutated_gate"
 
 grep -Fq 'APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"' "$GATE_SCRIPT" ||
   fail "canonical Apple UI-test lock path is missing"
+# The two simulator UI legs take the lock through `gate_ui_test_lock` rather
+# than calling apple-ui-test-lock directly. Both forms serialize identically;
+# only the wrapper deletes the XCTestDevices clones xcodebuild leaves behind,
+# so a regression to the direct form serializes correctly while leaking a
+# simulator clone per run -- silent, and worth ~4 GB each. Pinned in both
+# directions for exactly that reason.
 for leg in GradusiOS-iPad GradusiOSUI; do
   ui_block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$GATE_SCRIPT")"
-  [[ "$ui_block" == *'"$APPLE_UI_TEST_LOCK" --label'* ]] ||
-    fail "$leg is not serialized by apple-ui-test-lock"
+  [[ "$ui_block" == *'gate_ui_test_lock --label'* ]] ||
+    fail "$leg is not serialized by gate_ui_test_lock"
+  [[ "$ui_block" != *'"$APPLE_UI_TEST_LOCK" --label'* ]] ||
+    fail "$leg must take the lock via gate_ui_test_lock so its clones are reaped"
 done
 for leg in GradusMac GradusRefreshAgent GradusiOS-iPhone GradusWidget; do
   unit_block="$(sed -n "/assert_counting_leg \"$leg\"/,/CODE_SIGNING_ALLOWED=NO/p" "$GATE_SCRIPT")"
-  [[ "$unit_block" != *'"$APPLE_UI_TEST_LOCK"'* ]] ||
-    fail "$leg unit leg must not use apple-ui-test-lock"
+  [[ "$unit_block" != *'"$APPLE_UI_TEST_LOCK"'* && "$unit_block" != *'gate_ui_test_lock'* ]] ||
+    fail "$leg unit leg must not take the Apple UI-test lock"
 done
 
 # GradusMacUI drives real HID automation against the host's focused window, so

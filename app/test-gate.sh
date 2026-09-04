@@ -449,7 +449,11 @@ assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
 # Three legs take this machine-wide lock -- GradusMacUI and both simulator UI
-# legs. `flock` is per open-file-description, so a *nested* acquisition is not
+# legs. The two simulator legs take it through simctl_gate_lib.sh's
+# `gate_ui_test_lock`, which also deletes the XCTestDevices clones xcodebuild
+# creates for them; GradusMacUI calls the binary directly because a macOS UI
+# test runs on the host and produces no simulator clone for that wrapper to
+# reap. `flock` is per open-file-description, so a *nested* acquisition is not
 # re-entrant: running this gate underneath an outer `apple-ui-test-lock` hold
 # makes each of those legs wait forever on a lock its own ancestor owns. Run
 # the gate bare -- `caffeinate -disu bash app/test-gate.sh` -- and let the legs
@@ -766,7 +770,7 @@ assert_counting_leg "GradusWidget" xcodebuild test \
 # would just stop covering the multi-column geometry. Kept as a named,
 # separate gate line so that loss is visible if anyone deletes it.
 echo "==> xcodebuild test — GradusiOS UI tests ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOS-iPad" "$APPLE_UI_TEST_LOCK" --label "GradusiOS UI tests ($ipad_udid)" -- xcodebuild test \
+assert_counting_leg "GradusiOS-iPad" gate_ui_test_lock --label "GradusiOS UI tests ($ipad_udid)" xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
@@ -793,7 +797,7 @@ reset_simulator_ui_session_for_iphone
 
 # Keep both simulator UI legs adjacent.
 echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOSUI" "$APPLE_UI_TEST_LOCK" --label "GradusiOSUITests" -- xcodebuild test \
+assert_counting_leg "GradusiOSUI" gate_ui_test_lock --label "GradusiOSUITests" xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
