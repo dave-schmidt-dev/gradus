@@ -195,8 +195,92 @@ assert_digest_unchanged() {
   }
 }
 
+# Candidate workspaces are disposable build trees, not durable state. The
+# ledger's candidateWorkspace always points into .release-state/candidates/,
+# which persist_candidate_ipa fills in after the archive succeeds -- nothing
+# resumable ever points at this temporary copy, so removing it cannot break a
+# resumed upload.
+CANDIDATE_WORKSPACE_DIR=""
+CANDIDATE_WORKSPACE_OWNED=0
+
+candidate_workspace_sweep_roots() {
+  # `${TMPDIR:-/tmp}` resolves differently depending on how this script is
+  # invoked: a launchd or cron context has no TMPDIR and lands in /tmp, an
+  # interactive run lands in the per-user /var/folders directory. Both are
+  # swept, because sweeping only the current one lets the other invocation
+  # style accumulate silently -- which is exactly what happened before.
+  local -a roots=()
+  # Hermetic tests need to point the sweep at a scratch root. Without this
+  # seam a test would have to run the real sweep against the real /tmp, which
+  # is exactly the kind of "cleanup test that deletes someone else's data"
+  # this change exists to prevent.
+  if [[ -n "${GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS:-}" ]]; then
+    printf '%s\n' "$GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS"
+    return 0
+  fi
+  local tmpdir="${TMPDIR:-/tmp}"
+  tmpdir="${tmpdir%/}"
+  roots+=("$tmpdir")
+  if [[ "$tmpdir" != "/tmp" ]]; then
+    roots+=("/tmp")
+  fi
+  printf '%s\n' "${roots[@]}"
+}
+
+sweep_stale_candidate_workspaces() {
+  # An EXIT trap never runs under SIGKILL, and for the whole build phase there
+  # is no EXIT trap installed at all, so a killed or crashed run always leaves
+  # its tree behind. Sweeping at create time is the half that survives those
+  # cases. The age cutoff is what makes it safe without a lock: a concurrent
+  # run's live workspace is minutes old and never in range.
+  #
+  # Count goes to stdout and per-entry detail to stderr, because the caller
+  # captures create_candidate_workspace's stdout as the workspace path.
+  local max_age="${GRADUS_CANDIDATE_WORKSPACE_MAX_AGE_SECONDS:-86400}"
+  local now cutoff root entry birth swept=0
+  now="$(date +%s)"
+  cutoff=$(( now - max_age ))
+  while IFS= read -r root; do
+    [[ -d "$root" ]] || continue
+    for entry in "$root"/gradus-ios-candidate.*; do
+      [[ -d "$entry" ]] || continue
+      [[ "$entry" != "$CANDIDATE_WORKSPACE_DIR" ]] || continue
+      # Birth time, not mtime: a long build writes into the tree throughout,
+      # so mtime would keep resetting and a genuinely stale workspace would
+      # never age out.
+      birth="$(/usr/bin/stat -f %B "$entry" 2>/dev/null || true)"
+      [[ -n "$birth" ]] || continue
+      (( birth < cutoff )) || continue
+      if rm -rf "$entry"; then
+        swept=$(( swept + 1 ))
+        echo "swept stale candidate workspace: $entry" >&2
+      else
+        echo "WARN: stale candidate workspace could not be removed: $entry" >&2
+      fi
+    done
+  done < <(candidate_workspace_sweep_roots)
+  printf '%s\n' "$swept"
+}
+
+cleanup_candidate_workspace() {
+  # Idempotent and always successful: this runs from EXIT traps that must not
+  # disturb the status the shell is already exiting with, and from more than
+  # one terminal path. A caller-supplied GRADUS_CANDIDATE_WORKSPACE is never
+  # ours to delete, which is what CANDIDATE_WORKSPACE_OWNED records.
+  if [[ "${CANDIDATE_WORKSPACE_OWNED:-0}" -eq 1 && -n "${CANDIDATE_WORKSPACE_DIR:-}" \
+    && -d "${CANDIDATE_WORKSPACE_DIR}" ]]; then
+    rm -rf "$CANDIDATE_WORKSPACE_DIR" || true
+  fi
+  CANDIDATE_WORKSPACE_DIR=""
+  CANDIDATE_WORKSPACE_OWNED=0
+  return 0
+}
+
 create_candidate_workspace() {
   local project_root="$1" workspace rsync_bin
+  # Creating implies sweeping, so a run that never reaches its own cleanup
+  # still bounds how much the previous ones left behind.
+  sweep_stale_candidate_workspaces >/dev/null || true
   workspace="${GRADUS_CANDIDATE_WORKSPACE:-$(mktemp -d "${TMPDIR:-/tmp}/gradus-ios-candidate.XXXXXX")}"
   mkdir -p "$workspace"
   if [[ -x /opt/homebrew/bin/rsync ]]; then
@@ -1554,6 +1638,17 @@ main() {
   validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "$source_revision" "$expected_project_digest"
   candidate_root="$(create_candidate_workspace "$project_root")"
   candidate_workspace="$(dirname "$candidate_root")"
+  CANDIDATE_WORKSPACE_DIR="$candidate_workspace"
+  # create_candidate_workspace runs inside a command substitution, so its
+  # subshell cannot record ownership or install a trap that outlives it --
+  # both have to happen here, in the caller.
+  if [[ -z "${GRADUS_CANDIDATE_WORKSPACE:-}" ]]; then
+    CANDIDATE_WORKSPACE_OWNED=1
+    trap 'cleanup_candidate_workspace' EXIT
+    trap 'cleanup_candidate_workspace; exit 130' INT
+    trap 'cleanup_candidate_workspace; exit 143' TERM
+    trap 'cleanup_candidate_workspace; exit 129' HUP
+  fi
   candidate_script_dir="$candidate_root/app"
   failure_hook allocation
 
@@ -1624,6 +1719,7 @@ main() {
     -scheme GradusiOS \
     -archivePath "$ARCHIVE_PATH" \
     -destination "generic/platform=iOS" \
+    -derivedDataPath "$candidate_workspace/DerivedData" \
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY="$SIGNING_IDENTITY")
   failure_hook archive
@@ -1764,10 +1860,12 @@ PY
   export GRADUS_UPLOAD_ATTEMPTED=0 GRADUS_UPLOAD_SUCCEEDED=0
   export GRADUS_UPLOAD_CANDIDATE_ID="$candidate_id"
   export GRADUS_UPLOAD_ARTIFACT_SHA256="$artifact_digest"
-  trap 'persist_upload_outcome' EXIT
-  trap 'persist_upload_outcome; exit 130' INT
-  trap 'persist_upload_outcome; exit 143' TERM
-  trap 'persist_upload_outcome; exit 129' HUP
+  # persist_upload_outcome captures $? on its first line, so appending the
+  # workspace cleanup after it cannot disturb the status being recorded.
+  trap 'persist_upload_outcome; cleanup_candidate_workspace' EXIT
+  trap 'persist_upload_outcome; cleanup_candidate_workspace; exit 130' INT
+  trap 'persist_upload_outcome; cleanup_candidate_workspace; exit 143' TERM
+  trap 'persist_upload_outcome; cleanup_candidate_workspace; exit 129' HUP
   # Keep the delivery log and the receipt written below owner-only.
   umask 077
 
@@ -1842,7 +1940,12 @@ PY
     fi
     rm -f "$delivery_log"
     persist_upload_outcome
-    trap - EXIT INT TERM HUP
+    # Drop the upload handler, keep the workspace handler: the delivery
+    # ambiguity is resolved here, the disposable tree still needs removing.
+    trap 'cleanup_candidate_workspace' EXIT
+    trap 'cleanup_candidate_workspace; exit 130' INT
+    trap 'cleanup_candidate_workspace; exit 143' TERM
+    trap 'cleanup_candidate_workspace; exit 129' HUP
     return "$upload_status"
   fi
   # Persist the receipt before anything else can fail. Every step after this
@@ -1865,7 +1968,10 @@ PY
   # The delivery is recorded, so nothing downstream is ambiguous any more.
   # GRADUS_UPLOAD_SUCCEEDED already makes the handler a no-op; dropping the
   # traps here keeps that from depending on one exported variable.
-  trap - EXIT INT TERM HUP
+  trap 'cleanup_candidate_workspace' EXIT
+  trap 'cleanup_candidate_workspace; exit 130' INT
+  trap 'cleanup_candidate_workspace; exit 143' TERM
+  trap 'cleanup_candidate_workspace; exit 129' HUP
   failure_hook assignment
 
   echo "==> Done. Candidate $candidate_id build $NEXT_BUILD uploaded -- Apple will take a few minutes to process it."

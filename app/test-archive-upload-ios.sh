@@ -956,13 +956,19 @@ grep -Fq 'persist_upload_outcome' "$UPLOAD_SCRIPT" || {
 # package. SIGINT/SIGTERM/SIGHUP bypass the EXIT trap, so the script handles
 # them explicitly. Assert the real script installs every handler -- a deleted
 # trap line would otherwise leave this suite green.
+#
+# The handler may compose further cleanup after persist_upload_outcome (the
+# candidate workspace removal does), but persist_upload_outcome has to stay
+# FIRST: it reads $? on its first line to record the status the run is dying
+# with, and any command in front of it would overwrite that. The patterns
+# anchor it to the front of the handler for exactly that reason.
 for signal_name in INT TERM HUP; do
-  grep -Eq "trap 'persist_upload_outcome; exit [0-9]+' $signal_name\b" "$UPLOAD_SCRIPT" || {
+  grep -Eq "trap 'persist_upload_outcome;( [a-z_]+;)* exit [0-9]+' $signal_name\b" "$UPLOAD_SCRIPT" || {
     echo "FAIL: archive-upload-ios.sh does not reconcile an interrupted upload on $signal_name" >&2
     exit 1
   }
 done
-grep -Fq "trap 'persist_upload_outcome' EXIT" "$UPLOAD_SCRIPT" || {
+grep -Eq "trap 'persist_upload_outcome(; [a-z_]+)*' EXIT" "$UPLOAD_SCRIPT" || {
   echo "FAIL: archive-upload-ios.sh does not reconcile an ambiguous upload on EXIT" >&2
   exit 1
 }
@@ -1184,11 +1190,18 @@ credential_line="$(awk '/_asc_api.make_token\(\)/ {print NR; exit}' "$UPLOAD_SCR
 
 # Ordering is also the durability property: the receipt must be on disk before
 # the traps that would otherwise record a delivered build as ambiguous are
-# released, so the delivery is never left with neither record.
+# released, so the delivery is never left with neither record. "Released"
+# means the reconciliation handler is gone; the workspace cleanup handler that
+# takes its place records nothing about the delivery, so it counts as released.
 persist_line="$(awk '/^  persist_delivery_receipt "\$GRADUS_UPLOAD_DELIVERY_RECEIPT_PATH"/ {print NR; exit}' "$UPLOAD_SCRIPT")"
 # The failure branch releases the same traps earlier, so match the last
 # occurrence: the one on the delivered path this ordering is about.
-release_line="$(awk '/^  trap - EXIT INT TERM HUP$/ {found = NR} END {if (found) print found}' "$UPLOAD_SCRIPT")"
+release_line="$(awk '/^  trap (- EXIT INT TERM HUP|.cleanup_candidate_workspace. EXIT)$/ {found = NR} END {if (found) print found}' "$UPLOAD_SCRIPT")"
+release_handler="$(awk -v n="$release_line" 'NR == n {print}' "$UPLOAD_SCRIPT")"
+[[ "$release_handler" != *persist_upload_outcome* ]] || {
+  echo "FAIL: the reconciliation handler is still installed after the delivery receipt" >&2
+  exit 1
+}
 [[ -n "$persist_line" && -n "$release_line" && "$persist_line" -lt "$release_line" ]] || {
   echo "FAIL: delivery receipt is not persisted before the reconciliation traps are released" >&2
   exit 1
@@ -1718,3 +1731,135 @@ export PATH="$orig_path"
 unset MOCK_CODESIGN_LOG
 
 echo "archive-upload-ios.sh HOME fallback and credential guard passed"
+
+# --- Candidate workspace lifecycle -----------------------------------------
+# The disposable build tree used to accumulate in $TMPDIR forever: 29 copies
+# totalling 7.6 GB, plus five orphaned DerivedData entries pointing into trees
+# that no longer existed. These cases pin the sweep, the ownership rule, and
+# the DerivedData relocation that stop it recurring.
+
+sweep_root="$TEST_ROOT/sweep-root"
+mkdir -p "$sweep_root/gradus-ios-candidate.AAAAAA" \
+  "$sweep_root/gradus-ios-candidate.BBBBBB" \
+  "$sweep_root/unrelated-directory"
+
+# A negative max age puts the cutoff in the future, so every existing entry is
+# stale without the test having to wait or fake a birth time.
+swept_count="$(
+  GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS="$sweep_root" \
+  GRADUS_CANDIDATE_WORKSPACE_MAX_AGE_SECONDS=-1 \
+    sweep_stale_candidate_workspaces 2>/dev/null
+)"
+[[ "$swept_count" == "2" ]] || {
+  echo "FAIL: sweep did not report both stale candidate workspaces (got '$swept_count')" >&2
+  exit 1
+}
+[[ ! -d "$sweep_root/gradus-ios-candidate.AAAAAA" && ! -d "$sweep_root/gradus-ios-candidate.BBBBBB" ]] || {
+  echo "FAIL: sweep left a stale candidate workspace behind" >&2
+  exit 1
+}
+[[ -d "$sweep_root/unrelated-directory" ]] || {
+  echo "FAIL: sweep removed a directory outside its own naming convention" >&2
+  exit 1
+}
+
+# The age cutoff is the only thing protecting a concurrent run's live tree.
+mkdir -p "$sweep_root/gradus-ios-candidate.CCCCCC"
+fresh_swept="$(
+  GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS="$sweep_root" \
+  GRADUS_CANDIDATE_WORKSPACE_MAX_AGE_SECONDS=86400 \
+    sweep_stale_candidate_workspaces 2>/dev/null
+)"
+[[ "$fresh_swept" == "0" ]] || {
+  echo "FAIL: sweep removed a workspace younger than the cutoff (swept '$fresh_swept')" >&2
+  exit 1
+}
+[[ -d "$sweep_root/gradus-ios-candidate.CCCCCC" ]] || {
+  echo "FAIL: sweep deleted a fresh candidate workspace" >&2
+  exit 1
+}
+
+# Even past the cutoff, the sweep must never remove the workspace the current
+# run is building in.
+CANDIDATE_WORKSPACE_DIR="$sweep_root/gradus-ios-candidate.CCCCCC"
+own_swept="$(
+  GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS="$sweep_root" \
+  GRADUS_CANDIDATE_WORKSPACE_MAX_AGE_SECONDS=-1 \
+    sweep_stale_candidate_workspaces 2>/dev/null
+)"
+[[ "$own_swept" == "0" && -d "$sweep_root/gradus-ios-candidate.CCCCCC" ]] || {
+  echo "FAIL: sweep removed the workspace belonging to the current run" >&2
+  exit 1
+}
+
+# Ownership: a workspace this script created is removed, a caller-supplied one
+# via GRADUS_CANDIDATE_WORKSPACE never is.
+owned_workspace="$sweep_root/owned-workspace"
+mkdir -p "$owned_workspace"
+CANDIDATE_WORKSPACE_DIR="$owned_workspace"
+CANDIDATE_WORKSPACE_OWNED=1
+cleanup_candidate_workspace
+[[ ! -d "$owned_workspace" ]] || {
+  echo "FAIL: cleanup did not remove a workspace this script created" >&2
+  exit 1
+}
+
+supplied_workspace="$sweep_root/supplied-workspace"
+mkdir -p "$supplied_workspace"
+CANDIDATE_WORKSPACE_DIR="$supplied_workspace"
+CANDIDATE_WORKSPACE_OWNED=0
+# Assert the precondition rather than assuming it: the previous cleanup call
+# resets both variables, so a regression that stopped resetting them would
+# otherwise make this case pass for the wrong reason.
+[[ "$CANDIDATE_WORKSPACE_DIR" == "$supplied_workspace" && "$CANDIDATE_WORKSPACE_OWNED" -eq 0 ]] || {
+  echo "FAIL: caller-supplied workspace precondition was not established" >&2
+  exit 1
+}
+cleanup_candidate_workspace
+[[ -d "$supplied_workspace" ]] || {
+  echo "FAIL: cleanup removed a caller-supplied candidate workspace" >&2
+  exit 1
+}
+
+# Cleanup runs from EXIT traps, so a second call must stay quiet and succeed.
+cleanup_candidate_workspace || {
+  echo "FAIL: cleanup_candidate_workspace is not idempotent" >&2
+  exit 1
+}
+
+# Both invocation styles have to be swept: a launchd run has no TMPDIR and
+# lands in /tmp, an interactive run lands under /var/folders. Read into an
+# array the long way -- macOS ships bash 3.2, which has no mapfile -- and use
+# a subshell rather than `env`, which cannot invoke a shell function.
+sweep_roots=""
+while IFS= read -r sweep_root_line; do
+  sweep_roots="${sweep_roots}${sweep_root_line}|"
+done < <(
+  unset GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS
+  TMPDIR=/var/folders/zz/test candidate_workspace_sweep_roots
+)
+[[ "$sweep_roots" == "/var/folders/zz/test|/tmp|" ]] || {
+  echo "FAIL: sweep roots did not cover both TMPDIR and /tmp (got '$sweep_roots')" >&2
+  exit 1
+}
+tmp_only_roots=""
+while IFS= read -r sweep_root_line; do
+  tmp_only_roots="${tmp_only_roots}${sweep_root_line}|"
+done < <(
+  unset GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS
+  TMPDIR=/tmp candidate_workspace_sweep_roots
+)
+[[ "$tmp_only_roots" == "/tmp|" ]] || {
+  echo "FAIL: sweep roots duplicated /tmp (got '$tmp_only_roots')" >&2
+  exit 1
+}
+
+# The archive must build into the disposable tree, or every release run mints
+# a permanent shared DerivedData entry keyed by a path that is about to vanish.
+archive_invocation="$(awk '/xcodebuild archive/,/CODE_SIGN_IDENTITY/' "$UPLOAD_SCRIPT")"
+grep -q -- '-derivedDataPath "\$candidate_workspace/DerivedData"' <<<"$archive_invocation" || {
+  echo "FAIL: xcodebuild archive does not build into the disposable candidate workspace" >&2
+  exit 1
+}
+
+echo "archive-upload-ios.sh candidate workspace lifecycle passed"
