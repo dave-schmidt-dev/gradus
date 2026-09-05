@@ -845,13 +845,24 @@ echo "  ✓ --entitlements and --preserve-entitlements cannot both be given"
 #     into the zip sent to Apple. Refuse up front instead.
 fixture="$TEST_ROOT/file-provider"
 mkdir -p "$fixture"
-xattr -w com.apple.file-provider-domain-id \
-  "com.apple.CloudDocs.iCloudDriveFileProvider/00000000-0000-0000-0000-000000000000" \
-  "$fixture"
+cat >"$MOCK_BIN/file-provider-xattr" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -eq 1 && -d "$1" &&
+  "$(cd "$1" && pwd -P)" == "$(cd "${MOCK_FILE_PROVIDER_ROOT:?}" && pwd -P)" ]]; then
+  printf '%s\n' com.apple.file-provider-domain-id
+  exit 0
+fi
+
+exec /usr/bin/xattr "$@"
+MOCK
+chmod +x "$MOCK_BIN/file-provider-xattr"
 app="$(make_bundle "$fixture/inner")"
 : >"$TEST_ROOT/sign.log"
 set +e
 env CODESIGN="$MOCK_BIN/codesign" MOCK_SIGN_LOG="$TEST_ROOT/sign.log" \
+  XATTR_TOOL="$MOCK_BIN/file-provider-xattr" MOCK_FILE_PROVIDER_ROOT="$fixture" \
   "$SIGN_SCRIPT" "$app" --identity "$IDENTITY" --preserve-entitlements \
   >"$TEST_ROOT/sign.out" 2>&1
 provider_status=$?
