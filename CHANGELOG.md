@@ -9,6 +9,20 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## 1.10.3 — 2026-09-05
+
+### Fixed
+
+- Carries the Cursor independent-pool correction and supersedes the uploaded
+  but unassigned 1.10.2 candidate after release-adapter reconciliation was
+  repaired.
+
+### TestFlight focus
+
+- Confirm Cursor remains active when Auto/Composer is depleted and API usage
+  remains available.
+- Confirm Cursor appears exhausted when both pools are depleted.
+
 ## 1.10.2 — 2026-09-05
 
 ### Fixed
