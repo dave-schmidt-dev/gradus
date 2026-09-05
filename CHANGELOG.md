@@ -9,6 +9,19 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## 1.10.2 — 2026-09-05
+
+### Fixed
+
+- Cursor is no longer reported exhausted while either its Auto/Composer or API
+  pool still has capacity.
+
+### TestFlight focus
+
+- Confirm Cursor remains active when Auto/Composer is depleted and API usage
+  remains available.
+- Confirm Cursor appears exhausted when both pools are depleted.
+
 ## 1.10.1 — 2026-08-29
 
 ### Fixed
