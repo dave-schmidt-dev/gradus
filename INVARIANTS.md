@@ -201,6 +201,14 @@ rationale: GradusiOS is a consumer of the Mac publisher, not an independent data
   makes the dependency decision explicit, requires both sides to pass their gates, and records the
   producer-publish evidence alongside the consumer upload evidence. The candidate ledger binds source, project,
   artifact, version, producer, iOS, IPA, and walkthrough digests and permits only validated state transitions.
+  Credential-free legacy-candidate compatibility is checked during readiness, before the
+  expensive local gate. A delivered-but-unassigned predecessor can be superseded only when its
+  candidate-local delivery receipt, chain-valid central uploaded transition, central allocation
+  proof, and legacy allocation identify the exact predecessor and a successor with a greater build
+  number and non-decreasing marketing version. Readiness and preparation consume one shared predicate;
+  the archive records the original state and delivery facts and never invents assignment.
+  Operation failures cross the central runner boundary only as schema-validated bounded diagnostics,
+  never raw child output.
   Preparation and upload are separate operations; upload acceptance is not processing or assignment. Processing,
   compliance, and internal-group assignment require a candidate-bound receipt with the exact build and redacted
   predicates. The iOS archive guard rejects missing, mismatched, wrong-build, or stale machine-written evidence before allocating an iOS build number. A Mac-only local republish does

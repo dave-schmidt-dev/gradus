@@ -13,6 +13,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:  # Supports both ``python app/...`` and package-based tests.
+    from .release_prepare_bridge import (
+        BridgeError,
+        clear_diagnostic,
+        emit_diagnostic,
+        load_context,
+        readiness_preflight,
+    )
+except ImportError:  # pragma: no cover - exercised by the adapter entrypoint
+    from release_prepare_bridge import (  # type: ignore[no-redef]
+        BridgeError,
+        clear_diagnostic,
+        emit_diagnostic,
+        load_context,
+        readiness_preflight,
+    )
+
 _CANDIDATE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -214,8 +231,26 @@ def main(argv: list[str] | None = None) -> int:
     if not value or "\x00" in value:
         return 4
     root = Path(__file__).resolve().parent.parent
+    candidate_id: str | None = None
     try:
         manifest_path = resolve_canonical_manifest(value, root)
+        common_result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        common_value = common_result.stdout.strip() if common_result.returncode == 0 else ""
+        if not common_value or "\n" in common_value or "\x00" in common_value:
+            raise BridgeError("readiness-legacy-candidate-incompatible")
+        common_dir = Path(common_value)
+        if not common_dir.is_absolute():
+            raise BridgeError("readiness-legacy-candidate-incompatible")
+        context = load_context(manifest_path, git_common_dir=common_dir.resolve(strict=True))
+        candidate_id = context.candidate_id
+        readiness_preflight(root, context)
         configuration = os.environ.get("RELEASE_CONFIGURATION", "")
         if local_gate:
             proof = build_local_gate_proof(
@@ -231,6 +266,23 @@ def main(argv: list[str] | None = None) -> int:
         proof_name = "local-gate.json" if local_gate else "readiness.json"
         destination = root / ".release-state" / "evidence" / candidate_id / proof_name
         write_proof(destination, proof)
+        if not local_gate:
+            clear_diagnostic(root, candidate_id, "readiness")
+    except BridgeError as exc:
+        if candidate_id is not None and not local_gate:
+            code = str(exc)
+            if code not in {
+                "readiness-legacy-candidate-incompatible",
+                "readiness-rollover-not-newer",
+                "readiness-delivery-receipt-invalid",
+                "readiness-central-upload-invalid",
+            }:
+                code = "readiness-legacy-candidate-incompatible"
+            try:
+                emit_diagnostic(root, candidate_id, "readiness", code)
+            except (BridgeError, OSError):
+                pass
+        return 4
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return 4
     return 0

@@ -540,6 +540,17 @@ version, the wrapper first retires it through the framework's `retire-failed`
 command and then prepares the new train through the ordinary fresh-candidate
 route. Both paths preserve the prior candidate ledger and fail closed if its
 state cannot be validated.
+The readiness operation performs that credential-free legacy-state check
+before the expensive local Xcode/UI gate. A delivered but unassigned
+predecessor may roll over only when its candidate-local delivery receipt, the
+chain-valid central `uploaded` transition for those exact artifact bytes, the
+central identity proof, and the legacy allocation all bind the same predecessor.
+Readiness and production preparation call one shared predicate, and the successor
+must use a greater build number without decreasing the marketing version. The
+predecessor is archived from its real state; delivery is never
+recorded as assignment. Readiness and production-build failures publish only
+schema-validated, bounded diagnostic codes through their declared evidence
+paths, never captured subprocess output.
 Do not use the `Gradus iOS Internal TestFlight` Cloud workflow for delivery: the
 account's Cloud product is attached to the GradusMac app record, so its iOS
 builds cannot reach the Gradus AI beta group.

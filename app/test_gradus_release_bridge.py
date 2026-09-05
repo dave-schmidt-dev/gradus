@@ -2629,7 +2629,204 @@ class ReleasePrepareBridgeTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        BridgeTests._write_v2_ledger(
+            manifest.parent.parent / "1.8.0-20",
+            [
+                {
+                    "transition": "uploaded",
+                    "details": {
+                        "candidateId": "1.8.0-20",
+                        "marketingVersion": "1.8.0",
+                        "buildNumber": "20",
+                        "operationClass": "upload",
+                        "signedArtifactSha256": ledger["artifactSha256"],
+                    },
+                }
+            ],
+        )
         return root, PREPARE.load_context(manifest, git_common_dir=common)
+
+    @staticmethod
+    def _delivered_upload_receipt(
+        root: Path, *, build: int = 20, include_delivery_uuid: bool = True
+    ) -> None:
+        ledger_path = root / ".release-state" / "candidate.json"
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        workspace = Path(ledger["metadata"]["candidateWorkspace"])
+        receipt = {
+            "schemaVersion": "1.0.0",
+            "operationClass": "upload",
+            "candidateId": ledger["candidateId"],
+            "marketingVersion": ledger["marketingVersion"],
+            "build": build,
+            "artifactSha256": ledger["artifactSha256"],
+            "artifactBytes": 1,
+            "result": "delivered",
+            "deliveredAt": "2026-09-01T00:00:00Z",
+        }
+        if include_delivery_uuid:
+            receipt["deliveryUuid"] = "00000000-0000-4000-8000-000000000001"
+        (workspace / "upload-delivery.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+    def test_readiness_preflight_accepts_delivered_upload_rollover_without_environment(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            ledger_path = root / ".release-state" / "candidate.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger["state"] = "uploading"
+            ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+            self._delivered_upload_receipt(root)
+
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(PREPARE.readiness_preflight(root, context), "gradus-ios-20")
+
+    def test_readiness_preflight_accepts_receipt_without_optional_delivery_uuid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            ledger_path = root / ".release-state" / "candidate.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger["state"] = "uploaded_unassigned"
+            ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+            self._delivered_upload_receipt(root, include_delivery_uuid=False)
+
+            self.assertEqual(PREPARE.readiness_preflight(root, context), "gradus-ios-20")
+
+    def test_readiness_preflight_rejects_untrusted_uploaded_rollover_evidence(self) -> None:
+        variants = (
+            "missing",
+            "malformed",
+            "mismatched",
+            "equal",
+            "older",
+            "escaping",
+            "symlink",
+            "remote-mismatch",
+            "central-missing",
+            "central-tampered",
+            "central-artifact-mismatch",
+        )
+        for variant in variants:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                root, context = self._fixture(temporary)
+                ledger_path = root / ".release-state" / "candidate.json"
+                ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+                ledger["state"] = "uploaded_unassigned"
+                workspace = Path(ledger["metadata"]["candidateWorkspace"])
+                if variant == "remote-mismatch":
+                    identity_path = root / ".release-state" / "evidence" / "allocate-identity.json"
+                    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+                    identity["remoteHighestMarketingVersion"] = "1.7.9"
+                    identity_path.write_text(json.dumps(identity), encoding="utf-8")
+                central_ledger = (
+                    context.manifest_path.parent.parent / "1.8.0-20" / "transitions.jsonl"
+                )
+                if variant == "central-missing":
+                    central_ledger.unlink()
+                elif variant == "central-tampered":
+                    central_ledger.write_text(
+                        central_ledger.read_text(encoding="utf-8").replace(
+                            '"operationClass":"upload"', '"operationClass":"other"'
+                        ),
+                        encoding="utf-8",
+                    )
+                elif variant == "central-artifact-mismatch":
+                    BridgeTests._write_v2_ledger(
+                        central_ledger.parent,
+                        [
+                            {
+                                "transition": "uploaded",
+                                "details": {
+                                    "candidateId": "1.8.0-20",
+                                    "marketingVersion": "1.8.0",
+                                    "buildNumber": "20",
+                                    "operationClass": "upload",
+                                    "signedArtifactSha256": "0" * 64,
+                                },
+                            }
+                        ],
+                    )
+                if variant == "escaping":
+                    outside = root / "outside"
+                    outside.mkdir()
+                    ledger["metadata"]["candidateWorkspace"] = str(outside)
+                if variant in {"equal", "older"}:
+                    ledger["build"] = (
+                        context.build_number if variant == "equal" else context.build_number + 1
+                    )
+                    ledger["candidateId"] = f"gradus-ios-{ledger['build']}"
+                    workspace = root / ".release-state" / "candidates" / ledger["candidateId"]
+                    workspace.mkdir()
+                    ledger["metadata"]["candidateWorkspace"] = str(workspace)
+                ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+                if variant != "missing":
+                    self._delivered_upload_receipt(root, build=ledger["build"])
+                receipt = workspace / "upload-delivery.json"
+                if variant == "malformed":
+                    receipt.write_text("{", encoding="utf-8")
+                elif variant == "mismatched":
+                    value = json.loads(receipt.read_text(encoding="utf-8"))
+                    value["artifactSha256"] = "0" * 64
+                    receipt.write_text(json.dumps(value), encoding="utf-8")
+                elif variant == "symlink":
+                    receipt.unlink()
+                    target = root / "receipt.json"
+                    target.write_text("{}", encoding="utf-8")
+                    receipt.symlink_to(target)
+
+                with self.assertRaises(PREPARE.BridgeError):
+                    PREPARE.readiness_preflight(root, context)
+
+    def test_uploaded_rollover_stages_allocation_and_uses_distinct_shell_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            ledger_path = root / ".release-state" / "candidate.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger["state"] = "uploading"
+            ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+            self._delivered_upload_receipt(root)
+            calls: list[list[str]] = []
+
+            def runner(argv, **_kwargs):
+                calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 1)
+
+            with self.assertRaisesRegex(PREPARE.BridgeError, "legacy-preparation-failed"):
+                PREPARE.execute("production-build", context, root=root, runner=runner)
+
+            self.assertEqual(len(calls), 1)
+            self.assertIn("--rollover-uploaded", calls[0])
+            self.assertNotIn("--rollover-assigned", calls[0])
+            staged = root / ".release-state" / ".rollover" / "gradus-ios-20" / "allocated-ios.json"
+            self.assertEqual(json.loads(staged.read_text())["candidateId"], "gradus-ios-20")
+            self.assertFalse((root / ".release-state" / "allocated-ios.json").exists())
+            diagnostic = json.loads(
+                (
+                    root
+                    / ".release-state"
+                    / "evidence"
+                    / context.candidate_id
+                    / "production-build-diagnostic.json"
+                ).read_text()
+            )
+            self.assertEqual(diagnostic["operationId"], "production-build")
+            self.assertEqual(
+                diagnostic["failureKind"], "production-build-legacy-preparation-failed"
+            )
+
+    def test_readiness_preflight_preserves_existing_prepared_and_assigned_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, context = self._fixture(temporary)
+            self.assertEqual(PREPARE.readiness_preflight(root, context), "gradus-ios-20")
+            ledger_path = root / ".release-state" / "candidate.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger["state"] = "prepared"
+            ledger["candidateId"] = context.candidate_id
+            ledger["marketingVersion"] = context.marketing_version
+            ledger["build"] = context.build_number
+            ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+            self.assertIsNone(PREPARE.readiness_preflight(root, context))
 
     def test_assigned_legacy_state_is_archived_only_for_exact_central_allocation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

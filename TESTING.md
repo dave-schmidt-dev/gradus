@@ -27,6 +27,12 @@ visual coordinates or incidental text layout.
 Internal TestFlight candidate tests must cover the candidate ledger's allowed
 transitions, digest/version predicates, fixture-only ASC pagination and strict
 version policy, and redacted processing/compliance/assignment receipt predicates.
+Release recovery tests also prove that incompatible legacy state is rejected
+during readiness before the local gate, delivered-but-unassigned rollover is
+bound to the exact receipt, chain-valid central upload, identity proof, and
+legacy allocation through the same predicate used by preparation, and emitted failure
+diagnostics satisfy the central closed schema without raw exception or process
+output.
 These checks prove local candidate safety only; they do not prove Apple upload,
 processing, installability, or App Store submission.
 

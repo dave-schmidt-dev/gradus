@@ -33,6 +33,11 @@ except ModuleNotFoundError:  # Direct pytest execution from app/.
         write_proof,
     )
 
+try:
+    from app.release_prepare_bridge import clear_diagnostic, diagnostic_path, emit_diagnostic
+except ModuleNotFoundError:  # Direct pytest execution from app/.
+    from release_prepare_bridge import clear_diagnostic, diagnostic_path, emit_diagnostic
+
 
 def test_build_proof_binds_candidate_source_and_manifest_bytes() -> None:
     with tempfile.TemporaryDirectory() as temporary:
@@ -89,6 +94,29 @@ def test_write_proof_atomically_creates_runner_evidence() -> None:
         assert json.loads(destination.read_text(encoding="utf-8")) == proof
         assert destination.stat().st_mode & 0o777 == 0o600
         assert not destination.with_name(".readiness.json.tmp").exists()
+
+
+def test_readiness_diagnostic_is_schema_bound_safe_and_removed_after_success() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        emit_diagnostic(
+            root,
+            "1.8.0-20",
+            "readiness",
+            "readiness-delivery-receipt-invalid",
+        )
+        path = diagnostic_path(root, "1.8.0-20", "readiness")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload == {
+            "schemaVersion": "1.0.0",
+            "proofSchema": "release.diagnostic.v1",
+            "operationId": "readiness",
+            "failureKind": "readiness-delivery-receipt-invalid",
+            "summary": "The predecessor delivery receipt is unavailable or does not bind the exact delivered artifact.",
+        }
+        assert path.stat().st_mode & 0o777 == 0o600
+        clear_diagnostic(root, "1.8.0-20", "readiness")
+        assert not path.exists()
 
 
 def test_build_local_gate_proof_is_typed_and_candidate_source_bound() -> None:

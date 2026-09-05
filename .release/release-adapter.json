@@ -389,9 +389,11 @@
   "evidencePaths": [
     {"name": "local-gate-proof", "path": ".release-state/evidence/{candidateId}/local-gate.json", "contentType": "application/json"},
     {"name": "readiness-proof", "path": ".release-state/evidence/{candidateId}/readiness.json", "contentType": "application/json"},
+    {"name": "readiness-diagnostic", "path": ".release-state/evidence/{candidateId}/readiness-diagnostic.json", "contentType": "application/json"},
     {"name": "candidate-proof", "path": ".release-state/evidence/{candidateId}/candidate.json", "contentType": "application/json"},
     {"name": "allocate-identity-proof", "path": ".release-state/evidence/allocate-identity.json", "contentType": "application/json"},
     {"name": "production-build-proof", "path": ".release-state/evidence/{candidateId}/production-build.json", "contentType": "application/json"},
+    {"name": "production-build-diagnostic", "path": ".release-state/evidence/{candidateId}/production-build-diagnostic.json", "contentType": "application/json"},
     {"name": "archive-proof", "path": ".release-state/evidence/{candidateId}/archive.json", "contentType": "application/json"},
     {"name": "signing-proof", "path": ".release-state/evidence/{candidateId}/signing.json", "contentType": "application/json"},
     {"name": "artifact-proof", "path": ".release-state/evidence/{candidateId}/artifact.json", "contentType": "application/json"},

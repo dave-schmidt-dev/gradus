@@ -56,10 +56,55 @@ _SECRET_NAMES = frozenset(
         "APP_STORE_CONNECT_ISSUER_ID",
     }
 )
+DIAGNOSTIC_SCHEMA = "release.diagnostic.v1"
+_DIAGNOSTIC_SUMMARIES = {
+    "readiness-legacy-candidate-incompatible": "The local candidate does not match the immutable release boundary.",
+    "readiness-rollover-not-newer": "The replacement candidate is not strictly newer than the delivered predecessor.",
+    "readiness-delivery-receipt-invalid": "The predecessor delivery receipt is unavailable or does not bind the exact delivered artifact.",
+    "readiness-central-upload-invalid": "The central release ledger does not contain a chain-valid upload for the exact delivered artifact.",
+    "production-build-preflight-failed": "The production build preflight did not establish a safe local candidate boundary.",
+    "production-build-legacy-preparation-failed": "The legacy production preparation did not complete.",
+    "production-build-artifact-unavailable": "The prepared production artifact could not be verified.",
+}
 
 
 class BridgeError(ValueError):
     """A stable failure at the local candidate/proof boundary."""
+
+
+def diagnostic_path(root: Path, candidate_id: str, operation: str) -> Path:
+    """Return the declared safe diagnostic location for one local operation."""
+
+    return root / ".release-state" / "evidence" / candidate_id / f"{operation}-diagnostic.json"
+
+
+def emit_diagnostic(root: Path, candidate_id: str, operation: str, code: str) -> None:
+    """Persist a schema-bound diagnostic with no exception or environment detail."""
+
+    summary = _DIAGNOSTIC_SUMMARIES.get(code)
+    if summary is None or operation not in {"readiness", "production-build"}:
+        raise BridgeError("diagnostic-code-invalid")
+    _write_json(
+        diagnostic_path(root, candidate_id, operation),
+        {
+            "schemaVersion": "1.0.0",
+            "proofSchema": DIAGNOSTIC_SCHEMA,
+            "operationId": operation,
+            "failureKind": code,
+            "summary": summary,
+        },
+    )
+
+
+def clear_diagnostic(root: Path, candidate_id: str, operation: str) -> None:
+    """Remove only a regular stale diagnostic after the operation succeeds."""
+
+    path = diagnostic_path(root, candidate_id, operation)
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_symlink() or not path.is_file():
+        raise BridgeError("diagnostic-path-invalid")
+    path.unlink()
 
 
 @dataclass(frozen=True)
@@ -223,7 +268,9 @@ def load_context(
     )
 
 
-def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
+def _identity_proof(
+    root: Path, context: CandidateContext, *, persist: bool = True
+) -> Mapping[str, Any]:
     proof = _load_json(root / ".release-state" / "evidence" / "allocate-identity.json")
     remote_highest_build = proof.get("remoteHighestBuildNumber")
     remote_highest_version = proof.get("remoteHighestMarketingVersion")
@@ -303,10 +350,15 @@ def _identity_proof(root: Path, context: CandidateContext) -> Mapping[str, Any]:
             "observedAt": allocation["observedAt"],
             "responseSha256": _canonical_digest(central),
         }
-        _write_json(
-            root / ".release-state" / "evidence" / context.candidate_id / "allocate-identity.json",
-            proof,
-        )
+        if persist:
+            _write_json(
+                root
+                / ".release-state"
+                / "evidence"
+                / context.candidate_id
+                / "allocate-identity.json",
+                proof,
+            )
     return proof
 
 
@@ -323,6 +375,306 @@ def _allocation_matches(
         and isinstance(allocation.get("allocatedAt"), str)
         and bool(allocation.get("allocatedAt"))
     )
+
+
+def _version_key(value: str) -> tuple[int, int, int]:
+    """Return a validated semantic-version ordering key."""
+
+    if _SEMVER.fullmatch(value) is None:
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+    return tuple(int(part) for part in value.split("."))  # type: ignore[return-value]
+
+
+def _canonical_record_bytes(value: Mapping[str, Any]) -> bytes:
+    """Encode a central transition record exactly as the ledger hashes it."""
+
+    return json.dumps(
+        dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _verify_central_uploaded_transition(
+    context: CandidateContext,
+    *,
+    marketing_version: str,
+    build: int,
+    artifact_sha256: str,
+) -> None:
+    """Require a chain-valid central upload record for the delivered bytes."""
+
+    central_id = f"{marketing_version}-{build}"
+    ledger_path = context.manifest_path.parent.parent / central_id / "transitions.jsonl"
+    if ledger_path.is_symlink() or not ledger_path.is_file():
+        raise BridgeError("readiness-central-upload-invalid")
+    try:
+        lines = ledger_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise BridgeError("readiness-central-upload-invalid") from exc
+    if not lines:
+        raise BridgeError("readiness-central-upload-invalid")
+
+    previous_hash = "0" * 64
+    uploaded = False
+    for sequence, line in enumerate(lines, 1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise BridgeError("readiness-central-upload-invalid") from exc
+        if not isinstance(record, Mapping):
+            raise BridgeError("readiness-central-upload-invalid")
+        record_hash = record.get("recordHash")
+        unsigned = dict(record)
+        unsigned.pop("recordHash", None)
+        if (
+            record.get("formatVersion") != 2
+            or record.get("candidateId") != central_id
+            or record.get("sequence") != sequence
+            or record.get("previousHash") != previous_hash
+            or not isinstance(record_hash, str)
+            or _HEX64.fullmatch(record_hash) is None
+            or hashlib.sha256(_canonical_record_bytes(unsigned)).hexdigest() != record_hash
+        ):
+            raise BridgeError("readiness-central-upload-invalid")
+        previous_hash = record_hash
+        details = record.get("details")
+        if record.get("transition") == "uploaded":
+            if (
+                uploaded
+                or not isinstance(details, Mapping)
+                or details.get("candidateId") != central_id
+                or details.get("marketingVersion") != marketing_version
+                or str(details.get("buildNumber")) != str(build)
+                or details.get("operationClass") != "upload"
+                or details.get("signedArtifactSha256") != artifact_sha256
+            ):
+                raise BridgeError("readiness-central-upload-invalid")
+            uploaded = True
+    if not uploaded:
+        raise BridgeError("readiness-central-upload-invalid")
+
+
+def _uploaded_rollover_preflight(
+    root: Path, context: CandidateContext, ledger: Mapping[str, Any]
+) -> tuple[str, str, int, str]:
+    """Validate the complete, shared predicate for an uploaded rollover."""
+
+    candidate_id, version, build, artifact = _delivered_predecessor_receipt(root, ledger)
+    _verify_central_uploaded_transition(
+        context,
+        marketing_version=version,
+        build=build,
+        artifact_sha256=artifact,
+    )
+    proof = _identity_proof(root, context, persist=False)
+    if (
+        context.build_number <= build
+        or _version_key(context.marketing_version) < _version_key(version)
+        or proof.get("remoteHighestMarketingVersion") != version
+        or proof.get("remoteHighestBuildNumber") != build
+    ):
+        raise BridgeError("readiness-rollover-not-newer")
+
+    allocation_path = root / ".release-state" / "allocated-ios.json"
+    staged = root / ".release-state" / ".rollover" / candidate_id / "allocated-ios.json"
+    old_matches = False
+    current_matches = False
+    if allocation_path.exists() or allocation_path.is_symlink():
+        if allocation_path.is_symlink() or not allocation_path.is_file():
+            raise BridgeError("uploaded-candidate-allocation-mismatch")
+        allocation = _load_json(allocation_path)
+        old_matches = _allocation_matches(
+            allocation, candidate=candidate_id, version=version, build=build
+        )
+        current_matches = _allocation_matches(
+            allocation,
+            candidate=context.candidate_id,
+            version=context.marketing_version,
+            build=context.build_number,
+        )
+        if not old_matches and not current_matches:
+            raise BridgeError("active-allocation-mismatch")
+    if staged.exists() or staged.is_symlink():
+        if staged.is_symlink() or not staged.is_file():
+            raise BridgeError("staged-allocation-invalid")
+        staged_allocation = _load_json(staged)
+        if not _allocation_matches(
+            staged_allocation, candidate=candidate_id, version=version, build=build
+        ):
+            raise BridgeError("staged-allocation-invalid")
+        if old_matches and staged.read_bytes() != allocation_path.read_bytes():
+            raise BridgeError("staged-allocation-mismatch")
+        if allocation_path.exists() and not old_matches and not current_matches:
+            raise BridgeError("active-allocation-mismatch")
+    elif not old_matches:
+        raise BridgeError("uploaded-candidate-allocation-mismatch")
+    return candidate_id, version, build, artifact
+
+
+def _legacy_workspace(root: Path, ledger: Mapping[str, Any], candidate_id: str) -> Path:
+    """Resolve the sole permitted non-symlink workspace for a predecessor."""
+
+    metadata = ledger.get("metadata")
+    workspace_value = metadata.get("candidateWorkspace") if isinstance(metadata, Mapping) else None
+    expected = (root / ".release-state" / "candidates" / candidate_id).resolve(strict=False)
+    if not isinstance(workspace_value, str) or not workspace_value:
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+    workspace = Path(workspace_value)
+    if workspace.is_symlink() or not workspace.is_dir() or workspace.resolve() != expected:
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+    return workspace
+
+
+def _delivered_predecessor_receipt(
+    root: Path, ledger: Mapping[str, Any]
+) -> tuple[str, str, int, str]:
+    """Validate the exact regular v1 upload receipt for one local predecessor."""
+
+    candidate_id = ledger.get("candidateId")
+    version = ledger.get("marketingVersion")
+    build = ledger.get("build")
+    artifact = ledger.get("artifactSha256")
+    if (
+        not isinstance(candidate_id, str)
+        or _CANDIDATE.fullmatch(candidate_id) is None
+        or not isinstance(version, str)
+        or _SEMVER.fullmatch(version) is None
+        or isinstance(build, bool)
+        or not isinstance(build, int)
+        or build < 1
+        or not isinstance(artifact, str)
+        or _HEX64.fullmatch(artifact) is None
+    ):
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+    workspace = _legacy_workspace(root, ledger, candidate_id)
+    receipt_path = workspace / "upload-delivery.json"
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise BridgeError("readiness-delivery-receipt-invalid")
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BridgeError("readiness-delivery-receipt-invalid") from exc
+    if not isinstance(receipt, Mapping):
+        raise BridgeError("readiness-delivery-receipt-invalid")
+    required = {
+        "schemaVersion",
+        "operationClass",
+        "candidateId",
+        "marketingVersion",
+        "build",
+        "artifactSha256",
+        "artifactBytes",
+        "result",
+        "deliveredAt",
+    }
+    allowed = required | {"deliveryUuid"}
+    raw_build = receipt.get("build")
+    delivery_uuid = receipt.get("deliveryUuid")
+    delivered_at = receipt.get("deliveredAt")
+    try:
+        delivered = (
+            datetime.fromisoformat(delivered_at[:-1] + "+00:00")
+            if isinstance(delivered_at, str) and delivered_at.endswith("Z")
+            else None
+        )
+    except ValueError:
+        delivered = None
+    if (
+        not required.issubset(receipt)
+        or set(receipt) - allowed
+        or receipt.get("schemaVersion") != "1.0.0"
+        or receipt.get("operationClass") != "upload"
+        or receipt.get("candidateId") != candidate_id
+        or receipt.get("marketingVersion") != version
+        or isinstance(raw_build, bool)
+        or raw_build != build
+        or receipt.get("artifactSha256") != artifact
+        or receipt.get("result") != "delivered"
+        or isinstance(receipt.get("artifactBytes"), bool)
+        or not isinstance(receipt.get("artifactBytes"), int)
+        or receipt["artifactBytes"] < 1
+        or delivery_uuid is not None
+        and (not isinstance(delivery_uuid, str) or not delivery_uuid)
+        or delivered is None
+        or delivered.tzinfo is None
+    ):
+        raise BridgeError("readiness-delivery-receipt-invalid")
+    return candidate_id, version, build, artifact
+
+
+def readiness_preflight(root: Path, context: CandidateContext) -> str | None:
+    """Validate the local candidate boundary without credentials or mutation.
+
+    A delivered predecessor may be archived only after the central immutable
+    candidate is demonstrably newer and the predecessor's own v1 receipt binds
+    exactly the candidate, release version/build, and artifact bytes.  Receipts
+    deliberately carry no product field: product binding is established by the
+    adapter-selected immutable ``context`` instead.
+    """
+
+    ledger_path = root / ".release-state" / "candidate.json"
+    if not ledger_path.exists() and not ledger_path.is_symlink():
+        return None
+    if ledger_path.is_symlink() or not ledger_path.is_file():
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+    ledger = _load_json(ledger_path)
+    candidate_id = ledger.get("candidateId")
+    state = ledger.get("state")
+    version = ledger.get("marketingVersion")
+    build = ledger.get("build")
+    if (
+        not isinstance(candidate_id, str)
+        or _CANDIDATE.fullmatch(candidate_id) is None
+        or not isinstance(version, str)
+        or _SEMVER.fullmatch(version) is None
+        or isinstance(build, bool)
+        or not isinstance(build, int)
+        or build < 1
+    ):
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+
+    if candidate_id == context.candidate_id:
+        if (
+            state not in {"prepared", "assigned"}
+            or version != context.marketing_version
+            or build != context.build_number
+        ):
+            raise BridgeError("readiness-legacy-candidate-incompatible")
+        return None
+    if state == "prepared":
+        predecessor = _authorized_staged_preupload_predecessor(context)
+        if predecessor is None:
+            predecessor = _authorized_failed_preupload_predecessor(context)
+        if predecessor != candidate_id:
+            raise BridgeError("readiness-legacy-candidate-incompatible")
+        return candidate_id
+    if state == "assigned":
+        # Existing assigned rollover remains governed by the central allocation
+        # proof.  Validate it here, without staging or archiving anything.
+        proof = _identity_proof(root, context, persist=False)
+        if not _legacy_workspace(root, ledger, candidate_id).is_dir() or not (
+            (
+                proof.get("remoteHighestMarketingVersion") == version
+                and proof.get("remoteHighestBuildNumber") == build
+            )
+            or (
+                proof.get("buildNumber") == context.build_number
+                and isinstance(proof.get("remoteHighestBuildNumber"), int)
+                and proof.get("remoteHighestBuildNumber") < context.build_number
+                and proof.get("remoteHighestBuildNumber") >= build
+                and context.build_number > build
+            )
+        ):
+            raise BridgeError("readiness-legacy-candidate-incompatible")
+        return candidate_id
+    if state not in {"uploading", "uploaded_unassigned"}:
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+
+    receipt_candidate, receipt_version, receipt_build, _ = _uploaded_rollover_preflight(
+        root, context, ledger
+    )
+    if receipt_candidate != candidate_id or receipt_version != version or receipt_build != build:
+        raise BridgeError("readiness-legacy-candidate-incompatible")
+    return candidate_id
 
 
 def _authorized_failed_preupload_predecessor(context: CandidateContext) -> str | None:
@@ -573,6 +925,52 @@ def reconcile_assigned_candidate(root: Path, context: CandidateContext) -> str |
         return _archive_prepared_predecessor(
             root, ledger_path, allocation_path, ledger, predecessor
         )
+    if ledger.get("state") in {"uploading", "uploaded_unassigned"}:
+        # Use the same complete predicate as readiness so no condition can be
+        # deferred until after the expensive local gate.
+        legacy_id, legacy_version, legacy_build, _ = _uploaded_rollover_preflight(
+            root, context, ledger
+        )
+        staged = root / ".release-state" / ".rollover" / legacy_id / "allocated-ios.json"
+        old_matches = False
+        current_matches = False
+        if allocation_path.exists():
+            allocation = _load_json(allocation_path)
+            old_matches = _allocation_matches(
+                allocation,
+                candidate=legacy_id,
+                version=legacy_version,
+                build=legacy_build,
+            )
+            current_matches = _allocation_matches(
+                allocation,
+                candidate=context.candidate_id,
+                version=context.marketing_version,
+                build=context.build_number,
+            )
+            if not old_matches and not current_matches:
+                raise BridgeError("active-allocation-mismatch")
+        if staged.exists():
+            staged_allocation = _load_json(staged)
+            if not _allocation_matches(
+                staged_allocation,
+                candidate=legacy_id,
+                version=legacy_version,
+                build=legacy_build,
+            ):
+                raise BridgeError("staged-allocation-invalid")
+            if old_matches:
+                if staged.read_bytes() != allocation_path.read_bytes():
+                    raise BridgeError("staged-allocation-mismatch")
+                allocation_path.unlink()
+            elif not current_matches and allocation_path.exists():
+                raise BridgeError("active-allocation-mismatch")
+        else:
+            if not old_matches:
+                raise BridgeError("uploaded-candidate-allocation-mismatch")
+            staged.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
+            os.replace(allocation_path, staged)
+        return legacy_id
     if ledger.get("state") != "assigned":
         raise BridgeError("legacy-candidate-not-rollover-safe")
 
@@ -1109,6 +1507,16 @@ def _proof_path(root: Path, context: CandidateContext, operation: str) -> Path:
     return root / ".release-state" / "evidence" / context.candidate_id / filename
 
 
+def _production_diagnostic_code(error: BridgeError) -> str:
+    """Map local failures to the closed, value-free diagnostic vocabulary."""
+
+    if str(error) == "legacy-preparation-failed":
+        return "production-build-legacy-preparation-failed"
+    if str(error).startswith("readiness-"):
+        return "production-build-preflight-failed"
+    return "production-build-artifact-unavailable"
+
+
 def execute(
     operation: str,
     context: CandidateContext,
@@ -1123,64 +1531,94 @@ def execute(
 
     if operation not in OPERATIONS:
         raise BridgeError("operation-not-supported")
-    if operation in {"production-build", "all"}:
-        legacy_id = reconcile_assigned_candidate(root, context)
-        environment = {
-            name: value for name, value in os.environ.items() if name not in _SECRET_NAMES
-        }
-        environment["GRADUS_CANDIDATE_ID"] = context.candidate_id
-        environment["GRADUS_RELEASE_BRIDGE_ACTIVE"] = "1"
-        correction_proof = (
-            root / ".release-state" / "evidence" / context.candidate_id / "allocate-identity.json"
-        )
-        if correction_proof.is_file() and not correction_proof.is_symlink():
-            environment["GRADUS_IDENTITY_ALLOCATION_PROOF_PATH"] = str(correction_proof)
-        argv = [
-            str(root / "app" / "archive-upload-ios.sh"),
-            "--prepare-only",
-            "--candidate",
-            context.candidate_id,
-        ]
-        if legacy_id is not None:
-            argv.extend(
-                [
-                    "--rollover-assigned",
-                    "--supersession-reason",
-                    f"superseded by central candidate {context.candidate_id}",
-                ]
+    production_operation = operation in {"production-build", "all"}
+    try:
+        if production_operation:
+            readiness_preflight(root, context)
+            legacy_id = reconcile_assigned_candidate(root, context)
+            legacy_ledger = (
+                _load_json(root / ".release-state" / "candidate.json") if legacy_id else None
             )
-        result = runner(
-            argv,
-            cwd=root,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise BridgeError("legacy-preparation-failed")
-        _finalize_staged_allocations(root)
-        _handoff_prepared_workspace(root, context, prepared_artifact(root, context))
+            rollover_uploaded = bool(
+                isinstance(legacy_ledger, Mapping)
+                and legacy_ledger.get("state") in {"uploading", "uploaded_unassigned"}
+            )
+            environment = {
+                name: value for name, value in os.environ.items() if name not in _SECRET_NAMES
+            }
+            environment["GRADUS_CANDIDATE_ID"] = context.candidate_id
+            environment["GRADUS_RELEASE_BRIDGE_ACTIVE"] = "1"
+            correction_proof = (
+                root
+                / ".release-state"
+                / "evidence"
+                / context.candidate_id
+                / "allocate-identity.json"
+            )
+            if correction_proof.is_file() and not correction_proof.is_symlink():
+                environment["GRADUS_IDENTITY_ALLOCATION_PROOF_PATH"] = str(correction_proof)
+            argv = [
+                str(root / "app" / "archive-upload-ios.sh"),
+                "--prepare-only",
+                "--candidate",
+                context.candidate_id,
+            ]
+            if legacy_id is not None:
+                rollover_flag = (
+                    "--rollover-uploaded" if rollover_uploaded else "--rollover-assigned"
+                )
+                argv.extend(
+                    [
+                        rollover_flag,
+                        "--supersession-reason",
+                        f"superseded by central candidate {context.candidate_id}",
+                    ]
+                )
+            result = runner(
+                argv,
+                cwd=root,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise BridgeError("legacy-preparation-failed")
+            _finalize_staged_allocations(root)
+            _handoff_prepared_workspace(root, context, prepared_artifact(root, context))
 
-    artifact = prepared_artifact(root, context)
-    if operation == "all":
-        inspection = inspector(artifact, context)
-        paths = []
-        for proof_operation in PROOF_OPERATIONS:
-            proof = build_proof(
-                proof_operation,
-                context,
-                artifact,
-                inspection=inspection if proof_operation in {"sign", "artifact-verify"} else None,
+        artifact = prepared_artifact(root, context)
+        if operation == "all":
+            inspection = inspector(artifact, context)
+            paths = []
+            for proof_operation in PROOF_OPERATIONS:
+                proof = build_proof(
+                    proof_operation,
+                    context,
+                    artifact,
+                    inspection=inspection
+                    if proof_operation in {"sign", "artifact-verify"}
+                    else None,
+                )
+                path = _proof_path(root, context, proof_operation)
+                _write_json(path, proof)
+                paths.append(path)
+            result_path = paths[-1]
+        else:
+            inspection = (
+                inspector(artifact, context) if operation in {"sign", "artifact-verify"} else None
             )
-            path = _proof_path(root, context, proof_operation)
-            _write_json(path, proof)
-            paths.append(path)
-        return paths[-1]
-    inspection = inspector(artifact, context) if operation in {"sign", "artifact-verify"} else None
-    proof = build_proof(operation, context, artifact, inspection=inspection)
-    path = _proof_path(root, context, operation)
-    _write_json(path, proof)
-    return path
+            proof = build_proof(operation, context, artifact, inspection=inspection)
+            result_path = _proof_path(root, context, operation)
+            _write_json(result_path, proof)
+    except BridgeError as exc:
+        if production_operation:
+            emit_diagnostic(
+                root, context.candidate_id, "production-build", _production_diagnostic_code(exc)
+            )
+        raise
+    if production_operation:
+        clear_diagnostic(root, context.candidate_id, "production-build")
+    return result_path
 
 
 def _git_common_dir(root: Path) -> Path:

@@ -163,6 +163,53 @@ def test_restart_preserves_uploaded_unassigned_and_rejects_replacement(tmp_path)
         restarted.allocate_replacement("candidate-2", source="x", project="y", artifact="z")
 
 
+@pytest.mark.parametrize("state", (CandidateState.UPLOADING, CandidateState.UPLOADED_UNASSIGNED))
+def test_uploaded_rollover_archives_without_claiming_assignment(tmp_path, state):
+    ledger = _ledger(tmp_path)
+    workspace = tmp_path / ".release-state" / "candidates" / "candidate-1"
+    workspace.mkdir(parents=True)
+    (workspace / "upload-delivery.json").write_text(
+        json.dumps(
+            {
+                "result": "delivered",
+                "candidateId": "candidate-1",
+                "artifactSha256": "c" * 64,
+                "deliveredAt": "2026-09-01T00:00:00Z",
+                "deliveryUuid": "00000000-0000-4000-8000-000000000001",
+            }
+        )
+        + "\n"
+    )
+    ledger.prepare(
+        "candidate-1",
+        source_sha256="a" * 64,
+        project_sha256="b" * 64,
+        artifact_sha256="c" * 64,
+        build=7,
+        marketing_version="1.2.3",
+        metadata={"candidateWorkspace": str(workspace)},
+    )
+    ledger.transition(CandidateState.UPLOADING)
+    if state == CandidateState.UPLOADED_UNASSIGNED:
+        ledger.transition(state)
+    with pytest.raises(CandidateError):
+        ledger.transition(CandidateState.SUPERSEDED)
+
+    archived = ledger.archive_uploaded_rollover(
+        tmp_path / ".release-state" / "archived", "new immutable candidate"
+    )
+
+    assert archived.state == CandidateState.SUPERSEDED
+    assert archived.metadata["supersededFromState"] == state
+    assert archived.metadata["deliveredAt"] == "2026-09-01T00:00:00Z"
+    assert archived.metadata["deliveredArtifactSha256"] == "c" * 64
+    assert archived.metadata["deliveryUuid"] == "00000000-0000-4000-8000-000000000001"
+    assert not ledger.path.exists()
+    archive = tmp_path / ".release-state" / "archived" / "candidate-1"
+    assert (archive / "candidate-workspace" / "upload-delivery.json").is_file()
+    assert CandidateLedger(archive / "candidate.json").load().state == CandidateState.SUPERSEDED
+
+
 def test_assigned_rollover_archives_workspace_and_creates_fresh_candidate(tmp_path):
     ledger = _ledger(tmp_path)
     workspace = tmp_path / ".release-state" / "candidates" / "candidate-1"

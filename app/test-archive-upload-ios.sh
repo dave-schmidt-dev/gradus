@@ -188,6 +188,8 @@ assert_upload_option_parsed() {
 assert_upload_option_parsed "prepare-only" --prepare-only
 assert_upload_option_parsed "prepare-only with assigned rollover" \
   --prepare-only --rollover-assigned --supersession-reason correction
+assert_upload_option_parsed "prepare-only with delivered-upload rollover" \
+  --prepare-only --rollover-uploaded --supersession-reason correction
 assert_upload_option_parsed "upload-only" --upload-only
 
 rollover_root="$TEST_ROOT/rollover"

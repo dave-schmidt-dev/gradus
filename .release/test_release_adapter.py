@@ -7,13 +7,18 @@ import copy
 import hashlib
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "apple_developer"))
 
 from release_tools import load_workflow_spec
-from release_tools.adapter import adapter_rejection_codes, load_adapter
+from release_tools.adapter import (
+    adapter_rejection_codes,
+    load_adapter,
+    validate_operation_diagnostic,
+)
 from release_tools.conformance import audit_conformance
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +56,14 @@ class GradusAdapterTests(unittest.TestCase):
             evidence_paths["allocate-identity-proof"],
             ".release-state/evidence/allocate-identity.json",
         )
+        self.assertEqual(
+            evidence_paths["readiness-diagnostic"],
+            ".release-state/evidence/{candidateId}/readiness-diagnostic.json",
+        )
+        self.assertEqual(
+            evidence_paths["production-build-diagnostic"],
+            ".release-state/evidence/{candidateId}/production-build-diagnostic.json",
+        )
         self.assertNotIn("{candidateId}", evidence_paths["allocate-identity-proof"])
         self.assertTrue(
             all(
@@ -83,6 +96,26 @@ class GradusAdapterTests(unittest.TestCase):
             elif operation["mode"] == "credential":
                 self.assertIsInstance(operation["arguments"], list)
 
+    def test_declared_diagnostic_is_accepted_by_the_central_schema(self) -> None:
+        sys.path.insert(0, str(ROOT / "app"))
+        import release_prepare_bridge as prepare
+
+        document = json.loads(ADAPTER.read_text(encoding="utf-8"))
+        loaded = load_adapter(document, repository_root=ROOT)
+        operation = loaded.operations["readiness"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepare.emit_diagnostic(
+                root,
+                "1.10.3-34",
+                "readiness",
+                "readiness-delivery-receipt-invalid",
+            )
+            payload = json.loads(
+                prepare.diagnostic_path(root, "1.10.3-34", "readiness").read_text()
+            )
+        self.assertEqual(dict(validate_operation_diagnostic(operation, payload)), payload)
+
     def test_identity_and_credential_argv_are_fixed_and_candidate_bound_only_after_allocation(
         self,
     ) -> None:
@@ -102,8 +135,10 @@ class GradusAdapterTests(unittest.TestCase):
             "processing": "processing",
             "compliance": "compliance",
             "testerGroup": "tester-group",
+            "assignmentReconcile": "assignment-reconcile",
             "assignment": "assignment",
             "deviceHealth": "device-health",
+            "notificationReconcile": "notification-reconcile",
             "notification": "notification",
         }
         for operation_class, operation_id in operation_ids.items():
@@ -138,8 +173,10 @@ class GradusAdapterTests(unittest.TestCase):
             ("processing", ["upload"]),
             ("compliance", ["processing"]),
             ("testerGroup", ["compliance"]),
+            ("assignmentReconcile", ["tester-group"]),
             ("assignment", ["tester-group"]),
             ("deviceHealth", ["assignment"]),
+            ("notificationReconcile", ["device-health"]),
             ("notification", ["device-health"]),
             ("receipt", ["notification"]),
         ]
@@ -212,6 +249,7 @@ class GradusAdapterTests(unittest.TestCase):
                 "expiresAt": "2026-08-13T00:00:00Z",
                 "deliveryReceiptSha256": "2" * 64,
                 "receiptSha256": "3" * 64,
+                "remoteIdentifier": "remote-build-18",
             }
             proof.update({field: values[field] for field in required if field in values})
             self.assertTrue(set(required) <= set(proof), operation_class)

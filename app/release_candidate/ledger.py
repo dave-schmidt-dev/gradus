@@ -396,12 +396,14 @@ class CandidateLedger:
         metadata: Mapping[str, Any],
         supersedes_reason: str | None = None,
         archive_root: str | Path | None = None,
+        rollover_uploaded: bool = False,
     ) -> CandidateRecord:
         """Create or resume a local candidate through the prepared state.
 
         ``supersedes_reason`` and ``archive_root`` are both required when the
-        active record is ``assigned``. In that case the old candidate is
-        archived with the reason before this method creates the replacement.
+        active record is ``assigned`` or ``rollover_uploaded`` is set. In that
+        case the old candidate is archived with the reason before this method
+        creates the replacement.
         """
 
         current = self.load()
@@ -413,6 +415,15 @@ class CandidateLedger:
             if candidate_id == current.candidate_id:
                 raise CandidateError("replacement candidate must have a new candidate ID")
             self.archive_assigned(archive_root, supersedes_reason)
+            current = None
+        if current is not None and rollover_uploaded:
+            if not supersedes_reason or archive_root is None:
+                raise CandidateError(
+                    "uploaded candidate requires an explicit supersession reason and archive root"
+                )
+            if candidate_id == current.candidate_id:
+                raise CandidateError("replacement candidate must have a new candidate ID")
+            self.archive_uploaded_rollover(archive_root, supersedes_reason)
             current = None
         if current is None:
             self.create(
@@ -476,9 +487,52 @@ class CandidateLedger:
         silently discard the assigned candidate.
         """
 
+        return self._archive_rollover(
+            archive_root,
+            reason,
+            allowed_states=frozenset({CandidateState.ASSIGNED.value}),
+            superseded_at=superseded_at,
+        )
+
+    def archive_uploaded_rollover(
+        self,
+        archive_root: str | Path,
+        reason: str,
+        *,
+        superseded_at: str | None = None,
+    ) -> CandidateRecord:
+        """Archive a delivered, unassigned candidate for a newer replacement.
+
+        This intentionally never transitions through ``assigned``: delivery is
+        evidence of upload only, not evidence that a tester group received the
+        build.  The bridge validates the replacement's immutable identity and
+        its exact delivery receipt before this local archival mutation occurs.
+        """
+
+        return self._archive_rollover(
+            archive_root,
+            reason,
+            allowed_states=frozenset(
+                {CandidateState.UPLOADING.value, CandidateState.UPLOADED_UNASSIGNED.value}
+            ),
+            superseded_at=superseded_at,
+        )
+
+    def _archive_rollover(
+        self,
+        archive_root: str | Path,
+        reason: str,
+        *,
+        allowed_states: frozenset[str],
+        superseded_at: str | None,
+    ) -> CandidateRecord:
+        """Copy one terminal predecessor before removing its active ledger."""
+
         current = self.load()
-        if current is None or current.state != CandidateState.ASSIGNED:
-            raise CandidateError("only an assigned candidate can be rolled over")
+        if current is None or current.state not in allowed_states:
+            if allowed_states == frozenset({CandidateState.ASSIGNED.value}):
+                raise CandidateError("only an assigned candidate can be rolled over")
+            raise CandidateError("only an uploading or uploaded candidate can be rolled over")
         if not isinstance(reason, str) or not reason.strip():
             raise CandidateError("supersession reason is required")
         if any(character in reason for character in "\r\n\t"):
@@ -518,6 +572,29 @@ class CandidateLedger:
             "supersededReason": reason,
             "archivePath": str(destination),
         }
+        if current.state in {
+            CandidateState.UPLOADING.value,
+            CandidateState.UPLOADED_UNASSIGNED.value,
+        }:
+            additions["supersededFromState"] = current.state
+            delivery_path = workspace / "upload-delivery.json"
+            try:
+                delivery = json.loads(delivery_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise CandidateError("uploaded candidate delivery receipt is invalid") from exc
+            if (
+                not isinstance(delivery, Mapping)
+                or delivery.get("result") != "delivered"
+                or delivery.get("candidateId") != current.candidate_id
+                or delivery.get("artifactSha256") != current.artifact_sha256
+                or not isinstance(delivery.get("deliveredAt"), str)
+                or not delivery["deliveredAt"]
+            ):
+                raise CandidateError("uploaded candidate delivery receipt is invalid")
+            additions["deliveredAt"] = delivery["deliveredAt"]
+            additions["deliveredArtifactSha256"] = delivery["artifactSha256"]
+            if isinstance(delivery.get("deliveryUuid"), str) and delivery["deliveryUuid"]:
+                additions["deliveryUuid"] = delivery["deliveryUuid"]
         if archived_receipt_path is not None:
             additions["archivedReceiptJournalPath"] = archived_receipt_path
         archived_metadata = _extend_metadata(
@@ -535,16 +612,20 @@ class CandidateLedger:
             archived_metadata,
         )
 
+        state_label = (
+            "assigned" if current.state == CandidateState.ASSIGNED.value else current.state
+        )
         destination.mkdir(mode=0o700, parents=True)
         try:
             print(
-                f"==> Archiving assigned candidate {current.candidate_id} workspace and receipt journal",
+                f"==> Archiving {state_label} candidate {current.candidate_id} workspace and receipt journal",
                 file=sys.stderr,
                 flush=True,
             )
             shutil.copytree(workspace, destination / "candidate-workspace")
             CandidateLedger(destination / "candidate.json").write(archived)
-            print("    Assigned candidate archive complete", file=sys.stderr, flush=True)
+            completion = "Assigned" if state_label == "assigned" else state_label.capitalize()
+            print(f"    {completion} candidate archive complete", file=sys.stderr, flush=True)
         except Exception:
             shutil.rmtree(destination, ignore_errors=True)
             raise

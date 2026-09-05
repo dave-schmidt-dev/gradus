@@ -33,6 +33,7 @@
 # Assigned candidates are never replaced implicitly. An attended rollover must
 # be explicit and include a non-empty reason:
 #   app/archive-upload-ios.sh --rollover-assigned --supersession-reason "<reason>"
+#   app/archive-upload-ios.sh --rollover-uploaded --supersession-reason "<reason>"
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -652,17 +653,19 @@ failure_hook() {
 }
 
 assert_candidate_not_in_flight() {
-  local ledger_path="$1" allow_assigned="${2:-0}"
-  /usr/bin/python3 - "$SCRIPT_DIR" "$ledger_path" "$allow_assigned" <<'PY'
+  local ledger_path="$1" allow_assigned="${2:-0}" allow_uploaded="${3:-0}"
+  /usr/bin/python3 - "$SCRIPT_DIR" "$ledger_path" "$allow_assigned" "$allow_uploaded" <<'PY'
 import sys
 
-script_dir, ledger_path, allow_assigned = sys.argv[1:]
+script_dir, ledger_path, allow_assigned, allow_uploaded = sys.argv[1:]
 sys.path.insert(0, script_dir)
 from release_candidate.ledger import CandidateLedger, CandidateError  # noqa: E402
 
 try:
     record = CandidateLedger(ledger_path).load()
     blocked = {"uploading", "uploaded_unassigned"}
+    if allow_uploaded == "1":
+        blocked -= {"uploading", "uploaded_unassigned"}
     if allow_assigned != "1":
         blocked.add("assigned")
     if record is not None and record.state in blocked:
@@ -898,16 +901,16 @@ prepare_candidate_ledger() {
   local ledger_path="$1" candidate_id="$2" source_digest="$3" project_digest="$4"
   local artifact_digest="$5" build="$6" marketing_version="$7" source_revision="$8" producer_build="$9"
   local producer_evidence_digest="${10}" producer_published_at="${11}" candidate_workspace="${12}" ipa_path="${13}"
-  local supersedes_reason="${14:-}" archive_root="${15:-}"
+  local supersedes_reason="${14:-}" archive_root="${15:-}" rollover_uploaded="${16:-0}"
   /usr/bin/python3 - "$SCRIPT_DIR" "$ledger_path" "$candidate_id" "$source_digest" "$project_digest" \
     "$artifact_digest" "$build" "$marketing_version" "$source_revision" "$producer_build" \
     "$producer_evidence_digest" "$producer_published_at" "$candidate_workspace" "$ipa_path" \
-    "$supersedes_reason" "$archive_root" <<'PY'
+    "$supersedes_reason" "$archive_root" "$rollover_uploaded" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 from release_candidate.ledger import CandidateError, CandidateLedger  # noqa: E402
 
-_, _, ledger_path, candidate_id, source_digest, project_digest, artifact_digest, build, marketing_version, source_revision, producer_build, producer_evidence_digest, producer_published_at, candidate_workspace, ipa_path, supersedes_reason, archive_root = sys.argv
+_, _, ledger_path, candidate_id, source_digest, project_digest, artifact_digest, build, marketing_version, source_revision, producer_build, producer_evidence_digest, producer_published_at, candidate_workspace, ipa_path, supersedes_reason, archive_root, rollover_uploaded = sys.argv
 try:
     CandidateLedger(ledger_path).prepare(
         candidate_id,
@@ -927,6 +930,7 @@ try:
         },
         supersedes_reason=supersedes_reason or None,
         archive_root=archive_root or None,
+        rollover_uploaded=rollover_uploaded == "1",
     )
 except (CandidateError, ValueError) as exc:
     print(f"FAIL: candidate ledger preparation: {exc}", file=sys.stderr)
@@ -1491,7 +1495,7 @@ bump_ios_build_number() {
 }
 
 main() {
-  local prepare_only=0 upload_only=0 rollover_assigned=0 supersession_reason="" requested_candidate_id=""
+  local prepare_only=0 upload_only=0 rollover_assigned=0 rollover_uploaded=0 supersession_reason="" requested_candidate_id=""
   while (($# > 0)); do
     case "$1" in
       --prepare-only) prepare_only=1 ;;
@@ -1509,6 +1513,7 @@ main() {
         shift
         ;;
       --rollover-assigned) rollover_assigned=1 ;;
+      --rollover-uploaded) rollover_uploaded=1 ;;
       --supersession-reason)
         (($# >= 2)) || {
           echo "FAIL: --supersession-reason requires a non-empty reason" >&2
@@ -1524,6 +1529,7 @@ main() {
         echo "  --upload-only                                upload only the existing prepared candidate"
         echo "  --candidate <id>                             require this exact prepared candidate"
         echo "  --rollover-assigned                         archive the assigned candidate before replacement"
+        echo "  --rollover-uploaded                         archive a delivered unassigned candidate before replacement"
         echo "  --supersession-reason <reason>              record why the assigned candidate is superseded"
         return 0
         ;;
@@ -1538,7 +1544,15 @@ main() {
     echo "FAIL: --rollover-assigned requires --supersession-reason" >&2
     return 64
   fi
-  if (( ! rollover_assigned )) && [[ -n "$supersession_reason" ]]; then
+  if (( rollover_uploaded )) && [[ -z "${supersession_reason//[[:space:]]/}" ]]; then
+    echo "FAIL: --rollover-uploaded requires --supersession-reason" >&2
+    return 64
+  fi
+  if (( rollover_assigned && rollover_uploaded )); then
+    echo "FAIL: only one rollover mode may be requested" >&2
+    return 64
+  fi
+  if (( ! rollover_assigned && ! rollover_uploaded )) && [[ -n "$supersession_reason" ]]; then
     echo "FAIL: --supersession-reason requires --rollover-assigned" >&2
     return 64
   fi
@@ -1585,7 +1599,7 @@ main() {
   if (( ! upload_only )); then
     validate_common_marketing_version "$SCRIPT_DIR/project.yml"
   fi
-  assert_candidate_not_in_flight "$candidate_ledger_path" "$rollover_assigned"
+  assert_candidate_not_in_flight "$candidate_ledger_path" "$rollover_assigned" "$rollover_uploaded"
   prepared_metadata="$(read_prepared_candidate "$candidate_ledger_path")"
   if (( upload_only )) && [[ -z "$prepared_metadata" ]]; then
     echo "FAIL: --upload-only requires an existing prepared candidate" >&2
@@ -1765,7 +1779,7 @@ main() {
   prepare_candidate_ledger "$candidate_ledger_path" "$candidate_id" "$baseline_source_digest" "$baseline_project_digest" \
     "$artifact_digest" "$NEXT_BUILD" "$marketing_version" "$source_revision" "$expected_mac_build" "$producer_evidence_digest" \
     "$producer_published_at" "$candidate_workspace" "$IPA_PATH" "$supersession_reason" \
-    "$project_root/.release-state/archived"
+    "$project_root/.release-state/archived" "$rollover_uploaded"
   echo "==> Capturing candidate-current walkthrough screens"
   GRADUS_WALKTHROUGH_PROJECT_PATH="$candidate_script_dir/Gradus.xcodeproj" \
     /bin/bash "$SCRIPT_DIR/scripts/capture-walkthrough.sh" --output-dir "$walkthrough_screenshots_path"
