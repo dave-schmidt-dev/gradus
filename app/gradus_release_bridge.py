@@ -36,7 +36,9 @@ OPERATIONS = (
     "processing",
     "compliance",
     "tester-group",
+    "assignment-reconcile",
     "assignment",
+    "notification-reconcile",
     "notification",
     "device-health",
 )
@@ -66,6 +68,8 @@ _PROOF_CLASSES = {
     "identity-allocation": "identityAllocation",
     "build-lookup": "buildLookup",
     "tester-group": "testerGroup",
+    "assignment-reconcile": "assignmentReconcile",
+    "notification-reconcile": "notificationReconcile",
     "device-health": "deviceHealth",
 }
 
@@ -927,7 +931,10 @@ def _tester_group(candidate: str, *, client_factory: Callable[[], Any]) -> int:
         uploaded_build_identifier=uploaded,
         # The identifier is hashed rather than recorded, because a proof needs
         # to bind the choice, not republish it.
-        observed={"groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest()},
+        observed={
+            "groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest(),
+            "lane": _candidate_lane(candidate),
+        },
     )
 
 
@@ -1070,6 +1077,100 @@ def _assignment(candidate: str, *, runner: Callable[..., subprocess.CompletedPro
         observed={
             "groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest(),
             "lane": _candidate_lane(candidate),
+        },
+    )
+
+
+def _assignment_reconcile(candidate: str, *, client_factory: Callable[[], Any]) -> int:
+    """Read whether the exact uploaded build is already assigned to the confirmed group."""
+
+    context = _observation_context("assignment-reconcile", candidate)
+    if isinstance(context, int):
+        return context
+    build, uploaded = context
+    confirmation = _confirmed_tester_group(candidate)
+    if confirmation is None:
+        return _blocked(
+            "assignment-reconcile",
+            candidate,
+            "tester-group-confirmation-required",
+        )
+    group_id, _group_name = confirmation
+    try:
+        client = client_factory()
+        item = _exact_build(client, _resolve_app_id(client), build)
+        if item is None:
+            lookup_result = "absent"
+        else:
+            build_id = item.get("id")
+            if not isinstance(build_id, str) or not build_id:
+                return _blocked("assignment-reconcile", candidate, "build-identity-missing")
+            relationship = client.request("GET", f"/betaGroups/{group_id}/builds?limit=200") or {}
+            entries = relationship.get("data") if isinstance(relationship, Mapping) else None
+            if not isinstance(entries, list):
+                return _blocked(
+                    "assignment-reconcile",
+                    candidate,
+                    "group-build-response-malformed",
+                )
+            lookup_result = (
+                "found"
+                if any(
+                    isinstance(entry, Mapping) and entry.get("id") == build_id for entry in entries
+                )
+                else "absent"
+            )
+    except _ObservationError as error:
+        return _blocked("assignment-reconcile", candidate, str(error))
+    except ImportError:
+        return _blocked("assignment-reconcile", candidate, "asc-client-unavailable")
+    except _transport_error_types():
+        return _blocked("assignment-reconcile", candidate, "app-store-connect-request-failed")
+
+    return _observation_passed(
+        "assignment-reconcile",
+        candidate,
+        uploaded_build_identifier=uploaded,
+        observed={
+            "groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest(),
+            "lane": _candidate_lane(candidate),
+            "lookupResult": lookup_result,
+            "remoteIdentifier": uploaded,
+        },
+    )
+
+
+def _notification_reconcile(candidate: str) -> int:
+    """Reconcile notification from an exact durable proof without another mutation.
+
+    App Store Connect's notification operation has no safe read endpoint in this
+    bridge. A prior candidate/build-bound proof is deterministic confirmation;
+    every other state is reported as absent so the workflow can make the single
+    authorized notification attempt.
+    """
+
+    context = _observation_context("notification-reconcile", candidate)
+    if isinstance(context, int):
+        return context
+    _build, uploaded = context
+    notification = _read_json(_proof_path("notification", candidate))
+    found = bool(
+        notification is not None
+        and notification.get("proofVersion") == "1.0.0"
+        and notification.get("operationClass") == "notification"
+        and notification.get("result") == "passed"
+        and notification.get("candidateId") == candidate
+        and notification.get("uploadedBuildIdentifier") == uploaded
+        and isinstance(notification.get("deliveryReceiptSha256"), str)
+        and _HEX64.fullmatch(str(notification["deliveryReceiptSha256"]))
+    )
+    return _observation_passed(
+        "notification-reconcile",
+        candidate,
+        uploaded_build_identifier=uploaded,
+        observed={
+            "lookupResult": "found" if found else "absent",
+            "remoteIdentifier": uploaded,
         },
     )
 
@@ -1430,6 +1531,11 @@ def dispatch(
         )
     if operation == "assignment":
         return _assignment(candidate, runner=runner)
+    if operation == "assignment-reconcile":
+        factory = (lambda: client) if client is not None else _default_client
+        return _assignment_reconcile(candidate, client_factory=factory)
+    if operation == "notification-reconcile":
+        return _notification_reconcile(candidate)
     if operation in (
         "processing",
         "compliance",

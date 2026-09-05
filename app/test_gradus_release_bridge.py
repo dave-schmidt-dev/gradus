@@ -63,6 +63,53 @@ class BridgeTests(unittest.TestCase):
             ".release-state/evidence/{candidateId}/build-lookup.json",
         )
 
+    def test_release_adapter_declares_required_reconciliation_operations(self) -> None:
+        adapter = json.loads((ROOT / ".release" / "release-adapter.json").read_text())
+        operations = adapter["operations"]
+        expected = {
+            "assignment-reconcile": (
+                "assignmentReconcile",
+                "release.proof.assignment-reconcile.v1",
+                "tester-group",
+            ),
+            "notification-reconcile": (
+                "notificationReconcile",
+                "release.proof.reconcile.v1",
+                "device-health",
+            ),
+        }
+        for operation_id, (operation_class, proof_schema, dependency) in expected.items():
+            with self.subTest(operation=operation_id):
+                matches = [item for item in operations if item["id"] == operation_id]
+                self.assertEqual(len(matches), 1)
+                operation = matches[0]
+                self.assertEqual(operation["class"], operation_class)
+                self.assertEqual(operation["mode"], "credential")
+                self.assertEqual(operation["consumer"], "gradus-app-store-connect-bridge")
+                self.assertEqual(operation["proofSchema"], proof_schema)
+                self.assertEqual(operation["dependencies"], [dependency])
+                self.assertEqual(
+                    operation["arguments"],
+                    [
+                        "--operation",
+                        operation_id,
+                        "--product",
+                        "gradus-ios",
+                        "--candidate",
+                        "{candidateId}",
+                    ],
+                )
+
+        paths = {entry["name"]: entry["path"] for entry in adapter["evidencePaths"]}
+        self.assertEqual(
+            paths["assignment-reconcile-proof"],
+            ".release-state/evidence/{candidateId}/assignment-reconcile.json",
+        )
+        self.assertEqual(
+            paths["notification-reconcile-proof"],
+            ".release-state/evidence/{candidateId}/notification-reconcile.json",
+        )
+
     def _release_wrapper_fixture(self, temporary: str) -> tuple[Path, Path, Path]:
         """Create an isolated checkout with a separately located Git common dir."""
         base = Path(temporary).resolve()
@@ -1790,6 +1837,61 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(proof["operationClass"], "deviceHealth")
             self.assertRegex(proof["evidenceSha256"], r"^[0-9a-f]{64}$")
 
+    def test_assignment_reconcile_reads_exact_group_build_relationship(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            group_id = "00000000-0000-4000-8000-000000000001"
+            self._confirm(root, group_id, "Internal Testers")
+            self._tester_group_proof(root, group_id)
+            status, client = self._dispatch_observed(
+                "assignment-reconcile",
+                root,
+                [
+                    {"data": [{"id": "app-1"}]},
+                    self._builds(19, "VALID"),
+                    {"data": [{"id": "build-1"}]},
+                ],
+            )
+            self.assertEqual(status, 0)
+            self.assertTrue(all(method == "GET" for method, _path, _body in client.requests))
+            self.assertEqual(client.requests[-1][1], f"/betaGroups/{group_id}/builds?limit=200")
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "assignment-reconcile.json").read_text()
+            )
+            self.assertEqual(proof["operationClass"], "assignmentReconcile")
+            self.assertEqual(proof["uploadedBuildIdentifier"], "1.7.0 (19)")
+            self.assertEqual(proof["lookupResult"], "found")
+            self.assertEqual(proof["remoteIdentifier"], "1.7.0 (19)")
+            self.assertEqual(proof["lane"], "standard")
+            self.assertEqual(
+                proof["groupIdentifierHash"], hashlib.sha256(group_id.encode()).hexdigest()
+            )
+
+    def test_assignment_reconcile_reports_absent_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            group_id = "00000000-0000-4000-8000-000000000001"
+            self._confirm(root, group_id, "Internal Testers")
+            self._tester_group_proof(root, group_id)
+            status, client = self._dispatch_observed(
+                "assignment-reconcile",
+                root,
+                [
+                    {"data": [{"id": "app-1"}]},
+                    self._builds(19, "VALID"),
+                    {"data": []},
+                ],
+            )
+            self.assertEqual(status, 0)
+            self.assertTrue(all(method == "GET" for method, _path, _body in client.requests))
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "assignment-reconcile.json").read_text()
+            )
+            self.assertEqual(proof["lookupResult"], "absent")
+            self.assertEqual(proof["remoteIdentifier"], "1.7.0 (19)")
+
     def test_notification_sends_for_exact_build_after_device_health(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1822,6 +1924,64 @@ class BridgeTests(unittest.TestCase):
                 (root / "evidence" / "gradus-ios-19" / "notification.json").read_text()
             )
             self.assertRegex(proof["deliveryReceiptSha256"], r"^[0-9a-f]{64}$")
+
+    def test_notification_reconcile_adopts_bound_existing_proof_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            notification = root / "evidence" / "gradus-ios-19" / "notification.json"
+            notification.parent.mkdir(parents=True, exist_ok=True)
+            notification.write_text(
+                json.dumps(
+                    {
+                        "proofVersion": "1.0.0",
+                        "operationClass": "notification",
+                        "result": "passed",
+                        "candidateId": "gradus-ios-19",
+                        "uploadedBuildIdentifier": "1.7.0 (19)",
+                        "deliveryReceiptSha256": "b" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            status, client = self._dispatch_observed("notification-reconcile", root, [])
+            self.assertEqual(status, 0)
+            self.assertEqual(client.requests, [])
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "notification-reconcile.json").read_text()
+            )
+            self.assertEqual(proof["operationClass"], "notificationReconcile")
+            self.assertEqual(proof["uploadedBuildIdentifier"], "1.7.0 (19)")
+            self.assertEqual(proof["lookupResult"], "found")
+            self.assertEqual(proof["remoteIdentifier"], "1.7.0 (19)")
+
+    def test_notification_reconcile_reports_absent_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            notification = root / "evidence" / "gradus-ios-19" / "notification.json"
+            notification.parent.mkdir(parents=True, exist_ok=True)
+            notification.write_text(
+                json.dumps(
+                    {
+                        "proofVersion": "1.0.0",
+                        "operationClass": "notification",
+                        "result": "passed",
+                        "candidateId": "gradus-ios-19",
+                        "uploadedBuildIdentifier": "different build",
+                        "deliveryReceiptSha256": "b" * 64,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            status, client = self._dispatch_observed("notification-reconcile", root, [])
+            self.assertEqual(status, 0)
+            self.assertEqual(client.requests, [])
+            proof = json.loads(
+                (root / "evidence" / "gradus-ios-19" / "notification-reconcile.json").read_text()
+            )
+            self.assertEqual(proof["lookupResult"], "absent")
+            self.assertEqual(proof["remoteIdentifier"], "1.7.0 (19)")
 
     def test_observation_refuses_an_ambiguous_build_match(self) -> None:
         """Two builds claiming the same version must not be silently narrowed."""
@@ -1943,6 +2103,7 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(proof["result"], "passed")
             self.assertEqual(proof["operationClass"], "testerGroup")
             self.assertRegex(proof["groupIdentifierHash"], r"^[0-9a-f]{64}$")
+            self.assertEqual(proof["lane"], "standard")
             # The proof binds the choice; it does not republish the identifier.
             self.assertNotIn("group-1", json.dumps(proof))
 

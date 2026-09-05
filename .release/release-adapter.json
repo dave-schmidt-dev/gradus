@@ -309,6 +309,40 @@
       }
     },
     {
+      "id": "assignment-reconcile",
+      "class": "assignmentReconcile",
+      "mode": "credential",
+      "consumer": "gradus-app-store-connect-bridge",
+      "arguments": ["--operation", "assignment-reconcile", "--product", "gradus-ios", "--candidate", "{candidateId}"],
+      "proofSchema": "release.proof.assignment-reconcile.v1",
+      "dependencies": ["tester-group"],
+      "timeoutSeconds": 120,
+      "statusEvents": {
+        "started": "assignment-reconcile:started",
+        "heartbeat": "assignment-reconcile:heartbeat",
+        "succeeded": "assignment-reconcile:succeeded",
+        "failed": "assignment-reconcile:failed",
+        "blocked": "assignment-reconcile:blocked"
+      }
+    },
+    {
+      "id": "notification-reconcile",
+      "class": "notificationReconcile",
+      "mode": "credential",
+      "consumer": "gradus-app-store-connect-bridge",
+      "arguments": ["--operation", "notification-reconcile", "--product", "gradus-ios", "--candidate", "{candidateId}"],
+      "proofSchema": "release.proof.reconcile.v1",
+      "dependencies": ["device-health"],
+      "timeoutSeconds": 120,
+      "statusEvents": {
+        "started": "notification-reconcile:started",
+        "heartbeat": "notification-reconcile:heartbeat",
+        "succeeded": "notification-reconcile:succeeded",
+        "failed": "notification-reconcile:failed",
+        "blocked": "notification-reconcile:blocked"
+      }
+    },
+    {
       "id": "notification",
       "class": "notification",
       "mode": "credential",
@@ -368,8 +402,10 @@
     {"name": "tester-group-proof", "path": ".release-state/evidence/{candidateId}/tester-group.json", "contentType": "application/json"},
     {"name": "provisioning-proof", "path": ".release-state/evidence/{candidateId}/provisioning.json", "contentType": "application/json"},
     {"name": "assignment-proof", "path": ".release-state/evidence/{candidateId}/assignment.json", "contentType": "application/json"},
+    {"name": "assignment-reconcile-proof", "path": ".release-state/evidence/{candidateId}/assignment-reconcile.json", "contentType": "application/json"},
     {"name": "device-health-proof", "path": ".release-state/evidence/{candidateId}/device-health.json", "contentType": "application/json"},
     {"name": "notification-proof", "path": ".release-state/evidence/{candidateId}/notification.json", "contentType": "application/json"},
+    {"name": "notification-reconcile-proof", "path": ".release-state/evidence/{candidateId}/notification-reconcile.json", "contentType": "application/json"},
     {"name": "receipt-proof", "path": ".release-state/evidence/{candidateId}/receipt.json", "contentType": "application/json"}
   ],
   "sourcePaths": [
