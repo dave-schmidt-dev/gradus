@@ -533,7 +533,13 @@ manifest to both the current source and checked Git tree, streams
 local app tests pass. `app/prepare-testflight-candidate` then performs
 production archive and signing, and `app/deploy-testflight --attended` performs
 upload, processing, and internal-tester assignment against the Gradus iOS App
-Store Connect record.
+Store Connect record. If an active failed pre-upload candidate belongs to the
+current marketing version, preparation uses the framework's
+successor-correction route. If that candidate belongs to an older marketing
+version, the wrapper first retires it through the framework's `retire-failed`
+command and then prepares the new train through the ordinary fresh-candidate
+route. Both paths preserve the prior candidate ledger and fail closed if its
+state cannot be validated.
 Do not use the `Gradus iOS Internal TestFlight` Cloud workflow for delivery: the
 account's Cloud product is attached to the GradusMac app record, so its iOS
 builds cannot reach the Gradus AI beta group.

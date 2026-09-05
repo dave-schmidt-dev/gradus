@@ -79,6 +79,10 @@ class BridgeTests(unittest.TestCase):
             wrapper = wrapper_dir / name
             shutil.copy2(ROOT / "app" / name, wrapper)
             wrapper.chmod(0o755)
+        (wrapper_dir / "project.yml").write_text(
+            'targets:\n  GradusiOS:\n    settings:\n      base:\n        MARKETING_VERSION: "1.8.2"\n',
+            encoding="utf-8",
+        )
         common_dir.mkdir()
         (checkout / ".release").mkdir(parents=True)
         (checkout / ".release" / "release-adapter.json").write_text("{}", encoding="utf-8")
@@ -135,7 +139,11 @@ class BridgeTests(unittest.TestCase):
             "            failure_attempt += 1\n"
             "            if record.get('attempt') != failure_attempt: raise ValueError('candidate-failure-attempt-invalid')\n"
             "        records.append(record); previous = declared\n"
-            "    return records\n",
+            "    return records\n"
+            "def load_candidate_manifest(path):\n"
+            "    value = json.loads(Path(path).read_text())\n"
+            "    if not isinstance(value, dict): raise ValueError('candidate-manifest-invalid')\n"
+            "    return value\n",
             encoding="utf-8",
         )
         (release_tools / "__main__.py").write_text(
@@ -188,6 +196,27 @@ class BridgeTests(unittest.TestCase):
         value["pointerSha256"] = hashlib.sha256(cls._canonical_bytes(value)).hexdigest()
         pointer.write_bytes(cls._canonical_bytes(value) + b"\n")
         return pointer
+
+    @staticmethod
+    def _write_candidate_manifest(candidate_dir: Path, marketing_version: str) -> Path:
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        manifest = candidate_dir / "manifest.json"
+        manifest.write_text(
+            json.dumps({"release": {"marketingVersion": marketing_version}}),
+            encoding="utf-8",
+        )
+        return manifest
+
+    @staticmethod
+    def _write_project_version(checkout: Path, marketing_version: str) -> None:
+        (checkout / "app" / "project.yml").write_text(
+            "targets:\n"
+            "  GradusiOS:\n"
+            "    settings:\n"
+            "      base:\n"
+            f'        MARKETING_VERSION: "{marketing_version}"\n',
+            encoding="utf-8",
+        )
 
     @classmethod
     def _write_v2_ledger(cls, candidate_dir: Path, transitions: list[dict]) -> Path:
@@ -318,6 +347,97 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("bws-run", prepare_branch)
         self.assertNotIn("bws-get", prepare_branch)
 
+    def test_cross_train_failed_candidate_retires_before_fresh_prepare(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            prior_id = "1.8.1-21"
+            self._write_active_pointer(common_dir, prior_id)
+            candidate_dir = common_dir / "release-state" / "gradus-ios" / "candidates" / prior_id
+            self._write_candidate_manifest(candidate_dir, "1.8.1")
+            self._write_v2_ledger(candidate_dir, [{"transition": "failed"}])
+
+            result = self._run_fixed_prepare(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            invocations = [
+                json.loads(line)
+                for line in (
+                    checkout.parent / "apple_developer" / "release_tools" / "invocations.jsonl"
+                )
+                .read_text()
+                .splitlines()
+            ]
+            self.assertIn("retire-failed", invocations[0])
+            self.assertIn(prior_id, invocations[0])
+            self.assertIn("testflight", invocations[1])
+            self.assertNotIn("--successor-correction", invocations[1])
+            self.assertIn("stage", invocations[2])
+
+    def test_cross_train_unfailed_candidate_stops_before_retirement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            prior_id = "1.8.1-21"
+            self._write_active_pointer(common_dir, prior_id)
+            candidate_dir = common_dir / "release-state" / "gradus-ios" / "candidates" / prior_id
+            self._write_candidate_manifest(candidate_dir, "1.8.1")
+            self._write_v2_ledger(candidate_dir, [{"transition": "staged"}])
+
+            result = self._run_fixed_prepare(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("has not failed and cannot be retired", result.stderr)
+            self.assertFalse(
+                (
+                    checkout.parent / "apple_developer" / "release_tools" / "invocations.jsonl"
+                ).exists()
+            )
+
+    def test_active_candidate_manifest_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            prior_id = "1.8.1-21"
+            self._write_active_pointer(common_dir, prior_id)
+            candidate_dir = common_dir / "release-state" / "gradus-ios" / "candidates" / prior_id
+            manifest = self._write_candidate_manifest(candidate_dir, "1.8.1")
+            replacement = candidate_dir / "manifest-target.json"
+            manifest.rename(replacement)
+            manifest.symlink_to(replacement.name)
+            self._write_v2_ledger(candidate_dir, [{"transition": "failed"}])
+
+            result = self._run_fixed_prepare(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("candidate-manifest-unreadable", result.stderr)
+            self.assertFalse(
+                (
+                    checkout.parent / "apple_developer" / "release_tools" / "invocations.jsonl"
+                ).exists()
+            )
+
+    def test_same_train_failed_candidate_keeps_successor_correction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            prior_id = "1.8.2-21"
+            self._write_active_pointer(common_dir, prior_id)
+            candidate_dir = common_dir / "release-state" / "gradus-ios" / "candidates" / prior_id
+            self._write_candidate_manifest(candidate_dir, "1.8.2")
+            self._write_v2_ledger(candidate_dir, [{"transition": "failed"}])
+
+            result = self._run_fixed_prepare(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            invocations = [
+                json.loads(line)
+                for line in (
+                    checkout.parent / "apple_developer" / "release_tools" / "invocations.jsonl"
+                )
+                .read_text()
+                .splitlines()
+            ]
+            self.assertNotIn("retire-failed", invocations[0])
+            self.assertIn("testflight", invocations[0])
+            self.assertIn("--successor-correction", invocations[0])
+
     def test_wrappers_do_not_run_release_tools_on_system_python(self) -> None:
         """`/usr/bin/python3` is 3.9; `release_tools` declares >= 3.11."""
         for name in (
@@ -382,7 +502,7 @@ class BridgeTests(unittest.TestCase):
                 / "release-state"
                 / "gradus-ios"
                 / "candidates"
-                / "1.8.1-21"
+                / "1.8.2-22"
                 / "manifest.json"
             )
             stale_manifest.parent.mkdir(parents=True)
@@ -392,7 +512,7 @@ class BridgeTests(unittest.TestCase):
                 / "release-state"
                 / "gradus-ios"
                 / "candidates"
-                / "1.8.1-21"
+                / "1.8.2-22"
                 / "manifest.json"
             )
             canonical_manifest.parent.mkdir(parents=True)
@@ -414,7 +534,7 @@ class BridgeTests(unittest.TestCase):
                 / "release-state"
                 / "gradus-ios"
                 / "candidates"
-                / "1.8.1-21"
+                / "1.8.2-22"
                 / "manifest.json"
             )
             canonical_manifest.parent.mkdir(parents=True)
@@ -678,6 +798,7 @@ class BridgeTests(unittest.TestCase):
         ):
             with self.subTest(transitions=transitions), tempfile.TemporaryDirectory() as temporary:
                 checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+                self._write_project_version(checkout, "1.8.1")
                 self._write_active_pointer(common_dir, "1.8.1-21")
 
                 if transitions:
@@ -695,7 +816,10 @@ class BridgeTests(unittest.TestCase):
                     / "manifest.json"
                 )
                 canonical_manifest.parent.mkdir(parents=True, exist_ok=True)
-                canonical_manifest.write_text("{}", encoding="utf-8")
+                canonical_manifest.write_text(
+                    json.dumps({"release": {"marketingVersion": "1.8.1"}}),
+                    encoding="utf-8",
+                )
 
                 result = self._run_release_prepare(checkout, common_dir, bin_dir)
 
@@ -913,6 +1037,7 @@ class BridgeTests(unittest.TestCase):
             local_transitions.write_text('{"transition": "uploaded"}\n', encoding="utf-8")
 
             self._write_active_pointer(common_dir, "1.8.1-21")
+            self._write_project_version(checkout, "1.8.1")
             canonical_candidate_dir = (
                 common_dir / "release-state" / "gradus-ios" / "candidates" / "1.8.1-21"
             )
@@ -926,7 +1051,10 @@ class BridgeTests(unittest.TestCase):
                 / "manifest.json"
             )
             canonical_manifest.parent.mkdir(parents=True, exist_ok=True)
-            canonical_manifest.write_text("{}", encoding="utf-8")
+            canonical_manifest.write_text(
+                json.dumps({"release": {"marketingVersion": "1.8.1"}}),
+                encoding="utf-8",
+            )
 
             result = self._run_release_prepare(checkout, common_dir, bin_dir)
 

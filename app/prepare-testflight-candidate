@@ -60,15 +60,16 @@ git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-d
   echo "release-testflight: Git common directory is unavailable" >&2
   exit 4
 }
-routing="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -c '
+route="$(env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -c '
 import re, sys
 from pathlib import Path
-from release_tools.iterative_release import read_candidate_ledger_v2
+from release_tools.iterative_release import load_candidate_manifest, read_candidate_ledger_v2
 from release_tools.product_state import ProductState
 
 try:
+    root = Path(sys.argv[1])
     state = ProductState.for_repository(
-        Path(sys.argv[1]), "gradus-ios", non_git_home=".release-state"
+        root, "gradus-ios", non_git_home=".release-state"
     )
     pointer = state.home / "active-candidate.json"
     if pointer.is_symlink() or (pointer.exists() and not pointer.is_file()):
@@ -79,7 +80,7 @@ except Exception as exc:
     sys.exit(3)
 
 if active is None:
-    print("CORRECTION")
+    print("FRESH")
     sys.exit(0)
 
 candidate = active.get("candidateId")
@@ -105,11 +106,57 @@ except Exception as exc:
 if any(record.get("transition") in uploaded_transitions for record in records):
     print("FRESH")
 else:
-    print("CORRECTION")
+    try:
+        manifest_path = candidate_directory / "manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("candidate-manifest-unreadable")
+        manifest = load_candidate_manifest(manifest_path)
+        project = (root / "app" / "project.yml").read_text(encoding="utf-8")
+        target = re.search(r"(?m)^  GradusiOS:\s*$", project)
+        if target is None:
+            raise ValueError("project-target-missing")
+        section = project[target.end():]
+        next_target = re.search(r"(?m)^  [A-Za-z0-9_]+:\s*$", section)
+        if next_target is not None:
+            section = section[:next_target.start()]
+        versions = re.findall(
+            r"(?m)^\s+MARKETING_VERSION:\s*[\"\x27]?([^\"\x27\s]+)", section
+        )
+        current_version = versions[0] if len(versions) == 1 else None
+        prior_version = manifest.get("release", {}).get("marketingVersion")
+        semver = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+        if (
+            not isinstance(current_version, str)
+            or not re.fullmatch(semver, current_version)
+            or not isinstance(prior_version, str)
+            or not re.fullmatch(semver, prior_version)
+        ):
+            raise ValueError("marketing-version-invalid")
+    except Exception as exc:
+        print(f"release-testflight: marketing version is unavailable: {exc}", file=sys.stderr)
+        sys.exit(3)
+    if prior_version == current_version:
+        print("CORRECTION")
+    elif not any(record.get("transition") == "failed" for record in records):
+        print(
+            "release-testflight: active candidate from an older marketing version "
+            "has not failed and cannot be retired",
+            file=sys.stderr,
+        )
+        sys.exit(3)
+    else:
+        print(f"RETIRE:{candidate}:{prior_version}:{current_version}")
 ' "$ROOT")" || exit $?
 
 prepare_args=(--adapter "$ADAPTER" --repository "$ROOT")
-if [[ "$routing" == "CORRECTION" ]]; then
+if [[ "$route" == RETIRE:* ]]; then
+  IFS=: read -r _ retired_candidate prior_version current_version <<<"$route"
+  env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools retire-failed \
+    --adapter "$ADAPTER" --repository "$ROOT" --candidate "$retired_candidate" \
+    --reason "new marketing version $prior_version to $current_version" >&2
+  route="FRESH"
+fi
+if [[ "$route" == "CORRECTION" ]]; then
   prepare_args+=(--successor-correction)
 fi
 
