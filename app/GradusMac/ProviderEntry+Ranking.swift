@@ -83,13 +83,12 @@ extension ProviderEntry: RankableProvider {
         ok || ProviderRetryAccessibility.isCarriedFailure(self)
     }
 
-    /// Recomputed with exactly the expression `CloudKitMapping` uses as its own
-    /// default for the stored field (`windows.contains { percentIsDepleted(...) }`).
-    /// Keeping the two literally identical is what makes the Mac's exhausted
-    /// partition and the iPhone's contain the same providers -- derive it any
-    /// other way and the two apps disagree about the same snapshot.
+    /// Recomputed with exactly the shared provider-aware predicate that
+    /// `CloudKitMapping` uses as its default for the stored field. Keeping the
+    /// two calls identical is what makes the Mac's exhausted partition and the
+    /// iPhone's contain the same providers.
     var rankingIsDepleted: Bool {
-        windows.contains { percentIsDepleted($0.percentLeft) }
+        providerIsDepleted(providerName: name, windows: windows)
     }
 
     /// The Mac's half of the union documented on `rankedPartition`. It

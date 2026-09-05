@@ -188,7 +188,9 @@ struct ProviderTriageTests {
         #expect(ranked(input) == ["Mike", "Alpha", "Zulu"])
         #expect(ranked(input.reversed()) == ["Mike", "Alpha", "Zulu"])
     }
+}
 
+extension ProviderTriageTests {
     // MARK: - exhausted partition
 
     /// The regression this whole change exists to prevent. The old
@@ -241,6 +243,35 @@ struct ProviderTriageTests {
         #expect(provider("Edge", percentLeft: 0.5).rankingIsDepleted == false)
         #expect(provider("Edge", percentLeft: 0.49).rankingIsDepleted == true)
         #expect(provider("NoWindows").rankingIsDepleted == false)
+    }
+
+    @Test func cursorRankingRequiresEveryPresentCapacityPoolToBeDepleted() {
+        let split = ProviderEntry(
+            name: "Cursor",
+            ok: true,
+            error: nil,
+            windows: [
+                ProviderWindow(id: "ac", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+                ProviderWindow(id: "ap", percentLeft: 91.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+                ProviderWindow(id: "unknown", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+            ],
+            data: [:],
+            observedAt: nil
+        )
+        #expect(split.rankingIsDepleted == false)
+
+        let onlyDepletedPool = ProviderEntry(
+            name: "Cursor",
+            ok: true,
+            error: nil,
+            windows: [
+                ProviderWindow(id: "ac", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+                ProviderWindow(id: "unknown", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+            ],
+            data: [:],
+            observedAt: nil
+        )
+        #expect(onlyDepletedPool.rankingIsDepleted == true)
     }
 
     /// The local threshold may only ever *add* providers to the attention

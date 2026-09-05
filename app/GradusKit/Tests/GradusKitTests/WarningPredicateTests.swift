@@ -47,8 +47,8 @@ private let truthTable: [WarnsTruthTableCase] = {
 
 @Test(arguments: truthTable)
 private func windowWarnsMatchesGeneratedTruthTable(_ testCase: WarnsTruthTableCase) {
-    let w = window(percentLeft: testCase.percentLeft, paceDelta: testCase.paceDelta)
-    #expect(windowWarns(w) == testCase.expectWarns)
+    let providerWindow = window(percentLeft: testCase.percentLeft, paceDelta: testCase.paceDelta)
+    #expect(windowWarns(providerWindow) == testCase.expectWarns)
 }
 
 @Test func invalidPercentNeverWarns() {
@@ -100,4 +100,45 @@ private func windowWarnsMatchesGeneratedTruthTable(_ testCase: WarnsTruthTableCa
     #expect(percentIsValid(100.001) == false)
     #expect(percentIsValid(nil) == false)
     #expect(percentIsValid(.nan) == false)
+}
+
+@Test func providerDepletionUsesIndependentCursorPools() {
+    let cursorWindows = [
+        ProviderWindow(id: "ac", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "ap", percentLeft: 91.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Cursor", windows: cursorWindows) == false)
+
+    let bothCursorPoolsDepleted = [
+        ProviderWindow(id: "ac", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "ap", percentLeft: 0.4, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Cursor", windows: bothCursorPoolsDepleted) == true)
+}
+
+@Test func providerDepletionIgnoresUnknownAndInvalidCursorWindows() {
+    let unknownOnly = [
+        ProviderWindow(id: "billing_cycle", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Cursor", windows: unknownOnly) == false)
+
+    let onePresentPool = [
+        ProviderWindow(id: "ac", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "ap", percentLeft: .nan, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "unknown", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Cursor", windows: onePresentPool) == true)
+
+    let invalidOnly = [
+        ProviderWindow(id: "ap", percentLeft: .infinity, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Cursor", windows: invalidOnly) == false)
+}
+
+@Test func nonCursorProviderDepletionRetainsAnyDepletedWindowRule() {
+    let windows = [
+        ProviderWindow(id: "weekly", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "monthly", percentLeft: 91.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Codex", windows: windows) == true)
 }

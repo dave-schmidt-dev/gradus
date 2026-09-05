@@ -234,7 +234,7 @@ public struct ProviderStatus: Codable, Equatable, Sendable {
         self.snapshotUpdatedAt = snapshotUpdatedAt
         self.publishedAt = publishedAt
         self.isWarning = isWarning ?? providerNeedsAttention(windows)
-        self.isDepleted = isDepleted ?? windows.contains { percentIsDepleted($0.percentLeft) }
+        self.isDepleted = isDepleted ?? providerIsDepleted(providerName: providerName, windows: windows)
         self.syncSource = syncSource
     }
 }
@@ -296,7 +296,7 @@ extension ProviderStatus {
         isWarning = (record["isWarning"] as? NSNumber)?.boolValue
             ?? windows.contains(where: windowWarns)
         isDepleted = (record["isDepleted"] as? NSNumber)?.boolValue
-            ?? windows.contains { percentIsDepleted($0.percentLeft) }
+            ?? providerIsDepleted(providerName: providerName, windows: windows)
         if let computerName = record["sourceComputerName"] as? String,
            let userName = record["sourceUserName"] as? String,
            !computerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

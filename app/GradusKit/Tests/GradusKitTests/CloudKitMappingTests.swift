@@ -127,6 +127,47 @@ private func sampleStatus(
     #expect(healthy.isDepleted == false)
 }
 
+@Test func derivesCursorDepletionFromIndependentPoolsWhenNotExplicitlySet() throws {
+    let windows = [
+        ProviderWindow(id: "ac", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "ap", percentLeft: 91.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    let status = ProviderStatus(
+        providerName: "Cursor",
+        providerDisplayName: "Cursor",
+        ok: true,
+        errorMessage: nil,
+        windows: windows,
+        data: [:],
+        observedAt: nil,
+        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+        publishedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    #expect(status.isDepleted == false)
+
+    let record = try status.toCKRecord(zoneID: zoneID)
+    record["isDepleted"] = nil
+    #expect(record["isDepleted"] == nil)
+    #expect(try ProviderStatus(record: record).isDepleted == false)
+}
+
+@Test func cursorWithOnlyDepletedPresentPoolIsDepleted() {
+    let status = ProviderStatus(
+        providerName: "Cursor",
+        providerDisplayName: "Cursor",
+        ok: true,
+        errorMessage: nil,
+        windows: [
+            ProviderWindow(id: "ac", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+        ],
+        data: [:],
+        observedAt: nil,
+        snapshotUpdatedAt: "2026-08-02T20:00:00-04:00",
+        publishedAt: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    #expect(status.isDepleted == true)
+}
+
 @Test func decodeToleratesMissingWindowsJSON() throws {
     let record = CKRecord(
         recordType: CloudKitConstants.recordType, recordID: CKRecord.ID(recordName: "Codex", zoneID: zoneID)
