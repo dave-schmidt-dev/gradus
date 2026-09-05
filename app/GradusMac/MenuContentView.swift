@@ -251,7 +251,12 @@ struct MenuBarContentRoot: View {
                         error: nil,
                         windows: [
                             ProviderWindow(
-                                id: "monthly", percentLeft: 0,
+                                id: "ac", percentLeft: 0,
+                                resetISO: "2026-08-31T23:59:00-04:00", windowHours: 720,
+                                paceDelta: -0.5
+                            ),
+                            ProviderWindow(
+                                id: "ap", percentLeft: 0,
                                 resetISO: "2026-08-31T23:59:00-04:00", windowHours: 720,
                                 paceDelta: -0.5
                             )
