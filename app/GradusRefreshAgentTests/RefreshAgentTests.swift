@@ -20,10 +20,16 @@ final class RefreshAgentTests: XCTestCase {
         XCTAssertEqual(fixture.runner.deadlines, [30, 105])
         XCTAssertEqual(fixture.status.phases.last, .succeeded)
         XCTAssertEqual(fixture.status.statuses.last?.health, .normal)
+        XCTAssertEqual(fixture.status.statuses.last?.bridge, .success)
+        // Nothing may claim a bridge result before the bridge has run.
+        for status in fixture.status.statuses where status.phase == .acquiringLock || status.phase == .bridgeWaiting {
+            XCTAssertNil(status.bridge)
+        }
+        try assertCredentialFree(fixture.status.statuses)
     }
 
     func testBridgeFailureContinuesToProducerWithDegradedSuccess() throws {
-        let fixture = try Fixture(outcomes: [.failure, .success])
+        let fixture = try Fixture(outcomes: [.failure(exitStatus: 1), .success])
 
         XCTAssertEqual(fixture.agent.run(), .success)
         XCTAssertEqual(fixture.runner.invocations.count, 2)
@@ -32,11 +38,11 @@ final class RefreshAgentTests: XCTestCase {
         XCTAssertEqual(fixture.status.statuses.first(where: { $0.phase == .degraded })?.health, .degraded)
         XCTAssertEqual(fixture.status.phases.last, .succeeded)
         XCTAssertEqual(fixture.status.statuses.last?.health, .degraded)
-        try XCTAssertCredentialFree(fixture.status.statuses)
+        try assertCredentialFree(fixture.status.statuses)
     }
 
     func testProducerFailureRestoresPriorSnapshot() throws {
-        let fixture = try Fixture(outcomes: [.success, .failure])
+        let fixture = try Fixture(outcomes: [.success, .failure(exitStatus: 1)])
         let prior = try fixture.writeSnapshot(schema: 2, value: "prior")
         fixture.runner.onInvocation = { invocationIndex in
             if invocationIndex == 1 {
@@ -89,23 +95,8 @@ final class RefreshAgentTests: XCTestCase {
         XCTAssertEqual(fixture.runner.invocations.last?.executable, fixture.paths.runtimeExecutable)
         XCTAssertEqual(fixture.status.phases.last, .succeeded)
         XCTAssertEqual(fixture.status.statuses.last?.health, .degraded)
-        try XCTAssertCredentialFree(fixture.status.statuses)
-    }
-
-    func testBridgeFailureClassesAllContinueToProducer() throws {
-        // The bridge intentionally exposes only a credential-free exit status;
-        // denied, missing, and malformed Safari state all map to the same
-        // non-success process result at this boundary.
-        for bridgeState in ["denied", "missing", "malformed", "failed"] {
-            let fixture = try Fixture(outcomes: [.failure, .success])
-
-            XCTAssertEqual(fixture.agent.run(), .success, bridgeState)
-            XCTAssertEqual(fixture.runner.invocations.count, 2, bridgeState)
-            XCTAssertEqual(fixture.runner.invocations.last?.executable, fixture.paths.runtimeExecutable, bridgeState)
-            XCTAssertEqual(fixture.status.phases.last, .succeeded, bridgeState)
-            XCTAssertEqual(fixture.status.statuses.last?.health, .degraded, bridgeState)
-            try XCTAssertCredentialFree(fixture.status.statuses)
-        }
+        XCTAssertEqual(fixture.status.statuses.last?.bridge, .timedOut)
+        try assertCredentialFree(fixture.status.statuses)
     }
 
     func testCancellationStopsBeforeProducer() throws {
@@ -153,7 +144,7 @@ final class RefreshAgentTests: XCTestCase {
     }
 
     func testPriorCompleteSnapshotsSurviveProducerFailureByteForByte() throws {
-        let fixture = try Fixture(outcomes: [.success, .failure])
+        let fixture = try Fixture(outcomes: [.success, .failure(exitStatus: 1)])
         let firstPrior = try fixture.writeSnapshot(at: 0, schema: 1, value: "v1-prior")
         let secondPrior = try fixture.writeSnapshot(at: 1, schema: 2, value: "v2-prior")
         fixture.runner.onInvocation = { invocationIndex in
@@ -254,38 +245,6 @@ final class RefreshAgentTests: XCTestCase {
         let text = try XCTUnwrap(String(bytes: data, encoding: .utf8)).lowercased()
         for forbidden in ["/users/", "documents", "python", "/bin/sh", ".venv"] {
             XCTAssertFalse(text.contains(forbidden))
-        }
-    }
-
-    private func XCTAssertCredentialFree(
-        _ statuses: [AgentStatus],
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) throws {
-        let encoded = try JSONEncoder().encode(statuses)
-        let text = try XCTUnwrap(String(bytes: encoded, encoding: .utf8)).lowercased()
-        for forbidden in ["cookie", "token", "secret", "account", "safari", "keychain"] {
-            XCTAssertFalse(
-                text.contains(forbidden),
-                "credential-bearing status: \(forbidden)",
-                file: file,
-                line: line
-            )
-        }
-        let objects = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: encoded) as? [[String: Any]],
-            file: file,
-            line: line
-        )
-        let allowedKeys = Set(["schemaVersion", "phase", "health", "sequence", "updatedAt"])
-        for object in objects {
-            XCTAssertEqual(
-                Set(object.keys),
-                allowedKeys,
-                "unexpected status field could expose a raw bridge error",
-                file: file,
-                line: line
-            )
         }
     }
 }

@@ -785,6 +785,27 @@ class VibeCookieCacheTests(unittest.TestCase):
         provider._acquire()
         self.assertFalse(self._cache_path.exists())
 
+    def test_missing_cache_reports_no_session_rather_than_an_expired_one(self) -> None:
+        # The provider cannot tell a denied bridge from a signed-out Safari;
+        # "expired" claimed the latter and sent the user to sign in when the
+        # fix was a Full Disk Access grant. The Mac resolver and the TUI both
+        # classify "session unavailable" as needing authentication.
+        from gradus.history import _probe_metadata
+        from gradus.snapshot import _is_transient_probe_error
+
+        provider = VibeProvider(project_root=self._tmpdir.name)
+        with patch("gradus.providers._base._is_headless", return_value=False):
+            with self.assertRaises(ProbeFailure) as ctx:
+                provider.fetch()
+        message = str(ctx.exception)
+        self.assertIn("session unavailable", message)
+        self.assertNotIn("expired", message)
+        self.assertIn("console.mistral.ai", message)
+        snapshot = ProviderSnapshot(name="Vibe", ok=False, source="api", error=message)
+        self.assertTrue(_is_auth_error(snapshot))
+        self.assertFalse(_is_transient_probe_error(snapshot))
+        self.assertEqual(_probe_metadata(snapshot, {})["reason"], "auth_failure")
+
     def test_401_clears_cache(self) -> None:
         import urllib.error as ue
 
@@ -798,9 +819,10 @@ class VibeCookieCacheTests(unittest.TestCase):
         provider = VibeProvider(project_root=self._tmpdir.name)
         err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
         with patch("urllib.request.urlopen", side_effect=err):
-            with self.assertRaises(ProbeFailure):
+            with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
         self.assertFalse(self._cache_path.exists())
+        self.assertIn("session expired", str(ctx.exception))
 
 
 class CacheResilienceTests(unittest.TestCase):

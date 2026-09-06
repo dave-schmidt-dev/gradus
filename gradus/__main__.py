@@ -88,6 +88,7 @@ _AUTH_KEYWORDS = (
     "authenticate",
     "re-authenticate",
     "session expired",
+    "session unavailable",
     "sign in",
     "sign-in",
     "token expired",

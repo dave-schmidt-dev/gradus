@@ -90,7 +90,9 @@ rationale: Safari-derived provider cookies are read only by the Developer-ID-sig
   only Vibe cache payloads at
   0600 inside a 0700 cache directory: source mode uses checkout `.cache`, while installed mode uses
   `~/Library/Application Support/Gradus/Private/.cache`. Its fixed check operation attempts that exact Safari read
-  and returns only credential-free success, denied, missing, or malformed state. Claude authentication remains
+  and returns only credential-free success, denied, missing, or malformed state; its refresh operation reports the
+  same vocabulary through its exit status alone (`CredentialBridgeExitStatus`), and the refresh agent copies that
+  word, and nothing else about the bridge run, into the public status file. Claude authentication remains
   Keychain-backed and has no Safari cache; OpenCode Go and Cursor are also Keychain-backed, reading fixed
   generic-password items read-only with no refresh or write-back.
   Python providers consume the allowlisted bridge caches only; neither they,

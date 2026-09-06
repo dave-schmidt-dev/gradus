@@ -9,21 +9,22 @@ struct GradusCredentialBridgeApp {
             return
         }
         guard let operation = CredentialBridgeOperation(arguments: arguments) else {
-            exit(64)
+            exit(CredentialBridgeExitStatus.usage.rawValue)
         }
         switch operation {
         case let .refresh(cacheDirectory):
             do {
                 try CredentialBridge.refresh(cacheDirectory: cacheDirectory)
             } catch {
-                // This process owns browser credentials. Its callers receive only an exit status.
-                exit(1)
+                // This process owns browser credentials. Its callers receive only
+                // an exit status, typed by `CredentialBridgeExitStatus`.
+                exit(CredentialBridgeExitStatus.forRefreshError(error).rawValue)
             }
         case .check:
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             guard let data = try? encoder.encode(CredentialBridge.check()) else {
-                exit(1)
+                exit(CredentialBridgeExitStatus.failed.rawValue)
             }
             FileHandle.standardOutput.write(data)
             FileHandle.standardOutput.write(Data("\n".utf8))

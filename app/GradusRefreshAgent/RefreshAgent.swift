@@ -79,19 +79,75 @@ enum AgentHealth: String, Codable {
     case degraded
 }
 
+/// What the credential bridge's exit status said, in the same fixed vocabulary
+/// its `check` operation prints. Nothing else about the bridge run is kept:
+/// no output, no error text, no path. `denied` is the one the UI has to be
+/// able to name, because it means "grant Full Disk Access" and nothing a
+/// provider's own failure text can say distinguishes it from a signed-out
+/// Safari.
+enum AgentBridgeOutcome: String, Codable {
+    case success
+    case denied
+    case missing
+    case malformed
+    case failed
+    case timedOut
+
+    /// Exit statuses are pinned by `RefreshAgentBridgeOutcomeTests.testBridgeExitStatusTableIsPinned`
+    /// against the bridge's own table; the two binaries share no type.
+    init(processOutcome: ProcessOutcome) {
+        switch processOutcome {
+        case .success: self = .success
+        case .timedOut: self = .timedOut
+        case .cancelled: self = .failed
+        case let .failure(exitStatus):
+            switch exitStatus {
+            case 65: self = .denied
+            case 66: self = .missing
+            case 67: self = .malformed
+            default: self = .failed
+            }
+        }
+    }
+}
+
 struct AgentStatus: Codable, Equatable {
     let schemaVersion: Int
     let phase: AgentPhase
     let health: AgentHealth
+    /// Absent until the bridge has run this cycle; present on every status
+    /// written after it, including the terminal one.
+    let bridge: AgentBridgeOutcome?
     let sequence: Int
     let updatedAt: String
 
-    init(phase: AgentPhase, health: AgentHealth = .normal, sequence: Int, date: Date) {
+    init(
+        phase: AgentPhase,
+        health: AgentHealth = .normal,
+        bridge: AgentBridgeOutcome? = nil,
+        sequence: Int,
+        date: Date
+    ) {
         schemaVersion = 1
         self.phase = phase
         self.health = health
+        self.bridge = bridge
         self.sequence = sequence
         updatedAt = ISO8601DateFormatter().string(from: date)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, phase, health, bridge, sequence, updatedAt
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(phase, forKey: .phase)
+        try container.encode(health, forKey: .health)
+        try container.encodeIfPresent(bridge, forKey: .bridge)
+        try container.encode(sequence, forKey: .sequence)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 }
 
@@ -157,7 +213,9 @@ struct ProcessInvocation: Equatable {
 
 enum ProcessOutcome: Equatable {
     case success
-    case failure
+    /// The child's exit status. Only the bridge's is interpreted, and only
+    /// through `AgentBridgeOutcome`; the producer's is success-or-not.
+    case failure(exitStatus: Int32)
     case timedOut
     case cancelled
 }
@@ -201,10 +259,13 @@ struct RefreshAgent {
     func run() -> AgentExit {
         var sequence = 0
         var health = AgentHealth.normal
+        var bridgeResult: AgentBridgeOutcome?
         func emit(_ phase: AgentPhase) -> Bool {
             sequence += 1
             do {
-                try statusWriter.write(AgentStatus(phase: phase, health: health, sequence: sequence, date: now()))
+                try statusWriter.write(AgentStatus(
+                    phase: phase, health: health, bridge: bridgeResult, sequence: sequence, date: now()
+                ))
                 return true
             } catch {
                 return false
@@ -253,6 +314,7 @@ struct RefreshAgent {
         if bridgeOutcome == .cancelled {
             return finishFailure(bridgeOutcome, emit: emit, snapshots: snapshots, priors: priors)
         }
+        bridgeResult = AgentBridgeOutcome(processOutcome: bridgeOutcome)
         if bridgeOutcome != .success {
             health = .degraded
             // Bridge failures are optional Vibe credential degradation. Keep
@@ -271,7 +333,7 @@ struct RefreshAgent {
             environment: environment
         )
         guard emit(.producerWaiting) else {
-            return finishFailure(.failure, emit: emit, snapshots: snapshots, priors: priors)
+            return finishFailure(.failure(exitStatus: 1), emit: emit, snapshots: snapshots, priors: priors)
         }
         let producerOutcome = runner.run(
             producer,

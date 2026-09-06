@@ -130,3 +130,46 @@ final class FailingStatusWriter: AgentStatusWriting {
         try base.write(status)
     }
 }
+
+/// Every status the agent writes must stay inside the fixed, credential-free
+/// shape. Shared by the suites so the tripwire is one definition.
+func assertCredentialFree(
+    _ statuses: [AgentStatus],
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let encoded = try JSONEncoder().encode(statuses)
+    let text = try XCTUnwrap(String(bytes: encoded, encoding: .utf8)).lowercased()
+    for forbidden in ["cookie", "token", "secret", "account", "safari", "keychain"] {
+        XCTAssertFalse(
+            text.contains(forbidden),
+            "credential-bearing status: \(forbidden)",
+            file: file,
+            line: line
+        )
+    }
+    let objects = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: encoded) as? [[String: Any]],
+        file: file,
+        line: line
+    )
+    let allowedKeys = Set(["schemaVersion", "phase", "health", "sequence", "updatedAt"])
+    let allowedBridgeValues = Set(["success", "denied", "missing", "malformed", "failed", "timedOut"])
+    for object in objects {
+        XCTAssertEqual(
+            Set(object.keys).subtracting(["bridge"]),
+            allowedKeys,
+            "unexpected status field could expose a raw bridge error",
+            file: file,
+            line: line
+        )
+        if let bridge = object["bridge"] {
+            XCTAssertTrue(
+                allowedBridgeValues.contains(bridge as? String ?? ""),
+                "bridge outcome outside the fixed vocabulary: \(bridge)",
+                file: file,
+                line: line
+            )
+        }
+    }
+}

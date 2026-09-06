@@ -43,7 +43,7 @@ final class FoundationSubprocessRunner: SubprocessRunning {
         do {
             try process.run()
         } catch {
-            return .failure
+            return .failure(exitStatus: 1)
         }
 
         let end = Date().addingTimeInterval(max(0, deadline))
@@ -59,11 +59,11 @@ final class FoundationSubprocessRunner: SubprocessRunning {
             }
             guard beforeWait() else {
                 terminate(process, exited: exited, beforeWait: { true })
-                return .failure
+                return .failure(exitStatus: 1)
             }
             _ = exited.wait(timeout: .now() + min(pollInterval, remaining))
         }
-        return process.terminationStatus == 0 ? .success : .failure
+        return process.terminationStatus == 0 ? .success : .failure(exitStatus: process.terminationStatus)
     }
 
     private func terminate(

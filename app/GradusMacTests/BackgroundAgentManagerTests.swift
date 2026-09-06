@@ -38,48 +38,6 @@ private final class FakeBackgroundAgentService: BackgroundAgentServicing {
 
 private struct AnyError: Error {}
 
-private func provider(
-    _ name: String,
-    ok: Bool = false,
-    error: String?,
-    windows: [ProviderWindow] = []
-) -> ProviderEntry {
-    ProviderEntry(
-        name: name,
-        ok: ok,
-        error: ok ? nil : error,
-        windows: windows,
-        data: [:],
-        observedAt: "2026-08-31T12:00:00Z"
-    )
-}
-
-private func status(
-    _ phase: BackgroundAgentStatusFile.Phase,
-    health: BackgroundAgentStatusFile.Health = .normal
-) -> BackgroundAgentStatusFile {
-    BackgroundAgentStatusFile(
-        phase: phase, health: health, sequence: 1, updatedAt: "2026-08-31T12:00:00Z"
-    )
-}
-
-private let fixedNow = Date(timeIntervalSince1970: 1_772_000_000)
-
-private func resolve(
-    registration: BackgroundAgentRegistration = .enabled,
-    agentStatus: BackgroundAgentStatusFile? = status(.succeeded),
-    ageSeconds: TimeInterval? = 60,
-    providers: [ProviderEntry] = []
-) -> BackgroundAgentState {
-    BackgroundAgentStatusResolver.state(
-        registration: registration,
-        agentStatus: agentStatus,
-        snapshotUpdatedAt: ageSeconds.map { fixedNow.addingTimeInterval(-$0) },
-        providers: providers,
-        now: fixedNow
-    )
-}
-
 @Suite("Background agent registration")
 struct BackgroundAgentRegistrationTests {
     @MainActor
@@ -88,7 +46,7 @@ struct BackgroundAgentRegistrationTests {
             service: service,
             statusFileURL: URL(fileURLWithPath: "/nonexistent/agent-status.json"),
             bridgeURL: URL(fileURLWithPath: "/nonexistent/GradusCredentialBridge.app"),
-            now: { fixedNow },
+            now: { agentFixedNow },
             openURL: { _ in },
             revealInFinder: { _ in }
         )
@@ -138,7 +96,7 @@ struct BackgroundAgentRegistrationTests {
             service: service,
             statusFileURL: URL(fileURLWithPath: "/nonexistent/agent-status.json"),
             bridgeURL: URL(fileURLWithPath: "/fixture/GradusCredentialBridge.app"),
-            now: { fixedNow },
+            now: { agentFixedNow },
             openURL: { events.append("open:\($0.absoluteString)") },
             revealInFinder: { events.append("reveal:\($0.lastPathComponent)") }
         )
@@ -154,20 +112,18 @@ struct BackgroundAgentRegistrationTests {
     }
 
     @MainActor
-    @Test func explanatoryActionsNeverRunAProvidersLoginCommand() {
+    @Test func theExplanatoryActionNeverRunsAnything() {
         var opened: [URL] = []
         let service = FakeBackgroundAgentService(registration: .enabled)
         let manager = BackgroundAgentManager(
             service: service,
             statusFileURL: URL(fileURLWithPath: "/nonexistent/agent-status.json"),
             bridgeURL: URL(fileURLWithPath: "/nonexistent/GradusCredentialBridge.app"),
-            now: { fixedNow },
+            now: { agentFixedNow },
             openURL: { opened.append($0) },
             revealInFinder: { _ in }
         )
 
-        manager.perform(.signIn("Cursor"))
-        manager.perform(.installPrerequisite("Antigravity"))
         manager.perform(.reinstallApp)
 
         #expect(opened.isEmpty)
@@ -212,7 +168,7 @@ struct BackgroundAgentStateTests {
     @Test func aHealthyFreshRefreshIsTheOnlyStateThatClaimsCurrentData() {
         let running = resolve()
 
-        #expect(running == .running(lastRefresh: fixedNow.addingTimeInterval(-60)))
+        #expect(running == .running(lastRefresh: agentFixedNow.addingTimeInterval(-60)))
         #expect(running.claimsCurrentData)
         #expect(running.recoveryActions.isEmpty)
     }
@@ -220,7 +176,7 @@ struct BackgroundAgentStateTests {
     @Test func staleSnapshotDataNeverReportsAsCurrent() {
         for age in [BackgroundAgentStatusResolver.staleAfter + 1, 86400] {
             let state = resolve(ageSeconds: age)
-            #expect(state == .stale(lastRefresh: fixedNow.addingTimeInterval(-age)))
+            #expect(state == .stale(lastRefresh: agentFixedNow.addingTimeInterval(-age)))
             #expect(!state.claimsCurrentData)
         }
         #expect(resolve(ageSeconds: nil) == .stale(lastRefresh: nil))
@@ -232,14 +188,12 @@ struct BackgroundAgentStateTests {
         }
     }
 
-    @Test func degradedHealthNamesTheBridgeWithoutQuotingIt() {
+    @Test func degradedHealthFromAnOlderAgentNamesTheBridgeWithoutQuotingIt() {
+        // No `bridge` field: an agent that predates the typed outcome.
         let state = resolve(agentStatus: status(.succeeded, health: .degraded))
 
-        guard case let .degraded(reason) = state else {
-            Issue.record("degraded health did not produce a degraded state")
-            return
-        }
-        #expect(reason.lowercased().contains("credential bridge"))
+        #expect(state == .degraded(nil))
+        #expect(state.explanation.lowercased().contains("credential bridge"))
         #expect(!state.claimsCurrentData)
         #expect(state.recoveryActions.first == .revealCredentialBridge)
     }
@@ -262,8 +216,10 @@ struct BackgroundAgentStateTests {
         ])
 
         #expect(state == .providerAuthRequired(["Claude", "Cursor"]))
-        #expect(state.recoveryActions == [.signIn("Claude"), .signIn("Cursor")])
+        // Signing in happens outside Gradus; a button here could only explain.
+        #expect(state.recoveryActions.isEmpty)
         #expect(state.explanation.contains("Claude and Cursor"))
+        #expect(state.explanation.contains("Safari for Vibe"))
     }
 
     @Test func aProviderOwnedPrerequisiteIsDistinctFromAnAuthFailure() {
@@ -272,7 +228,8 @@ struct BackgroundAgentStateTests {
         ])
 
         #expect(state == .prerequisiteMissing(["OpenCode Go"]))
-        #expect(state.recoveryActions == [.installPrerequisite("OpenCode Go")])
+        #expect(state.recoveryActions.isEmpty)
+        #expect(state.explanation.contains("OpenCode Go"))
     }
 
     @Test func aCarriedFailureIsNotAnActionableState() {
@@ -286,24 +243,36 @@ struct BackgroundAgentStateTests {
     }
 
     @Test func everyStateAnswersWithCopyAndAnActionOrDeliberatelyNeitherOne() {
-        let states: [BackgroundAgentState] = [
+        // States Settings can only explain: the fix happens outside Gradus
+        // (a sign-in, a tool install, Safari itself) or on the next refresh.
+        // Each is listed here on purpose; a new explanation-only state is a
+        // decision, not a default.
+        let explanationOnly: [BackgroundAgentState] = [
+            .providerAuthRequired(["Cursor"]),
+            .prerequisiteMissing(["Vibe"]),
+            .degraded(.missing), .degraded(.malformed), .degraded(.failed), .degraded(.timedOut)
+        ]
+        let states: [BackgroundAgentState] = explanationOnly + [
             .notRegistered, .requiresApproval, .notFound,
             .refreshing(status(.bridgeWaiting)),
             .fullDiskAccessDenied,
-            .providerAuthRequired(["Cursor"]),
-            .prerequisiteMissing(["Vibe"]),
-            .degraded("reduced coverage"),
+            .degraded(nil), .degraded(.denied),
             .stale(lastRefresh: nil),
-            .running(lastRefresh: fixedNow)
+            .running(lastRefresh: agentFixedNow)
         ]
 
         for state in states {
             #expect(!state.headline.isEmpty)
             #expect(!state.explanation.isEmpty)
-            // Only the two states that need nothing from the user are allowed
-            // to offer nothing: a live refresh, and a healthy one.
-            let mayHaveNoAction = state.claimsCurrentData || state == .refreshing(status(.bridgeWaiting))
-            #expect(!state.recoveryActions.isEmpty || mayHaveNoAction)
+            let mayHaveNoAction = state.claimsCurrentData
+                || state == .refreshing(status(.bridgeWaiting))
+                || explanationOnly.contains(state)
+            #expect(!state.recoveryActions.isEmpty || mayHaveNoAction, "\(state)")
+            // The converse: an explanation-only state must not grow a button
+            // that does nothing when pressed.
+            if explanationOnly.contains(state) {
+                #expect(state.recoveryActions.isEmpty, "\(state)")
+            }
         }
     }
 
@@ -320,6 +289,7 @@ struct BackgroundAgentStateTests {
 
         #expect(decoded.phase == .producerWaiting)
         #expect(decoded.health == .normal)
+        #expect(decoded.bridge == nil)
         #expect(decoded.sequence == 4)
         #expect(decoded.isInFlight)
     }

@@ -222,9 +222,8 @@ public final class BackgroundAgentManager {
             revealInFinder(bridgeURL)
         case .openFullDiskAccessSettings:
             openURL(Self.fullDiskAccessSettingsURL)
-        case .signIn, .installPrerequisite, .reinstallApp:
-            // Explanatory-only: Gradus never runs a provider's login command on
-            // the user's behalf, and never reinstalls itself.
+        case .reinstallApp:
+            // Explanatory-only: Gradus never reinstalls itself.
             break
         }
     }

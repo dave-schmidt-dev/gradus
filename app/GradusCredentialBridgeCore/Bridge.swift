@@ -104,11 +104,24 @@ public enum CredentialBridge {
             throw BridgeError.invalidCacheDirectory
         }
 
-        let data = try Data(contentsOf: cookieFileURL, options: [.mappedIfSafe])
+        let data: Data
+        do {
+            data = try Data(contentsOf: cookieFileURL, options: [.mappedIfSafe])
+        } catch {
+            switch readFailureState(error) {
+            case .missing: throw BridgeError.cookieFileMissing
+            default: throw BridgeError.cookieFileDenied
+            }
+        }
         guard data.count <= maximumCookieFileBytes else {
             throw BridgeError.cookieFileTooLarge
         }
-        let cookies = try parseCookies(data)
+        let cookies: [Cookie]
+        do {
+            cookies = try parseCookies(data)
+        } catch {
+            throw BridgeError.invalidCookieFile
+        }
         let cachedAt = ISO8601DateFormatter().string(from: Date())
 
         try removeLegacyProviderCaches(from: cacheDirectory)
@@ -226,7 +239,34 @@ public enum CredentialBridge {
 
 enum BridgeError: Error {
     case invalidCacheDirectory
+    case cookieFileDenied
+    case cookieFileMissing
     case cookieFileTooLarge
     case invalidCookieFile
     case cacheWriteFailed
+}
+
+/// The bridge's only output channel. Its callers (the refresh agent, the
+/// launchd wrapper) never see stdout, stderr, or an error string, so the exit
+/// status has to carry the same credential-free vocabulary `check` prints:
+/// the difference between "denied" and "missing" is the difference between
+/// "grant Full Disk Access" and "sign in to Safari", and collapsing them to 1
+/// left the UI guessing from provider text.
+public enum CredentialBridgeExitStatus: Int32, CaseIterable {
+    case success = 0
+    case failed = 1
+    case usage = 64
+    case denied = 65
+    case missing = 66
+    case malformed = 67
+
+    public static func forRefreshError(_ error: Error) -> CredentialBridgeExitStatus {
+        guard let bridgeError = error as? BridgeError else { return .failed }
+        switch bridgeError {
+        case .cookieFileDenied: return .denied
+        case .cookieFileMissing: return .missing
+        case .cookieFileTooLarge, .invalidCookieFile: return .malformed
+        case .invalidCacheDirectory, .cacheWriteFailed: return .failed
+        }
+    }
 }

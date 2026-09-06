@@ -32,6 +32,7 @@
 		1C9B2973B487A726B2AC6F65 /* DashboardViewModel+Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC61613C19DAE6DF59BE17C0 /* DashboardViewModel+Notifications.swift */; };
 		1CA4F2B8B243DBE5CB71AC17 /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439B36D7F7A5680EF367C768 /* EmptyStateView.swift */; };
 		1D6E46A26CDA015CCE780A21 /* NotificationAuthorization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44483A7421F5192C4A92F9C4 /* NotificationAuthorization.swift */; };
+		1D88CA3ED191848D99B3310D /* BridgeExitStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D1BEA2669CA7CABD6CA6DCF /* BridgeExitStatusTests.swift */; };
 		1E20262D3EF75DCE1C973D50 /* DashboardView+DenseGridExhausted.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35A05EADD3FCB674E3A646B3 /* DashboardView+DenseGridExhausted.swift */; };
 		1E26FB68895560B36AB5A5A4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08876CF2CE6205C9C818D55 /* SettingsView.swift */; };
 		20FD61FEBA3B52096CBDD8A9 /* libGradusRefreshAgentCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = D0A31F4571632C84115C5F13 /* libGradusRefreshAgentCore.a */; };
@@ -98,8 +99,10 @@
 		60D5A6B6476F9538CAC01A7C /* emptyStateWaitingForFirstPublish.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 77E46C72D948DA077F191624 /* emptyStateWaitingForFirstPublish.1.png */; };
 		6182CF096FA577D092A7AFF9 /* DashboardSnapshotTests+SampleData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A8149E30488F918DE0FA5C7 /* DashboardSnapshotTests+SampleData.swift */; };
 		63F62B3503C5DE61229BF103 /* RefreshAgentCollaborators.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04D3A951D444D2A3B70E8125 /* RefreshAgentCollaborators.swift */; };
+		64649D8552FEB696551EE51C /* RefreshAgentBridgeOutcomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E55A2742E1EBD4597C12082 /* RefreshAgentBridgeOutcomeTests.swift */; };
 		6580085C9A15BA54B8C6F419 /* LegacyRuntimeMigrationTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0DF80A072E2BAAF0E19BEF1 /* LegacyRuntimeMigrationTestSupport.swift */; };
 		67DC0C0CB7FD476AF6CF7C13 /* PublishCoordinator+ErrorNaming.swift in Sources */ = {isa = PBXBuildFile; fileRef = B92DC1CA01A6E9C1C75DFDA1 /* PublishCoordinator+ErrorNaming.swift */; };
+		69CE2DF6AA60AEE4E9303E75 /* BackgroundAgentBridgeOutcomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7919EE42F3B3433F57B1B6EC /* BackgroundAgentBridgeOutcomeTests.swift */; };
 		6AE499B6FF737409FF9600DD /* dashboardRendersDenseCardsCompactDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 9C35AB84812324E2B4527C1B /* dashboardRendersDenseCardsCompactDark.1.png */; };
 		6CB21EB250614C39218CF7F7 /* WidgetSnapshotPublisherDiagnosticTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA7BFEFED9EBDDA3FD2BB51B /* WidgetSnapshotPublisherDiagnosticTests.swift */; };
 		6E08A8E81E9A4C19389EAC98 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21179439A249EF36EA31EFC9 /* AppDelegate.swift */; };
@@ -130,6 +133,7 @@
 		8D465D9E764158D5D9036093 /* GradusKit in Frameworks */ = {isa = PBXBuildFile; productRef = 8FFA51B03DE8DA722018E9CA /* GradusKit */; };
 		8DBDABEB8D8B9EBAA03E14AD /* DashboardSnapshotTests+EmptyStates.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37BF8208042ADC5386E996E8 /* DashboardSnapshotTests+EmptyStates.swift */; };
 		905D3F74031ADBBF45C5E08A /* providerDetailRendersAllWindowsDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 5A7549663B72325EB5FFCE7F /* providerDetailRendersAllWindowsDark.1.png */; };
+		90680B8CB51C08B9B813D4FD /* BackgroundAgentTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C754E6F2BC06220E0D3DDA9A /* BackgroundAgentTestSupport.swift */; };
 		90F33C3550BD228A23D469E5 /* GradusRefreshAgentApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12B11684A5D92598B5F73002 /* GradusRefreshAgentApp.swift */; };
 		915BD888C707ED505F3016DA /* ProviderRetryAccessibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21795607EC3DB4582CDD3475 /* ProviderRetryAccessibilityTests.swift */; };
 		94249E29636B22FDA2FCF4FB /* DashboardViewModel+AccountStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9858C7AE18EE2FFA14179853 /* DashboardViewModel+AccountStatus.swift */; };
@@ -495,6 +499,7 @@
 		6C34AE581013767B89C84A00 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png; sourceTree = "<group>"; };
 		6CD2A7EEE9BC5667647B000A /* CardLayoutSolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardLayoutSolver.swift; sourceTree = "<group>"; };
 		6D109255042B98352B77322B /* GradusWidgetFormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusWidgetFormattingTests.swift; sourceTree = "<group>"; };
+		6D1BEA2669CA7CABD6CA6DCF /* BridgeExitStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeExitStatusTests.swift; sourceTree = "<group>"; };
 		6D527542E168FE738F064F7F /* GradusiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GradusiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6ED6FF507C14BCA7CBE51FB6 /* PublisherViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublisherViewModel.swift; sourceTree = "<group>"; };
 		70946A22625EC5335461F009 /* com.zerodelta.gradus.refresh-agent.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "com.zerodelta.gradus.refresh-agent.plist"; sourceTree = "<group>"; };
@@ -505,8 +510,10 @@
 		773E313969E9D2D0B3851CF3 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
 		77D1969B78A609FE47CA6F9C /* IconButtonSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconButtonSnapshotTests.swift; sourceTree = "<group>"; };
 		77E46C72D948DA077F191624 /* emptyStateWaitingForFirstPublish.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = emptyStateWaitingForFirstPublish.1.png; sourceTree = "<group>"; };
+		7919EE42F3B3433F57B1B6EC /* BackgroundAgentBridgeOutcomeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAgentBridgeOutcomeTests.swift; sourceTree = "<group>"; };
 		7A587EF37495C6CA507D80F5 /* DashboardViewModel+CardLayoutPreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardViewModel+CardLayoutPreference.swift"; sourceTree = "<group>"; };
 		7CAF320078579655D5EDF862 /* BridgeCookieParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeCookieParser.swift; sourceTree = "<group>"; };
+		7E55A2742E1EBD4597C12082 /* RefreshAgentBridgeOutcomeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RefreshAgentBridgeOutcomeTests.swift; sourceTree = "<group>"; };
 		7FB4C9056931FA6B47D052C6 /* densePadPortraitLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densePadPortraitLight.1.png; sourceTree = "<group>"; };
 		7FDE0EEA5731FD11EC5D0B49 /* dashboardTruncatesPercentagesRatherThanRounding.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = dashboardTruncatesPercentagesRatherThanRounding.1.png; sourceTree = "<group>"; };
 		80F4C794354A1E33E39E3540 /* MenuProviderList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuProviderList.swift; sourceTree = "<group>"; };
@@ -590,6 +597,7 @@
 		C60F7BE7D1F7757A0BF28D4C /* DashboardDensity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardDensity.swift; sourceTree = "<group>"; };
 		C65739F0A1AD5EF5B8322F3E /* BridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeTests.swift; sourceTree = "<group>"; };
 		C6BB112D29211092758C4A6A /* GradusMacUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GradusMacUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C754E6F2BC06220E0D3DDA9A /* BackgroundAgentTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundAgentTestSupport.swift; sourceTree = "<group>"; };
 		C7CEF22E360E7772B0118758 /* DensityLayoutXCUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DensityLayoutXCUITests.swift; sourceTree = "<group>"; };
 		C8C9A1A0989CAC73B0A89A75 /* densityLargePadPortraitExtraExtraExtraLarge.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densityLargePadPortraitExtraExtraExtraLarge.1.png; sourceTree = "<group>"; };
 		CB6D4E80E55036E625838581 /* exhaustedCompactCellsPad.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = exhaustedCompactCellsPad.1.png; sourceTree = "<group>"; };
@@ -819,6 +827,7 @@
 		0BA09CFFC4560ACFBD6483E6 /* GradusRefreshAgentTests */ = {
 			isa = PBXGroup;
 			children = (
+				7E55A2742E1EBD4597C12082 /* RefreshAgentBridgeOutcomeTests.swift */,
 				1A463D106EC7152AB2953C6B /* RefreshAgentTestDoubles.swift */,
 				44C8277B1E34158B7FD864FD /* RefreshAgentTests.swift */,
 			);
@@ -1083,6 +1092,7 @@
 		A898C746865215F3DB1C24C3 /* GradusCredentialBridgeTests */ = {
 			isa = PBXGroup;
 			children = (
+				6D1BEA2669CA7CABD6CA6DCF /* BridgeExitStatusTests.swift */,
 				05D161BFC0501A54651EE5E5 /* BridgeStructureTests.swift */,
 				C65739F0A1AD5EF5B8322F3E /* BridgeTests.swift */,
 			);
@@ -1115,7 +1125,9 @@
 			isa = PBXGroup;
 			children = (
 				BE6A984FC7F10EE34E91165C /* AppIconTests.swift */,
+				7919EE42F3B3433F57B1B6EC /* BackgroundAgentBridgeOutcomeTests.swift */,
 				AB3221560456B2F060269B91 /* BackgroundAgentManagerTests.swift */,
+				C754E6F2BC06220E0D3DDA9A /* BackgroundAgentTestSupport.swift */,
 				D6F8EAC96579D0F02407DB83 /* DevicePresenceSettingsTests.swift */,
 				4EF211C0B300EF36E2B452FB /* DisplayPreferenceTests.swift */,
 				9665FE92F94D2664633B9A36 /* ExpectedPaceTests.swift */,
@@ -1923,6 +1935,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				64649D8552FEB696551EE51C /* RefreshAgentBridgeOutcomeTests.swift in Sources */,
 				EF9A244D0D6104F1F17185F3 /* RefreshAgentTestDoubles.swift in Sources */,
 				D5F71DBE82E97E97E94EA064 /* RefreshAgentTests.swift in Sources */,
 			);
@@ -1949,6 +1962,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1D88CA3ED191848D99B3310D /* BridgeExitStatusTests.swift in Sources */,
 				3D7323535EAE8D0C754800F1 /* BridgeStructureTests.swift in Sources */,
 				7F772E2FA6A54AEB8914620F /* BridgeTests.swift in Sources */,
 			);
@@ -1998,7 +2012,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE47DB8C0C26AB5FC4C4B0D1 /* AppIconTests.swift in Sources */,
+				69CE2DF6AA60AEE4E9303E75 /* BackgroundAgentBridgeOutcomeTests.swift in Sources */,
 				1C8D8622BC984AFF78785215 /* BackgroundAgentManagerTests.swift in Sources */,
+				90680B8CB51C08B9B813D4FD /* BackgroundAgentTestSupport.swift in Sources */,
 				CD0A112EB79A1395ED67610E /* DevicePresenceSettingsTests.swift in Sources */,
 				CB600D719F68959CC6026991 /* DisplayPreferenceTests.swift in Sources */,
 				C1F588D55FDDDC0A63604114 /* ExpectedPaceTests.swift in Sources */,

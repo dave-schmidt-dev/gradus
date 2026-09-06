@@ -72,8 +72,16 @@ class VibeProvider:
 
         self._acquire()
         if not self._has_cookies:
+            # No cache means the credential bridge wrote nothing: either it
+            # could not read Safari (Full Disk Access) or Safari holds no
+            # console.mistral.ai session. Only the bridge's own typed outcome
+            # can tell those apart, so this text must not claim "expired".
             raise ProbeFailure(
-                _auth_required_message("Vibe session expired: sign in at console.mistral.ai"), ""
+                _auth_required_message(
+                    "Vibe session unavailable: no Safari session for console.mistral.ai reached "
+                    "the credential bridge; Settings names the cause"
+                ),
+                "",
             )
 
         cookie_header = f"{self._ory_name}={self._ory_value}; csrftoken={self._csrf}"
@@ -93,7 +101,7 @@ class VibeProvider:
                 self._ory_name = self._ory_value = self._csrf = ""
                 self._clear_cache()
                 raise ProbeFailure(
-                    "Mistral session expired. Log into console.mistral.ai to refresh.",
+                    "Mistral session expired: sign in at console.mistral.ai in Safari",
                     f"HTTP {exc.code}",
                 ) from exc
             raise ProbeFailure(f"Mistral API returned HTTP {exc.code}", str(exc)) from exc

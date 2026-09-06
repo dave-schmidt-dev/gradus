@@ -148,17 +148,35 @@ struct MenuContentView: View {
     /// nothing -- the row exists to name a problem, not to congratulate itself.
     @ViewBuilder
     private var backgroundAgentStatus: some View {
-        if !viewModel.backgroundAgentState.claimsCurrentData {
+        let state = viewModel.backgroundAgentState
+        if !state.claimsCurrentData {
             VStack(alignment: .leading, spacing: 1) {
-                Text(viewModel.backgroundAgentState.headline)
+                Text(state.headline)
                     .foregroundStyle(SignalColor.forLevel(.orange))
-                Button("Fix in Settings…") { SettingsWindow.show(viewModel: viewModel) }
-                    .buttonStyle(.link)
-                    .accessibilityIdentifier("menu-agent-fix-button")
+                // "Fix" only when Settings has a button to press. A state that
+                // Settings can only explain gets "Details", and a refresh in
+                // flight gets no link at all: there is nothing to do yet.
+                if let label = Self.settingsLinkLabel(state) {
+                    Button(label) { SettingsWindow.show(viewModel: viewModel) }
+                        .buttonStyle(.link)
+                        .accessibilityIdentifier(
+                            state.recoveryActions.isEmpty ? "menu-agent-details-button" : "menu-agent-fix-button"
+                        )
+                }
             }
             .font(.caption)
             .accessibilityIdentifier("menu-agent-status")
         }
+    }
+
+    static func settingsLinkLabel(_ state: BackgroundAgentState) -> String? {
+        if case .refreshing = state {
+            return nil
+        }
+        if state.claimsCurrentData {
+            return nil
+        }
+        return state.recoveryActions.isEmpty ? "Details in Settings…" : "Fix in Settings…"
     }
 
     /// Uses `friendlyDateLabel` -- the same helper behind the "resets …" copy

@@ -288,9 +288,16 @@ The agent holds its own `~/Library/Application Support/Gradus/Installed/.refresh
 while it runs the bridge and then the frozen producer, each under its own bounded deadline,
 and writes credential-free progress to `Installed/agent-status.json` before every subprocess
 wait. A denied, missing, malformed, timed-out, or failed bridge is a *degraded success*, not a
-failure: the producer still runs against whatever caches remain. Producer failure or
-cancellation restores the prior complete snapshots (INV-8). Settings renders exactly one of
-ten states, and only `running` is allowed to claim the data is current.
+failure: the producer still runs against whatever caches remain. The bridge reports which of
+those it was through its exit status alone (0 success, 1 failed, 64 usage, 65 denied, 66 missing,
+67 malformed), and the agent records that word as `bridge` in `agent-status.json`. A `denied`
+bridge is what makes Settings say *Full Disk Access is denied*; without it, a Vibe cache the
+bridge never wrote reads as "no session", which is a sign-in problem only when the bridge
+succeeded. Producer failure or cancellation restores the prior complete snapshots (INV-8).
+Settings renders exactly one of ten states, and only `running` is allowed to claim the data is
+current. Its buttons are real actions only: a state Gradus can merely explain (a provider
+sign-in, a missing tool, a bridge that will retry) gets the explanation and no button, and the
+menu offers *Fix in Settings…* only when such a button exists.
 
 **Legacy launchd job (rollback only, one release).** The `launchd/` templates and
 `app/install-credential-bridge.sh` still work and are still tested, but they are no longer the

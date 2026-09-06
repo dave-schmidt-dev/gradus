@@ -22,16 +22,37 @@ public struct BackgroundAgentStatusFile: Codable, Equatable, Sendable {
         case degraded
     }
 
+    /// What the credential bridge's exit status said, in the bridge's own
+    /// fixed vocabulary. Absent from a status written before the bridge ran,
+    /// and from any file an older agent wrote.
+    public enum Bridge: String, Codable, Sendable {
+        case success
+        case denied
+        case missing
+        case malformed
+        case failed
+        case timedOut
+    }
+
     public let schemaVersion: Int
     public let phase: Phase
     public let health: Health
+    public let bridge: Bridge?
     public let sequence: Int
     public let updatedAt: String
 
-    public init(schemaVersion: Int = 1, phase: Phase, health: Health, sequence: Int, updatedAt: String) {
+    public init(
+        schemaVersion: Int = 1,
+        phase: Phase,
+        health: Health,
+        bridge: Bridge? = nil,
+        sequence: Int,
+        updatedAt: String
+    ) {
         self.schemaVersion = schemaVersion
         self.phase = phase
         self.health = health
+        self.bridge = bridge
         self.sequence = sequence
         self.updatedAt = updatedAt
     }
@@ -73,7 +94,9 @@ public enum BackgroundAgentState: Equatable, Sendable {
     case fullDiskAccessDenied
     case providerAuthRequired([String])
     case prerequisiteMissing([String])
-    case degraded(String)
+    /// The agent finished without the bridge. The payload is the bridge's own
+    /// typed outcome; nil means an agent that predates the field.
+    case degraded(BackgroundAgentStatusFile.Bridge?)
     case stale(lastRefresh: Date?)
     case running(lastRefresh: Date?)
 }
@@ -85,8 +108,6 @@ public enum BackgroundAgentRecovery: Equatable, Sendable, Identifiable {
     case openLoginItemsSettings
     case revealCredentialBridge
     case openFullDiskAccessSettings
-    case signIn(String)
-    case installPrerequisite(String)
     case reinstallApp
 
     public var id: String {
@@ -99,8 +120,6 @@ public enum BackgroundAgentRecovery: Equatable, Sendable, Identifiable {
         case .openLoginItemsSettings: "Open Login Items Settings"
         case .revealCredentialBridge: "Reveal Credential Bridge"
         case .openFullDiskAccessSettings: "Open Full Disk Access Settings"
-        case let .signIn(provider): "How to Sign In to \(provider)"
-        case let .installPrerequisite(provider): "What \(provider) Needs"
         case .reinstallApp: "Reinstall Gradus"
         }
     }
@@ -141,12 +160,12 @@ public extension BackgroundAgentState {
             "The credential bridge cannot read Safari's cookie store. Reveal the bridge first, then add that "
                 + "exact app to Full Disk Access — adding Gradus itself will not grant it."
         case let .providerAuthRequired(providers):
-            "\(Self.list(providers)) rejected the stored session. Sign in again in that tool's own CLI; "
-                + "Gradus never asks for the credential itself."
+            "\(Self.list(providers)) has no usable session. Sign in again where that provider authenticates: "
+                + "its own CLI, or Safari for Vibe. Gradus never asks for the credential itself."
         case let .prerequisiteMissing(providers):
             "\(Self.list(providers)) needs a tool or account setup that is not present on this Mac."
-        case let .degraded(reason):
-            reason
+        case let .degraded(bridge):
+            Self.degradedExplanation(bridge)
         case .stale:
             "The last refresh did not produce new data. What is shown is the last good reading, not a live one."
         case .running:
@@ -164,9 +183,17 @@ public extension BackgroundAgentState {
         // to drag in the nested bridge, and there is no way to find a helper
         // inside a bundle from that pane alone.
         case .fullDiskAccessDenied: [.revealCredentialBridge, .openFullDiskAccessSettings]
-        case let .providerAuthRequired(providers): providers.map { .signIn($0) }
-        case let .prerequisiteMissing(providers): providers.map { .installPrerequisite($0) }
-        case .degraded: [.revealCredentialBridge, .openFullDiskAccessSettings]
+        // Signing in happens in the provider's own tool or in Safari; a button
+        // here could only explain, and a button that only explains reads as a
+        // fix that does nothing. The explanation carries the instruction.
+        case .providerAuthRequired, .prerequisiteMissing: []
+        case let .degraded(bridge):
+            switch bridge {
+            // An agent that predates the typed outcome: the pre-existing best
+            // guess, since denial was the only bridge failure ever seen.
+            case nil, .denied: [.revealCredentialBridge, .openFullDiskAccessSettings]
+            case .success, .missing, .malformed, .failed, .timedOut: []
+            }
         case .stale: [.openLoginItemsSettings]
         case .running: []
         }
@@ -179,6 +206,30 @@ public extension BackgroundAgentState {
             return true
         }
         return false
+    }
+
+    private static func degradedExplanation(_ bridge: BackgroundAgentStatusFile.Bridge?) -> String {
+        let consequence = "Vibe is showing its last good reading; no other provider depends on the bridge."
+        switch bridge {
+        case nil:
+            return "The credential bridge did not run, so any provider that depends on it is showing its last "
+                + "good reading."
+        case .denied:
+            return "The credential bridge cannot read Safari's cookie store. " + consequence
+        case .success:
+            return "The credential bridge ran, but the refresh still reported reduced coverage. " + consequence
+        case .missing:
+            return "Safari has no cookie store on this Mac yet, so there is no console.mistral.ai session to "
+                + "read. Open Safari and sign in at console.mistral.ai. " + consequence
+        case .malformed:
+            return "Safari's cookie store could not be read in the format the credential bridge expects. "
+                + consequence
+        case .failed:
+            return "The credential bridge exited with an error. It runs again on the next refresh. " + consequence
+        case .timedOut:
+            return "The credential bridge did not finish within its deadline. It runs again on the next refresh. "
+                + consequence
+        }
     }
 
     private static func list(_ names: [String]) -> String {
@@ -222,6 +273,13 @@ public enum BackgroundAgentStatusResolver {
             return .refreshing(agentStatus)
         }
 
+        // The bridge's own typed denial outranks provider text. Without it, a
+        // provider whose cache the bridge never wrote reports "no session",
+        // which reads as "sign in" when the fix is a Full Disk Access grant.
+        if agentStatus?.bridge == .denied {
+            return .fullDiskAccessDenied
+        }
+
         // Provider-attributed causes outrank a bare "degraded" or "stale":
         // both of those describe the symptom, and only one of these names what
         // the user has to do about it.
@@ -230,10 +288,7 @@ public enum BackgroundAgentStatusResolver {
         }
 
         if let agentStatus, agentStatus.health == .degraded || agentStatus.phase == .degraded {
-            return .degraded(
-                "The credential bridge did not run, so any provider that depends on it is showing its last "
-                    + "good reading."
-            )
+            return .degraded(agentStatus.bridge)
         }
         if let agentStatus, agentStatus.phase == .failed || agentStatus.phase == .cancelled {
             return .stale(lastRefresh: snapshotUpdatedAt)
@@ -276,6 +331,7 @@ public enum BackgroundAgentStatusResolver {
         guard let error = failureText(provider) else { return false }
         return error.contains("auth required")
             || error.contains("session expired")
+            || error.contains("session unavailable")
             || error.contains("re-authenticate")
             || error.contains("login`")
             || error.contains("authorization denied")

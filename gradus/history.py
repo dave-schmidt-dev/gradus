@@ -72,6 +72,7 @@ _AUTH_MARKERS = (
     "authenticate",
     "re-authenticate",
     "session expired",
+    "session unavailable",
     "sign in",
     "sign-in",
     "token expired",
