@@ -60,9 +60,11 @@ def _http_json(
     import urllib.error
     import urllib.request
 
+    from ..tls import default_ssl_context
+
     req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=default_ssl_context()) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         try:

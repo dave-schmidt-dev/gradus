@@ -6,6 +6,7 @@ import json
 from datetime import datetime, timezone
 
 from ..parsing import VibeStatus
+from ..tls import default_ssl_context
 from ._base import (
     ProbeFailure,
     _auth_required_message,
@@ -85,7 +86,7 @@ class VibeProvider:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=15, context=default_ssl_context()) as resp:
                 body = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             if exc.code in (301, 302, 401, 403):

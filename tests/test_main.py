@@ -1742,6 +1742,12 @@ class TestCredentialAwareRefresh(unittest.TestCase):
         for args in (
             ("--json", "--refresh-snapshot"),
             ("--once", "--refresh-snapshot"),
+            ("--tls-trust-report", "--json"),
+            ("--tls-trust-report", "--once"),
+            ("--tls-trust-report", "--refresh-snapshot"),
+            ("--tls-trust-report", "--verify-refresh-health"),
+            ("--tls-trust-report", "--publisher-watchdog"),
+            ("--tls-trust-report", "--history-at", "2026-01-01T00:00:00+00:00"),
         ):
             with self.subTest(args=args), patch("sys.argv", ["gradus", *args]):
                 with self.assertRaises(SystemExit) as ctx:

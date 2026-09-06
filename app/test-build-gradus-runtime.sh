@@ -160,6 +160,31 @@ for expected_child in agy gh security; do
     fail "provider subprocess fixture '$expected_child' did not run"
 done
 
+printf '%s\n' "==> Verifying the relocated runtime carries its own TLS trust store"
+run_frozen "$TEST_ROOT/tls.out" --tls-trust-report
+/usr/bin/python3 - "$TEST_ROOT/tls.out" "$relocated_app" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+relocated_app = Path(sys.argv[2]).resolve()
+if report.get("frozen") is not True:
+    raise SystemExit("FAIL: --tls-trust-report did not run from the frozen runtime")
+if report.get("verify_mode") != "CERT_REQUIRED" or report.get("check_hostname") is not True:
+    raise SystemExit("FAIL: frozen runtime TLS context is not a verifying client context")
+bundled = Path(report.get("bundled_ca_file", "")).resolve()
+if not bundled.is_file() or not bundled.is_relative_to(relocated_app):
+    raise SystemExit(f"FAIL: bundled CA file is not inside the relocated app: {bundled}")
+# The python.org OpenSSL has no usable OPENSSLDIR here; the regression this
+# guards is a provider store that is empty without the bundle.
+if report.get("ca_certificates", 0) < 100:
+    raise SystemExit(
+        "FAIL: frozen runtime trust store is empty or truncated: "
+        f"{report.get('ca_certificates')} CA certificates"
+    )
+PY
+
 printf '%s\n' "==> Running --json and --once with no host Python on PATH"
 run_frozen "$TEST_ROOT/json.out" --json
 run_frozen "$TEST_ROOT/once.out" --once
@@ -220,4 +245,4 @@ if not manifest.get("binaries") or not manifest.get("packages") or not manifest.
     raise SystemExit("FAIL: build manifest inventory is incomplete")
 PY
 
-printf '%s\n' "11 GradusRuntime build and relocation checks passed"
+printf '%s\n' "12 GradusRuntime build and relocation checks passed"

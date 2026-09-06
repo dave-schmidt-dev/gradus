@@ -8,6 +8,7 @@ import subprocess
 from typing import Any
 
 from ..parsing import OpenCodeGoStatus
+from ..tls import default_ssl_context
 from ._base import ProbeFailure, _auth_required_message, _format_reset_time, _is_headless, register
 
 USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
@@ -109,7 +110,7 @@ class OpenCodeGoProvider:
                 },
                 method="GET",
             )
-            with urllib.request.urlopen(req, timeout=15) as response:
+            with urllib.request.urlopen(req, timeout=15, context=default_ssl_context()) as response:
                 payload = json.loads(response.read())
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):

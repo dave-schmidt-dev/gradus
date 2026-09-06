@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..parsing import CursorStatus
+from ..tls import default_ssl_context
 from ._base import ProbeFailure, _auth_required_message, _is_headless, _is_jwt_expired, register
 
 # Cursor is intentionally absent from history.py's _PROVENANCE_BY_PROVIDER, as it
@@ -199,7 +200,7 @@ class CursorProvider:
             },
             method="POST",
         )
-        with ur.urlopen(req, timeout=15) as resp:
+        with ur.urlopen(req, timeout=15, context=default_ssl_context()) as resp:
             payload = json.loads(resp.read())
         return payload if isinstance(payload, dict) else {}
 

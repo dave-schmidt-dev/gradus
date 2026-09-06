@@ -39,13 +39,15 @@ PUBLISHER_SNAPSHOT = (
 )
 PUBLISHER_EVIDENCE = PUBLISHER_SNAPSHOT.parent / "publish-evidence.json"
 
-# Launch by absolute path, never by name or bundle identifier. Two bundles in
-# /Applications currently declare `com.zerodelta.gradus.mac`, and the one that
-# carries the higher version (the Task 2.4 single-bundle stub) has no producer
-# provenance keys, so it cannot publish. Identifier-based resolution could pick
-# it and the watchdog would "succeed" into a permanently silent publisher.
-PUBLISHER_APP = Path("/Applications/GradusMac.app")
-PUBLISHER_EXECUTABLE = PUBLISHER_APP / "Contents" / "MacOS" / "GradusMac"
+# Launch by absolute path, never by name or bundle identifier. The shipped
+# wrapper is `Gradus.app` (`GradusMac` survives only as the scheme and archive
+# name). Until 2026-09-06 this pointed at the pre-rename `GradusMac.app`, so a
+# stale 1.10.0 publisher was kept alive beside the installed one and iOS
+# showed whichever record won the race. Identifier-based resolution would
+# reintroduce exactly that ambiguity whenever a second bundle claims
+# `com.zerodelta.gradus.mac`, so the path stays literal.
+PUBLISHER_APP = Path("/Applications/Gradus.app")
+PUBLISHER_EXECUTABLE = PUBLISHER_APP / "Contents" / "MacOS" / "Gradus"
 
 # A snapshot older than this means the producer itself is behind; publisher
 # liveness is not the problem and the producer's own failure path already
@@ -100,8 +102,8 @@ def _publisher_is_running(executable: Path) -> bool:
     """True when a process is running that exact executable path.
 
     Matched on the full path so a differently-located build of the same app --
-    a DerivedData copy, or the non-publishing single-bundle stub -- never reads
-    as a healthy publisher.
+    a DerivedData copy, or a pre-rename `GradusMac.app` -- never reads as a
+    healthy publisher.
     """
     try:
         result = subprocess.run(

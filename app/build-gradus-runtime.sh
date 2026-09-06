@@ -336,6 +336,20 @@ for path in sorted(app.rglob("*"), key=lambda item: item.relative_to(app).as_pos
 if not binaries:
     fail("bundle contains no Mach-O binaries")
 
+# The frozen interpreter's OpenSSL points at a python.org OPENSSLDIR that does
+# not exist on an ordinary host, so the certifi bundle collected by
+# pyinstaller-hooks-contrib is the runtime's only deterministic trust source.
+# A hook regression must fail the build here, not the first provider probe.
+ca_bundles = [
+    path
+    for path in app.rglob("cacert.pem")
+    if path.is_file() and "certifi" in path.relative_to(app).as_posix()
+]
+if len(ca_bundles) != 1:
+    fail(f"expected exactly one bundled certifi cacert.pem, found {len(ca_bundles)}")
+if b"-----BEGIN CERTIFICATE-----" not in ca_bundles[0].read_bytes():
+    fail("bundled certifi cacert.pem contains no certificates")
+
 forbidden_literals = {
     str(repository_root).encode(): "absolute checkout path",
     b"/.venv/": "checkout virtual-environment path",
@@ -364,6 +378,7 @@ for path in sorted(app.rglob("*"), key=lambda item: item.relative_to(app).as_pos
             fail(f"secret-shaped {label} embedded in {relative}")
 
 package_licenses = {
+    "certifi": "MPL-2.0",
     "gradus": "MIT",
     "markdown-it-py": "MIT",
     "mdurl": "MIT",

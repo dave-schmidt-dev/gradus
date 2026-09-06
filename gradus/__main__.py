@@ -524,6 +524,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--tls-trust-report",
+        action="store_true",
+        dest="tls_trust_report",
+        help=(
+            "Print a credential-free JSON description of the TLS trust store provider "
+            "probes verify against, then exit. Never contacts a provider."
+        ),
+    )
+    parser.add_argument(
         "--refresh-snapshot",
         action="store_true",
         dest="refresh_snapshot",
@@ -576,6 +585,21 @@ def parse_args() -> argparse.Namespace:
         ]
         if conflicts:
             parser.error("argument --publisher-watchdog: not allowed with " + ", ".join(conflicts))
+    if args.tls_trust_report:
+        conflicts = [
+            flag
+            for flag, enabled in (
+                ("--once", args.once),
+                ("--json", args.json),
+                ("--publisher-watchdog", args.publisher_watchdog),
+                ("--refresh-snapshot", args.refresh_snapshot),
+                ("--verify-refresh-health", args.verify_refresh_health),
+                ("--history-at", bool(args.history_at)),
+            )
+            if enabled
+        ]
+        if conflicts:
+            parser.error("argument --tls-trust-report: not allowed with " + ", ".join(conflicts))
     if args.refresh_snapshot and (args.once or args.json):
         parser.error("argument --refresh-snapshot: not allowed with --once or --json")
     if args.refresh_snapshot and args.providers:
@@ -1511,6 +1535,12 @@ def main() -> int:
         from .publisher_watchdog import main as _publisher_watchdog_main
 
         return _publisher_watchdog_main()
+    if getattr(args, "tls_trust_report", False):
+        from .tls import trust_report
+
+        sys.stdout.write(json.dumps(trust_report(), ensure_ascii=True, sort_keys=True) + "\n")
+        sys.stdout.flush()
+        return 0
     if getattr(args, "history_at", None):
         return _history_query_once(
             args.history_at,

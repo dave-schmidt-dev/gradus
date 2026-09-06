@@ -331,19 +331,27 @@ if [[ ! -w "$INSTALL_DIR" ]]; then
   exit 77
 fi
 
-echo "==> Quitting any running $PRODUCT_NAME"
+echo "==> Quitting any running $PRODUCT_NAME or $LEGACY_PRODUCT_NAME"
 # pkill exits 1 when nothing matched, which is the normal case and not an
 # error. Under `set -e` an unguarded call would end the script here.
-pkill -x "$PRODUCT_NAME" 2>/dev/null || true
+#
+# The pre-rename process is quit as well. `pkill -x Gradus` does not match
+# `GradusMac`, so until 2026-09-06 a still-running 1.10.0 GradusMac.app
+# survived every install and went on publishing stale CloudKit records beside
+# the new app. Quitting it is not removing it: the bundle stays on disk, and
+# the WARN at the end still hands that decision to the operator.
 quit_timeout="${QUIT_TIMEOUT_SECONDS:-15}"
-quit_deadline=$((SECONDS + quit_timeout))
-while pgrep -x "$PRODUCT_NAME" >/dev/null 2>&1; do
-  if ((SECONDS >= quit_deadline)); then
-    echo "FAIL: $PRODUCT_NAME still running after ${quit_timeout}s; refusing to swap a live bundle." >&2
-    exit 75
-  fi
-  progress "Waiting for $PRODUCT_NAME to exit"
-  sleep 0.5
+for process_name in "$PRODUCT_NAME" "$LEGACY_PRODUCT_NAME"; do
+  pkill -x "$process_name" 2>/dev/null || true
+  quit_deadline=$((SECONDS + quit_timeout))
+  while pgrep -x "$process_name" >/dev/null 2>&1; do
+    if ((SECONDS >= quit_deadline)); then
+      echo "FAIL: $process_name still running after ${quit_timeout}s; refusing to swap a live bundle." >&2
+      exit 75
+    fi
+    progress "Waiting for $process_name to exit"
+    sleep 0.5
+  done
 done
 
 echo "==> Staging the new bundle beside the installed one"

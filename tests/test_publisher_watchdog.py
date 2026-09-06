@@ -33,9 +33,9 @@ class PublisherWatchdogTests(unittest.TestCase):
         self.snapshot = self.root / "snapshot-v2.json"
         self.evidence = self.root / "publish-evidence.json"
         self.state = self.root / ".publisher-watchdog.json"
-        self.app = self.root / "GradusMac.app"
+        self.app = self.root / "Gradus.app"
         self.app.mkdir()
-        self.executable = self.app / "Contents" / "MacOS" / "GradusMac"
+        self.executable = self.app / "Contents" / "MacOS" / "Gradus"
 
     def _write(self, snapshot_age: float | None, publish_age: float | None) -> None:
         if snapshot_age is not None:
@@ -102,6 +102,11 @@ class PublisherWatchdogTests(unittest.TestCase):
         """Two installed bundles share com.zerodelta.gradus.mac; only one can publish."""
         self.assertTrue(wd.PUBLISHER_APP.is_absolute())
         self.assertTrue(str(wd.PUBLISHER_EXECUTABLE).startswith(str(wd.PUBLISHER_APP)))
+        # The shipped product is Gradus.app. Pointing here at the pre-rename
+        # GradusMac.app kept a stale 1.10.0 publisher alive beside the installed
+        # one (2026-09-06), so the target is locked to the current product.
+        self.assertEqual(wd.PUBLISHER_APP, Path("/Applications/Gradus.app"))
+        self.assertEqual(wd.PUBLISHER_EXECUTABLE.name, "Gradus")
         with patch.object(wd.subprocess, "run") as run:
             run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
             wd._launch(self.app)

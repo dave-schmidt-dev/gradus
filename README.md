@@ -97,10 +97,21 @@ python3 -m gradus --debug
 python3 -m gradus --providers Claude,Codex,Copilot,Antigravity
 python3 -m gradus --refresh-snapshot
 python3 -m gradus --verify-refresh-health --duration 360
+python3 -m gradus --tls-trust-report
 python3 -m gradus --history-at 2026-08-04T12:00:00Z
 python3 -m gradus --history-at 2026-08-04T12:00:00Z --history-provider Antigravity --history-max-gap 900
 ./monitor --once
 ```
+
+`--tls-trust-report` prints a credential-free JSON description of the trust store
+provider probes verify against and never contacts a provider. Every provider HTTPS
+call goes through `gradus.tls.default_ssl_context()`, which is the interpreter's
+default verifying context plus the pinned `certifi` bundle packaged with Gradus. That
+matters for the frozen `GradusRuntime.app`: its python.org OpenSSL is compiled with an
+`OPENSSLDIR` that exists only where python.org's installer ran, so without the bundle
+the interpreter's own store is empty and every probe fails with
+`CERTIFICATE_VERIFY_FAILED` (2026-09-06). The report's `interpreter_ca_certificates`
+shows that unaided count; `ca_certificates` is what probes actually use.
 
 When `--debug` is enabled on the credential-aware `--refresh-snapshot` producer, raw captures are written to `/tmp/gradus_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches). Reader commands (`--json`, `--once`, and the TUI) do not probe providers or write debug captures.
 
@@ -318,7 +329,10 @@ refreshing while iOS silently freezes on the last publication — that failure r
 hours on 2026-08-30. Each successful legacy refresh cycle therefore ends with one bounded
 `gradus --publisher-watchdog` check: if the snapshot is fresh, publish evidence is more than
 five minutes behind, and no process is running the publisher's exact executable path, it
-relaunches the bundle by absolute path. A publisher that *is* running but not publishing is a
+relaunches `/Applications/Gradus.app` by absolute path. (Until 2026-09-06 it targeted the
+pre-rename `GradusMac.app`, which kept a stale 1.10.0 publisher alive beside the installed one
+and let iOS show whichever CloudKit record won the race; the installer's quit step now stops
+both process names.) A publisher that *is* running but not publishing is a
 wedged app or a CloudKit outage, so that case is logged and left alone; repeated relaunches
 inside an hour are throttled and reported as a crash loop rather than retried forever. The check
 prints only when it has something to say. `--publisher-watchdog` is opt-in and passed only by the
