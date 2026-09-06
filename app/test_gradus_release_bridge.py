@@ -126,6 +126,11 @@ class BridgeTests(unittest.TestCase):
             wrapper = wrapper_dir / name
             shutil.copy2(ROOT / "app" / name, wrapper)
             wrapper.chmod(0o755)
+        shutil.copytree(
+            ROOT / "app" / "release_candidate",
+            wrapper_dir / "release_candidate",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
         (wrapper_dir / "project.yml").write_text(
             'targets:\n  GradusiOS:\n    settings:\n      base:\n        MARKETING_VERSION: "1.8.2"\n',
             encoding="utf-8",
@@ -253,6 +258,102 @@ class BridgeTests(unittest.TestCase):
             encoding="utf-8",
         )
         return manifest
+
+    @classmethod
+    def _write_central_walkthrough(cls, candidate_dir: Path, candidate: str) -> tuple[Path, str]:
+        value = {
+            "artifactSha256": "c" * 64,
+            "candidateId": candidate,
+            "htmlSha256": "d" * 64,
+            "inventoryFileSha256": "e" * 64,
+            "inventorySha256": "f" * 64,
+            "screenCount": 1,
+            "sealed": True,
+            "sourceDigest": "a" * 64,
+            "walkthroughSha256": None,
+        }
+        digest = hashlib.sha256(cls._canonical_bytes(value) + b"\n").hexdigest()
+        value["walkthroughSha256"] = digest
+        path = candidate_dir / "walkthrough.json"
+        path.write_bytes(cls._canonical_bytes(value) + b"\n")
+        return path, digest
+
+    @classmethod
+    def _write_gradus_owner_review(cls, checkout: Path, candidate: str) -> Path:
+        local_candidate = checkout / ".release-state" / "candidates" / candidate
+        local_candidate.mkdir(parents=True, exist_ok=True)
+        walkthrough = local_candidate / "walkthrough.html"
+        walkthrough.write_text("<html>candidate walkthrough</html>\n", encoding="utf-8")
+        walkthrough_sha256 = hashlib.sha256(walkthrough.read_bytes()).hexdigest()
+        inventory = local_candidate / "walkthrough-inventory.json"
+        inventory_value = {
+            "candidateId": candidate,
+            "inventorySha256": "9" * 64,
+            "screens": [{"id": "dashboard"}],
+        }
+        inventory.write_bytes(cls._canonical_bytes(inventory_value) + b"\n")
+        inventory_file_sha256 = hashlib.sha256(inventory.read_bytes()).hexdigest()
+        source_revision = "fixture-source-revision"
+        binding = {
+            "artifactSha256": "c" * 64,
+            "candidateId": candidate,
+            "inventoryFileSha256": inventory_file_sha256,
+            "inventoryPath": str(inventory),
+            "inventorySha256": inventory_value["inventorySha256"],
+            "path": str(walkthrough),
+            "projectSha256": "b" * 64,
+            "screenCount": 1,
+            "sha256": walkthrough_sha256,
+            "sourceRevision": source_revision,
+        }
+        ledger = checkout / ".release-state" / "candidate.json"
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(
+            json.dumps(
+                {
+                    "artifactSha256": "c" * 64,
+                    "build": int(candidate.rsplit("-", 1)[1]),
+                    "candidateId": candidate,
+                    "marketingVersion": candidate.rsplit("-", 1)[0],
+                    "metadata": {
+                        "sourceRevision": source_revision,
+                        "walkthrough": binding,
+                        "walkthroughPath": str(walkthrough),
+                        "walkthroughSha256": walkthrough_sha256,
+                    },
+                    "projectSha256": "b" * 64,
+                    "sourceSha256": "a" * 64,
+                    "state": "prepared",
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        review = local_candidate / "walkthrough-owner-review.json"
+        review.write_text(
+            json.dumps(
+                {
+                    "approved": True,
+                    "artifactSha256": "c" * 64,
+                    "candidateId": candidate,
+                    "formatVersion": 1,
+                    "inventorySha256": inventory_value["inventorySha256"],
+                    "projectSha256": "b" * 64,
+                    "reviewedAt": "2026-09-05T00:00:00Z",
+                    "reviewedBy": "David",
+                    "screenCount": 1,
+                    "sha256": walkthrough_sha256,
+                    "sourceRevision": source_revision,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return review
 
     @staticmethod
     def _write_project_version(checkout: Path, marketing_version: str) -> None:
@@ -612,6 +713,8 @@ class BridgeTests(unittest.TestCase):
             )
             canonical_manifest.parent.mkdir(parents=True)
             canonical_manifest.write_text(json.dumps({"candidateId": "1.8.1-21"}), encoding="utf-8")
+            self._write_gradus_owner_review(checkout, "1.8.1-21")
+            self._write_central_walkthrough(canonical_manifest.parent, "1.8.1-21")
 
             result = self._run_release_upload(checkout, common_dir, bin_dir)
 
@@ -642,6 +745,10 @@ class BridgeTests(unittest.TestCase):
             )
             canonical_manifest.parent.mkdir(parents=True)
             canonical_manifest.write_text(json.dumps({"candidateId": "1.8.1-21"}), encoding="utf-8")
+            review = self._write_gradus_owner_review(checkout, "1.8.1-21")
+            _, walkthrough_sha256 = self._write_central_walkthrough(
+                canonical_manifest.parent, "1.8.1-21"
+            )
 
             result = self._run_fixed_deploy(checkout, common_dir, bin_dir)
 
@@ -655,6 +762,125 @@ class BridgeTests(unittest.TestCase):
                 checkout.parent / "apple_developer" / "release_tools" / "readiness-manifest.txt"
             ).read_text()
             self.assertEqual(supplied_manifest, str(canonical_manifest))
+            translated = json.loads(
+                (canonical_manifest.parent / "walkthrough-review.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                translated,
+                {
+                    "candidateId": "1.8.1-21",
+                    "formatVersion": 1,
+                    "ownerApprovalSha256": hashlib.sha256(review.read_bytes()).hexdigest(),
+                    "reviewed": True,
+                    "walkthroughSha256": walkthrough_sha256,
+                },
+            )
+
+    def test_fixed_deploy_missing_owner_review_stops_before_release_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            candidate = "1.8.1-21"
+            self._write_active_pointer(common_dir, candidate)
+            candidate_dir = common_dir / "release-state" / "gradus-ios" / "candidates" / candidate
+            self._write_candidate_manifest(candidate_dir, "1.8.1").write_text(
+                json.dumps({"candidateId": candidate}), encoding="utf-8"
+            )
+            review = self._write_gradus_owner_review(checkout, candidate)
+            review.unlink()
+            self._write_central_walkthrough(candidate_dir, candidate)
+
+            result = self._run_fixed_deploy(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("walkthrough owner review bridge is invalid", result.stderr)
+            self.assertFalse((candidate_dir / "walkthrough-review.json").exists())
+            self.assertFalse(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
+            )
+
+    def test_fixed_deploy_rejects_malformed_or_mismatched_owner_review(self) -> None:
+        for failure in ("malformed", "mismatched"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+                candidate = "1.8.1-21"
+                self._write_active_pointer(common_dir, candidate)
+                candidate_dir = (
+                    common_dir / "release-state" / "gradus-ios" / "candidates" / candidate
+                )
+                self._write_candidate_manifest(candidate_dir, "1.8.1").write_text(
+                    json.dumps({"candidateId": candidate}), encoding="utf-8"
+                )
+                review = self._write_gradus_owner_review(checkout, candidate)
+                if failure == "malformed":
+                    review.write_text("{not json", encoding="utf-8")
+                else:
+                    value = json.loads(review.read_text(encoding="utf-8"))
+                    value["candidateId"] = "1.8.1-22"
+                    review.write_text(json.dumps(value), encoding="utf-8")
+                self._write_central_walkthrough(candidate_dir, candidate)
+
+                result = self._run_fixed_deploy(checkout, common_dir, bin_dir)
+
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertFalse((candidate_dir / "walkthrough-review.json").exists())
+                self.assertFalse(
+                    (
+                        checkout.parent / "apple_developer" / "release_tools" / "invoked.json"
+                    ).exists()
+                )
+
+    def test_fixed_deploy_rejects_symlinked_owner_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            candidate = "1.8.1-21"
+            self._write_active_pointer(common_dir, candidate)
+            candidate_dir = common_dir / "release-state" / "gradus-ios" / "candidates" / candidate
+            self._write_candidate_manifest(candidate_dir, "1.8.1").write_text(
+                json.dumps({"candidateId": candidate}), encoding="utf-8"
+            )
+            review = self._write_gradus_owner_review(checkout, candidate)
+            target = review.with_name("owner-review-target.json")
+            review.rename(target)
+            review.symlink_to(target.name)
+            self._write_central_walkthrough(candidate_dir, candidate)
+
+            result = self._run_fixed_deploy(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertFalse((candidate_dir / "walkthrough-review.json").exists())
+            self.assertFalse(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
+            )
+
+    def test_fixed_deploy_rejects_conflicting_central_owner_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            candidate = "1.8.1-21"
+            self._write_active_pointer(common_dir, candidate)
+            candidate_dir = common_dir / "release-state" / "gradus-ios" / "candidates" / candidate
+            self._write_candidate_manifest(candidate_dir, "1.8.1").write_text(
+                json.dumps({"candidateId": candidate}), encoding="utf-8"
+            )
+            self._write_gradus_owner_review(checkout, candidate)
+            _, walkthrough_sha256 = self._write_central_walkthrough(candidate_dir, candidate)
+            central_review = candidate_dir / "walkthrough-review.json"
+            conflicting = {
+                "candidateId": candidate,
+                "formatVersion": 1,
+                "ownerApprovalSha256": "0" * 64,
+                "reviewed": True,
+                "walkthroughSha256": walkthrough_sha256,
+            }
+            central_review.write_bytes(self._canonical_bytes(conflicting) + b"\n")
+            before = central_review.read_bytes()
+
+            result = self._run_fixed_deploy(checkout, common_dir, bin_dir)
+
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertEqual(central_review.read_bytes(), before)
+            self.assertFalse(
+                (checkout.parent / "apple_developer" / "release_tools" / "invoked.json").exists()
+            )
 
     def test_fixed_deploy_rejects_corrupt_candidate_state_before_release_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

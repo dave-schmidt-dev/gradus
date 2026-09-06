@@ -98,6 +98,165 @@ except Exception as exc:
 print(candidate)
 ' "$ROOT")" || exit $?
 readiness_manifest="$git_common_dir/release-state/gradus-ios/candidates/$candidate/manifest.json"
+
+# Gradus records one candidate-bound owner acknowledgement in its project-local
+# ledger.  Translate that already-approved record into the retired central
+# walkthrough schema before release_tools (and therefore credentials) starts.
+if ! env PYTHONPATH="$SCRIPT_DIR" "$PYTHON_BIN" - "$ROOT" "$git_common_dir" "$candidate" <<'PY'
+import hashlib
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+from collections.abc import Mapping
+from pathlib import Path
+
+from release_candidate.ledger import CandidateLedger
+from release_candidate.walkthrough import validate_owner_review
+
+
+class BridgeError(ValueError):
+    pass
+
+
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def canonical_bytes(value):
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def read_regular(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise BridgeError("required review evidence is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise BridgeError("required review evidence is not a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(descriptor)
+
+
+def load_object(raw, code):
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BridgeError(code) from exc
+    if not isinstance(value, Mapping):
+        raise BridgeError(code)
+    return dict(value)
+
+
+def verify_existing(path, expected):
+    if path.is_symlink():
+        raise BridgeError("central walkthrough review conflicts")
+    actual = load_object(read_regular(path), "central walkthrough review conflicts")
+    if actual != expected:
+        raise BridgeError("central walkthrough review conflicts")
+
+
+try:
+    root = Path(sys.argv[1])
+    common = Path(sys.argv[2])
+    candidate = sys.argv[3]
+
+    local_candidate = root / ".release-state" / "candidates" / candidate
+    if local_candidate.is_symlink() or not local_candidate.is_dir():
+        raise BridgeError("Gradus owner review is unavailable")
+    ledger_path = root / ".release-state" / "candidate.json"
+    review_path = local_candidate / "walkthrough-owner-review.json"
+    if ledger_path.is_symlink() or review_path.is_symlink():
+        raise BridgeError("Gradus owner review is symlinked")
+
+    ledger_before = read_regular(ledger_path)
+    review_before = read_regular(review_path)
+    validated = validate_owner_review(CandidateLedger(ledger_path), review_path)
+    if validated.get("candidateId") != candidate:
+        raise BridgeError("Gradus owner review candidate does not match")
+    if ledger_before != read_regular(ledger_path) or review_before != read_regular(review_path):
+        raise BridgeError("Gradus owner review changed during validation")
+    owner_approval_sha256 = hashlib.sha256(review_before).hexdigest()
+
+    central_candidate = common / "release-state" / "gradus-ios" / "candidates" / candidate
+    if central_candidate.is_symlink() or not central_candidate.is_dir():
+        raise BridgeError("central candidate directory is unavailable")
+    walkthrough_path = central_candidate / "walkthrough.json"
+    if walkthrough_path.is_symlink():
+        raise BridgeError("central walkthrough seal is symlinked")
+    walkthrough = load_object(
+        read_regular(walkthrough_path), "central walkthrough seal is invalid"
+    )
+    walkthrough_sha256 = walkthrough.get("walkthroughSha256")
+    normalized = dict(walkthrough)
+    normalized["walkthroughSha256"] = None
+    computed_walkthrough_sha256 = hashlib.sha256(
+        canonical_bytes(normalized) + b"\n"
+    ).hexdigest()
+    if (
+        walkthrough.get("candidateId") != candidate
+        or walkthrough.get("sealed") is not True
+        or not isinstance(walkthrough_sha256, str)
+        or not HEX64.fullmatch(walkthrough_sha256)
+        or walkthrough_sha256 != computed_walkthrough_sha256
+    ):
+        raise BridgeError("central walkthrough seal is invalid")
+
+    expected = {
+        "formatVersion": 1,
+        "candidateId": candidate,
+        "walkthroughSha256": walkthrough_sha256,
+        "ownerApprovalSha256": owner_approval_sha256,
+        "reviewed": True,
+    }
+    destination = central_candidate / "walkthrough-review.json"
+    if destination.exists() or destination.is_symlink():
+        verify_existing(destination, expected)
+    else:
+        encoded = canonical_bytes(expected) + b"\n"
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".walkthrough-review.", dir=central_candidate
+        )
+        try:
+            os.fchmod(descriptor, 0o400)
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, destination, follow_symlinks=False)
+            except FileExistsError:
+                verify_existing(destination, expected)
+            directory_descriptor = os.open(central_candidate, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+        verify_existing(destination, expected)
+except Exception:
+    print("release-testflight: walkthrough owner review bridge is invalid", file=sys.stderr)
+    sys.exit(3)
+PY
+then
+  exit 3
+fi
+
 exec env PYTHONPATH="$CENTRAL_ROOT" READINESS_MANIFEST="$readiness_manifest" \
   "$PYTHON_BIN" -m release_tools testflight \
   --adapter "$ADAPTER" --repository "$ROOT" --upload --candidate "$candidate"
