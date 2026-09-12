@@ -1788,6 +1788,40 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         ):
             self.assertNotIn(classifier_substring, message)
 
+    def test_stale_token_self_heals_via_claude_auth_status(self) -> None:
+        """A stale-but-refreshable token recovers without spending a model request.
+
+        Observed 2026-09-12: a long-running Claude Code session left the
+        keychain token expired for 2+ hours with no scheduled poll to fix it.
+        `claude auth status` is a free identity check that nudges Claude Code
+        to refresh its own token; the probe should retry the keychain read
+        once and use the fresh grant instead of reporting stale.
+        """
+        now_ms = datetime.now().timestamp() * 1000
+        stale_keychain = self._keychain(
+            expiresAt=now_ms - 60_000,
+            refreshTokenExpiresAt=now_ms + 30 * 86_400_000,
+        )
+        fresh_keychain = self._keychain(
+            expiresAt=now_ms + 3_600_000,
+            refreshTokenExpiresAt=now_ms + 30 * 86_400_000,
+        )
+        auth_status_ok = MagicMock(returncode=0, stdout="{}")
+        with patch(
+            "gradus.providers.claude.subprocess.run",
+            side_effect=[stale_keychain, auth_status_ok, fresh_keychain],
+        ) as run:
+            with patch(
+                "gradus.providers.claude._base._http_json",
+                return_value=self.NORMAL_RESPONSE,
+            ) as http:
+                status = ClaudeHttpProvider().fetch()
+
+        http.assert_called_once()
+        self.assertEqual(status.session_percent_left, 70.0)
+        recovery_call = run.call_args_list[1].args[0]
+        self.assertEqual(recovery_call, ["claude", "auth", "status"])
+
     def test_expired_refresh_token_is_still_a_real_sign_in(self) -> None:
         """With nothing left to refresh from, `claude auth login` is the right call."""
         now_ms = datetime.now().timestamp() * 1000
