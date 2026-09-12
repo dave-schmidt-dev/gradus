@@ -1828,8 +1828,9 @@ class ClaudeHttpProviderTests(unittest.TestCase):
     def test_invalid_keychain_payload_fails_closed(self) -> None:
         keychain = MagicMock(returncode=0, stdout=json.dumps({"sessionKey": "legacy"}))
         with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
-            with self.assertRaises(FileNotFoundError):
+            with self.assertRaises(FileNotFoundError) as ctx:
                 ClaudeHttpProvider._load_keychain_credential()
+        self.assertEqual(str(ctx.exception), "keychain item has no access token")
 
     def test_keychain_failure_does_not_expose_command_output(self) -> None:
         keychain = MagicMock(returncode=1, stdout="secret-adjacent-output")
@@ -1837,6 +1838,49 @@ class ClaudeHttpProviderTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError) as ctx:
                 ClaudeHttpProvider._load_keychain_credential()
         self.assertNotIn("secret-adjacent-output", str(ctx.exception))
+
+    def test_keychain_item_not_found_is_distinguished_from_denied_access(self) -> None:
+        """A real errSecItemNotFound (exit 44) genuinely needs a fresh sign-in."""
+        keychain = MagicMock(returncode=44, stdout="")
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                ClaudeHttpProvider._load_keychain_credential()
+        self.assertEqual(str(ctx.exception), "no keychain item")
+
+    def test_keychain_interaction_not_allowed_is_not_a_sign_in_problem(self) -> None:
+        """errSecInteractionNotAllowed (exit 36) means the Keychain is locked,
+        not that Claude Code's grant is gone -- `claude auth login` won't help."""
+        keychain = MagicMock(returncode=36, stdout="")
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                ClaudeHttpProvider._load_keychain_credential()
+        self.assertEqual(str(ctx.exception), "keychain is locked or unavailable to this session")
+
+    def test_other_keychain_exit_codes_report_their_exit_status(self) -> None:
+        keychain = MagicMock(returncode=51, stdout="")
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                ClaudeHttpProvider._load_keychain_credential()
+        self.assertEqual(str(ctx.exception), "keychain denied the read, exit 51")
+
+    def test_malformed_keychain_json_names_the_reason(self) -> None:
+        keychain = MagicMock(returncode=0, stdout="not json")
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
+            with self.assertRaises(FileNotFoundError) as ctx:
+                ClaudeHttpProvider._load_keychain_credential()
+        self.assertEqual(str(ctx.exception), "keychain item is not valid JSON")
+
+    def test_probe_failure_surfaces_the_keychain_reason(self) -> None:
+        """The dashboard message must name which of the four causes fired,
+        not just repeat one generic "unavailable" string for all of them."""
+        keychain = MagicMock(returncode=36, stdout="")
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
+            with self.assertRaises(ProbeFailure) as ctx:
+                ClaudeHttpProvider().fetch()
+        message = str(ctx.exception)
+        self.assertIn("keychain is locked or unavailable to this session", message)
+        self.assertIn("credentials unavailable", message)
+        self.assertIn("claude auth login", message)
 
     def test_headless_acquire_never_reads_keychain(self) -> None:
         providers.set_headless(True)

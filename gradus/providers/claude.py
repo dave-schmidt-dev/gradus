@@ -58,7 +58,8 @@ class ClaudeHttpProvider:
                 credential = self._load_keychain_credential()
             except FileNotFoundError as exc:
                 raise ProbeFailure(
-                    "Claude Code OAuth credentials unavailable: run `claude auth login`",
+                    f"Claude Code OAuth credentials unavailable ({exc}): "
+                    "run `claude auth login`",
                     "",
                 ) from exc
             self._reject_if_only_stale(credential)
@@ -105,9 +106,27 @@ class ClaudeHttpProvider:
             "",
         )
 
+    # `security`'s exit status is the OSStatus residue mod 256: errSecItemNotFound
+    # (-25300) surfaces as 44, errSecInteractionNotAllowed (-25308) as 36. Both are
+    # well short of a soundness guarantee (a delta a future macOS release can move),
+    # but the alternative -- one exit code, one message -- is what let a Keychain
+    # lock and a real sign-out look identical to David for hours in September 2026.
+    _KEYCHAIN_EXIT_ITEM_NOT_FOUND = 44
+    _KEYCHAIN_EXIT_INTERACTION_NOT_ALLOWED = 36
+
     @classmethod
     def _load_keychain_credential(cls) -> _KeychainCredential:
-        """Read Claude Code's OAuth grant without persisting or logging it."""
+        """Read Claude Code's OAuth grant without persisting or logging it.
+
+        Every failure below reaches the dashboard through the same sign-in
+        prompt in `_acquire`, but the raw causes do not share one fix: a
+        missing item needs `claude auth login`; a locked or ACL-denied
+        Keychain needs the Mac unlocked or the prompt approved, and no login
+        will touch it. Each raise carries a short, fixed, secret-free reason
+        (never `result.stdout`/`stderr`, which sit next to the actual grant)
+        so `_acquire` can show which one fired instead of a single opaque
+        string that was true of four different failures at once.
+        """
         try:
             result = subprocess.run(
                 [
@@ -125,21 +144,21 @@ class ClaudeHttpProvider:
                 check=False,
             )
         except (OSError, subprocess.SubprocessError) as exc:
-            raise FileNotFoundError("Could not read Claude Code credentials") from exc
+            raise FileNotFoundError("could not run `security`") from exc
         if result.returncode != 0:
-            raise FileNotFoundError(
-                "Claude Code OAuth credentials unavailable: run `claude auth login`"
-            )
+            if result.returncode == cls._KEYCHAIN_EXIT_ITEM_NOT_FOUND:
+                raise FileNotFoundError("no keychain item")
+            if result.returncode == cls._KEYCHAIN_EXIT_INTERACTION_NOT_ALLOWED:
+                raise FileNotFoundError("keychain is locked or unavailable to this session")
+            raise FileNotFoundError(f"keychain denied the read, exit {result.returncode}")
         try:
             payload: Any = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
-            raise FileNotFoundError("Claude Code credentials are invalid") from exc
+            raise FileNotFoundError("keychain item is not valid JSON") from exc
         oauth = payload.get("claudeAiOauth") if isinstance(payload, dict) else None
         token = oauth.get("accessToken") if isinstance(oauth, dict) else None
         if not isinstance(token, str) or not token.strip():
-            raise FileNotFoundError(
-                "Claude Code OAuth credentials unavailable: run `claude auth login`"
-            )
+            raise FileNotFoundError("keychain item has no access token")
         return _KeychainCredential(
             access_token=token.strip(),
             expires_at=_epoch_ms(oauth.get("expiresAt")),
