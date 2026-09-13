@@ -102,6 +102,49 @@ class ProjectedLegacyClaudeTests(unittest.TestCase):
             with self.subTest(legacy=legacy):
                 self.assertIsNone(snap.project_legacy_claude_entry(legacy, now))
 
+    def test_projected_legacy_stale_without_values_becomes_usage_unavailable(self) -> None:
+        legacy_at = NOW.replace(tzinfo=timezone.utc) - timedelta(seconds=30)
+        refresh_at = NOW.replace(tzinfo=timezone.utc)
+        payload = self._payload(legacy_at)
+        entry = payload["providers"][0]
+        entry.update(
+            {
+                "ok": False,
+                "error": snap.CLAUDE_STALE_CREDENTIAL_MESSAGE,
+                "windows": [],
+                "data": {"session_percent_left": 64.5},
+                "observed_at": None,
+            }
+        )
+
+        projected = snap.project_legacy_claude_entry(payload, refresh_at)
+
+        self.assertIsNotNone(projected)
+        self.assertEqual(projected["error"], snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE)
+        self.assertEqual(projected["windows"], [])
+        self.assertEqual(projected["data"], {})
+        self.assertIsNone(projected["observed_at"])
+
+    def test_projected_legacy_usage_unavailable_has_no_values(self) -> None:
+        payload = self._payload(NOW.replace(tzinfo=timezone.utc))
+        entry = payload["providers"][0]
+        entry.update(
+            {
+                "ok": False,
+                "error": snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE,
+                "windows": [],
+                "data": {"session_percent_left": 64.5},
+            }
+        )
+
+        projected = snap.project_legacy_claude_entry(payload, NOW.replace(tzinfo=timezone.utc))
+
+        self.assertIsNotNone(projected)
+        self.assertEqual(projected["error"], snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE)
+        self.assertEqual(projected["windows"], [])
+        self.assertEqual(projected["data"], {})
+        self.assertIsNone(projected["observed_at"])
+
     def test_projected_legacy_claude_unavailable_entry_prevents_fallback(self) -> None:
         now = NOW.replace(tzinfo=timezone.utc)
         unavailable = snap.legacy_claude_unavailable_entry()
@@ -1345,13 +1388,124 @@ class TestTransientMerge(unittest.TestCase):
                 payload = snap.build_snapshot_payload([failing], NOW, prior=prior)
                 current = next(entry for entry in payload["providers"] if entry["name"] == "Claude")
                 self.assertFalse(current["ok"])
-                self.assertEqual(current["error"], snap.CLAUDE_STALE_CREDENTIAL_MESSAGE)
+                self.assertEqual(
+                    current["error"],
+                    (
+                        snap.CLAUDE_STALE_CREDENTIAL_MESSAGE
+                        if retained
+                        else snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE
+                    ),
+                )
                 self.assertEqual(bool(current["windows"]), retained)
+                if not retained:
+                    self.assertEqual(current["data"], {})
                 self.assertEqual(
                     current["observed_at"],
                     prior_claude["observed_at"] if retained else None,
                 )
                 self.assertEqual(current["probe_attempted_at"], snap.local_iso(NOW))
+
+    def test_claude_stale_credential_without_valid_prior_has_no_cached_values(self) -> None:
+        failing = _ps(
+            "Claude",
+            False,
+            error=snap.CLAUDE_STALE_CREDENTIAL_MESSAGE,
+            data={"session_percent_left": 12},
+        )
+        malformed_prior = snap.build_snapshot_v2_payload(
+            [_ps("Claude", True, data={"session_percent_left": 73, "primary_reset": "in 4h"})],
+            NOW - timedelta(seconds=100),
+        )
+        prior_claude = next(
+            entry for entry in malformed_prior["providers"] if entry["name"] == "Claude"
+        )
+        prior_claude["windows"][0]["percent_left"] = True
+
+        for builder in (snap.build_snapshot_payload, snap.build_snapshot_v2_payload):
+            for prior in (None, malformed_prior):
+                with self.subTest(builder=builder.__name__, prior=prior is not None):
+                    payload = builder([failing], NOW, prior=prior)
+                    current = next(
+                        entry for entry in payload["providers"] if entry["name"] == "Claude"
+                    )
+                    self.assertFalse(current["ok"])
+                    self.assertEqual(current["error"], snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE)
+                    self.assertEqual(current["windows"], [])
+                    self.assertEqual(current["data"], {})
+                    self.assertIsNone(current["observed_at"])
+
+    def test_claude_no_values_cooldown_preserves_last_probe_time(self) -> None:
+        failing = _ps("Claude", False, error=snap.CLAUDE_STALE_CREDENTIAL_MESSAGE)
+        deferred = ProviderSnapshot(
+            name="Claude",
+            ok=False,
+            source="snapshot",
+            error=snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE,
+        )
+
+        for builder in (snap.build_snapshot_payload, snap.build_snapshot_v2_payload):
+            with self.subTest(builder=builder.__name__):
+                initial = builder([failing], NOW)
+                initial_claude = next(
+                    entry for entry in initial["providers"] if entry["name"] == "Claude"
+                )
+                payload = builder([deferred], NOW + timedelta(seconds=120), prior=initial)
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Claude")
+                self.assertEqual(current["error"], snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE)
+                self.assertEqual(current["windows"], [])
+                self.assertEqual(current["data"], {})
+                self.assertEqual(
+                    current["probe_attempted_at"], initial_claude["probe_attempted_at"]
+                )
+
+    def test_claude_refresh_metadata_unavailable_does_not_carry_recent_prior(self) -> None:
+        prior_claude = _ps(
+            "Claude",
+            True,
+            data={"session_percent_left": 73, "primary_reset": "in 4h"},
+        )
+        failing = _ps(
+            "Claude",
+            False,
+            error=snap.CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE,
+        )
+
+        for builder in (snap.build_snapshot_payload, snap.build_snapshot_v2_payload):
+            with self.subTest(builder=builder.__name__):
+                prior = builder([prior_claude], NOW - timedelta(seconds=100))
+                payload = builder([failing], NOW, prior=prior)
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Claude")
+                self.assertFalse(current["ok"])
+                self.assertEqual(
+                    current["error"],
+                    snap.CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE,
+                )
+                self.assertEqual(current["windows"], [])
+                self.assertEqual(current["data"], {})
+                self.assertIsNone(current["observed_at"])
+
+    def test_claude_usage_unavailable_never_carries_recent_prior(self) -> None:
+        prior_claude = _ps(
+            "Claude",
+            True,
+            data={"session_percent_left": 73, "primary_reset": "in 4h"},
+        )
+        failing = _ps(
+            "Claude",
+            False,
+            error=snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE,
+        )
+
+        for builder in (snap.build_snapshot_payload, snap.build_snapshot_v2_payload):
+            with self.subTest(builder=builder.__name__):
+                prior = builder([prior_claude], NOW - timedelta(seconds=100))
+                payload = builder([failing], NOW, prior=prior)
+                current = next(entry for entry in payload["providers"] if entry["name"] == "Claude")
+                self.assertFalse(current["ok"])
+                self.assertEqual(current["error"], snap.CLAUDE_USAGE_UNAVAILABLE_MESSAGE)
+                self.assertEqual(current["windows"], [])
+                self.assertEqual(current["data"], {})
+                self.assertIsNone(current["observed_at"])
 
     def test_claude_stale_credential_near_match_is_not_transient(self) -> None:
         near_match = SimpleNamespace(

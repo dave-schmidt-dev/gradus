@@ -31,6 +31,8 @@ from .providers.antigravity import (
 from .providers.opencode_go import HISTORY_PROVENANCE as OPENCODE_GO_PROVENANCE
 from .snapshot import (
     _UNSAFE_JSON,
+    CLAUDE_STALE_CREDENTIAL_MESSAGE,
+    CLAUDE_USAGE_UNAVAILABLE_MESSAGE,
     SAFE_DATA_KEYS,
     SCHEMA_VERSION_V2,
     _is_headless_deferred_probe,
@@ -275,6 +277,12 @@ def _probe_metadata(
         if "(cached)" in snapshot.source.lower() or snapshot.cached_since is not None:
             return {"attempted": True, "reason": "transient_failure"}
         return {"attempted": True, "reason": "success"}
+
+    if snapshot.name == "Claude" and snapshot.error in (
+        CLAUDE_STALE_CREDENTIAL_MESSAGE,
+        CLAUDE_USAGE_UNAVAILABLE_MESSAGE,
+    ):
+        return {"attempted": False, "reason": "transient_failure"}
 
     # A graced provider carries the raw probe classification in the internal
     # debug slot while exposing only the neutral consumer marker. The marker is

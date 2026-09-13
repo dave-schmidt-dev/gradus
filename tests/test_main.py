@@ -844,6 +844,18 @@ class BuildFixActionsTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions["1"], ("Antigravity", "cli", "agy"))
 
+    def test_claude_unqueried_and_cache_markers_do_not_offer_sign_in_action(self) -> None:
+        errors = (
+            snapshot_module.CLAUDE_STALE_CREDENTIAL_MESSAGE,
+            snapshot_module.CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE,
+            snapshot_module.CLAUDE_USAGE_UNAVAILABLE_MESSAGE,
+        )
+        for error in errors:
+            with self.subTest(error=error):
+                snapshot = ProviderSnapshot(name="Claude", ok=False, source="api", error=error)
+                self.assertFalse(_is_auth_error(snapshot))
+                self.assertEqual(_build_fix_actions([snapshot]), {})
+
     def test_browser_action_type(self) -> None:
         snaps = [
             ProviderSnapshot(name="Vibe", ok=False, source="api", error="please login to continue"),
@@ -939,6 +951,9 @@ class IsTransientProbeErrorTests(unittest.TestCase):
         self.assertTrue(_is_transient_probe_error(self._snap("rate limited")))
         self.assertTrue(_is_transient_probe_error(self._snap("HTTP 429")))
         self.assertTrue(_is_transient_probe_error(self._snap("HTTP 503")))
+        self.assertFalse(
+            _is_transient_probe_error(self._snap(snapshot_module.CLAUDE_USAGE_UNAVAILABLE_MESSAGE))
+        )
 
     def test_auth_error_not_transient(self) -> None:
         self.assertFalse(_is_transient_probe_error(self._snap("session expired — visit claude.ai")))

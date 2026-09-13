@@ -6,6 +6,7 @@ import ast
 import base64
 import inspect
 import json
+import math
 import os
 import stat
 import subprocess
@@ -1788,39 +1789,45 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         ):
             self.assertNotIn(classifier_substring, message)
 
-    def test_stale_token_self_heals_via_claude_auth_status(self) -> None:
-        """A stale-but-refreshable token recovers without spending a model request.
-
-        Observed 2026-09-12: a long-running Claude Code session left the
-        keychain token expired for 2+ hours with no scheduled poll to fix it.
-        `claude auth status` is a free identity check that nudges Claude Code
-        to refresh its own token; the probe should retry the keychain read
-        once and use the fresh grant instead of reporting stale.
-        """
+    def test_stale_token_never_launches_claude_for_implicit_recovery(self) -> None:
+        """A refreshable stale grant is classified from Keychain metadata only."""
         now_ms = datetime.now().timestamp() * 1000
         stale_keychain = self._keychain(
             expiresAt=now_ms - 60_000,
             refreshTokenExpiresAt=now_ms + 30 * 86_400_000,
         )
-        fresh_keychain = self._keychain(
-            expiresAt=now_ms + 3_600_000,
-            refreshTokenExpiresAt=now_ms + 30 * 86_400_000,
-        )
-        auth_status_ok = MagicMock(returncode=0, stdout="{}")
-        with patch(
-            "gradus.providers.claude.subprocess.run",
-            side_effect=[stale_keychain, auth_status_ok, fresh_keychain],
-        ) as run:
-            with patch(
-                "gradus.providers.claude._base._http_json",
-                return_value=self.NORMAL_RESPONSE,
-            ) as http:
-                status = ClaudeHttpProvider().fetch()
+        with patch("gradus.providers.claude.subprocess.run", return_value=stale_keychain) as run:
+            with patch("gradus.providers.claude._base._http_json") as http:
+                with self.assertRaisesRegex(ProbeFailure, f"^{CLAUDE_STALE_CREDENTIAL_MESSAGE}$"):
+                    ClaudeHttpProvider().fetch()
 
-        http.assert_called_once()
-        self.assertEqual(status.session_percent_left, 70.0)
-        recovery_call = run.call_args_list[1].args[0]
-        self.assertEqual(recovery_call, ["claude", "auth", "status"])
+        http.assert_not_called()
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][:3], ["security", "find-generic-password", "-w"])
+
+    def test_expired_access_with_unusable_refresh_expiry_is_not_queried(self) -> None:
+        now_ms = datetime.now().timestamp() * 1000
+        unusable_values = (None, "not-a-timestamp", True, math.inf, -math.inf, math.nan)
+
+        for refresh_expiry in unusable_values:
+            with self.subTest(refresh_expiry=refresh_expiry):
+                keychain = self._keychain(
+                    expiresAt=now_ms - 60_000,
+                    refreshTokenExpiresAt=refresh_expiry,
+                )
+                with patch("gradus.providers.claude.subprocess.run", return_value=keychain) as run:
+                    with patch("gradus.providers.claude._base._http_json") as http:
+                        with self.assertRaisesRegex(
+                            ProbeFailure,
+                            f"^{snapshot_module.CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE}$",
+                        ):
+                            ClaudeHttpProvider().fetch()
+
+                http.assert_not_called()
+                run.assert_called_once()
+                self.assertEqual(
+                    run.call_args.args[0][:3], ["security", "find-generic-password", "-w"]
+                )
 
     def test_expired_refresh_token_is_still_a_real_sign_in(self) -> None:
         """With nothing left to refresh from, `claude auth login` is the right call."""
@@ -1829,10 +1836,13 @@ class ClaudeHttpProviderTests(unittest.TestCase):
             expiresAt=now_ms - 60_000,
             refreshTokenExpiresAt=now_ms - 30_000,
         )
-        with patch("gradus.providers.claude.subprocess.run", return_value=keychain):
-            with self.assertRaises(ProbeFailure) as ctx:
-                ClaudeHttpProvider().fetch()
+        with patch("gradus.providers.claude.subprocess.run", return_value=keychain) as run:
+            with patch("gradus.providers.claude._base._http_json") as http:
+                with self.assertRaises(ProbeFailure) as ctx:
+                    ClaudeHttpProvider().fetch()
         self.assertIn("session expired", str(ctx.exception))
+        http.assert_not_called()
+        run.assert_called_once()
 
     def test_live_access_token_is_used_without_a_staleness_veto(self) -> None:
         now_ms = datetime.now().timestamp() * 1000

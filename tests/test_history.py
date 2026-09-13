@@ -745,5 +745,36 @@ class ProbeMetadataGraceMarkerTests(unittest.TestCase):
         self.assertEqual(result, {"attempted": False, "reason": "auth_failure"})
 
 
+class ClaudeProbeMetadataTests(unittest.TestCase):
+    @staticmethod
+    def _classify(error: str) -> dict[str, object]:
+        snapshot = ProviderSnapshot(name="Claude", ok=False, source="api", error=error)
+        return history._probe_metadata(snapshot, {})
+
+    def test_exact_stale_marker_is_unattempted_transient_failure(self) -> None:
+        self.assertEqual(
+            self._classify(snapshot_module.CLAUDE_STALE_CREDENTIAL_MESSAGE),
+            {"attempted": False, "reason": "transient_failure"},
+        )
+
+    def test_usage_unavailable_marker_is_unattempted_transient_failure(self) -> None:
+        self.assertEqual(
+            self._classify(snapshot_module.CLAUDE_USAGE_UNAVAILABLE_MESSAGE),
+            {"attempted": False, "reason": "transient_failure"},
+        )
+
+    def test_refresh_metadata_unavailable_is_other_failure(self) -> None:
+        self.assertEqual(
+            self._classify(snapshot_module.CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE),
+            {"attempted": False, "reason": "other_failure"},
+        )
+
+    def test_unknown_claude_error_is_other_failure(self) -> None:
+        self.assertEqual(
+            self._classify("Claude Code usage response had an unexpected shape"),
+            {"attempted": False, "reason": "other_failure"},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

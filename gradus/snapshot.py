@@ -82,6 +82,10 @@ ANTIGRAVITY_AUTH_RETRY_MESSAGE = "Antigravity refresh retrying; values may be st
 # dropping it would reclassify the tick for `history.py` and `__main__.py`.
 COPILOT_PROBE_RETRY_MESSAGE = "Copilot probe timed out; showing cached values"
 CLAUDE_STALE_CREDENTIAL_MESSAGE = "Claude Code credential is stale; showing cached values"
+CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE = (
+    "Claude Code refresh metadata unavailable; provider not queried"
+)
+CLAUDE_USAGE_UNAVAILABLE_MESSAGE = "Claude Code usage unavailable; no cached values"
 ANTIGRAVITY_AUTH_ERROR_MARKER = "Antigravity session expired"
 LEGACY_CLAUDE_UNAVAILABLE_ERROR = "legacy Claude snapshot unavailable"
 _LEGACY_CLAUDE_ENTRY_MAX_BYTES = 16_384
@@ -1366,6 +1370,14 @@ def _bounded_legacy_claude_entry(entry: object, *, allow_unavailable: bool = Fal
         "observed_at": observed_at,
         "probe_attempted_at": probe_attempted_at,
     }
+    if projected["error"] == CLAUDE_USAGE_UNAVAILABLE_MESSAGE:
+        projected["windows"] = []
+        projected["data"] = {}
+        projected["observed_at"] = None
+    elif projected["error"] == CLAUDE_STALE_CREDENTIAL_MESSAGE and projected["observed_at"] is None:
+        projected["error"] = CLAUDE_USAGE_UNAVAILABLE_MESSAGE
+        projected["windows"] = []
+        projected["data"] = {}
     try:
         encoded = json.dumps(projected, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
     except (TypeError, ValueError):
@@ -1742,6 +1754,14 @@ def _build_snapshot_payload(
                 auth_grace = False
         if auth_grace and entry["error"] != ANTIGRAVITY_AUTH_RETRY_MESSAGE:
             entry["error"] = ANTIGRAVITY_AUTH_RETRY_MESSAGE
+        if (
+            name == "Claude"
+            and snap.error == CLAUDE_STALE_CREDENTIAL_MESSAGE
+            and entry["observed_at"] is None
+        ):
+            entry["error"] = CLAUDE_USAGE_UNAVAILABLE_MESSAGE
+            entry["windows"] = []
+            entry["data"] = {}
         providers.append(entry)
         if schema_version == SCHEMA_VERSION_V2 and name in _SYNTHETIC_ENTRY_SPECS:
             providers.append(_synthetic_entry(snap, *_SYNTHETIC_ENTRY_SPECS[name]))

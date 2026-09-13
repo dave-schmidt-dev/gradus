@@ -50,9 +50,6 @@ class ClaudeHttpProvider:
     def __init__(self) -> None:
         self._access_token: str = ""
 
-    # Bounded like the keychain read: a hung `claude` process must not hang the probe.
-    _AUTH_STATUS_TIMEOUT_SECONDS = 15
-
     def _acquire(self) -> None:
         if _base._is_headless():
             raise ProbeFailure("auth required: no cached credentials", "")
@@ -69,7 +66,7 @@ class ClaudeHttpProvider:
 
     @classmethod
     def _reject_if_only_stale(cls, credential: _KeychainCredential) -> _KeychainCredential:
-        """Fail transiently when the cached token is merely stale, not revoked.
+        """Classify an expired access token from local refresh metadata only.
 
         Claude Code refreshes this keychain item lazily -- observed 2026-09-08,
         a token expired at 13:00:05 and was not rewritten until ~13:19 while
@@ -82,17 +79,12 @@ class ClaudeHttpProvider:
         ``login` ``, `auth required`) so the menu does not raise a sign-in
         banner for a grant that needs no sign-in.
 
-        Before giving up, this nudges Claude Code to refresh via
-        `_recover_stale_credential` -- observed 2026-09-12, a long-running
-        Claude Code session left the keychain item expired for 2+ hours
-        because nothing forced a new process to touch it. That recovery is a
-        `claude auth status` call, not a model request, so it costs no usage
-        credit and needs no polling schedule of its own.
-
         Gradus does not mint a replacement token itself: the refresh token
         rotates on use (same observation -- its hash changed across the
         refresh), so a third-party consumer that minted a token without
-        writing the successor back would revoke Claude Code's own login.
+        writing the successor back would revoke Claude Code's own login. It
+        also does not launch Claude Code: absent or invalid refresh-expiry
+        metadata cannot establish that the grant is refreshable.
         """
         expires_at = credential.expires_at
         if expires_at is None:
@@ -101,15 +93,20 @@ class ClaudeHttpProvider:
         if expires_at > now_ms:
             return credential
         refresh_expires_at = credential.refresh_expires_at
-        if refresh_expires_at is not None and refresh_expires_at <= now_ms:
+        if refresh_expires_at is None:
+            # Imported lazily to preserve snapshot.py's provider-import boundary.
+            from ..snapshot import CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE
+
+            raise ProbeFailure(
+                CLAUDE_REFRESH_METADATA_UNAVAILABLE_MESSAGE,
+                "",
+            )
+        if refresh_expires_at <= now_ms:
             # Nothing left to refresh from: this one really is a sign-in.
             raise ProbeFailure(
                 "Claude Code session expired: run `claude auth login`",
                 "",
             )
-        refreshed = cls._recover_stale_credential()
-        if refreshed is not None:
-            return refreshed
         # Imported lazily to preserve snapshot.py's provider-import boundary.
         from ..snapshot import CLAUDE_STALE_CREDENTIAL_MESSAGE
 
@@ -117,37 +114,6 @@ class ClaudeHttpProvider:
             CLAUDE_STALE_CREDENTIAL_MESSAGE,
             "",
         )
-
-    @classmethod
-    def _recover_stale_credential(cls) -> _KeychainCredential | None:
-        """Best-effort nudge for Claude Code to refresh its own keychain item.
-
-        `claude auth status` is an identity lookup, not a model request -- it
-        costs no usage credit, so this can run on every stale hit instead of
-        needing a standing poll schedule. Any failure (binary missing,
-        offline, still expired) just returns None and lets the caller fall
-        back to the existing stale-cache message.
-        """
-        try:
-            result = subprocess.run(
-                ["claude", "auth", "status"],
-                capture_output=True,
-                text=True,
-                timeout=cls._AUTH_STATUS_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        try:
-            credential = cls._load_keychain_credential()
-        except FileNotFoundError:
-            return None
-        now_ms = datetime.datetime.now().timestamp() * 1000
-        if credential.expires_at is not None and credential.expires_at <= now_ms:
-            return None
-        return credential
 
     # `security`'s exit status is the OSStatus residue mod 256: errSecItemNotFound
     # (-25300) surfaces as 44, errSecInteractionNotAllowed (-25308) as 36. Both are
