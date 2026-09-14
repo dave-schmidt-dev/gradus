@@ -732,7 +732,10 @@ def _load_config() -> dict[str, object]:
 
 
 def initialize_providers(
-    cwd: str, enabled: set[str] | None = None
+    cwd: str,
+    enabled: set[str] | None = None,
+    *,
+    on_status: Callable[[str], None] | None = None,
 ) -> tuple[list[tuple[str, object]], list[object]]:
     providers: list[tuple[str, object]] = []
     cleanup: list[object] = []
@@ -742,12 +745,14 @@ def initialize_providers(
             continue
         try:
             sig = inspect.signature(provider_cls.__init__)
+            kwargs: dict[str, object] = {}
             if "cwd" in sig.parameters:
-                instance = provider_cls(cwd=cwd)
+                kwargs["cwd"] = cwd
             elif "project_root" in sig.parameters:
-                instance = provider_cls(project_root=cwd)
-            else:
-                instance = provider_cls()
+                kwargs["project_root"] = cwd
+            if "on_status" in sig.parameters:
+                kwargs["on_status"] = on_status
+            instance = provider_cls(**kwargs)
             providers.append((name, instance))
             cleanup.append(instance)
         except Exception as exc:  # noqa: BLE001
@@ -1137,7 +1142,11 @@ def _refresh_snapshot_once(
                 providers_to_initialize = set(_PROVIDER_REGISTRY) - {"Claude"}
             else:
                 providers_to_initialize = set(enabled_providers) - {"Claude"}
-        providers, cleanup = initialize_providers(cwd, providers_to_initialize)
+        providers, cleanup = initialize_providers(
+            cwd,
+            providers_to_initialize,
+            on_status=_refresh_progress,
+        )
         # launchd owns the producer tick while this path assigns each provider
         # a stable cadence. Deferred canonical results still flow through the
         # normal builders, so every invocation commits one coherent snapshot.

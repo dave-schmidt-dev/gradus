@@ -50,6 +50,7 @@ from gradus.__main__ import (
     _verify_refresh_health,
     _write_snapshot_versions,
     collect_snapshots,
+    initialize_providers,
     main,
     parse_args,
 )
@@ -358,6 +359,31 @@ class LoadConfigTests(unittest.TestCase):
             with patch("os.getcwd", return_value=tmpdir):
                 config = _load_config()
                 self.assertEqual(config, {})
+
+
+class ProviderInitializationTests(unittest.TestCase):
+    def test_wires_credential_free_status_callback(self) -> None:
+        callback = MagicMock()
+        received: list[object | None] = []
+
+        class StatusProvider:
+            def __init__(self, on_status: object | None = None) -> None:
+                received.append(on_status)
+                self.on_status = on_status
+
+        with patch.dict(
+            "gradus.__main__._PROVIDER_REGISTRY", {"Claude": StatusProvider}, clear=True
+        ):
+            providers, cleanup = initialize_providers("/tmp", {"Claude"}, on_status=callback)
+
+        self.assertEqual(len(cleanup), 1)
+        self.assertIs(providers[0][1].on_status, callback)
+
+        with patch.dict(
+            "gradus.__main__._PROVIDER_REGISTRY", {"Claude": StatusProvider}, clear=True
+        ):
+            initialize_providers("/tmp", {"Claude"}, on_status=None)
+        self.assertEqual(received, [callback, None])
 
 
 class CodexWarningTests(unittest.TestCase):

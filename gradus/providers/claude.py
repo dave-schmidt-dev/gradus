@@ -7,6 +7,8 @@ import getpass
 import json
 import math
 import subprocess
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..parsing import ClaudeStatus
@@ -46,9 +48,66 @@ class ClaudeHttpProvider:
     _OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
     _KEYCHAIN_SERVICE = "Claude Code-credentials"
     _USER_AGENT = "gradus (claude oauth usage probe)"
+    _AUTH_RECOVERY_WRAPPER = ".agent/bin/claude-headless"
+    _AUTH_RECOVERY_TIMEOUT_SECONDS = 30.0
 
-    def __init__(self) -> None:
+    def __init__(self, on_status: Callable[[str], None] | None = None) -> None:
         self._access_token: str = ""
+        self._on_status = on_status
+        self._recovery_attempted = False
+
+    def _status(self, message: str) -> None:
+        """Emit a fixed, credential-free status message when configured."""
+        if self._on_status is not None:
+            self._on_status(message)
+
+    @staticmethod
+    def _access_is_fresh(credential: _KeychainCredential) -> bool:
+        expires_at = credential.expires_at
+        if expires_at is None:
+            return False
+        return expires_at > datetime.datetime.now().timestamp() * 1000
+
+    @classmethod
+    def _auth_recovery_wrapper(cls) -> str:
+        """Resolve the approved wrapper beneath the current user's home."""
+        return str(Path.home() / cls._AUTH_RECOVERY_WRAPPER)
+
+    def _recover_stale_credential(self) -> _KeychainCredential | None:
+        """Ask Claude Code to refresh once, accepting only its exact OK result."""
+        if self._recovery_attempted:
+            return None
+        self._recovery_attempted = True
+        self._status("provider Claude recovery started")
+        wrapper = self._auth_recovery_wrapper()
+        try:
+            result = subprocess.run(
+                [wrapper, "--verify-auth"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=self._AUTH_RECOVERY_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            self._status("provider Claude recovery unavailable")
+            return None
+
+        if result.returncode != 0 or result.stdout != "OK\n":
+            self._status("provider Claude recovery unavailable")
+            return None
+
+        try:
+            credential = self._load_keychain_credential()
+        except Exception:  # noqa: BLE001 - recovery must retain the stale safe state
+            self._status("provider Claude recovery unavailable")
+            return None
+        if not self._access_is_fresh(credential):
+            self._status("provider Claude recovery unavailable")
+            return None
+        self._status("provider Claude recovery complete")
+        return credential
 
     def _acquire(self) -> None:
         if _base._is_headless():
@@ -61,7 +120,18 @@ class ClaudeHttpProvider:
                     f"Claude Code OAuth credentials unavailable ({exc}): run `claude auth login`",
                     "",
                 ) from exc
-            credential = self._reject_if_only_stale(credential)
+            try:
+                credential = self._reject_if_only_stale(credential)
+            except ProbeFailure as exc:
+                from ..snapshot import CLAUDE_STALE_CREDENTIAL_MESSAGE
+
+                if str(exc) != CLAUDE_STALE_CREDENTIAL_MESSAGE:
+                    raise
+                recovered = self._recover_stale_credential()
+                if recovered is None:
+                    raise
+                self._access_token = recovered.access_token
+                return
             self._access_token = credential.access_token
 
     @classmethod
@@ -82,9 +152,9 @@ class ClaudeHttpProvider:
         Gradus does not mint a replacement token itself: the refresh token
         rotates on use (same observation -- its hash changed across the
         refresh), so a third-party consumer that minted a token without
-        writing the successor back would revoke Claude Code's own login. It
-        also does not launch Claude Code: absent or invalid refresh-expiry
-        metadata cannot establish that the grant is refreshable.
+        writing the successor back would revoke Claude Code's own login. This
+        classifier does not launch Claude Code: absent or invalid
+        refresh-expiry metadata cannot establish that the grant is refreshable.
         """
         expires_at = credential.expires_at
         if expires_at is None:
