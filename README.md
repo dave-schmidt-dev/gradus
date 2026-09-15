@@ -55,7 +55,8 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Shows OpenCode Go 5h/1w/monthly remaining quota, reset times, and pace indicators
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
 - Retains cached usage data during transient network errors with an `(offline Xm)` title indicator; shows a `stale` panel after 5 minutes of continuous failure
-- Supports live keyboard shortcuts (`q` quit, `r` refresh now, `s` cycle provider sorting)
+- Supports live keyboard shortcuts (`q` quit, `r` refresh now, `s` cycle provider sorting, `t` toggle the read-only history tab)
+- The history tab reads only the credential-free v2 journal and plots one provider/window at a time with actual remaining capacity, the canonical pace guide, and bounded `[1-9]` provider, `[/]` window, and `[j/k]` point controls. It reports missing, empty, and corrupt history explicitly; `--once` remains the bars-only reader.
 - Supports `.gradus.json` (legacy `.ai_monitor.json` also read as a fallback) for provider selection and interval configuration
 - Sends one-shot macOS pace/depletion notifications and marks warning providers with a `[!]` badge
 - Renders depleted providers as centered 1-line micro-cards paired side-by-side (ratio Cursor:Copilot:Vibe = 2:1:1) at the bottom of the dashboard to conserve vertical space
@@ -319,16 +320,21 @@ The two modes never share a canonical writer and their single-flight locks are d
 independent, because serializing the migration requires *verified* legacy quiescence rather than
 an inferred one (INV-8).
 
-**Cutover status: not performed.** `LegacyRuntimeMigrator` is implemented, tested, and
-currently *refusing*. It moves refresh from the launchd job to the bundled agent only after
-every named consumer has produced a receipt proving it reads the installed canonical snapshot,
-and after the legacy job is observed quiescent with no running wrapper or producer process; on
-any failure it restores the legacy job to exactly the state it found, including "installed but
-not loaded". It has no filesystem-removal dependency at all, so no legacy plist, wrapper, or
-snapshot mirror can be deleted on any path through it, including rollback. No receipt exists on
-any machine yet (`router-consumer-migration`), so this repository still runs the legacy job.
+**Cutover status: installed-only cutover and lifecycle-persistence acceptance complete.** On
+2026-09-15, both named consumers produced fresh installed-path, opaque-digest receipts; the
+legacy job was observed idle with no producer process and then retired through its exact
+uninstall script. Its plist and wrapper are absent. The installed agent then produced three
+advancing snapshots and Claude was healthy on the third; the terminal alias also uses installed
+mode. After an attended reboot, the installed agent restarted without manual action, Claude became
+healthy within five minutes, two normal refresh intervals advanced, and both consumers renewed
+matching receipts. The lifecycle gate is complete.
 
-**Publisher watchdog (legacy path only).** launchd supervises the producer; nothing supervises
+`LegacyRuntimeMigrator` remains the guarded rollback-capable implementation: it refuses until
+consumer receipts and legacy quiescence pass, captures the prior job state, and restores it on a
+failed agent handoff. It has no filesystem-removal dependency, so no path through that migrator,
+including rollback, deletes a legacy plist, wrapper, or snapshot mirror.
+
+**Publisher watchdog (legacy path only; retired with the old wrapper).** launchd supervised the producer; nothing supervises
 the macOS CloudKit publisher, which is an ordinary GUI app. When it exits, the snapshot goes on
 refreshing while iOS silently freezes on the last publication — that failure ran for fourteen
 hours on 2026-08-30. Each successful legacy refresh cycle therefore ends with one bounded
@@ -342,8 +348,8 @@ wedged app or a CloudKit outage, so that case is logged and left alone; repeated
 inside an hour are throttled and reported as a crash loop rather than retried forever. The check
 prints only when it has something to say. `--publisher-watchdog` is opt-in and passed only by the
 launchd wrapper, so no test, hermetic run, or interactive session can launch an app; set
-`GRADUS_DISABLE_PUBLISHER_WATCHDOG=1` to suppress it entirely. It is removed once the cutover
-completes and the agent supervises publishing directly.
+`GRADUS_DISABLE_PUBLISHER_WATCHDOG=1` to suppress it entirely. It is absent from the installed
+agent path.
 
 **Credential bridge.** Neither the agent nor the launchd job reads Safari directly.
 `GradusCredentialBridge.app` is the single-purpose, Developer-ID-signed, separately identified

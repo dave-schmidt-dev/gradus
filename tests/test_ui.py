@@ -7,7 +7,7 @@ import math
 import pathlib
 import re
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 
 from rich.console import Console
@@ -26,6 +26,8 @@ from gradus.ui import (
     THEME,
     DynamicMicroDepletedPair,
     DynamicMicroDepletedSingle,
+    HistoryPoint,
+    HistorySelection,
     PaceLabel,
     PercentageBar,
     _build_compact_lines,
@@ -38,6 +40,8 @@ from gradus.ui import (
     _format_pace_delta,
     _format_percent_value,
     _format_reset_display,
+    _history_plot,
+    _history_x_coordinates,
     _percent_str,
     _provider_credit_entry,
     _provider_is_empty,
@@ -45,9 +49,17 @@ from gradus.ui import (
     _style_for_signal,
     _zen_credit_text,
     build_dashboard,
+    build_history_refresh_view,
+    build_history_view,
     build_loading_screen,
     build_micro_depleted_panel,
     build_provider_panel,
+    history_cycle_window,
+    history_move_point,
+    history_provider_names,
+    history_select_provider,
+    history_series,
+    history_window_ids,
     render_json,
 )
 
@@ -2271,6 +2283,164 @@ class LoadingScreenTests(unittest.TestCase):
         self.assertIn("Warming Up", output)
         self.assertIn("Starting up 2.3s", output)
         self.assertIn("Fetching data...", output)
+
+
+class HistoryViewTests(unittest.TestCase):
+    """History tab reads safe journal records and keeps selection bounded."""
+
+    now = datetime(2026, 3, 14, 8, 22, 30)
+    RECORDS = [
+        {
+            "snapshot": {
+                "updated_at": "2026-03-14T08:22:30+00:00",
+                "providers": [
+                    {
+                        "name": "Codex",
+                        "windows": [
+                            {
+                                "id": "five_hour",
+                                "percent_left": 80.0,
+                                "pace_delta": -0.10,
+                            },
+                            {
+                                "id": "weekly",
+                                "percent_left": 90.0,
+                                "pace_delta": 0.0,
+                            },
+                        ],
+                    },
+                    {
+                        "name": "Claude",
+                        "windows": [
+                            {
+                                "id": "five_hour",
+                                "percent_left": 65.0,
+                                "pace_delta": 0.05,
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+        {
+            "snapshot": {
+                "updated_at": "2026-03-14T08:27:30+00:00",
+                "providers": [
+                    {
+                        "name": "Codex",
+                        "windows": [
+                            {
+                                "id": "five_hour",
+                                "percent_left": 75.0,
+                                "pace_delta": -0.10,
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+    ]
+
+    def test_valid_series_uses_nested_snapshot_timestamp_and_canonical_pace(self) -> None:
+        points = history_series(self.RECORDS, "Codex", "five_hour")
+        self.assertEqual(len(points), 2)
+        self.assertEqual(points[0].percent_left, 80.0)
+        self.assertEqual(points[0].expected_remaining, 90.0)
+
+    def test_provider_window_and_point_selection_are_bounded(self) -> None:
+        self.assertEqual(history_provider_names(self.RECORDS), ("Codex", "Claude"))
+        self.assertEqual(history_window_ids(self.RECORDS, "Codex"), ("five_hour", "weekly"))
+        selection = history_select_provider(self.RECORDS, HistorySelection(), 1)
+        self.assertEqual(selection, HistorySelection(1, 0, 0))
+        selection = history_cycle_window(self.RECORDS, selection, 1)
+        self.assertEqual(selection, HistorySelection(1, 0, 0))
+        selection = history_select_provider(self.RECORDS, HistorySelection(), 0)
+        selection = history_cycle_window(self.RECORDS, selection, 1)
+        self.assertEqual(selection, HistorySelection(0, 1, 0))
+        self.assertEqual(history_move_point(self.RECORDS, selection, 1), HistorySelection(0, 1, 0))
+
+    def test_history_view_has_tabs_series_and_pace_marker(self) -> None:
+        output = _capture(build_history_view(self.RECORDS, "ok", self.now), width=80)
+        self.assertIn("[bars]", output)
+        self.assertIn("history", output)
+        self.assertIn("Codex", output)
+        self.assertIn("90.0%", output)
+        self.assertIn("◆", output)
+
+    def test_empty_and_corrupt_history_are_explicit(self) -> None:
+        empty = _capture(build_history_view([], "empty", self.now), width=80)
+        corrupt = _capture(build_history_view([], "corrupt", self.now), width=80)
+        self.assertIn("no history", empty)
+        self.assertIn("corrupt journal", corrupt)
+
+    def test_history_view_renders_at_narrow_width(self) -> None:
+        output = _capture(build_history_view(self.RECORDS, "ok", self.now), width=32)
+        self.assertIn("actual", output)
+        self.assertIn("80.0%", output)
+
+    def test_refresh_view_keeps_loading_and_refresh_progress_visible(self) -> None:
+        loading = _capture(
+            build_history_refresh_view(
+                self.RECORDS,
+                "ok",
+                self.now,
+                HistorySelection(),
+                width=80,
+                refresh_elapsed_seconds=1.2,
+                history_loading=True,
+            ),
+            width=80,
+        )
+        self.assertIn("history: loading journal", loading)
+        self.assertIn("refresh: updating snapshot 1.2s", loading)
+
+        ready = _capture(
+            build_history_refresh_view(
+                self.RECORDS,
+                "ok",
+                self.now,
+                HistorySelection(),
+                width=80,
+                refresh_elapsed_seconds=1.2,
+                history_loading=False,
+            ),
+            width=80,
+        )
+        self.assertIn("history refresh: updating canonical snapshot 1.2s", ready)
+        self.assertIn("series:", ready)
+
+    def test_history_plot_spaces_points_by_timestamp(self) -> None:
+        points = tuple(
+            HistoryPoint(
+                timestamp=datetime(2026, 3, 14, 8, 0) + timedelta(seconds=seconds),
+                percent_left=80.0,
+                pace_delta=0.0,
+                expected_remaining=80.0,
+            )
+            for seconds in (0, 10, 100)
+        )
+        self.assertEqual(_history_x_coordinates(points, 80), (0, 7, 67))
+
+    def test_history_plot_equal_times_falls_back_and_reports_collisions(self) -> None:
+        points = tuple(
+            HistoryPoint(
+                timestamp=self.now.replace(second=0),
+                percent_left=value,
+                pace_delta=0.0,
+                expected_remaining=value,
+            )
+            for value in (80.0, 70.0, 60.0)
+        )
+        self.assertEqual(_history_x_coordinates(points, 80), (0, 34, 67))
+
+        colliding_points = (
+            HistoryPoint(self.now.replace(second=0), 80.0, 0.0, 80.0),
+            HistoryPoint(self.now.replace(second=0), 70.0, 0.0, 70.0),
+            HistoryPoint(self.now.replace(second=10), 60.0, 0.0, 60.0),
+        )
+        self.assertEqual(_history_x_coordinates(colliding_points, 80), (0, 0, 67))
+        output = _capture(_history_plot(colliding_points, 80), width=80)
+        self.assertIn("share a terminal time column", output)
 
 
 class FormatResetDisplayTests(unittest.TestCase):

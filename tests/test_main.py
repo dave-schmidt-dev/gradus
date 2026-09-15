@@ -462,6 +462,7 @@ class MainOnceTests(unittest.TestCase):
             ),
             patch("gradus.__main__.initialize_providers") as init,
             patch("gradus.__main__.collect_snapshots") as collect,
+            patch("gradus.__main__.read_history_evidence") as history_read,
             patch("gradus.__main__._canonical_or_refresh", return_value=(snapshots, NOW)),
             patch("gradus.__main__.Console") as MockConsole,
         ):
@@ -473,6 +474,7 @@ class MainOnceTests(unittest.TestCase):
         mock_console.print.assert_called_once()
         init.assert_not_called()
         collect.assert_not_called()
+        history_read.assert_not_called()
 
     def test_once_does_not_use_live_context(self) -> None:
         """--once must never enter alt-screen (no Live)."""

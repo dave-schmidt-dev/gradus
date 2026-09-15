@@ -29,7 +29,12 @@ from pathlib import Path
 from rich.console import Console
 from rich.live import Live
 
-from .history import append_history_record, query_history, recent_auth_failure_count
+from .history import (
+    append_history_record,
+    query_history,
+    read_history_evidence,
+    recent_auth_failure_count,
+)
 from .paths import INSTALLED_MODE, RUNTIME_PATHS
 from .providers import (
     ProviderSnapshot,
@@ -59,8 +64,15 @@ from .snapshot import (
 )
 from .ui import (
     THEME,
+    HistorySelection,
     build_dashboard,
+    build_history_loading_screen,
+    build_history_refresh_view,
+    build_history_view,
     build_loading_screen,
+    history_cycle_window,
+    history_move_point,
+    history_select_provider,
     render_json,
 )
 
@@ -476,6 +488,11 @@ def _snapshot_signature() -> tuple[int, int] | None:
     except OSError:
         return None
     return stat_result.st_mtime_ns, stat_result.st_size
+
+
+def _read_tui_history() -> tuple[list[dict[str, object]], str]:
+    """Read the credential-free journal through its non-mutating evidence API."""
+    return read_history_evidence(Path(SNAPSHOT_V2_PATH).resolve().parent / "history")
 
 
 def _canonical_or_refresh(
@@ -1723,6 +1740,14 @@ def main() -> int:
     # submissions keep `notified_providers` single-threaded, so the "only mark
     # notified once osascript accepted it" retry rule still holds.
     notify_executor = ThreadPoolExecutor(max_workers=1)
+    history_executor = ThreadPoolExecutor(max_workers=1)
+    history_active = False
+    history_records: list[dict[str, object]] = []
+    history_status = "missing"
+    history_selection = HistorySelection()
+    history_future = None
+    history_requested_signature: tuple[int, int] | None = None
+    history_loaded_signature: tuple[int, int] | None = None
 
     console = Console(theme=THEME)
     sort_option = _load_tui_sort_option()
@@ -1735,6 +1760,34 @@ def main() -> int:
                 screen=True,
                 auto_refresh=False,
             ) as live:
+
+                def begin_history_load() -> None:
+                    """Show the journal-loading state before a background disk read."""
+                    nonlocal history_future, history_requested_signature, history_loaded_signature
+                    if history_future is not None and not history_future.done():
+                        return
+                    history_requested_signature = _snapshot_signature()
+                    history_loaded_signature = None
+                    live.update(build_history_loading_screen(datetime.now().astimezone()))
+                    live.refresh()
+                    history_future = history_executor.submit(_read_tui_history)
+
+                def finish_history_load() -> None:
+                    """Consume one completed journal read without probing providers."""
+                    nonlocal \
+                        history_future, \
+                        history_records, \
+                        history_status, \
+                        history_loaded_signature
+                    if history_future is None or not history_future.done():
+                        return
+                    try:
+                        history_records, history_status = history_future.result()
+                    except Exception:  # noqa: BLE001 - an unreadable journal is honest unavailable state
+                        history_records, history_status = [], "corrupt"
+                    history_future = None
+                    history_loaded_signature = history_requested_signature
+
                 started = time.monotonic()
                 load_executor = ThreadPoolExecutor(max_workers=1)
                 load_future = load_executor.submit(
@@ -1769,6 +1822,8 @@ def main() -> int:
                     refresh_now = False
                     fix_actions = _build_fix_actions(current)
                     while remaining > 0 and not quit_requested:
+                        if history_active:
+                            finish_history_load()
                         watched = _read_canonical_snapshots(for_display=True)
                         new_signature = _snapshot_signature()
                         if watched is not None and new_signature != snapshot_signature:
@@ -1777,15 +1832,34 @@ def main() -> int:
                             notify_executor.submit(
                                 _check_warnings, current, notified_providers, datetime.now()
                             )
-                        live.update(
-                            build_dashboard(
+                        if (
+                            history_active
+                            and history_future is None
+                            and history_loaded_signature != snapshot_signature
+                        ):
+                            begin_history_load()
+                        if history_active:
+                            if history_future is not None:
+                                view = build_history_loading_screen(
+                                    datetime.now().astimezone(), time.monotonic() - started
+                                )
+                            else:
+                                view = build_history_view(
+                                    history_records,
+                                    history_status,
+                                    updated_at,
+                                    history_selection,
+                                    width=console.width,
+                                )
+                        else:
+                            view = build_dashboard(
                                 current,
                                 updated_at,
                                 remaining,
                                 fix_actions=fix_actions,
                                 sort_option=sort_option,
                             )
-                        )
+                        live.update(view)
                         live.refresh()
                         sleep_until = deadline - remaining + 1
                         wait_time = max(0.0, sleep_until - time.monotonic())
@@ -1799,6 +1873,35 @@ def main() -> int:
                                 if key in ("r", "R"):
                                     refresh_now = True
                                     break
+                                if key in ("t", "T"):
+                                    history_active = not history_active
+                                    if history_active:
+                                        history_selection = HistorySelection()
+                                        history_loaded_signature = None
+                                        begin_history_load()
+                                    continue
+                                if history_active:
+                                    if key.isdigit() and key != "0":
+                                        history_selection = history_select_provider(
+                                            history_records, history_selection, int(key) - 1
+                                        )
+                                    elif key == "[":
+                                        history_selection = history_cycle_window(
+                                            history_records, history_selection, -1
+                                        )
+                                    elif key == "]":
+                                        history_selection = history_cycle_window(
+                                            history_records, history_selection, 1
+                                        )
+                                    elif key in ("j", "J"):
+                                        history_selection = history_move_point(
+                                            history_records, history_selection, 1
+                                        )
+                                    elif key in ("k", "K"):
+                                        history_selection = history_move_point(
+                                            history_records, history_selection, -1
+                                        )
+                                    continue
                                 if key in ("s", "S"):
                                     sort_option = _next_tui_sort_option(sort_option)
                                     _save_tui_sort_option(sort_option)
@@ -1828,8 +1931,20 @@ def main() -> int:
                             _refresh_snapshot_once, cwd, enabled_providers, args.debug
                         )
                         while not refresh_future.done():
-                            live.update(
-                                build_dashboard(
+                            if history_active:
+                                finish_history_load()
+                            if history_active:
+                                view = build_history_refresh_view(
+                                    history_records,
+                                    history_status,
+                                    updated_at,
+                                    history_selection,
+                                    width=console.width,
+                                    refresh_elapsed_seconds=time.monotonic() - refresh_started,
+                                    history_loading=history_future is not None,
+                                )
+                            else:
+                                view = build_dashboard(
                                     current,
                                     datetime.now(),
                                     0,
@@ -1838,7 +1953,7 @@ def main() -> int:
                                     fix_actions=fix_actions,
                                     sort_option=sort_option,
                                 )
-                            )
+                            live.update(view)
                             live.refresh()
                             if sys.stdin.isatty():
                                 readable, _, _ = select.select([sys.stdin], [], [], 0.12)
@@ -1850,6 +1965,32 @@ def main() -> int:
                                     if key in ("s", "S"):
                                         sort_option = _next_tui_sort_option(sort_option)
                                         _save_tui_sort_option(sort_option)
+                                    elif key in ("t", "T"):
+                                        history_active = not history_active
+                                        if history_active:
+                                            history_selection = HistorySelection()
+                                            history_loaded_signature = None
+                                            begin_history_load()
+                                    elif history_active and key.isdigit() and key != "0":
+                                        history_selection = history_select_provider(
+                                            history_records, history_selection, int(key) - 1
+                                        )
+                                    elif history_active and key == "[":
+                                        history_selection = history_cycle_window(
+                                            history_records, history_selection, -1
+                                        )
+                                    elif history_active and key == "]":
+                                        history_selection = history_cycle_window(
+                                            history_records, history_selection, 1
+                                        )
+                                    elif history_active and key in ("j", "J"):
+                                        history_selection = history_move_point(
+                                            history_records, history_selection, 1
+                                        )
+                                    elif history_active and key in ("k", "K"):
+                                        history_selection = history_move_point(
+                                            history_records, history_selection, -1
+                                        )
                             else:
                                 time.sleep(0.12)
                         if not quit_requested:
@@ -1874,6 +2015,7 @@ def main() -> int:
         # dropping it silently is worse than the brief wait an in-flight
         # osascript costs on the way out.
         notify_executor.shutdown(wait=False)
+        history_executor.shutdown(wait=False, cancel_futures=True)
         for provider in cleanup:
             provider.close()
 

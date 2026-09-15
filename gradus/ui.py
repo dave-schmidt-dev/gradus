@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -1693,6 +1695,455 @@ class DynamicMicroDepletedSingle:
         yield from console.render(panel, options)
 
 
+@dataclass(frozen=True, slots=True)
+class HistoryPoint:
+    """One safe journal observation for a provider/window series."""
+
+    timestamp: datetime
+    percent_left: float
+    pace_delta: float | None
+    expected_remaining: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class HistorySelection:
+    """Bounded indexes for the provider, window, and point history controls."""
+
+    provider_index: int = 0
+    window_index: int = 0
+    point_index: int = 0
+
+
+def _history_provider_entries(record: Mapping[str, object]) -> list[Mapping[str, object]]:
+    snapshot = record.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        return []
+    providers = snapshot.get("providers")
+    if not isinstance(providers, list):
+        return []
+    return [entry for entry in providers if isinstance(entry, Mapping)]
+
+
+def history_provider_names(records: list[dict[str, object]]) -> tuple[str, ...]:
+    """Return journal provider names in first-seen order."""
+    names: list[str] = []
+    for record in records:
+        for entry in _history_provider_entries(record):
+            name = entry.get("name")
+            if isinstance(name, str) and name and name not in names:
+                names.append(name)
+    return tuple(names)
+
+
+def history_window_ids(records: list[dict[str, object]], provider_name: str) -> tuple[str, ...]:
+    """Return safe window IDs available for one provider in the journal."""
+    window_ids: list[str] = []
+    for record in records:
+        for entry in _history_provider_entries(record):
+            if entry.get("name") != provider_name:
+                continue
+            windows = entry.get("windows")
+            if not isinstance(windows, list):
+                continue
+            for window in windows:
+                if not isinstance(window, Mapping):
+                    continue
+                window_id = window.get("id")
+                if isinstance(window_id, str) and window_id and window_id not in window_ids:
+                    window_ids.append(window_id)
+    return tuple(window_ids)
+
+
+def _history_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return timestamp if timestamp.tzinfo is not None and timestamp.utcoffset() is not None else None
+
+
+def _history_window(
+    record: Mapping[str, object], provider_name: str, window_id: str
+) -> Mapping[str, object] | None:
+    for entry in _history_provider_entries(record):
+        if entry.get("name") != provider_name:
+            continue
+        windows = entry.get("windows")
+        if not isinstance(windows, list):
+            return None
+        for window in windows:
+            if isinstance(window, Mapping) and window.get("id") == window_id:
+                return window
+    return None
+
+
+def history_series(
+    records: list[dict[str, object]], provider_name: str, window_id: str
+) -> tuple[HistoryPoint, ...]:
+    """Extract one provider/window series from safe journal records.
+
+    The expected line is derived exclusively from each window's canonical
+    ``pace_delta`` through ``_expected_remaining``; missing pace remains an
+    honest un-guided observation.
+    """
+    points: list[HistoryPoint] = []
+    for record in records:
+        snapshot = record.get("snapshot")
+        updated_at = snapshot.get("updated_at") if isinstance(snapshot, Mapping) else None
+        timestamp = _history_timestamp(updated_at)
+        window = _history_window(record, provider_name, window_id)
+        if timestamp is None or window is None:
+            continue
+        percent = window.get("percent_left")
+        if not percent_is_valid(percent):
+            continue
+        raw_delta = window.get("pace_delta")
+        delta = (
+            float(raw_delta)
+            if isinstance(raw_delta, (int, float))
+            and not isinstance(raw_delta, bool)
+            and math.isfinite(float(raw_delta))
+            else None
+        )
+        percent_value = float(percent)
+        points.append(
+            HistoryPoint(
+                timestamp=timestamp,
+                percent_left=percent_value,
+                pace_delta=delta,
+                expected_remaining=_expected_remaining(percent_value, delta),
+            )
+        )
+    points.sort(key=lambda point: point.timestamp)
+    return tuple(points)
+
+
+def history_window_label(window_id: str) -> str:
+    """Use the compact dashboard label for a canonical history window ID."""
+    return {
+        "five_hour": "5h",
+        "weekly": "1w",
+        "seven_day": "1w",
+        "seven_day_opus": "1w opus",
+    }.get(window_id, window_id.replace("_", " ")[:12])
+
+
+def history_select_provider(
+    records: list[dict[str, object]], selection: HistorySelection, index: int
+) -> HistorySelection:
+    names = history_provider_names(records)
+    if not names or index < 0 or index >= len(names):
+        return selection
+    return HistorySelection(index, 0, 0)
+
+
+def history_cycle_window(
+    records: list[dict[str, object]], selection: HistorySelection, step: int
+) -> HistorySelection:
+    names = history_provider_names(records)
+    if not names or selection.provider_index >= len(names):
+        return selection
+    windows = history_window_ids(records, names[selection.provider_index])
+    if not windows:
+        return selection
+    index = (selection.window_index + step) % len(windows)
+    return HistorySelection(selection.provider_index, index, 0)
+
+
+def history_move_point(
+    records: list[dict[str, object]], selection: HistorySelection, step: int
+) -> HistorySelection:
+    names = history_provider_names(records)
+    if not names or selection.provider_index >= len(names):
+        return selection
+    windows = history_window_ids(records, names[selection.provider_index])
+    if not windows or selection.window_index >= len(windows):
+        return selection
+    points = history_series(
+        records, names[selection.provider_index], windows[selection.window_index]
+    )
+    if not points:
+        return selection
+    index = (selection.point_index + step) % len(points)
+    return HistorySelection(selection.provider_index, selection.window_index, index)
+
+
+def _history_x_coordinates(points: tuple[HistoryPoint, ...], width: int) -> tuple[int, ...]:
+    """Map timestamps across the plotted range, with an ordinal equal-time fallback."""
+    graph_width = max(24, min(88, width - 12))
+    if len(points) <= 1:
+        return (0,) if points else ()
+    timestamps = [point.timestamp.timestamp() for point in points]
+    start, end = min(timestamps), max(timestamps)
+    span = end - start
+    if not math.isfinite(span) or span <= 0:
+        return tuple(
+            round(index * (graph_width - 1) / (len(points) - 1)) for index in range(len(points))
+        )
+    return tuple(round((timestamp - start) * (graph_width - 1) / span) for timestamp in timestamps)
+
+
+def _history_plot(points: tuple[HistoryPoint, ...], width: int) -> Text:
+    """Render a connected Rich terminal plot with canonical guide markers."""
+    graph_width = max(24, min(88, width - 12))
+    graph_height = 11 if width >= 60 else 8
+    cells: list[list[tuple[str, str]]] = [
+        [("·", "border") for _ in range(graph_width)] for _ in range(graph_height)
+    ]
+    x_coordinates = _history_x_coordinates(points, width)
+    actual_coords = [
+        (x_coordinates[index], round((100.0 - point.percent_left) * (graph_height - 1) / 100.0))
+        for index, point in enumerate(points)
+    ]
+    guide_coords = [
+        (
+            x_coordinates[index],
+            round((100.0 - point.expected_remaining) * (graph_height - 1) / 100.0),
+        )
+        if point.expected_remaining is not None
+        else None
+        for index, point in enumerate(points)
+    ]
+
+    def paint_line(first: tuple[int, int], second: tuple[int, int], style: str, char: str) -> None:
+        x1, y1 = first
+        x2, y2 = second
+        distance = max(1, abs(x2 - x1))
+        for step in range(distance + 1):
+            x = round(x1 + (x2 - x1) * step / distance)
+            y = round(y1 + (y2 - y1) * step / distance)
+            if 0 <= y < graph_height and 0 <= x < graph_width:
+                cells[y][x] = (char, style)
+
+    previous_actual = None
+    previous_guide = None
+    for actual, guide in zip(actual_coords, guide_coords, strict=True):
+        if previous_actual is not None:
+            slope = (
+                "╱"
+                if actual[1] < previous_actual[1]
+                else "╲"
+                if actual[1] > previous_actual[1]
+                else "─"
+            )
+            paint_line(previous_actual, actual, "text.cyan", slope)
+        if guide is not None and previous_guide is not None:
+            paint_line(previous_guide, guide, "bar.marker", "·")
+        previous_actual = actual
+        previous_guide = guide
+
+    actual_counts = Counter(actual_coords)
+    guide_counts = Counter(coord for coord in guide_coords if coord is not None)
+    for index, (actual, guide) in enumerate(zip(actual_coords, guide_coords, strict=True)):
+        if guide is not None:
+            x, y = guide
+            marker = str(guide_counts[guide]) if guide_counts[guide] > 1 else "◆"
+            cells[y][x] = (marker, "bar.marker")
+        x, y = actual
+        actual_marker = str(actual_counts[actual]) if actual_counts[actual] > 1 else "●"
+        cells[y][x] = (
+            "◎" if guide == actual and actual_counts[actual] == 1 else actual_marker,
+            "text.cyan" if guide != actual else "bar.marker",
+        )
+
+    output = Text()
+    for row in range(graph_height):
+        value = round(100 - row * 100 / (graph_height - 1))
+        output.append(f"│ {value:>3}% ┤", style="text.muted")
+        for char, style in cells[row]:
+            output.append(char, style=style)
+        output.append("\n" if row < graph_height - 1 else "")
+    output.append("│       └" + "─" * graph_width + "┘\n", style="border")
+    first = points[0].timestamp.astimezone().strftime("%H:%M")
+    last = points[-1].timestamp.astimezone().strftime("%H:%M")
+    output.append(f"│       {first}  …  {last}", style="text.muted")
+    time_column_counts = Counter(x for x, _ in actual_coords)
+    collisions = sum(count - 1 for count in time_column_counts.values() if count > 1)
+    if collisions:
+        output.append(
+            f"\n│ note: {collisions} sample(s) share a terminal time column", style="text.muted"
+        )
+    return output
+
+
+def _history_tabs(active: str) -> Text:
+    return Text.assemble(
+        ("[bars]", "text.cyan" if active == "bars" else "text.muted"),
+        "  ",
+        ("history", "text.cyan" if active == "history" else "text.muted"),
+        "  ",
+        ("[t] toggle", "text.muted"),
+    )
+
+
+def build_history_loading_screen(
+    updated_at: datetime,
+    elapsed_seconds: float = 0.0,
+    *,
+    refresh_elapsed_seconds: float | None = None,
+) -> Group:
+    """Build the visible state used before each off-thread journal read."""
+    header = Text.assemble(
+        ("Gradus", "bold text.cyan"),
+        ("  |  ", "text.muted"),
+        ("Last Updated: ", "text.muted"),
+        (updated_at.strftime("%b %d %H:%M:%S"), "text.yellow"),
+    )
+    body = Text.assemble(
+        ("history: loading journal", "text.cyan"),
+        (f"  {elapsed_seconds:0.1f}s", "text.muted"),
+    )
+    if refresh_elapsed_seconds is not None:
+        body.append(
+            f"  |  refresh: updating snapshot {refresh_elapsed_seconds:0.1f}s",
+            style="text.yellow",
+        )
+    return Group(
+        header,
+        _history_tabs("history"),
+        Text(""),
+        body,
+        Text(""),
+        Text("[q] quit  [t] bars", style="text.muted"),
+    )
+
+
+def build_history_refresh_view(
+    records: list[dict[str, object]],
+    status: str,
+    updated_at: datetime,
+    selection: HistorySelection,
+    *,
+    width: int,
+    refresh_elapsed_seconds: float,
+    history_loading: bool,
+) -> Group:
+    """Keep both journal-load and producer-refresh progress visible."""
+    if history_loading:
+        return build_history_loading_screen(
+            updated_at,
+            refresh_elapsed_seconds,
+            refresh_elapsed_seconds=refresh_elapsed_seconds,
+        )
+    view = build_history_view(records, status, updated_at, selection, width=width)
+    return Group(
+        view,
+        Text(
+            f"history refresh: updating canonical snapshot {refresh_elapsed_seconds:0.1f}s",
+            style="text.yellow",
+        ),
+    )
+
+
+def build_history_view(
+    records: list[dict[str, object]],
+    status: str,
+    updated_at: datetime,
+    selection: HistorySelection = HistorySelection(),
+    *,
+    width: int = 80,
+) -> Group:
+    """Render one safe provider/window series and its selected point."""
+    header = Text.assemble(
+        ("Gradus", "bold text.cyan"),
+        ("  |  ", "text.muted"),
+        ("Last Updated: ", "text.muted"),
+        (updated_at.strftime("%b %d %H:%M:%S"), "text.yellow"),
+    )
+    names = history_provider_names(records)
+    if not names:
+        message = {
+            "corrupt": "history unavailable: corrupt journal",
+            "missing": "history: no history (journal missing)",
+            "empty": "history: no history (no observations yet)",
+        }.get(status, "history unavailable: no usable records")
+        return Group(
+            header,
+            _history_tabs("history"),
+            Text(""),
+            Text(message, style="text.yellow"),
+            Text(""),
+            Text("[q] quit  [t] bars", style="text.muted"),
+        )
+
+    provider_index = min(selection.provider_index, len(names) - 1)
+    selected_provider = names[provider_index]
+    windows = history_window_ids(records, selected_provider)
+    if not windows:
+        return Group(
+            header,
+            _history_tabs("history"),
+            Text(""),
+            Text(f"history: no usable windows for {selected_provider}", style="text.yellow"),
+            Text(""),
+            Text("[q] quit  [t] bars", style="text.muted"),
+        )
+    window_index = min(selection.window_index, len(windows) - 1)
+    selected_window = windows[window_index]
+    points = history_series(records, selected_provider, selected_window)
+    point_index = min(selection.point_index, len(points) - 1) if points else 0
+    provider_row = "  ".join(
+        f"[{i + 1}] {name}" if i != provider_index else f"[{i + 1}] {name}*"
+        for i, name in enumerate(names[:9])
+    )
+    window_row = "  ".join(
+        f"[{window_id}] {history_window_label(window_id)}"
+        if i != window_index
+        else f"[{window_id}] {history_window_label(window_id)}*"
+        for i, window_id in enumerate(windows)
+    )
+    controls = Text.assemble(
+        (f"provider: {provider_row}\n", "text.muted"),
+        (f"window:   {window_row}\n", "text.muted"),
+        (f"source:   read-only journal ({status})\n", "text.muted"),
+        (
+            f"series:   {selected_provider} / {history_window_label(selected_window)}  ({len(points)} observations)",
+            "text.ink",
+        ),
+    )
+    if not points:
+        body = Text("history: no usable observations for selected window", style="text.yellow")
+        footer = Text("[q] quit  [t] bars  [1-9] provider  [[/]] window", style="text.muted")
+        return Group(
+            header, _history_tabs("history"), Text(""), controls, Text(""), body, Text(""), footer
+        )
+    point = points[point_index]
+    difference = (
+        None if point.expected_remaining is None else point.percent_left - point.expected_remaining
+    )
+    guide = (
+        "guide n/a"
+        if point.expected_remaining is None
+        else f"guide {point.expected_remaining:0.1f}%"
+    )
+    delta = (
+        "pace n/a"
+        if difference is None
+        else f"{difference:+0.1f} pts {'ahead' if difference >= 0 else 'behind'}"
+    )
+    inspector = Text(
+        f"point {point_index + 1:>2}/{len(points)}  {point.timestamp.astimezone().strftime('%H:%M:%S')}  actual {point.percent_left:0.1f}% remain  {guide}  {delta}",
+        style="text.ink",
+    )
+    footer = Text(
+        "[q] quit  [t] bars  [1-9] provider  [[/]] window  [j/k] point", style="text.muted"
+    )
+    return Group(
+        header,
+        _history_tabs("history"),
+        Text(""),
+        controls,
+        Text(""),
+        _history_plot(points, width),
+        Text(""),
+        inspector,
+        Text(""),
+        footer,
+    )
+
+
 def build_dashboard(
     snapshots: list[ProviderSnapshot],
     updated_at: datetime,
@@ -1765,6 +2216,9 @@ def build_dashboard(
         ("[r]", "cyan"),
         " refresh",
         "  ",
+        ("[t]", "cyan"),
+        " history",
+        "  ",
         ("[s]", "cyan"),
         f" sort: {TUI_SORT_LABELS.get(sort_option, TUI_SORT_LABELS['name'])}",
     ]
@@ -1774,7 +2228,7 @@ def build_dashboard(
             footer_parts.extend(["  ", (f"[{key}]", "cyan"), f" fix {name}"])
     footer = Text.assemble(*footer_parts)
 
-    return Group(header, Text(""), body, Text(""), footer)
+    return Group(header, _history_tabs("bars"), Text(""), body, Text(""), footer)
 
 
 TUI_SORT_LABELS = {

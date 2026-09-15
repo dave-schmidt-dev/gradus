@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gradus terminal / provider usage pace</title>
+  <style>
+    :root { color-scheme: dark; --bg: #03070a; --terminal: #071016; --line: #35505f; --dim: #78909d; --text: #dce8ed; --cyan: #54d6d2; --guide: #005fd7; --good: #87d787; --warn: #ffd75f; --provider: #d78b64; }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body { margin: 0; padding: 14px 10px; background: var(--bg); color: var(--text); font: 13px/1.38 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .terminal { width: min(1080px, 100%); min-height: 640px; margin: 0 auto; padding: 14px 16px 11px; overflow: hidden; border: 1px solid var(--line); background: var(--terminal); }
+    .line { min-height: 1.38em; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .dim { color: var(--dim); }
+    .cyan { color: var(--cyan); }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .provider-color { color: var(--provider); }
+    .rule { color: var(--line); user-select: none; white-space: nowrap; overflow: hidden; }
+    .title-line { color: #f3f8fa; font-weight: 700; letter-spacing: .04em; }
+    .selector { margin: 2px 0; }
+    .selector-label { color: var(--dim); }
+    .selector-option { color: var(--dim); cursor: pointer; }
+    .selector-option:hover, .selector-option:focus-visible { color: var(--text); outline: none; text-decoration: underline; text-underline-offset: 3px; }
+    .selector-option.selected { color: var(--provider); font-weight: 700; }
+    .selector-option.selected::before { color: var(--cyan); content: "▸ "; }
+    .graph-heading { color: #f3f8fa; margin-top: 4px; }
+    .graph { margin: 3px 0 0; overflow-x: auto; color: var(--dim); font: inherit; line-height: 1.32; tab-size: 2; }
+    .graph .grid { color: #2c4653; }
+    .graph .actual { color: var(--provider); }
+    .graph .guide { color: var(--guide); }
+    .graph .both { color: var(--cyan); }
+    .graph .point { cursor: pointer; }
+    .graph .point:hover, .graph .point:focus-visible { color: #fff; outline: 1px solid var(--cyan); outline-offset: 1px; }
+    .inspector { margin: 4px 0; padding: 2px 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .legend { color: var(--dim); }
+    .legend .actual-key { color: var(--provider); }
+    .legend .guide-key { color: var(--guide); }
+    .no-history { margin: 4px 0; color: var(--warn); white-space: pre-wrap; }
+    .no-history .dim { color: var(--dim); }
+    kbd { color: var(--cyan); font: inherit; }
+    .footer { margin-top: 6px; color: var(--dim); }
+    @media (max-width: 560px) {
+      body { padding: 5px; font-size: 11px; }
+      .terminal { min-height: 600px; padding: 9px 7px 8px; }
+      .graph { font-size: 10px; }
+    }
+    @media (max-width: 370px) {
+      body { font-size: 10px; }
+      .graph { font-size: 9px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="terminal" aria-label="Gradus terminal usage history">
+    <div class="line rule">┌──────────────────────────────────── GRADUS ────────────────────────────────────┐</div>
+    <div class="line title-line">│ provider usage pace                                                        <span id="live-status" class="good">● live</span> │</div>
+    <div class="line rule">├───────────────────────────────────────────────────────────────────────────────┤</div>
+    <div class="line">│ <span class="selector-label">provider:</span> <span id="provider-row" class="selector" role="listbox" aria-label="Provider"></span></div>
+    <div class="line">│ <span class="selector-label">window:  </span> <span id="window-row" class="selector" role="listbox" aria-label="Usage window"></span></div>
+    <div class="line rule">├───────────────────────────────────────────────────────────────────────────────┤</div>
+    <div id="graph-heading" class="line graph-heading">│ </div>
+    <div id="chart-region"></div>
+    <div id="legend" class="line legend">│ </div>
+    <div class="line rule">├───────────────────────────────────────────────────────────────────────────────┤</div>
+    <div class="line footer">│ keys: <kbd>1–9</kbd> provider · <kbd>←/→</kbd> window · <kbd>j/k</kbd> point · <kbd>tab</kbd> focus points · <kbd>r</kbd> refresh</div>
+    <div class="line footer">└────────────────────────────── remaining capacity ────────────────────────────────┘</div>
+  </main>
+
+  <script>
+    // Canonical fixture: one provider/window series at a time. null means no history, not zero.
+    const model = {
+      selectedProvider: 'Claude', selectedWindow: '5h',
+      providers: [
+        { id: 'Claude', label: 'Claude', accent: '#d78b64', windows: {
+          '5h': { label: '5h', reset: 'resets in 2h 41m', history: [['09:32',86,88],['10:02',80,84],['10:32',76,80],['11:02',79,76],['11:32',68,72],['12:02',62,68],['12:32',66,64],['13:02',57,60],['13:32',51,56],['14:02',55,52],['14:32',47,48]] },
+          '1w': { label: '1w', reset: 'resets in 4d 02h', history: [['Mon',73,78],['Tue',69,74],['Wed',71,70],['Thu',65,66],['Fri',61,62],['Sat',64,58],['Sun',58,54]] }
+        } },
+        { id: 'Codex', label: 'Codex', accent: '#78a9dc', windows: {
+          '5h': { label: '5h', reset: 'resets in 1h 18m', history: [['09:32',92,90],['10:02',88,86],['10:32',83,82],['11:02',86,78],['11:32',78,74],['12:02',73,70],['12:32',76,66],['13:02',68,62],['13:32',64,58],['14:02',67,54],['14:32',60,50]] },
+          '1w': { label: '1w', reset: 'resets in 3d 06h', history: [['Mon',81,84],['Tue',77,79],['Wed',78,74],['Thu',73,69],['Fri',69,64],['Sat',70,59],['Sun',66,54]] }
+        } },
+        { id: 'Copilot', label: 'Copilot', accent: '#a890d9', windows: {
+          '5h': { label: '5h', reset: 'resets in 3h 07m', history: [['09:32',64,70],['10:02',60,66],['10:32',63,62],['11:02',55,58],['11:32',51,54],['12:02',54,50],['12:32',45,46],['13:02',42,42],['13:32',46,38],['14:02',37,34],['14:32',34,30]] },
+          '1w': { label: '1w', reset: 'history not collected', history: null }
+        } }
+      ]
+    };
+
+    const $ = selector => document.querySelector(selector);
+    const provider = () => model.providers.find(item => item.id === model.selectedProvider);
+    const windowData = () => provider().windows[model.selectedWindow];
+    const esc = value => String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[char]));
+    let focusedPoint = 0;
+
+    function optionMarkup(items, selected, kind) {
+      return items.map((item, index) => {
+        const key = kind === 'provider' ? index + 1 : index === 0 ? '←' : '→';
+        const id = kind === 'provider' ? item.id : item.label;
+        return `<span class="selector-option ${id === selected ? 'selected' : ''}" data-${kind}="${esc(id)}" role="option" aria-selected="${id === selected}" tabindex="0">[${key}] ${esc(item.label || item)}${item.history ? '' : kind === 'window' ? ' (no history)' : ''}</span> `;
+      }).join('');
+    }
+
+    function gridChar(actual, guide, actualIndex, guideIndex, actualChar) {
+      if (actualIndex !== null) return `<span class="point ${actual && guide ? 'both' : 'actual'}" data-point="${actualIndex}" tabindex="0" aria-label="observation ${actualIndex + 1}">${actual && guide ? '◎' : '●'}</span>`;
+      if (guideIndex !== null) return `<span class="guide" aria-hidden="true">•</span>`;
+      if (actual) return `<span class="actual" aria-hidden="true">${actualChar || '─'}</span>`;
+      if (guide) return '<span class="guide" aria-hidden="true">·</span>';
+      return '<span class="grid">·</span>';
+    }
+
+    function renderTerminalGraph(history) {
+      const narrow = window.innerWidth < 560;
+      const width = narrow ? 49 : 73;
+      const height = narrow ? 13 : 16;
+      const yFor = value => Math.max(0, Math.min(height - 1, Math.round((100 - value) * (height - 1) / 100)));
+      const xFor = index => history.length === 1 ? Math.floor(width / 2) : Math.round(index * (width - 1) / (history.length - 1));
+      const cells = Array.from({ length: height }, () => Array.from({ length: width }, () => ({ grid: true, actual: false, guide: false, actualIndex: null, guideIndex: null, actualChar: '─' })));
+      [0,25,50,75,100].forEach(value => { const row = yFor(value); cells[row].forEach(cell => { cell.grid = true; }); });
+      const paintLine = (first, second, type) => {
+        const [x1,y1] = first, [x2,y2] = second;
+        const distance = Math.max(1, Math.abs(x2 - x1));
+        for (let step = 0; step <= distance; step += 1) {
+          const col = Math.round(x1 + (x2 - x1) * step / distance);
+          const row = Math.round(y1 + (y2 - y1) * step / distance);
+          if (cells[row]?.[col]) {
+            cells[row][col][type] = true;
+            if (type === 'actual') cells[row][col].actualChar = y2 < y1 ? '╱' : y2 > y1 ? '╲' : '─';
+          }
+        }
+      };
+      history.forEach((record, index) => {
+        const x = xFor(index), actualY = yFor(record[1]), guideY = yFor(record[2]);
+        cells[actualY][x].actualIndex = index; cells[actualY][x].actual = true;
+        cells[guideY][x].guideIndex = index; cells[guideY][x].guide = true;
+        if (index) { paintLine([xFor(index - 1), yFor(history[index - 1][1])], [x, actualY], 'actual'); paintLine([xFor(index - 1), yFor(history[index - 1][2])], [x, guideY], 'guide'); }
+      });
+      const labels = [100,75,50,25,0];
+      const rows = Array.from({ length: height }, (_, row) => {
+        const label = labels.find(value => yFor(value) === row);
+        const cellsMarkup = cells[row].map(cell => gridChar(cell.actual, cell.guide, cell.actualIndex, cell.guideIndex, cell.actualChar)).join('');
+        return `│ ${label === undefined ? '   ' : String(label).padStart(3)}% ┤${cellsMarkup}`;
+      }).join('\n');
+      const xLabelChars = Array.from({ length: width }, () => ' ');
+      history.forEach((record, index) => {
+        if (narrow && index % 2 === 1 && index !== history.length - 1) return;
+        const text = String(record[0]).slice(0, narrow ? 5 : 5);
+        [...text].forEach((char, offset) => { const column = xFor(index) + offset - Math.floor(text.length / 2); if (column >= 0 && column < width) xLabelChars[column] = char; });
+      });
+      return `<pre class="graph" aria-label="${esc(provider().label)} ${esc(windowData().label)} remaining capacity graph"><span class="dim">│       ${xLabelChars.join('')}</span>\n${rows}\n│       └${'─'.repeat(width)}┘</pre>`;
+    }
+
+    function showPoint(index) {
+      const record = windowData().history?.[index];
+      if (!record) return;
+      focusedPoint = index;
+      const difference = record[1] - record[2];
+      $('#inspector').textContent = `│ point ${String(index + 1).padStart(2)}/${windowData().history.length} ${record[0]}  actual ${record[1]}% remain  guide ${record[2]}%  ${difference >= 0 ? '+' : ''}${difference} pts ${difference >= 0 ? 'ahead' : 'behind'}`;
+    }
+
+    function render() {
+      const currentProvider = provider();
+      const data = windowData();
+      document.documentElement.style.setProperty('--provider', currentProvider.accent);
+      $('#provider-row').innerHTML = optionMarkup(model.providers, model.selectedProvider, 'provider');
+      $('#window-row').innerHTML = optionMarkup(Object.values(currentProvider.windows), model.selectedWindow, 'window');
+      $('#graph-heading').textContent = `│ ${currentProvider.label} / ${data.label}  remaining capacity  current: ${data.history ? data.history[data.history.length - 1][1] + '%' : '—'}  ${data.reset}`;
+      if (!data.history) {
+        $('#chart-region').innerHTML = `<div class="no-history">│ !! no history for ${esc(currentProvider.label)} / ${esc(data.label)}\n│ $ history --provider ${esc(currentProvider.id)} --window ${esc(data.label)}\n│ <span class="dim">no observations; curve and pace guide omitted\n│ current remaining: unavailable (nothing inferred)</span></div>`;
+        $('#legend').textContent = '│ legend: no plotted values · waiting for an observed snapshot';
+      } else {
+        $('#chart-region').innerHTML = renderTerminalGraph(data.history) + '<div id="inspector" class="inspector" aria-live="polite"></div>';
+        $('#legend').innerHTML = `│ legend: <span class="actual-key">● actual remaining</span>  <span class="guide-key">• · pace guide remaining</span>  <span class="dim">| positive = ahead</span>`;
+        showPoint(Math.min(focusedPoint, data.history.length - 1));
+      }
+    }
+
+    function chooseProvider(id) {
+      model.selectedProvider = id;
+      const available = Object.keys(provider().windows);
+      if (!available.includes(model.selectedWindow)) model.selectedWindow = available[0];
+      focusedPoint = 0; render();
+    }
+    function chooseWindow(id) { model.selectedWindow = id; focusedPoint = 0; render(); }
+    document.addEventListener('click', event => {
+      const providerChoice = event.target.closest('[data-provider]');
+      const windowChoice = event.target.closest('[data-window]');
+      const point = event.target.closest('[data-point]');
+      if (providerChoice) chooseProvider(providerChoice.dataset.provider);
+      else if (windowChoice) chooseWindow(windowChoice.dataset.window);
+      else if (point) showPoint(Number(point.dataset.point));
+    });
+    document.addEventListener('focusin', event => { const point = event.target.closest('[data-point]'); if (point) showPoint(Number(point.dataset.point)); });
+    document.addEventListener('keydown', event => {
+      const providerChoice = event.target.closest('[data-provider]');
+      const windowChoice = event.target.closest('[data-window]');
+      if (providerChoice && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); chooseProvider(providerChoice.dataset.provider); return; }
+      if (windowChoice && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); chooseWindow(windowChoice.dataset.window); return; }
+      if (/^[1-9]$/.test(event.key) && !event.target.closest('[data-point]')) { const item = model.providers[Number(event.key) - 1]; if (item) chooseProvider(item.id); return; }
+      if (event.key === 'j' || event.key === 'k') { const history = windowData().history; if (history) { showPoint(Math.max(0, Math.min(history.length - 1, focusedPoint + (event.key === 'j' ? 1 : -1)))); document.querySelector(`[data-point="${focusedPoint}"]`)?.focus(); } return; }
+      if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && document.activeElement.closest?.('[data-window]')) { const windows = Object.keys(provider().windows); const index = windows.indexOf(model.selectedWindow); chooseWindow(windows[(index + (event.key === 'ArrowRight' ? 1 : windows.length - 1)) % windows.length]); }
+    });
+    window.addEventListener('resize', render);
+    render();
+  </script>
+</body>
+</html>
