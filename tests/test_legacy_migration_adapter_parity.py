@@ -28,8 +28,26 @@ from gradus.paths import installed_runtime_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 HOSTS = ROOT / "app" / "GradusMac" / "LegacyRuntimeMigrationHosts.swift"
+AGENT = ROOT / "app" / "GradusRefreshAgent" / "RefreshAgent.swift"
 INSTALL = ROOT / "launchd" / "install.sh"
 WRAPPER_TEMPLATE = ROOT / "launchd" / "gradus_snapshot.sh.in"
+
+PRODUCER_ENVIRONMENT_SOURCES = (HOSTS, AGENT)
+
+
+def _producer_environment(source: str) -> dict[str, str]:
+    """Return the literal environment dict a Swift producer launch site builds.
+
+    Both sites scrub the inherited environment and hand the producer a fixed
+    dict, so the dict text is the whole contract; parsing it is enough.
+    """
+    start = source.index('"GRADUS_RUNTIME_MODE": "installed"')
+    entries: dict[str, str] = {}
+    for line in source[start : source.index("]", start)].splitlines():
+        key, separator, value = line.strip().rstrip(",").partition('": ')
+        if separator:
+            entries[key.lstrip('"')] = value
+    return entries
 
 
 class LegacyAdapterParityTests(unittest.TestCase):
@@ -89,6 +107,53 @@ class LegacyAdapterParityTests(unittest.TestCase):
 
     def test_the_standalone_bridge_is_looked_for_in_the_users_applications(self) -> None:
         self.assertIn('"Applications/GradusCredentialBridge.app"', self.hosts)
+
+    def test_both_producer_launch_sites_agree_on_the_environment(self) -> None:
+        # The Mac app's preflight and the refresh agent each build their own
+        # scrubbed dict, and nothing made them agree until this test.  A key
+        # present in one and missing from the other is invisible in every
+        # Swift test, because each site's tests only ever see its own dict.
+        dicts = {
+            path.name: _producer_environment(path.read_text())
+            for path in PRODUCER_ENVIRONMENT_SOURCES
+        }
+        keys = {name: sorted(entries) for name, entries in dicts.items()}
+        self.assertEqual(
+            len(set(map(tuple, keys.values()))),
+            1,
+            f"producer launch sites disagree on which variables the producer gets: {keys}",
+        )
+
+    def test_both_producer_launch_sites_name_the_console_user(self) -> None:
+        # Claude Code resolves its stored credential by account name and answers
+        # "Not logged in" without USER/LOGNAME, so the stale-credential self-heal
+        # silently never worked from launchd until 2026-09-15.  `NSUserName()`
+        # rather than the caller's environment: launchd gives a user agent
+        # neither reliably, and the console user is the account that matters.
+        for path in PRODUCER_ENVIRONMENT_SOURCES:
+            source = path.read_text()
+            entries = _producer_environment(source)
+            self.assertIn("NSUserName()", source, path.name)
+            for variable in ("USER", "LOGNAME"):
+                self.assertEqual(entries.get(variable), "userName", f"{path.name} {variable}")
+
+    def test_both_producer_launch_sites_put_the_local_bin_first_on_path(self) -> None:
+        # The self-heal shells out to ~/.agent/bin/claude-headless, whose roster
+        # lookup runs under a `#!/usr/bin/env -S uv run --script` shebang; without
+        # `uv` on PATH it exits 127 and never reaches Claude Code at all.
+        tails = set()
+        for path in PRODUCER_ENVIRONMENT_SOURCES:
+            value = _producer_environment(path.read_text())["PATH"]
+            _, separator, tail = value.partition(".path)")
+            self.assertTrue(
+                separator, f"{path.name} PATH is not rooted at an interpolated home: {value}"
+            )
+            self.assertTrue(
+                tail.startswith("/.local/bin:"),
+                f"{path.name} PATH does not start at the home-local bin: {value}",
+            )
+            tails.add(tail)
+        self.assertEqual(len(tails), 1, f"producer launch sites disagree on PATH: {sorted(tails)}")
 
     def test_the_preflight_creates_every_directory_the_producer_needs(self) -> None:
         # The producer creates the leaf of each with a bare `mkdir` so its lock
