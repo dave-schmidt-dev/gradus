@@ -28,6 +28,42 @@ final class RefreshAgentTests: XCTestCase {
         try assertCredentialFree(fixture.status.statuses)
     }
 
+    /// Regression for 2026-09-15: the Claude card read offline every morning
+    /// because the scrubbed producer environment was missing two variables the
+    /// stale-credential self-heal needs.
+    ///
+    /// `~/.local/bin` on PATH: the self-heal runs `~/.agent/bin/claude-headless`,
+    /// whose roster lookup has a `#!/usr/bin/env -S uv run --script` shebang. With
+    /// the old PATH the roster exited 127 and the wrapper died before reaching
+    /// Claude Code at all.
+    ///
+    /// `USER`/`LOGNAME`: Claude Code resolves its Keychain account from them and
+    /// answers `Not logged in - Please run /login` without them, for a session
+    /// that is signed in. The wrapper then returns non-zero and the provider
+    /// records "recovery unavailable".
+    ///
+    /// Both the bridge and the producer are checked: the environment is built
+    /// once and handed to both, and a future split that fixes only one launch is
+    /// exactly the drift this pins down.
+    func testProducerEnvironmentCarriesClaudeSelfHealPrerequisites() throws {
+        let fixture = try Fixture(outcomes: [.success, .success])
+
+        XCTAssertEqual(fixture.agent.run(), .success)
+
+        let expectedPath = fixture.root.appending(path: "home").path
+            + "/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        let expectedUser = NSUserName()
+        XCTAssertFalse(expectedUser.isEmpty, "NSUserName() must resolve for the account name to mean anything")
+
+        for (index, invocation) in fixture.runner.invocations.enumerated() {
+            XCTAssertEqual(invocation.environment["PATH"], expectedPath, "invocation \(index) PATH")
+            XCTAssertEqual(invocation.environment["USER"], expectedUser, "invocation \(index) USER")
+            XCTAssertEqual(invocation.environment["LOGNAME"], expectedUser, "invocation \(index) LOGNAME")
+        }
+
+        try assertCredentialFree(fixture.status.statuses)
+    }
+
     func testBridgeFailureContinuesToProducerWithDegradedSuccess() throws {
         let fixture = try Fixture(outcomes: [.failure(exitStatus: 1), .success])
 

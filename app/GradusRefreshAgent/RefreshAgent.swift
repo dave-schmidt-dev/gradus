@@ -369,13 +369,29 @@ struct RefreshAgent {
         return .failed
     }
 
+    /// Scrubbed on purpose, so every variable the producer needs is named here.
+    /// Claude's stale-credential self-heal needs two that were missing until
+    /// 2026-09-15, which is why the Claude card read offline every morning.
+    /// It shells out to `~/.agent/bin/claude-headless`: that wrapper's roster
+    /// lookup runs under a `uv run --script` shebang and exits 127 unless PATH
+    /// reaches `~/.local/bin`, and Claude Code itself answers `Not logged in`
+    /// unless `USER`/`LOGNAME` name the account holding its stored credential.
+    /// Either one missing makes a signed-in session look signed out.
+    ///
+    /// `NSUserName()`, not the caller's environment: launchd starts this in
+    /// David's GUI session and the console user is the account that matters.
+    /// The agent still reads no credential -- it only names the user, so the
+    /// process it launches can find its own.
     private func fixedEnvironment(homeDirectory: URL) -> [String: String] {
-        [
+        let userName = NSUserName()
+        return [
             "GRADUS_RUNTIME_MODE": "installed",
             "HOME": homeDirectory.path,
             "LANG": "en_US.UTF-8",
-            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-            "TMPDIR": "/tmp"
+            "LOGNAME": userName,
+            "PATH": "\(homeDirectory.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "TMPDIR": "/tmp",
+            "USER": userName
         ]
     }
 }

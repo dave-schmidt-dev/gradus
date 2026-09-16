@@ -207,12 +207,20 @@ final class BundledProducerPreflight: IsolatedProducerRunning {
         let process = Process()
         process.executableURL = runtimeExecutable
         process.arguments = ["--refresh-snapshot"]
+        // Same shape as `RefreshAgent.fixedEnvironment` and for the same reasons
+        // documented there: `~/.local/bin` on PATH for the self-heal wrapper's
+        // `uv` shebang, and `USER`/`LOGNAME` so Claude Code can find its Keychain
+        // account. Kept identical to the real agent's dict on purpose -- the two
+        // drifting apart is how a producer launch site quietly loses a variable.
+        let userName = NSUserName()
         process.environment = [
             "GRADUS_RUNTIME_MODE": "installed",
             "HOME": stateRoot.path,
             "LANG": "en_US.UTF-8",
-            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-            "TMPDIR": NSTemporaryDirectory()
+            "LOGNAME": userName,
+            "PATH": "\(stateRoot.path)/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "TMPDIR": NSTemporaryDirectory(),
+            "USER": userName
         ]
         process.standardOutput = Pipe()
         process.standardError = Pipe()

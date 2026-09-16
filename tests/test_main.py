@@ -2802,10 +2802,22 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             'REPO_ROOT="${GRADUS_REPO_ROOT:-__GRADUS_REPO_ROOT__}"',
             wrapper,
         )
+        # `~/.local/bin` leads the PATH for Claude's stale-credential self-heal:
+        # it shells out to ~/.agent/bin/claude-headless, whose roster lookup runs
+        # under a `uv run --script` shebang and exits 127 without `uv`.
+        # USER/LOGNAME are exported alongside it because Claude Code looks up its
+        # stored credential by account name and reports "Not logged in" without
+        # them -- launchd hands a user agent neither reliably. Both were missing
+        # until 2026-09-15, which is why Claude read offline every morning.
         required_path = (
-            'export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"'
+            'export PATH="${HOME}/.local/bin'
+            ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"'
         )
         self.assertIn(required_path, wrapper)
+        self.assertIn('USER="${USER:-$(/usr/bin/id -un)}"', wrapper)
+        self.assertIn('LOGNAME="${LOGNAME:-${USER}}"', wrapper)
+        self.assertIn("export USER LOGNAME", wrapper)
+        self.assertLess(wrapper.index("export USER LOGNAME"), wrapper.index("GRADUS_PYTHON="))
         self.assertIn(
             'GRADUS_PYTHON="${GRADUS_PYTHON:-__GRADUS_PYTHON_PATH__}"',
             wrapper,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pwd
 import stat
 import subprocess
 import tempfile
@@ -26,6 +27,7 @@ class LaunchdInstallTests(unittest.TestCase):
         self.launchctl_log = self.root / "launchctl.log"
         self.event_log = self.root / "events.log"
         self.python_log = self.root / "python.log"
+        self.python_env_log = self.root / "python-env.log"
         self.bridge_log = self.root / "bridge.log"
         self.run_at_load_counter = self.root / "run-at-load-counter"
         self.snapshot_path = self.root / "state" / "snapshot-v2.json"
@@ -80,6 +82,8 @@ esac
             """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' \"$*\" >> \"$GRADUS_TEST_PYTHON_LOG\"
+printf 'PATH=%s\\nUSER=%s\\nLOGNAME=%s\\n' \"${PATH:-}\" \"${USER:-}\" \"${LOGNAME:-}\" \
+  >> \"${GRADUS_TEST_PYTHON_ENV_LOG:-/dev/null}\"
 if [[ \"${1:-}\" == \"-\" ]]; then
   test -f \"${2:?snapshot path is required}\" || exit 1
   tr -cd '0-9' < \"$2\"
@@ -153,6 +157,7 @@ exit 64
                 "GRADUS_TEST_EVENT_LOG": str(self.event_log),
                 "GRADUS_TEST_BOOTOUT_MARKER": str(self.root / "bootout-marker"),
                 "GRADUS_TEST_PYTHON_LOG": str(self.python_log),
+                "GRADUS_TEST_PYTHON_ENV_LOG": str(self.python_env_log),
                 "GRADUS_TEST_BRIDGE_LOG": str(self.bridge_log),
                 "GRADUS_DEADLINE_RUNNER": str(self.bin_dir / "deadline-runner"),
                 "GRADUS_TEST_RUN_AT_LOAD_COUNTER": str(self.run_at_load_counter),
@@ -294,6 +299,56 @@ exit 64
             f"refresh --cache-directory {isolated_repo / '.cache'}",
         )
         self.assertIn("--refresh-snapshot", self.python_log.read_text(encoding="utf-8"))
+
+    def test_wrapper_gives_the_producer_claude_self_heal_prerequisites(self) -> None:
+        """Regression for 2026-09-15: Claude read offline every morning.
+
+        The producer's Claude probe self-heals a stale Claude Code credential by
+        shelling out to ``~/.agent/bin/claude-headless``. Two environment
+        variables that path needs were missing from every producer launch:
+
+        * ``~/.local/bin`` on ``PATH`` -- the wrapper's roster lookup runs under a
+          ``#!/usr/bin/env -S uv run --script`` shebang, so without ``uv`` it exits
+          127 and the self-heal never reaches Claude Code.
+        * ``USER``/``LOGNAME`` -- Claude Code resolves its Keychain account from
+          them and answers "Not logged in" without them, for a session that is
+          signed in perfectly well.
+
+        launchd hands a user agent neither reliably, so the wrapper is run here
+        with both scrubbed from the environment, which is the condition that
+        actually reproduced the bug.
+        """
+        self.assertEqual(self._run().returncode, 0)
+        wrapper = self.home / ".launchd/scripts/gradus_snapshot.sh"
+        environment = self._environment()
+        isolated_repo = self.root / "repo"
+        isolated_repo.mkdir()
+        environment["GRADUS_REPO_ROOT"] = str(isolated_repo)
+        for scrubbed in ("USER", "LOGNAME"):
+            environment.pop(scrubbed, None)
+
+        result = subprocess.run(
+            ["bash", str(wrapper)],
+            cwd=REPO_ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        observed = dict(
+            line.split("=", 1)
+            for line in self.python_env_log.read_text(encoding="utf-8").splitlines()
+            if "=" in line
+        )
+        self.assertTrue(
+            observed["PATH"].startswith(f"{self.home}/.local/bin:"),
+            f"producer PATH must lead with the user bin directory, got {observed['PATH']}",
+        )
+        expected_user = pwd.getpwuid(os.getuid()).pw_name
+        self.assertEqual(observed["USER"], expected_user)
+        self.assertEqual(observed["LOGNAME"], expected_user)
 
     def test_wrapper_continues_with_static_status_when_bridge_fails(self) -> None:
         self.assertEqual(self._run().returncode, 0)

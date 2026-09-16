@@ -32,7 +32,17 @@
 
 set -uo pipefail
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# `~/.local/bin` is first because Claude's stale-credential self-heal shells out
+# to ~/.agent/bin/claude-headless, whose roster lookup runs under a
+# `#!/usr/bin/env -S uv run --script` shebang; without `uv` it exits 127 and the
+# self-heal never reaches Claude Code. USER/LOGNAME are exported for the same
+# path: Claude Code resolves its Keychain account from them and reports
+# "Not logged in" without them, for a session that is signed in. launchd gives a
+# user agent neither reliably, so both are derived here rather than inherited.
+export PATH="${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+USER="${USER:-$(/usr/bin/id -un)}"
+LOGNAME="${LOGNAME:-${USER}}"
+export USER LOGNAME
 
 REPO_ROOT="${GRADUS_REPO_ROOT:-__GRADUS_REPO_ROOT__}"
 
