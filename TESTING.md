@@ -174,10 +174,16 @@ inherited a forbidden loader variable. `test-build-gradus-runtime.sh` does this
 against the unsigned build output; the signed copy needs its own run because signing
 is what changes.
 
-iOS snapshot baselines are canonical to the pinned local Xcode and simulator
-runtime. Refresh them only from an exact local result bundle after reviewing
-every rendered image. The replacement is not accepted until the candidate-bound
-local gate reruns green against the new files.
+iOS and macOS snapshot/UI baselines are canonical to the pinned local Xcode,
+host macOS, and simulator runtime. The exact host pin is tracked in
+`app/.macos-version` (currently `26.6.2`); `app/test-gate.sh` compares it to
+`sw_vers -productVersion` before Xcode project generation or native tests.
+Refresh baselines only from an exact local result bundle after reviewing every
+rendered image. For a deliberate OS upgrade, verify the intended Xcode and iOS
+runtime pins, replace `app/.macos-version` with the new exact
+`sw_vers -productVersion`, regenerate and review the affected baselines on that
+host, then rerun `bash app/test-gate-selfcheck.sh` and the candidate-bound local
+gate. Do not change the pin just to bypass a preflight mismatch.
 
 ## Cross-language rules: shared truth tables
 

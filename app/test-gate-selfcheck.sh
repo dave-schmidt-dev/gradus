@@ -66,6 +66,29 @@ source "$GATE_SCRIPT"
 validate_counting_leg_declarations || fail "live counting-leg declarations are invalid"
 validate_density_image_snapshot_selectors || fail "live density image snapshot selectors are invalid"
 
+macos_pin_fixture="$diagnostic_test_root/macos-version"
+printf '26.6.2\n' >"$macos_pin_fixture"
+validate_macos_version_pin "$macos_pin_fixture" "26.6.2" ||
+  fail "matching macOS version pin was rejected"
+expect_failure "mismatching macOS version pin" \
+  validate_macos_version_pin "$macos_pin_fixture" "26.6.3"
+printf '26.6\n' >"$macos_pin_fixture"
+expect_failure "malformed macOS version pin" \
+  validate_macos_version_pin "$macos_pin_fixture" "26.6.2"
+rm -f "$macos_pin_fixture"
+expect_failure "missing macOS version pin" \
+  validate_macos_version_pin "$macos_pin_fixture" "26.6.2"
+grep -Fq 'PINNED_MACOS_VERSION_PATH="$GATE_SCRIPT_DIR/.macos-version"' "$GATE_SCRIPT" ||
+  fail "macOS version pin path is not rooted in the gate script directory"
+grep -Fq 'sw_vers -productVersion' "$GATE_SCRIPT" ||
+  fail "macOS preflight does not read sw_vers -productVersion"
+grep -Fq 'validate_macos_version_pin "$PINNED_MACOS_VERSION_PATH" "$active_macos_version"' "$GATE_SCRIPT" ||
+  fail "macOS preflight does not validate the active version against its pin"
+macos_preflight_line="$(grep -n 'validate_macos_version_pin "$PINNED_MACOS_VERSION_PATH"' "$GATE_SCRIPT" | cut -d: -f1)"
+xcodegen_line="$(grep -n '^xcodegen generate$' "$GATE_SCRIPT" | cut -d: -f1)"
+[[ -n "$macos_preflight_line" && -n "$xcodegen_line" && "$macos_preflight_line" -lt "$xcodegen_line" ]] ||
+  fail "macOS version preflight does not run before Xcode project generation"
+
 emit_failed_diagnostic_fixture() {
   printf 'credential-free failure detail\n'
   return 37

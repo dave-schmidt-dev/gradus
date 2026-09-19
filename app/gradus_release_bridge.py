@@ -975,7 +975,9 @@ def _candidate_lane(candidate: str) -> str:
         return "standard"
     manifest, _attestation = central
     lane = manifest.get("lane")
-    return lane if isinstance(lane, str) and lane.strip() else "standard"
+    if not isinstance(lane, str) or not lane.strip():
+        raise _ObservationError("candidate-lane-invalid")
+    return lane
 
 
 def _confirmed_tester_group(candidate: str) -> tuple[str, str] | None:
@@ -1049,6 +1051,10 @@ def _assignment(candidate: str, *, runner: Callable[..., subprocess.CompletedPro
     give the same candidate two disagreeing records of the same act.
     """
 
+    try:
+        lane = _candidate_lane(candidate)
+    except _ObservationError as error:
+        return _blocked("assignment", candidate, str(error))
     binding = _candidate_bindings(candidate)
     if binding is None:
         return _blocked("assignment", candidate, "candidate-ledger-mismatch")
@@ -1100,7 +1106,7 @@ def _assignment(candidate: str, *, runner: Callable[..., subprocess.CompletedPro
         # choice was honored, and is not a directory of who receives builds.
         observed={
             "groupIdentifierHash": hashlib.sha256(group_id.encode()).hexdigest(),
-            "lane": _candidate_lane(candidate),
+            "lane": lane,
         },
     )
 
@@ -1202,6 +1208,10 @@ def _notification_reconcile(candidate: str) -> int:
 def _observation_context(operation: str, candidate: str) -> tuple[int, str] | int:
     """Resolve the build number and upload confirmation both observers need."""
 
+    try:
+        _candidate_lane(candidate)
+    except _ObservationError as error:
+        return _blocked(operation, candidate, str(error))
     binding = _candidate_bindings(candidate)
     if binding is None:
         return _blocked(operation, candidate, "candidate-ledger-mismatch")

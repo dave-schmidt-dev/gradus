@@ -457,6 +457,34 @@ report_external_termination() {
   echo "      as a regression." >&2
 }
 
+validate_macos_version_pin() {
+  local pin_path="$1"
+  local active_version="$2"
+  local pinned_version
+
+  if [[ ! -f "$pin_path" ]]; then
+    echo "FAIL: macOS version pin is missing: $pin_path" >&2
+    return 1
+  fi
+  if ! pinned_version="$(<"$pin_path")"; then
+    echo "FAIL: could not read macOS version pin: $pin_path" >&2
+    return 1
+  fi
+  if [[ ! "$pinned_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "FAIL: macOS version pin is malformed: '$pinned_version' ($pin_path)" >&2
+    return 1
+  fi
+  if [[ ! "$active_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "FAIL: sw_vers returned a malformed macOS version: '$active_version'" >&2
+    return 1
+  fi
+  if [[ "$active_version" != "$pinned_version" ]]; then
+    echo "FAIL: active macOS is $active_version, pinned to $pinned_version (.macos-version)" >&2
+    echo "      snapshot baselines are host-OS-specific — update the pin and baselines deliberately on upgrade." >&2
+    return 1
+  fi
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 set -euo pipefail
 
@@ -553,6 +581,7 @@ echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
 assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
+PINNED_MACOS_VERSION_PATH="$GATE_SCRIPT_DIR/.macos-version"
 # Three legs take this machine-wide lock -- GradusMacUI and both simulator UI
 # legs. The two simulator legs take it through simctl_gate_lib.sh's
 # `gate_ui_test_lock`, which also deletes the XCTestDevices clones xcodebuild
@@ -605,11 +634,17 @@ if [[ "$active_xcode_version" != "$PINNED_XCODE_VERSION" ]]; then
   exit 1
 fi
 
+if ! active_macos_version="$(sw_vers -productVersion)"; then
+  echo "FAIL: could not read the active macOS version with sw_vers -productVersion" >&2
+  exit 1
+fi
+validate_macos_version_pin "$PINNED_MACOS_VERSION_PATH" "$active_macos_version"
+
 if ! xcrun simctl list runtimes | grep -q "iOS $SIM_OS_VERSION "; then
   echo "FAIL: iOS $SIM_OS_VERSION runtime is not installed (pinned simulator OS)" >&2
   exit 1
 fi
-echo "    Xcode $active_xcode_version, iOS $SIM_OS_VERSION runtime present. OK."
+echo "    Xcode $active_xcode_version, macOS $active_macos_version, iOS $SIM_OS_VERSION runtime present. OK."
 
 echo "==> Regenerating Xcode project from project.yml"
 xcodegen generate

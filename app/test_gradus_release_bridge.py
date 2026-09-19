@@ -1827,7 +1827,15 @@ class BridgeTests(unittest.TestCase):
             attributes["complianceState"] = compliance
         return {"data": [{"id": "build-1", "attributes": attributes}]}
 
-    def _dispatch_observed(self, operation: str, root: Path, responses: list, **kwargs) -> tuple:
+    def _dispatch_observed(
+        self,
+        operation: str,
+        root: Path,
+        responses: list,
+        *,
+        candidate: str = "gradus-ios-19",
+        **kwargs,
+    ) -> tuple:
         client = _RecordingClient(responses)
         with (
             patch.object(BRIDGE, "ROOT", root),
@@ -1836,7 +1844,7 @@ class BridgeTests(unittest.TestCase):
             status = BRIDGE.dispatch(
                 operation,
                 product="gradus-ios",
-                candidate="gradus-ios-19",
+                candidate=candidate,
                 client=client,
                 sleep=lambda _seconds: None,
                 **kwargs,
@@ -2385,7 +2393,9 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual([g["groupId"] for g in choices["internalGroups"]], ["group-1"])
 
     @staticmethod
-    def _central_candidate(root: Path, *, state: str, receipt: dict | None = None) -> str:
+    def _central_candidate(
+        root: Path, *, state: str, receipt: dict | None = None, lane: Any = "standard"
+    ) -> str:
         """Write a central manifest plus the legacy ledger it must bind to.
 
         Returns the artifact digest so a caller can build a receipt that either
@@ -2399,6 +2409,7 @@ class BridgeTests(unittest.TestCase):
             json.dumps(
                 {
                     "candidateId": "1.8.0-20",
+                    "lane": lane,
                     "release": {"marketingVersion": "1.8.0", "buildNumber": "20"},
                     "artifactAttestation": {"path": "artifact-attestation.json"},
                 }
@@ -2464,6 +2475,59 @@ class BridgeTests(unittest.TestCase):
                 self._central_candidate(root, state=state)
                 with patch.object(BRIDGE, "ROOT", root):
                     self.assertIsNone(BRIDGE._candidate_bindings("1.8.0-20"))
+
+    def test_central_candidate_lane_invalid_values_block_through_the_bridge(self) -> None:
+        for label, lane in {
+            "missing": None,
+            "non-string": 7,
+            "blank": " \t",
+        }.items():
+            with self.subTest(lane=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self._central_candidate(root, state="uploaded_unassigned", lane="standard")
+                manifest = (
+                    root
+                    / ".git"
+                    / "release-state"
+                    / "gradus-ios"
+                    / "candidates"
+                    / "1.8.0-20"
+                    / "manifest.json"
+                )
+                value = json.loads(manifest.read_text(encoding="utf-8"))
+                if label == "missing":
+                    value.pop("lane")
+                else:
+                    value["lane"] = lane
+                manifest.write_text(json.dumps(value), encoding="utf-8")
+
+                status, client = self._dispatch_observed(
+                    "tester-group",
+                    root,
+                    [],
+                    candidate="1.8.0-20",
+                )
+
+                self.assertEqual(status, 3)
+                self.assertEqual(client.requests, [])
+                proof = json.loads(
+                    (root / "evidence" / "1.8.0-20" / "tester-group.json").read_text()
+                )
+                self.assertEqual(proof["result"], "blocked")
+                self.assertEqual(proof["reason"], "candidate-lane-invalid")
+
+    def test_candidate_lane_uses_manifest_value_and_legacy_standard_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._central_candidate(root, state="uploaded_unassigned", lane="priority")
+            with patch.object(BRIDGE, "ROOT", root):
+                self.assertEqual(BRIDGE._candidate_lane("1.8.0-20"), "priority")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._legacy_candidate(root)
+            with patch.object(BRIDGE, "ROOT", root):
+                self.assertEqual(BRIDGE._candidate_lane("gradus-ios-19"), "standard")
 
     def test_upload_adopts_a_delivery_apple_already_accepted(self) -> None:
         """A receipt for these exact bytes passes without re-running transport.
