@@ -645,10 +645,10 @@ they are not additional public release routes. A prepared upload rechecks the
 checkout revision and clean status against its candidate record before any
 upload work, and source drift fails closed.
 
-The central fleet audit reports Gradus as adopted. Local hooks stay lightweight
-and do not run Xcode app automation; the candidate-bound local gate is the
-authoritative app-validation path. Optional hosted results remain separate from
-candidate-bound canary evidence.
+The central fleet audit reports Gradus as adopted. Pre-commit hooks stay fast and
+lightweight, while pre-push runs the authoritative full Gradus local gate;
+the candidate-bound local gate is the authoritative app-validation path.
+Optional hosted results remain separate from candidate-bound canary evidence.
 
 Every semantic product release gets one concise entry in `CHANGELOG.md`. Copy
 its release summary and test-focus text into App Store Connect's “What to
@@ -929,8 +929,9 @@ The same rule is why product/workflow questions here are settled by
 
 ### Git hooks (enforcement)
 
-Local hooks provide fast feedback, while the candidate-bound local gate provides
-authoritative app validation before release preparation.
+Pre-commit hooks provide fast feedback (lint, format, and dead-code checks), while
+pre-push runs the authoritative full Gradus local gate and the candidate-bound
+local gate provides authoritative app validation before release preparation.
 Python hooks run through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
 tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
 enforced by `scripts/check-static-tool-versions.sh`.
@@ -952,9 +953,16 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **pre-push** (~40s): the whole Python suite via `uv run pytest -q`. The hook
-  is `always_run` with `pass_filenames: false`, so a push
-  containing no Python change still runs it.
+- **pre-push**: runs the authoritative full Gradus local gate via
+  `scripts/pre-push-full-gate.sh`. The hook is unconditional (`always_run: true`,
+  `pass_filenames: false`, `require_serial: true`), so every push runs the full gate.
+  It can take over simulator and UI resources (running under `caffeinate -disu`
+  without an outer UI lock), derives its static comparison base from the upstream
+  merge base (`git merge-base HEAD "$upstream"`), and supports an explicit
+  `GRADUS_STATIC_BASE` override. Because pre-commit buffers hook output, the wrapper
+  also mirrors gate output to the controlling terminal when one is available.
+  `GRADUS_PROGRESS_DEVICE` is an explicit diagnostic/test override for that mirror.
+  Physical-device acceptance and signed-Keychain acceptance remain explicitly separate.
 - **release gate**: `app/test-gate.sh` runs the local macOS and simulator app
   automation against candidate-bound source. Physical-device acceptance remains
   a separate owner gate. Supply the commit preceding your changes, for example

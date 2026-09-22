@@ -1,7 +1,6 @@
-# Local git hooks — this project keeps local enforcement lightweight and fast.
-# pre-commit runs fast checks (lint + format); pre-push runs the Python suite.
-# Required Xcode Cloud checks run after push for app validation, and no Xcode
-# app automation runs locally at either stage.
+# Local git hooks — pre-commit keeps commit checks lightweight and fast
+# (lint, format, dead code); pre-push runs the authoritative full Gradus
+# local gate (scripts/pre-push-full-gate.sh).
 # Python hooks use the project's `uv run` tools. SwiftLint, SwiftFormat, and
 # ShellCheck are PATH tools whose exact required versions are fail-closed by
 # `scripts/check-static-tool-versions.sh`.
@@ -81,14 +80,11 @@ repos:
         stages: [pre-commit]
 
       # ---- pre-push ----
-      # `467227f` moved app validation to Xcode Cloud and dropped the pre-push
-      # app gate, which left the Python suite gated by nothing: the required
-      # cloud checks cover the two Swift contexts only. This restores the Python
-      # leg alone. The simulator legs belong to the cloud now, and a local
-      # `xcodebuild` Mac test host is what hung a push for 600s on 2026-08-18.
-      - id: pytest
-        name: pytest (Python suite)
-        entry: uv run pytest -q
+      # Runs the authoritative full Gradus local gate via scripts/pre-push-full-gate.sh,
+      # deriving the static comparison base from upstream merge-base or GRADUS_STATIC_BASE.
+      - id: pre-push-full-gate
+        name: pre-push full gate
+        entry: scripts/pre-push-full-gate.sh
         language: system
         pass_filenames: false
         always_run: true

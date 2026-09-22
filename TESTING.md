@@ -127,12 +127,20 @@ GradusKit needs its own step because it is consumed as a SwiftPM package
 *dependency*: `xcodebuild test -scheme GradusMac|GradusiOS` builds its library
 product but never its test targets, and XcodeGen cannot add them to a scheme's
 `test:` block since they are not project targets. Without step 2 the package's
-tests — the reconciliation core both apps import — do not run at all.
+tests — the reconciliation core both apps import — do not run at all. The gate
+builds that package in a disposable scratch directory outside the File Provider
+checkout so Finder metadata cannot make SwiftPM's generated test bundle fail
+codesigning; the scratch directory is removed after the leg.
 
-Local hooks are kept free of app automation: pre-commit runs fast lint and
-formatting checks, and pre-push runs the whole Python suite (`uv run pytest -q`,
-~40s). App-specific candidate evidence is collected by the source-bound local
-release gate.
+Pre-commit hooks are kept lightweight and fast (lint, formatting, and dead-code checks),
+while pre-push runs the authoritative full Gradus local gate (`scripts/pre-push-full-gate.sh`).
+Pre-push can take over simulator and UI resources, derives its static comparison base
+from the upstream merge base (`git merge-base HEAD "$upstream"`), and supports an explicit
+`GRADUS_STATIC_BASE` override. The wrapper mirrors the gate's output to the controlling
+terminal when available so pre-commit's output capture does not turn the long run into a
+silent wait; `GRADUS_PROGRESS_DEVICE` overrides the mirror target for diagnostics and tests.
+Physical-device acceptance and signed-Keychain acceptance remain explicitly
+separate. App-specific candidate evidence is collected by the source-bound local release gate.
 
 ### Mac bundle signing: hermetic tests are necessary and not sufficient
 

@@ -880,6 +880,18 @@ validate_static_gate_contract() {
 validate_static_gate_contract "$GATE_SCRIPT" ||
   fail "changed Swift static gate is incomplete or runs after test work"
 
+validate_gradus_kit_scratch_contract() {
+  local gate_path="$1" function_block
+  function_block="$(sed -n '/^run_gradus_kit_tests()/,/^}/p' "$gate_path")"
+  [[ "$function_block" == *'mktemp -d "${TMPDIR:-/private/tmp}/gradus-kit-tests.XXXXXX"'* ]] || return 1
+  [[ "$function_block" == *'--package-path GradusKit'* ]] || return 1
+  [[ "$function_block" == *'--scratch-path "$scratch_dir"'* ]] || return 1
+  [[ "$function_block" == *'rm -rf "$scratch_dir"'* ]] || return 1
+}
+
+validate_gradus_kit_scratch_contract "$GATE_SCRIPT" ||
+  fail "GradusKit tests must use and clean a non-checkout SwiftPM scratch directory"
+
 fake_static_bin="$diagnostic_test_root/fake-static-bin"
 mkdir -p "$fake_static_bin"
 make_fake_static_tools() {

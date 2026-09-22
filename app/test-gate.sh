@@ -485,6 +485,22 @@ validate_macos_version_pin() {
   fi
 }
 
+run_gradus_kit_tests() {
+  local scratch_dir status=0
+  scratch_dir="$(mktemp -d "${TMPDIR:-/private/tmp}/gradus-kit-tests.XXXXXX")" || return 1
+
+  # SwiftPM's in-checkout test bundle inherits File Provider metadata under
+  # ~/Documents, which codesign rejects as resource-fork/Finder detritus. Keep
+  # the entire disposable build outside the synced checkout instead of
+  # mutating the package cache or weakening signing.
+  assert_counting_leg "swift-testing" swift test \
+    --package-path GradusKit \
+    --scratch-path "$scratch_dir" || status=$?
+
+  rm -rf "$scratch_dir"
+  return "$status"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 set -euo pipefail
 
@@ -575,7 +591,7 @@ assert_counting_leg "release-bridge" uv run pytest -q test_gradus_release_bridge
 # pre-push. Both run here now, ordered before the slow simulator work so the
 # gate fails fast.
 echo "==> swift test — GradusKit package (SwiftPM; not reachable via either app scheme)"
-assert_counting_leg "swift-testing" swift test --package-path GradusKit
+run_gradus_kit_tests
 
 echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
 assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'

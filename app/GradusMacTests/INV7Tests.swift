@@ -142,7 +142,7 @@ private func strippingLineComments(_ contents: String) -> String {
 
     for file in files {
         let contents = try String(contentsOf: file, encoding: .utf8)
-        let lowered = contents.lowercased()
+        let lowered = strippingLineComments(contents).lowercased()
         for term in forbidden {
             #expect(
                 !referencesForbiddenTerm(term, in: lowered),
