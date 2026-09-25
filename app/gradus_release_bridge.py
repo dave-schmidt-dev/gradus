@@ -45,6 +45,13 @@ OPERATIONS = (
 _CANDIDATE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+_CENTRAL_CANDIDATE = re.compile(
+    r"^(?P<marketingVersion>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r")-(?P<build>[1-9][0-9]{0,9})$"
+)
+_MAX_FAILED_PREUPLOAD_CHAIN_LENGTH = 64
+_MAX_FAILED_PREUPLOAD_LEDGER_BYTES = 1024 * 1024
+_MAX_FAILED_PREUPLOAD_LEDGER_RECORDS = 4096
 _UPLOAD_LINE = re.compile(
     r"(?m)^.*Candidate\s+(?P<candidate>[A-Za-z0-9._-]+)\s+build\s+"
     r"(?P<build>[0-9]+)\s+uploaded\b.*$"
@@ -259,42 +266,107 @@ def _central_candidate_manifest(candidate: str) -> Path | None:
     return common_dir / "release-state" / PRODUCT / "candidates" / candidate / "manifest.json"
 
 
-def _failed_preupload_candidate_can_reserve_successor(candidate: str) -> bool:
-    """Return whether one consumed identity may seed a central successor.
+def _central_candidate_parts(candidate: str) -> tuple[str, int] | None:
+    """Parse the bounded central candidate identity used by this exception."""
 
-    App Store Connect cannot observe a build that failed locally before upload,
-    so its next-build proof still names the failed local build.  The central
-    release framework consumes that observation under its recorded correction
-    authorization and reserves the following build.  Keep this exception bound
-    to the active candidate and a terminal failed, never-uploaded ledger.
-    """
+    if not _CANDIDATE.fullmatch(candidate):
+        return None
+    match = _CENTRAL_CANDIDATE.fullmatch(candidate)
+    if match is None:
+        return None
+    return match.group("marketingVersion"), int(match.group("build"))
 
-    common_dir = _git_common_dir()
-    manifest_path = _central_candidate_manifest(candidate)
-    if common_dir is None or manifest_path is None:
-        return False
-    pointer = _read_json(common_dir / "release-state" / PRODUCT / "active-candidate.json")
-    if pointer is None or pointer.get("candidateId") != candidate:
-        return False
-    if manifest_path.is_symlink() or not manifest_path.is_file():
-        return False
-    ledger = manifest_path.parent / "transitions.jsonl"
+
+def _failed_preupload_ledger_is_terminal(ledger: Path, *, active: bool) -> bool:
+    """Return whether a bounded failed-preupload ledger has its role's terminal state."""
+
     if ledger.is_symlink() or not ledger.is_file():
         return False
     try:
-        records = [
-            json.loads(line)
-            for line in ledger.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        if ledger.stat().st_size > _MAX_FAILED_PREUPLOAD_LEDGER_BYTES:
+            return False
+        encoded = ledger.read_bytes()
+        if len(encoded) > _MAX_FAILED_PREUPLOAD_LEDGER_BYTES:
+            return False
+        records = []
+        for line in encoded.splitlines():
+            if not line.strip():
+                continue
+            if len(records) >= _MAX_FAILED_PREUPLOAD_LEDGER_RECORDS:
+                return False
+            record = json.loads(line)
+            if not isinstance(record, Mapping):
+                return False
+            records.append(record)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
-    if not records or not all(isinstance(record, Mapping) for record in records):
+    if not records:
+        return False
+    transitions = [record.get("transition") for record in records]
+    if not all(isinstance(transition, str) for transition in transitions):
         return False
     uploaded = {"uploadAttemptStarted", "uploaded", "internalTestFlightReceipted"}
-    return records[-1].get("transition") == "failed" and not any(
-        record.get("transition") in uploaded for record in records
-    )
+    if any(transition in uploaded for transition in transitions):
+        return False
+    if active:
+        return transitions[-1] == "failed"
+    return transitions[-1] == "superseded" and "failed" in transitions[:-1]
+
+
+def _failed_preupload_candidate_can_reserve_successor(candidate: str) -> bool:
+    """Return whether a failed local correction chain may seed a successor.
+
+    App Store Connect cannot observe a build that failed locally before upload,
+    so its next-build proof still names the first unuploaded failed build.  The
+    central release framework consumes that observation under its recorded
+    correction authorization and reserves the following build.  Keep this
+    preliminary exception within one marketing version, a bounded contiguous
+    run ending at the active candidate.  The active ledger must remain failed;
+    each predecessor must be the failed ledger that the framework superseded.
+    """
+
+    observed = _central_candidate_parts(candidate)
+    if observed is None:
+        return False
+    marketing_version, observed_build = observed
+    common_dir = _git_common_dir()
+    if common_dir is None:
+        return False
+    state_root = common_dir / "release-state" / PRODUCT
+    pointer_path = state_root / "active-candidate.json"
+    if pointer_path.is_symlink() or not pointer_path.is_file():
+        return False
+    pointer = _read_json(pointer_path)
+    active = pointer.get("candidateId") if pointer is not None else None
+    if not isinstance(active, str):
+        return False
+    active_parts = _central_candidate_parts(active)
+    if active_parts is None:
+        return False
+    active_version, active_build = active_parts
+    if (
+        active_version != marketing_version
+        or active_build < observed_build
+        or active_build - observed_build >= _MAX_FAILED_PREUPLOAD_CHAIN_LENGTH
+    ):
+        return False
+    candidates_root = state_root / "candidates"
+    if candidates_root.is_symlink() or not candidates_root.is_dir():
+        return False
+    for build in range(observed_build, active_build + 1):
+        candidate_root = candidates_root / f"{marketing_version}-{build}"
+        manifest_path = candidate_root / "manifest.json"
+        if (
+            candidate_root.is_symlink()
+            or not candidate_root.is_dir()
+            or manifest_path.is_symlink()
+            or not manifest_path.is_file()
+            or not _failed_preupload_ledger_is_terminal(
+                candidate_root / "transitions.jsonl", active=build == active_build
+            )
+        ):
+            return False
+    return True
 
 
 def _central_candidate_record(candidate: str) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:

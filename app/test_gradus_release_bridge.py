@@ -1525,6 +1525,157 @@ class BridgeTests(unittest.TestCase):
             ):
                 self.assertTrue(BRIDGE._identity_proof_valid(marketing_version="1.6.7"))
 
+    @staticmethod
+    def _failed_preupload_chain_fixture(
+        root: Path,
+        *,
+        active_version: str = "1.11.0",
+        missing_build: int | None = None,
+        uploaded_build: int | None = None,
+        active_failed: bool = True,
+        predecessor_failed: bool = True,
+    ) -> tuple[Path, Path]:
+        """Create a central 36 -> 37 correction chain and its ASC observation."""
+
+        common_dir = root / "repository.git"
+        common_dir.mkdir()
+        candidates = common_dir / "release-state" / "gradus-ios" / "candidates"
+        for build in (36, 37):
+            version = active_version if build == 37 else "1.11.0"
+            candidate = candidates / f"{version}-{build}"
+            candidate.mkdir(parents=True)
+            if build != missing_build:
+                (candidate / "manifest.json").write_text("{}", encoding="utf-8")
+            transitions = [{"transition": "readinessSatisfied"}]
+            if build == uploaded_build:
+                transitions.append({"transition": "uploadAttemptStarted"})
+            if build == 36:
+                if predecessor_failed:
+                    transitions.append({"transition": "failed"})
+                transitions.append({"transition": "superseded"})
+            else:
+                transitions.append(
+                    {"transition": "failed"}
+                    if active_failed
+                    else {"transition": "readinessSatisfied"}
+                )
+            (candidate / "transitions.jsonl").write_text(
+                "\n".join(json.dumps(record) for record in transitions) + "\n",
+                encoding="utf-8",
+            )
+        pointer = common_dir / "release-state" / "gradus-ios" / "active-candidate.json"
+        pointer.write_text(json.dumps({"candidateId": f"{active_version}-37"}), encoding="utf-8")
+        proof_path = root / "evidence" / "allocate.json"
+        proof_path.parent.mkdir(parents=True)
+        proof_path.write_text(
+            json.dumps(
+                {
+                    "proofVersion": "1.0.0",
+                    "operationClass": "identityAllocation",
+                    "result": "passed",
+                    "productKey": "gradus-ios",
+                    "marketingVersion": "1.11.0",
+                    "buildNumber": 36,
+                    "responseSha256": "a" * 64,
+                    "remoteHighestMarketingVersion": "1.11.0",
+                    "remoteHighestBuildNumber": 35,
+                    "observedAt": "2026-09-25T00:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return common_dir, proof_path
+
+    def test_identity_reuses_two_candidate_failed_preupload_chain_for_successor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir, proof_path = self._failed_preupload_chain_fixture(root)
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertTrue(BRIDGE._identity_proof_valid(marketing_version="1.11.0"))
+
+    def test_identity_rejects_superseded_preupload_candidate_without_prior_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir, proof_path = self._failed_preupload_chain_fixture(
+                root, predecessor_failed=False
+            )
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.11.0"))
+
+    def test_identity_rejects_malformed_preupload_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir, proof_path = self._failed_preupload_chain_fixture(root)
+            ledger = (
+                common_dir
+                / "release-state"
+                / "gradus-ios"
+                / "candidates"
+                / "1.11.0-36"
+                / "transitions.jsonl"
+            )
+            ledger.write_text('{"transition": []}\n', encoding="utf-8")
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.11.0"))
+
+    def test_identity_rejects_failed_preupload_chain_with_intervening_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir, proof_path = self._failed_preupload_chain_fixture(root, uploaded_build=36)
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.11.0"))
+
+    def test_identity_rejects_failed_preupload_chain_with_missing_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir, proof_path = self._failed_preupload_chain_fixture(root, missing_build=37)
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.11.0"))
+
+    def test_identity_rejects_failed_preupload_chain_in_wrong_marketing_version(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir, proof_path = self._failed_preupload_chain_fixture(
+                root, active_version="1.11.1"
+            )
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.11.0"))
+
+    def test_identity_rejects_failed_preupload_chain_with_nonfailed_active_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common_dir, proof_path = self._failed_preupload_chain_fixture(root, active_failed=False)
+            with (
+                patch.object(BRIDGE, "IDENTITY_PROOF", proof_path),
+                patch.object(BRIDGE, "ROOT", root),
+                patch.object(BRIDGE, "_git_common_dir", return_value=common_dir),
+            ):
+                self.assertFalse(BRIDGE._identity_proof_valid(marketing_version="1.11.0"))
+
     def test_identity_rejects_uploaded_failed_candidate_proof(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
