@@ -99,7 +99,7 @@
       "workingDirectory": ".",
       "environment": {
         "inherit": false,
-        "inputs": ["READINESS_MANIFEST", "HOME", "PATH", "PYTHONPATH", "USER", "LOGNAME"],
+        "inputs": ["READINESS_MANIFEST", "HOME", "PATH", "PYTHONPATH", "USER", "LOGNAME", "GRADUS_STATIC_BASE"],
         "literals": {"RELEASE_CONFIGURATION": "Production"}
       },
       "proofSchema": "release.proof.local-gate.v2",

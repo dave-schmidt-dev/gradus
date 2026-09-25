@@ -55,6 +55,26 @@ class _RecordingClient:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_local_gate_adapter_forwards_static_base_to_release_local_gate(self) -> None:
+        adapter = json.loads((ROOT / ".release" / "release-adapter.json").read_text())
+        operations = {entry["id"]: entry for entry in adapter["operations"]}
+        local_gate = operations["local-gate"]
+
+        self.assertEqual(local_gate["argv"], ["python3", "app/release_local_gate.py"])
+        self.assertFalse(local_gate["environment"]["inherit"])
+        self.assertEqual(
+            local_gate["environment"]["inputs"],
+            [
+                "READINESS_MANIFEST",
+                "HOME",
+                "PATH",
+                "PYTHONPATH",
+                "USER",
+                "LOGNAME",
+                "GRADUS_STATIC_BASE",
+            ],
+        )
+
     def test_release_adapter_declares_build_lookup_proof_path(self) -> None:
         adapter = json.loads((ROOT / ".release" / "release-adapter.json").read_text())
         paths = {entry["name"]: entry["path"] for entry in adapter["evidencePaths"]}
