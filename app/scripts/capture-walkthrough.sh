@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 APP_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
 PROJECT_PATH="${GRADUS_WALKTHROUGH_PROJECT_PATH:-$APP_DIR/Gradus.xcodeproj}"
+APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"
 ROUTES=(
   "icloud.discovery|fresh-account-discovery|icloud-account-discovery-status|fresh-account-discovery.png"
   "icloud.confirmation|legacy-awaiting-confirmation|Continue|legacy-awaiting-confirmation.png"
@@ -136,15 +137,49 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-create_spec="$(xcrun simctl list --json | /usr/bin/python3 -c '
+simulator_inventory="$(xcrun simctl list --json)" || fail "could not list available Simulator runtimes"
+create_spec="$(printf '%s' "$simulator_inventory" | /usr/bin/python3 -c '
 import json, re, sys
-data=json.load(sys.stdin)
-r=[x for x in data.get("runtimes",[]) if x.get("isAvailable") is True and x.get("platform")=="iOS"]
-d=[x for x in data.get("devicetypes",[]) if x.get("isAvailable") is not False and str(x.get("name","")).startswith("iPhone")]
-if not r or not d: raise SystemExit(1)
-key=lambda x: tuple(int(v) for v in re.findall(r"\d+",x.get("version","")))
-print(sorted(d,key=lambda x:(x.get("name","") != "iPhone 15",x.get("name","")))[0]["identifier"]+"\t"+max(r,key=key)["identifier"])
-')" || fail "could not discover an available iPhone Simulator"
+data = json.load(sys.stdin)
+runtimes = [
+    runtime
+    for runtime in data.get("runtimes", [])
+    if runtime.get("platform") == "iOS"
+    and runtime.get("isAvailable") is True
+    and re.fullmatch(r"26(?:\.\d+)*", str(runtime.get("version", "")))
+]
+devices = [
+    device
+    for device in data.get("devicetypes", [])
+    if device.get("isAvailable") is not False
+    and str(device.get("name", "")).startswith("iPhone")
+]
+if not runtimes:
+    print("no-available-ios-26-runtime")
+    raise SystemExit(0)
+if not devices:
+    print("no-available-iphone-device")
+    raise SystemExit(0)
+
+def version_key(runtime):
+    return tuple(int(part) for part in str(runtime.get("version", "")).split("."))
+
+def device_key(device):
+    name = device.get("name", "")
+    return (name != "iPhone 15", name)
+
+device = sorted(devices, key=device_key)[0]
+runtime = max(runtimes, key=version_key)
+print(device["identifier"] + "\t" + runtime["identifier"])
+')" || fail "could not parse the available Simulator inventory"
+case "$create_spec" in
+  no-available-ios-26-runtime)
+    fail "no available iOS 26.x Simulator runtime; install or enable an iOS 26.x runtime"
+    ;;
+  no-available-iphone-device)
+    fail "could not discover an available iPhone Simulator device type"
+    ;;
+esac
 IFS=$'\t' read -r device_type runtime <<< "$create_spec"
 simulator_udid="$(xcrun simctl create "Gradus walkthrough disposable $$" "$device_type" "$runtime")"
 [[ "$simulator_udid" =~ ^[0-9A-Fa-f-]{36}$ ]] || fail "Simulator create returned an invalid identifier"
@@ -164,6 +199,8 @@ for index in "${!ROUTES[@]}"; do
       log="$capture_root/widget-render.log"
       if ! run_bounded_capture "rendering deterministic widget states" "$log" env \
         TEST_RUNNER_GRADUS_WALKTHROUGH_WIDGET_OUTPUT="$output_dir" \
+        "$APPLE_UI_TEST_LOCK" --simulator-udid "$simulator_udid" \
+          --label "Gradus walkthrough widget rendering" -- \
         xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
           -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
           -maximum-parallel-testing-workers 1 \
@@ -199,6 +236,8 @@ for index in "${!ROUTES[@]}"; do
     TEST_RUNNER_GRADUS_WALKTHROUGH_FIXTURE="$fixture" \
     TEST_RUNNER_GRADUS_WALKTHROUGH_MARKER="$marker" \
     TEST_RUNNER_GRADUS_WALKTHROUGH_SCREENSHOT="$screenshot" \
+    "$APPLE_UI_TEST_LOCK" --simulator-udid "$simulator_udid" \
+      --label "Gradus walkthrough capture $screen" -- \
     xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
       -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
       -maximum-parallel-testing-workers 1 \

@@ -113,6 +113,10 @@ state's Explore Sample entry, the sample dashboard banner/reset/exit controls,
 and the sample Settings reset/exit variant. The generator records the
 walkthrough digest in the candidate ledger and refuses stale, mismatched, or
 incomplete coverage.
+The walkthrough capture chooses the newest available iOS 26.x runtime, creates
+a disposable simulator, and holds that simulator's UI lane for each capture.
+It fails closed when no iOS 26.x runtime is available; iOS 27.x screenshots
+do not satisfy this candidate gate.
 This is a human release-owner gate for internal TestFlight only; it is not App
 Store submission or proof of Apple processing/installability.
 

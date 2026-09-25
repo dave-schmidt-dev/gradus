@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -31,6 +35,213 @@ class CaptureContractTests(unittest.TestCase):
         self.ios_app = IOS_APP.read_text(encoding="utf-8")
         self.widget_tests = WIDGET_TESTS.read_text(encoding="utf-8")
         self.project = PROJECT.read_text(encoding="utf-8")
+
+    def run_stubbed_capture(
+        self, runtimes: list[dict[str, object]], start_at: int
+    ) -> tuple[subprocess.CompletedProcess[str], str, str, str]:
+        """Run the real capture driver against hermetic simulator and Xcode stubs."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            output_dir = root / "screenshots"
+            output_dir.mkdir()
+            simulator_list = root / "simulators.json"
+            simulator_list.write_text(
+                json.dumps(
+                    {
+                        "runtimes": runtimes,
+                        "devicetypes": [
+                            {
+                                "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-15",
+                                "name": "iPhone 15",
+                                "isAvailable": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            create_log = root / "created-runtime.txt"
+            lock_log = root / "lock-invocations.txt"
+            xcode_env_log = root / "xcode-environment.txt"
+            scripts = {
+                "xcrun": """#!/bin/bash
+set -eu
+if [[ "$1" == "simctl" && "$2" == "list" && "$3" == "--json" ]]; then
+  cat "$SIMULATOR_LIST_JSON"
+elif [[ "$1" == "simctl" && "$2" == "create" ]]; then
+  printf '%s\\n' "$5" >> "$SIMULATOR_CREATE_LOG"
+  printf '11111111-2222-3333-4444-555555555555\\n'
+elif [[ "$1" == "xcresulttool" ]]; then
+  printf '{"totalTestCount":1}\\n'
+fi
+""",
+                "xcodebuild": """#!/bin/bash
+set -eu
+printf '%s\\t%s\\t%s\\t%s\\n' \\
+  "${TEST_RUNNER_GRADUS_WALKTHROUGH_FIXTURE:-}" \\
+  "${TEST_RUNNER_GRADUS_WALKTHROUGH_MARKER:-}" \\
+  "${TEST_RUNNER_GRADUS_WALKTHROUGH_SCREENSHOT:-}" \\
+  "${TEST_RUNNER_GRADUS_WALKTHROUGH_WIDGET_OUTPUT:-}" >> "$XCODEBUILD_ENV_LOG"
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "-resultBundlePath" ]]; then
+    mkdir -p "$2"
+    shift 2
+  else
+    shift
+  fi
+done
+if [[ -n "${TEST_RUNNER_GRADUS_WALKTHROUGH_SCREENSHOT:-}" ]]; then
+  printf 'png' > "$TEST_RUNNER_GRADUS_WALKTHROUGH_SCREENSHOT"
+fi
+if [[ -n "${TEST_RUNNER_GRADUS_WALKTHROUGH_WIDGET_OUTPUT:-}" ]]; then
+  for image in widget-render-current.png widget-render-empty.png widget-render-unavailable.png; do
+    printf 'png' > "$TEST_RUNNER_GRADUS_WALKTHROUGH_WIDGET_OUTPUT/$image"
+  done
+fi
+""",
+                "apple-ui-test-lock": """#!/bin/bash
+set -eu
+printf '%s\\n' "$*" >> "$APPLE_UI_TEST_LOCK_LOG"
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "--" ]]; then
+    shift
+    exec "$@"
+  fi
+  shift
+done
+exit 64
+""",
+                "sleep": """#!/usr/bin/env python3
+import time
+time.sleep(0.01)
+""",
+            }
+            for name, source in scripts.items():
+                script = bin_dir / name
+                script.write_text(textwrap.dedent(source), encoding="utf-8")
+                script.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{bin_dir}:{environment['PATH']}",
+                    "SIMULATOR_LIST_JSON": str(simulator_list),
+                    "SIMULATOR_CREATE_LOG": str(create_log),
+                    "APPLE_UI_TEST_LOCK": str(bin_dir / "apple-ui-test-lock"),
+                    "APPLE_UI_TEST_LOCK_LOG": str(lock_log),
+                    "XCODEBUILD_ENV_LOG": str(xcode_env_log),
+                    "GRADUS_WALKTHROUGH_START_AT": str(start_at),
+                    "GRADUS_WALKTHROUGH_CAPTURE_TIMEOUT_SECONDS": "180",
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(CAPTURE), "--output-dir", str(output_dir)],
+                cwd=APP,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return (
+                result,
+                create_log.read_text(encoding="utf-8") if create_log.exists() else "",
+                lock_log.read_text(encoding="utf-8") if lock_log.exists() else "",
+                xcode_env_log.read_text(encoding="utf-8") if xcode_env_log.exists() else "",
+            )
+
+    @staticmethod
+    def runtime(identifier: str, version: str, available: bool = True) -> dict[str, object]:
+        return {
+            "identifier": identifier,
+            "version": version,
+            "isAvailable": available,
+            "platform": "iOS",
+        }
+
+    def test_selects_highest_available_ios_26_runtime_only(self) -> None:
+        result, created_runtime, _locks, xcode_environment = self.run_stubbed_capture(
+            [
+                self.runtime("com.apple.CoreSimulator.SimRuntime.iOS-26-3", "26.3"),
+                self.runtime("com.apple.CoreSimulator.SimRuntime.iOS-26-5", "26.5"),
+                self.runtime("com.apple.CoreSimulator.SimRuntime.iOS-27-0", "27.0"),
+            ],
+            start_at=45,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(created_runtime.strip(), "com.apple.CoreSimulator.SimRuntime.iOS-26-5")
+        self.assertIn("reset-alerts-denied", xcode_environment)
+
+    def test_unavailable_ios_26_runtime_fails_closed(self) -> None:
+        result, created_runtime, locks, _xcode_environment = self.run_stubbed_capture(
+            [
+                self.runtime("com.apple.CoreSimulator.SimRuntime.iOS-26-5", "26.5", False),
+                self.runtime("com.apple.CoreSimulator.SimRuntime.iOS-27-0", "27.0"),
+            ],
+            start_at=45,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no available iOS 26.x Simulator runtime", result.stderr)
+        self.assertEqual(created_runtime, "")
+        self.assertEqual(locks, "")
+
+    def test_missing_ios_26_runtime_fails_closed(self) -> None:
+        result, created_runtime, locks, _xcode_environment = self.run_stubbed_capture(
+            [self.runtime("com.apple.CoreSimulator.SimRuntime.iOS-27-0", "27.0")],
+            start_at=45,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no available iOS 26.x Simulator runtime", result.stderr)
+        self.assertEqual(created_runtime, "")
+        self.assertEqual(locks, "")
+
+    def test_both_xcode_capture_lanes_use_the_disposable_simulator_lock(self) -> None:
+        result, created_runtime, locks, xcode_environment = self.run_stubbed_capture(
+            [self.runtime("com.apple.CoreSimulator.SimRuntime.iOS-26-5", "26.5")],
+            start_at=35,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(created_runtime.splitlines()), 1)
+        invocations = locks.splitlines()
+        self.assertTrue(
+            all(
+                "--simulator-udid 11111111-2222-3333-4444-555555555555" in invocation
+                and "xcodebuild test" in invocation
+                for invocation in invocations
+            )
+        )
+        self.assertTrue(
+            any("GradusWidgetTests/exportWalkthroughWidgetStates()" in line for line in invocations)
+        )
+        self.assertTrue(
+            any(
+                "GradusiOSUITests/WalkthroughCaptureXCUITests/testWalkthroughCapture" in line
+                for line in invocations
+            )
+        )
+        environment_rows = [row.split("\t") for row in xcode_environment.splitlines()]
+        self.assertTrue(
+            any(row[0] == "" and row[3].endswith("/screenshots") for row in environment_rows)
+        )
+        self.assertTrue(
+            any(
+                row[0] == "reset-alerts-denied"
+                and row[1] == "reset-alerts-permission-denied"
+                and row[2].endswith("/reset-alerts-denied.png")
+                and row[3] == ""
+                for row in environment_rows
+            )
+        )
+
+    def test_capture_driver_uses_canonical_lane_lock_for_both_xcode_calls(self) -> None:
+        self.assertIn(
+            'APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"',
+            self.shell,
+        )
+        self.assertEqual(
+            self.shell.count('"$APPLE_UI_TEST_LOCK" --simulator-udid "$simulator_udid"'), 2
+        )
 
     def test_self_test_emits_one_visible_status_per_declared_screen(self) -> None:
         result = subprocess.run(
