@@ -91,7 +91,7 @@ def test_full_gate_wrapper_has_no_outer_ui_lock() -> None:
 
 @pytest.fixture
 def isolated_gate_env(tmp_path: Path) -> dict[str, Any]:
-    """Provide an isolated git repo with fake caffeinate and fake app/test-gate.sh."""
+    """Provide an isolated git repo with fake sweep, caffeinate, and app gate."""
     if not WRAPPER.is_file():
         pytest.skip(f"wrapper script not found at {WRAPPER}")
 
@@ -201,6 +201,14 @@ def isolated_gate_env(tmp_path: Path) -> dict[str, Any]:
     wrapper_copy = scripts_dir / "pre-push-full-gate.sh"
     shutil.copy2(WRAPPER, wrapper_copy)
     wrapper_copy.chmod(0o755)
+    fake_sweep = scripts_dir / "sweep-gradus-gate-simulators.sh"
+    fake_sweep.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        f'echo "SWEEP_CALLED" >> "{receipt}"\n'
+        'exit "${FAKE_SWEEP_EXIT:-0}"\n'
+    )
+    fake_sweep.chmod(0o755)
 
     run_env = git_env.copy()
     run_env["PATH"] = f"{bin_dir}:{run_env.get('PATH', '')}"
@@ -362,6 +370,28 @@ def test_wrapper_prints_progress_to_stderr(isolated_gate_env: dict[str, Any]) ->
 
     assert res.returncode == 0
     assert res.stderr, "expected progress on stderr"
+
+
+def test_wrapper_sweeps_abandoned_simulators_before_running_gate(
+    isolated_gate_env: dict[str, Any],
+) -> None:
+    """The safe local sweep must complete before caffeinate and the full gate."""
+    repo = isolated_gate_env["repo"]
+    receipt = isolated_gate_env["receipt"]
+    wrapper = isolated_gate_env["wrapper"]
+    env = isolated_gate_env["run_env"].copy()
+    env["GRADUS_STATIC_BASE"] = isolated_gate_env["base_commit"]
+
+    result = subprocess.run([str(wrapper)], cwd=repo, env=env, capture_output=True, text=True)
+
+    assert result.returncode == 0, f"wrapper failed:\n{result.stderr}"
+    entries = receipt.read_text().splitlines()
+    assert entries.index("SWEEP_CALLED") < entries.index(
+        "CAFFEINATE_CALLED: -disu bash app/test-gate.sh"
+    )
+    assert entries.index("SWEEP_CALLED") < next(
+        index for index, entry in enumerate(entries) if entry.startswith("GATE_CALLED:")
+    )
 
 
 def test_wrapper_mirrors_gate_output_to_progress_device(

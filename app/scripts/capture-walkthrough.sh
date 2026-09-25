@@ -58,25 +58,87 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 status() { echo "==> $*" >&2; }
 usage() { echo "usage: capture-walkthrough.sh --output-dir DIRECTORY | --self-test" >&2; }
 
+active_capture_pid=""
+active_clone_snapshot=""
+active_clone_source_name=""
+
+terminate_capture_group() {
+  local pid="$1" attempt=0
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  while (( attempt < 10 )) && kill -0 -- "-$pid" 2>/dev/null; do
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  if kill -0 -- "-$pid" 2>/dev/null; then
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+  active_capture_pid=""
+}
+
+terminate_capture_on_signal() {
+  local exit_status="$1"
+  trap '' INT TERM
+  if [[ -n "$active_capture_pid" ]]; then
+    terminate_capture_group "$active_capture_pid"
+  fi
+  if [[ -n "$active_clone_snapshot" ]]; then
+    reap_interrupted_capture_clones "$active_clone_snapshot" "$active_clone_source_name" || \
+      status "interrupted XCTest clone cleanup failed; inspect the XCTestDevices set"
+    rm -f "$active_clone_snapshot"
+    active_clone_snapshot=""
+    active_clone_source_name=""
+  fi
+  exit "$exit_status"
+}
+
 run_bounded_capture() {
   local label="$1" log="$2"
   shift 2
+  local set_root="${GATE_XCTEST_DEVICE_SET:-$HOME/Library/Developer/XCTestDevices}"
+  local clone_snapshot
+  clone_snapshot="$(mktemp "${TMPDIR:-/tmp}/gradus-xctest-snapshot.XXXXXX")"
+  if ! _gate_lib_snapshot_clones "$set_root" >"$clone_snapshot"; then
+    rm -f "$clone_snapshot"
+    echo "FAIL: could not snapshot XCTest clones before $label" >&2
+    return 1
+  fi
+  active_clone_snapshot="$clone_snapshot"
+  active_clone_source_name="$simulator_name"
+  local monitor_was_enabled=0
+  [[ "$-" == *m* ]] && monitor_was_enabled=1
+  set -m
   "$@" >"$log" 2>&1 &
   local pid=$! elapsed=0 maximum="${GRADUS_WALKTHROUGH_CAPTURE_TIMEOUT_SECONDS:-180}"
+  active_capture_pid="$pid"
+  (( monitor_was_enabled )) || set +m
   while kill -0 "$pid" 2>/dev/null; do
     if (( elapsed >= maximum )); then
-      kill "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
+      terminate_capture_group "$pid"
+      local clone_cleanup_result=0
+      reap_interrupted_capture_clones "$clone_snapshot" "$simulator_name" || clone_cleanup_result=$?
+      rm -f "$clone_snapshot"
+      active_clone_snapshot=""
+      active_clone_source_name=""
       tail -n 80 "$log" >&2 || true
       status "$label timed out; the disposable Simulator will be removed"
+      if (( clone_cleanup_result != 0 )); then
+        status "interrupted XCTest clone cleanup failed; inspect the XCTestDevices set"
+        return 125
+      fi
       return 124
     fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-    status "$label still running (${elapsed}s)"
+    sleep 1
+    elapsed=$((elapsed + 1))
+    (( elapsed % 5 == 0 )) && status "$label still running (${elapsed}s)"
   done
   local result=0
   wait "$pid" || result=$?
+  active_capture_pid=""
+  rm -f "$clone_snapshot"
+  active_clone_snapshot=""
+  active_clone_source_name=""
   if (( result != 0 )); then
     tail -n 80 "$log" >&2 || true
   fi
@@ -129,13 +191,77 @@ output_dir="$(cd -- "$output_dir" && pwd -P)"
 capture_root="$(mktemp -d "${TMPDIR:-/tmp}/gradus-walkthrough.XXXXXX")"
 simulator_udid=""
 cleanup() {
-  if [[ -n "$simulator_udid" ]]; then
-    xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
-    xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
-  fi
   rm -rf "$capture_root"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'terminate_capture_on_signal 130' INT
+trap 'terminate_capture_on_signal 143' TERM
+# Source after the EXIT trap so the shared library composes simulator cleanup
+# with removal of this script's temporary capture directory.
+# shellcheck source=/dev/null
+source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+
+reap_interrupted_capture_clones() {
+  local before="$1"
+  local source_name="$2"
+  local set_root="${GATE_XCTEST_DEVICE_SET:-$HOME/Library/Developer/XCTestDevices}"
+  [[ -d "$set_root" ]] || return 0
+  local end_ts locked_command
+  end_ts="$(date +%s)" || return 1
+  locked_command=""
+  IFS= read -r -d '' locked_command <<'EOF' || true
+set -euo pipefail
+source "$1"
+_gate_lib_reap_new_clones "$2" "$3" "$4"
+source_name="$5"
+[[ "$source_name" =~ ^gradus-gate-[1-9][0-9]*-walkthrough(-permission-[1-9][0-9]*)?$ ]] || exit 1
+while IFS=$'\t' read -r udid name data_path state; do
+  [[ -n "$udid" ]] || continue
+  grep -qxF -- "$udid" "$3" && continue
+  case "$data_path" in "$2"/*) ;; *) continue ;; esac
+  case "$name" in Clone\ *\ of\ *) ;; *) continue ;; esac
+  [[ "$state" == "Shutdown" ]] && continue
+  if [[ "$state" == "Booted" && "$name" =~ ^Clone\ [0-9]+\ of\ ${source_name}$ ]]; then
+    if xcrun simctl --set "$2" shutdown "$udid" >/dev/null 2>&1 && \
+      xcrun simctl --set "$2" delete "$udid" >/dev/null 2>&1; then
+      echo "capture-walkthrough: deleted owned booted XCTest clone $name ($udid)" >&2
+      continue
+    fi
+    echo "capture-walkthrough: failed to remove owned booted XCTest clone $name ($udid)" >&2
+    exit 1
+  fi
+  echo "capture-walkthrough: left new XCTest clone $name ($udid) state=$state; ownership is not safe to infer" >&2
+done < <(_gate_lib_list_devices --set "$2")
+EOF
+
+  GRADUS_XCTEST_SOURCE_SIMULATOR_NAME="$source_name" \
+    "$APPLE_UI_TEST_LOCK" --label "Gradus interrupted XCTest clone cleanup" -- bash -c \
+      "$locked_command" _ "$_GATE_LIB_SELF" "$set_root" "$before" "$end_ts" "$source_name"
+}
+
+run_widget_render() {
+  TEST_RUNNER_GRADUS_WALKTHROUGH_WIDGET_OUTPUT="$output_dir" \
+    gate_ui_test_lock --simulator-udid "$simulator_udid" \
+      --label "Gradus walkthrough widget rendering" \
+      xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
+        -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
+        -maximum-parallel-testing-workers 1 \
+        "-only-testing:GradusWidgetTests/exportWalkthroughWidgetStates()" \
+        -resultBundlePath "$capture_root/widget-render.xcresult" CODE_SIGNING_ALLOWED=NO
+}
+
+run_route_capture() {
+  TEST_RUNNER_GRADUS_WALKTHROUGH_FIXTURE="$fixture" \
+    TEST_RUNNER_GRADUS_WALKTHROUGH_MARKER="$marker" \
+    TEST_RUNNER_GRADUS_WALKTHROUGH_SCREENSHOT="$screenshot" \
+    gate_ui_test_lock --simulator-udid "$simulator_udid" \
+      --label "Gradus walkthrough capture $screen" \
+      xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
+        -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
+        -maximum-parallel-testing-workers 1 \
+        -only-testing:GradusiOSUITests/WalkthroughCaptureXCUITests/testWalkthroughCapture \
+        -resultBundlePath "$capture_root/$fixture.xcresult" CODE_SIGNING_ALLOWED=NO
+}
 
 simulator_inventory="$(xcrun simctl list --json)" || fail "could not list available Simulator runtimes"
 create_spec="$(printf '%s' "$simulator_inventory" | /usr/bin/python3 -c '
@@ -181,7 +307,8 @@ case "$create_spec" in
     ;;
 esac
 IFS=$'\t' read -r device_type runtime <<< "$create_spec"
-simulator_udid="$(xcrun simctl create "Gradus walkthrough disposable $$" "$device_type" "$runtime")"
+simulator_name="gradus-gate-$$-walkthrough"
+simulator_udid="$(gate_sim_create gradus walkthrough "$device_type" "$runtime")"
 [[ "$simulator_udid" =~ ^[0-9A-Fa-f-]{36}$ ]] || fail "Simulator create returned an invalid identifier"
 xcrun simctl boot "$simulator_udid"
 xcrun simctl bootstatus "$simulator_udid" -b
@@ -197,15 +324,8 @@ for index in "${!ROUTES[@]}"; do
   if [[ "$fixture" == widget-render-* ]]; then
     if [[ ! -s "$output_dir/widget-render-current.png" ]]; then
       log="$capture_root/widget-render.log"
-      if ! run_bounded_capture "rendering deterministic widget states" "$log" env \
-        TEST_RUNNER_GRADUS_WALKTHROUGH_WIDGET_OUTPUT="$output_dir" \
-        "$APPLE_UI_TEST_LOCK" --simulator-udid "$simulator_udid" \
-          --label "Gradus walkthrough widget rendering" -- \
-        xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
-          -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
-          -maximum-parallel-testing-workers 1 \
-          "-only-testing:GradusWidgetTests/exportWalkthroughWidgetStates()" \
-          -resultBundlePath "$capture_root/widget-render.xcresult" CODE_SIGNING_ALLOWED=NO; then
+      if ! run_bounded_capture "rendering deterministic widget states" "$log" \
+        run_widget_render; then
         cp "$log" "$output_dir/widget-render-blocked.log" 2>/dev/null || true
         cp -R "$capture_root/widget-render.xcresult" "$output_dir/widget-render-blocked.xcresult" 2>/dev/null || true
         fail "widget rendering failed; evidence preserved at $output_dir/widget-render-blocked.log"
@@ -225,24 +345,16 @@ for index in "${!ROUTES[@]}"; do
     status "recreating disposable Simulator for isolated notification permission state"
     xcrun simctl shutdown "$simulator_udid" >/dev/null 2>&1 || true
     xcrun simctl delete "$simulator_udid" >/dev/null 2>&1 || true
-    simulator_udid="$(xcrun simctl create "Gradus walkthrough permission $$ $index" "$device_type" "$runtime")"
+    simulator_name="gradus-gate-$$-walkthrough-permission-$index"
+    simulator_udid="$(gate_sim_create gradus "walkthrough-permission-$index" "$device_type" "$runtime")"
     [[ "$simulator_udid" =~ ^[0-9A-Fa-f-]{36}$ ]] || fail "Simulator create returned an invalid identifier"
     xcrun simctl boot "$simulator_udid"
     xcrun simctl bootstatus "$simulator_udid" -b
     xcrun simctl ui "$simulator_udid" appearance dark
   fi
   log="$capture_root/$fixture.log"
-  if ! run_bounded_capture "capture-$((index + 1))-of-$total $screen" "$log" env \
-    TEST_RUNNER_GRADUS_WALKTHROUGH_FIXTURE="$fixture" \
-    TEST_RUNNER_GRADUS_WALKTHROUGH_MARKER="$marker" \
-    TEST_RUNNER_GRADUS_WALKTHROUGH_SCREENSHOT="$screenshot" \
-    "$APPLE_UI_TEST_LOCK" --simulator-udid "$simulator_udid" \
-      --label "Gradus walkthrough capture $screen" -- \
-    xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
-      -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
-      -maximum-parallel-testing-workers 1 \
-      -only-testing:GradusiOSUITests/WalkthroughCaptureXCUITests/testWalkthroughCapture \
-      -resultBundlePath "$capture_root/$fixture.xcresult" CODE_SIGNING_ALLOWED=NO; then
+  if ! run_bounded_capture "capture-$((index + 1))-of-$total $screen" "$log" \
+    run_route_capture; then
     cp "$log" "$output_dir/$fixture-blocked.log" 2>/dev/null || true
     cp -R "$capture_root/$fixture.xcresult" "$output_dir/$fixture-blocked.xcresult" 2>/dev/null || true
     fail "capture failed for $screen; evidence preserved at $output_dir/$fixture-blocked.log"

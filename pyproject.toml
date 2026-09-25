@@ -32,6 +32,7 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests", "app"]
 # Two release-tooling suites predate the `test_*.py` convention and were
 # collected by nothing: `app/testflight-setup-tests.py` (run only by
 # `app/test-gate.sh`) and `app/test-testflight-assign.py` (run by nothing at

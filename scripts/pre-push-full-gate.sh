@@ -27,6 +27,8 @@ fi
 
 export GRADUS_STATIC_BASE="$base"
 
+"$SCRIPT_DIR/sweep-gradus-gate-simulators.sh"
+
 progress_device="${GRADUS_PROGRESS_DEVICE:-}"
 if [[ -z "$progress_device" && ! -t 1 && ! -t 2 ]] && { : > /dev/tty; } 2>/dev/null; then
   progress_device="/dev/tty"
