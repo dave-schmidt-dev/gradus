@@ -1,3 +1,4 @@
 # Format: <path> <reason>. These entries document legacy source files over 800 lines.
 app/allocate_identity.py legacy 2026-09-25: established ASC CLI and operation families are stable release interfaces; this bounded identity hook is extracted to release_candidate.retired_identity.py instead of reshaping unrelated operations.
 app/gradus_release_bridge.py legacy 2026-09-25: registered broker dispatch and proof handling are stable release interfaces; this bounded identity hook is extracted to release_candidate.retired_identity.py instead of splitting unrelated operations.
+app/release_prepare_bridge.py legacy 2026-09-25: the candidate readiness and proof bridge keeps archive preflight, rollover authorization, and proof issuance at one stable trust boundary; this exact retired-candidate check belongs there, while unrelated release operations remain untouched.

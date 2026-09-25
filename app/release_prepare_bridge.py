@@ -301,10 +301,20 @@ def _identity_proof(
         authorization = central.get("reuseAuthorization")
         if not isinstance(allocation, Mapping):
             raise BridgeError("identity-proof-central-mismatch")
+        authorization_kind = (
+            authorization.get("kind") if isinstance(authorization, Mapping) else None
+        )
+        allowed_authorizations = {
+            "failed-preupload-correction",
+            "staged-preupload-correction",
+        }
+        if authorization_kind == "failed-candidate":
+            if not _valid_failed_candidate_authorization(context, authorization):
+                raise BridgeError("identity-proof-central-mismatch")
+            allowed_authorizations.add("failed-candidate")
         if (
             not isinstance(authorization, Mapping)
-            or authorization.get("kind")
-            not in {"failed-preupload-correction", "staged-preupload-correction"}
+            or authorization_kind not in allowed_authorizations
             or authorization.get("priorCandidateId")
             != f"{context.marketing_version}-{context.build_number - 1}"
             or allocation.get("productKey") != PRODUCT
@@ -691,6 +701,13 @@ def _authorized_failed_preupload_predecessor(context: CandidateContext) -> str |
     predecessor = (
         authorization.get("priorCandidateId") if isinstance(authorization, Mapping) else None
     )
+    if isinstance(authorization, Mapping) and authorization.get("kind") == "failed-candidate":
+        return (
+            predecessor
+            if isinstance(predecessor, str)
+            and _valid_failed_candidate_authorization(context, authorization)
+            else None
+        )
     if (
         not isinstance(authorization, Mapping)
         or authorization.get("kind") != "failed-preupload-correction"
@@ -699,6 +716,99 @@ def _authorized_failed_preupload_predecessor(context: CandidateContext) -> str |
     ):
         return None
     return predecessor
+
+
+def _valid_failed_candidate_authorization(
+    context: CandidateContext, authorization: Mapping[str, Any]
+) -> bool:
+    """Validate the exact prior candidate bound by a central failed-candidate proof."""
+
+    predecessor = f"{context.marketing_version}-{context.build_number - 1}"
+    if (
+        context.candidate_id != f"{context.marketing_version}-{context.build_number}"
+        or context.build_number < 2
+        or authorization.get("kind") != "failed-candidate"
+        or authorization.get("priorCandidateId") != predecessor
+        or not isinstance(authorization.get("failureRecordHash"), str)
+        or _HEX64.fullmatch(authorization["failureRecordHash"]) is None
+    ):
+        return False
+
+    try:
+        from release_candidate.retired_identity import (
+            _MAX_LEDGER_BYTES,
+            _MAX_LEDGER_RECORDS,
+            _UPLOAD_TRANSITIONS,
+            _central_readers,
+            _contains_upload_or_receipt_evidence,
+            _verified_manifest,
+        )
+
+        predecessor_root = context.manifest_path.parent.parent / predecessor
+        if predecessor_root.is_symlink() or not predecessor_root.is_dir():
+            return False
+        if (
+            _verified_manifest(
+                predecessor_root,
+                predecessor,
+                context.marketing_version,
+                context.build_number - 1,
+            )
+            is None
+        ):
+            return False
+        transitions_path = predecessor_root / "transitions.jsonl"
+        if transitions_path.is_symlink() or not transitions_path.is_file():
+            return False
+        if transitions_path.stat().st_size > _MAX_LEDGER_BYTES:
+            return False
+        transition_bytes = transitions_path.read_bytes()
+        if len(transition_bytes) > _MAX_LEDGER_BYTES:
+            return False
+        transition_lines = transition_bytes.decode("utf-8").splitlines()
+        if (
+            not transition_lines
+            or len(transition_lines) > _MAX_LEDGER_RECORDS
+            or any(not line for line in transition_lines)
+        ):
+            return False
+        _, read_candidate_ledger_v2 = _central_readers()
+        records = read_candidate_ledger_v2(predecessor_root)
+        if transitions_path.read_bytes() != transition_bytes:
+            return False
+        if (
+            not records
+            or len(records) > _MAX_LEDGER_RECORDS
+            or records[-1].get("transition") != "cancelled"
+            or _UPLOAD_TRANSITIONS.intersection(record.get("transition") for record in records)
+        ):
+            return False
+        failures = [record for record in records[:-1] if record.get("transition") == "failed"]
+        if (
+            not failures
+            or failures[-1].get("recordHash") != authorization["failureRecordHash"]
+            or _contains_upload_or_receipt_evidence(predecessor_root)
+        ):
+            return False
+
+        active_pointer = context.manifest_path.parent.parent.parent / "active-candidate.json"
+        if os.path.lexists(active_pointer):
+            if active_pointer.is_symlink() or not active_pointer.is_file():
+                return False
+            if active_pointer.stat().st_size > 4096:
+                return False
+            active_bytes = active_pointer.read_bytes()
+            if len(active_bytes) > 4096:
+                return False
+            active_value = json.loads(active_bytes.decode("utf-8"))
+            if not isinstance(active_value, Mapping):
+                return False
+            active = active_value.get("candidateId")
+            if active != context.candidate_id:
+                return False
+    except (ImportError, OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+        return False
+    return True
 
 
 def _authorized_staged_preupload_predecessor(context: CandidateContext) -> str | None:
@@ -1535,12 +1645,12 @@ def execute(
     try:
         if production_operation:
             readiness_preflight(root, context)
+            legacy_ledger_path = root / ".release-state" / "candidate.json"
+            legacy_ledger = _load_json(legacy_ledger_path) if legacy_ledger_path.exists() else None
             legacy_id = reconcile_assigned_candidate(root, context)
-            legacy_ledger = (
-                _load_json(root / ".release-state" / "candidate.json") if legacy_id else None
-            )
             rollover_uploaded = bool(
-                isinstance(legacy_ledger, Mapping)
+                legacy_id is not None
+                and isinstance(legacy_ledger, Mapping)
                 and legacy_ledger.get("state") in {"uploading", "uploaded_unassigned"}
             )
             environment = {

@@ -81,6 +81,9 @@ release-blocking correction, run the upload wrapper from `app/` with
 `--rollover-assigned --supersession-reason "<reason>"`. The wrapper archives the
 old candidate workspace, evidence, and receipt under
 `.release-state/archived/<candidate-id>/` before creating the replacement.
+After the local readiness bridge accepts a frozen failed-candidate proof, retry
+that same candidate through the supported central stage without rerunning
+candidate preparation.
 Superseding a frozen candidate is Amber per `~/.agent/prompts/_shared/gar.md`:
 do it, record the supersession reason, and continue. Immutability forbids
 mutating an assigned candidate in place; it is not a reason to end the turn.
