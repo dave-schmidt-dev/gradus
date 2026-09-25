@@ -27,6 +27,11 @@
       "source": "caller"
     },
     {
+      "name": "TMPDIR",
+      "required": true,
+      "source": "caller"
+    },
+    {
       "name": "PATH",
       "required": true,
       "source": "caller"
@@ -104,7 +109,7 @@
       "workingDirectory": ".",
       "environment": {
         "inherit": false,
-        "inputs": ["READINESS_MANIFEST", "HOME", "PATH", "PYTHONPATH", "USER", "LOGNAME", "GRADUS_STATIC_BASE"],
+        "inputs": ["READINESS_MANIFEST", "HOME", "TMPDIR", "PATH", "PYTHONPATH", "USER", "LOGNAME", "GRADUS_STATIC_BASE"],
         "literals": {"RELEASE_CONFIGURATION": "Production"}
       },
       "proofSchema": "release.proof.local-gate.v2",

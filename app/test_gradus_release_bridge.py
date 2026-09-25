@@ -66,6 +66,14 @@ class BridgeTests(unittest.TestCase):
                 "source": "caller",
             },
         )
+        self.assertEqual(
+            environment_inputs["TMPDIR"],
+            {
+                "name": "TMPDIR",
+                "required": True,
+                "source": "caller",
+            },
+        )
 
         operations = {entry["id"]: entry for entry in adapter["operations"]}
         local_gate = operations["local-gate"]
@@ -77,6 +85,7 @@ class BridgeTests(unittest.TestCase):
             [
                 "READINESS_MANIFEST",
                 "HOME",
+                "TMPDIR",
                 "PATH",
                 "PYTHONPATH",
                 "USER",
