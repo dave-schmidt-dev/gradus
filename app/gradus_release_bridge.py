@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from release_candidate.retired_identity import retired_candidate_successor_build
+
 PRODUCT = "gradus-ios"
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_ROOT = ROOT / ".release-state" / "evidence"
@@ -639,6 +641,7 @@ def _identity_proof_valid(*, marketing_version: str) -> bool:
         and proof.get("productKey") == PRODUCT
         and proof.get("marketingVersion") == marketing_version
         and isinstance(proof.get("buildNumber"), int)
+        and not isinstance(proof.get("buildNumber"), bool)
         and proof["buildNumber"] > 0
         and isinstance(proof.get("marketingVersion"), str)
         and _SEMVER.fullmatch(proof["marketingVersion"]) is not None
@@ -650,11 +653,13 @@ def _identity_proof_valid(*, marketing_version: str) -> bool:
         and isinstance(remote_build, int)
         and not isinstance(remote_build, bool)
         and remote_build >= 0
-        and proof["buildNumber"] == remote_build + 1
+        and proof["buildNumber"] >= remote_build + 1
         and isinstance(proof.get("observedAt"), str)
     )
     if not valid:
         return False
+    if proof["buildNumber"] > remote_build + 1:
+        return retired_candidate_successor_build(proof, ROOT) == proof["buildNumber"]
     candidate = f"{marketing_version}-{proof['buildNumber']}"
     manifest = _central_candidate_manifest(candidate)
     return (

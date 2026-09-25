@@ -23,6 +23,7 @@ from typing import Any
 from urllib.parse import quote
 
 from _asc_api import API_BASE, ASCClient, ASCError, make_token_provider
+from release_candidate.retired_identity import retired_candidate_successor_build
 from xcode_cloud_artifact import (
     ArtifactDownloadError,
     download_ci_build_action_result_bundle,
@@ -2048,6 +2049,9 @@ def main(argv: list[str] | None = None) -> int:
                 product=args.product,
                 marketing_version=read_marketing_version(project_root / "app" / "project.yml"),
             )
+            retired_successor = retired_candidate_successor_build(proof, project_root)
+            if retired_successor is not None:
+                proof["buildNumber"] = retired_successor
             write_proof(project_root / EVIDENCE_PATH, proof)
         except ASCError as exc:
             # Emit only the typed transport classification.  The broker boundary

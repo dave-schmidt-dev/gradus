@@ -91,6 +91,13 @@ The receipt journal must be inside the candidate workspace; rollover emits
 archive-start and archive-complete progress and preserves that journal in the
 archived workspace.
 
+When the framework retires a failed pre-upload candidate, the allocator may
+reserve the build after a contiguous same-version chain ending in that
+candidate's central `cancelled` transition. It preserves the fresh App Store
+Connect observation and advances only the local build number; the central
+release validator remains the final authority. An active pointer, upload
+transition, receipt, malformed lineage, or stale observation blocks this path.
+
 ### Candidate-current walkthrough and release-owner handoff
 
 Before the release owner authorizes TestFlight, generate the dated walkthrough
