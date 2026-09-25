@@ -2,7 +2,16 @@ import Foundation
 @testable import GradusRefreshAgentCore
 import XCTest
 
+// This focused lifecycle suite keeps the failure/restore matrix together for review.
+// swiftlint:disable:next type_body_length
 final class RefreshAgentTests: XCTestCase {
+    private func validSidecar(count: Int = 2) -> Data {
+        Data("""
+        {"schema_version":1,"count":\(count),"generation":"8a596d59-294c-4efc-81a3-0caab767abbb",\
+        "snapshot_updated_at":"2026-09-23T10:00:00-04:00","observed_at":"2026-09-23T10:00:00-04:00"}
+        """.utf8)
+    }
+
     func testSuccessRunsOnlyFixedBridgeThenProducer() throws {
         let fixture = try Fixture(outcomes: [.success, .success])
 
@@ -89,6 +98,82 @@ final class RefreshAgentTests: XCTestCase {
 
         XCTAssertEqual(fixture.agent.run(), .failed)
         XCTAssertEqual(try Data(contentsOf: fixture.paths.snapshotFiles[1]), prior)
+    }
+
+    func testPriorValidSidecarRestoredOnProducerFailureAndCancellation() throws {
+        for outcome in [ProcessOutcome.failure(exitStatus: 1), .timedOut, .cancelled] {
+            let fixture = try Fixture(outcomes: [.success, outcome])
+            let sidecar = fixture.paths.snapshotFiles[2]
+            try FileManager.default.createDirectory(
+                at: fixture.paths.publicStateRoot, withIntermediateDirectories: true
+            )
+            let prior = validSidecar()
+            try prior.write(to: sidecar)
+            fixture.runner.onInvocation = { index in
+                if index == 1 {
+                    try? self.validSidecar(count: 3).write(to: sidecar)
+                }
+            }
+            XCTAssertEqual(fixture.agent.run(), .failed)
+            XCTAssertEqual(try Data(contentsOf: sidecar), prior)
+            XCTAssertNil(fixture.status.statuses.last?.committedSnapshotUpdatedAt)
+        }
+    }
+
+    func testNewSidecarRemovedOnFailedProducerWithNoPrior() throws {
+        let fixture = try Fixture(outcomes: [.success, .failure(exitStatus: 1)])
+        let sidecar = fixture.paths.snapshotFiles[2]
+        fixture.runner.onInvocation = { index in
+            if index == 1 {
+                try? self.validSidecar().write(to: sidecar)
+            }
+        }
+        XCTAssertEqual(fixture.agent.run(), .failed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecar.path))
+    }
+
+    func testInvalidPriorSidecarBytesSurviveFailedProducer() throws {
+        let fixture = try Fixture(outcomes: [.success, .failure(exitStatus: 1)])
+        let sidecar = fixture.paths.snapshotFiles[2]
+        try FileManager.default.createDirectory(
+            at: fixture.paths.publicStateRoot, withIntermediateDirectories: true
+        )
+        let prior = Data("{invalid prior sidecar}\n".utf8)
+        try prior.write(to: sidecar)
+        fixture.runner.onInvocation = { index in
+            guard index == 1 else { return }
+            do {
+                try self.validSidecar(count: 3).write(to: sidecar)
+            } catch {
+                XCTFail("fixture write failed: \(error)")
+            }
+        }
+        XCTAssertEqual(fixture.agent.run(), .failed)
+        XCTAssertEqual(try Data(contentsOf: sidecar), prior)
+        XCTAssertNil(fixture.status.statuses.last?.committedSnapshotUpdatedAt)
+    }
+
+    func testSuccessStatusCarriesExactCommittedV2Token() throws {
+        let fixture = try Fixture(outcomes: [.success, .success])
+        let token = "2026-09-23T10:00:00.123456-04:00"
+        let committed = Data("{\"schema_version\":2,\"updated_at\":\"\(token)\"}".utf8)
+        try FileManager.default.createDirectory(
+            at: fixture.paths.publicStateRoot, withIntermediateDirectories: true
+        )
+        fixture.runner.onInvocation = { index in
+            guard index == 1 else { return }
+            do {
+                try committed.write(to: fixture.paths.snapshotFiles[1])
+            } catch {
+                XCTFail("fixture write failed: \(error)")
+            }
+        }
+        XCTAssertEqual(fixture.agent.run(), .success)
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.snapshotFiles[1]), committed)
+        XCTAssertEqual(fixture.status.statuses.last?.committedSnapshotUpdatedAt, token)
+        XCTAssertTrue(fixture.status.statuses.dropLast().allSatisfy {
+            $0.committedSnapshotUpdatedAt == nil
+        })
     }
 
     func testProducerCancellationRestoresPriorCompleteSnapshots() throws {

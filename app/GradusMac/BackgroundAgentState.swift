@@ -40,6 +40,9 @@ public struct BackgroundAgentStatusFile: Codable, Equatable, Sendable {
     public let bridge: Bridge?
     public let sequence: Int
     public let updatedAt: String
+    /// Exact v2 `updated_at` committed before a terminal success. Older
+    /// refresh agents omit it, so their status still decodes as nil.
+    public let committedSnapshotUpdatedAt: String?
 
     public init(
         schemaVersion: Int = 1,
@@ -47,7 +50,8 @@ public struct BackgroundAgentStatusFile: Codable, Equatable, Sendable {
         health: Health,
         bridge: Bridge? = nil,
         sequence: Int,
-        updatedAt: String
+        updatedAt: String,
+        committedSnapshotUpdatedAt: String? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.phase = phase
@@ -55,6 +59,7 @@ public struct BackgroundAgentStatusFile: Codable, Equatable, Sendable {
         self.bridge = bridge
         self.sequence = sequence
         self.updatedAt = updatedAt
+        self.committedSnapshotUpdatedAt = committedSnapshotUpdatedAt
     }
 
     /// True while a refresh is in flight, which is what entitles the UI to show

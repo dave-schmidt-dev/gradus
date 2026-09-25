@@ -106,6 +106,14 @@ public final class DashboardViewModel: ObservableObject {
     /// changing it requires leaving the app.
     @Published public internal(set) var systemNotificationAuthorization: NotificationAuthorization = .notDetermined
 
+    /// Independent, per-installation reset-alert choices. Neither changes the
+    /// warning subscription or the silent zone-change subscription.
+    @Published public internal(set) var bankedResetAlertsEnabled: Bool
+    @Published public internal(set) var usageRefillAlertsEnabled: Bool
+    @Published public internal(set) var bankedResetStatus: ResetBankedStatus =
+        .unavailable(lastObservedCount: nil, lastObservedAt: nil)
+    @Published public internal(set) var resetAlertAuthorizationRequestInProgress = false
+
     /// P5/T5.2: iOS-local, per-device "locally urgent" percent-left
     /// threshold (Key decision #1/#5) -- affects local display/ranking
     /// only, never what CloudKit pushes. Plain `didSet`-persists, like
@@ -168,6 +176,9 @@ public final class DashboardViewModel: ObservableObject {
     static let requiredICloudModeVersionKey = RequiredICloudMigration.versionKey
     static let requiredICloudModeVersion = RequiredICloudMigration.currentVersion
     static let notificationsEnabledKey = "warningNotificationsEnabled"
+    static let bankedResetAlertsEnabledKey = "bankedResetAlertsEnabled"
+    static let usageRefillAlertsEnabledKey = "usageRefillAlertsEnabled"
+    static let resetAlertStateKey = "mobileResetAlertStateV1"
     static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
     static let providerSortOptionKey = "providerSortOption"
     static let showExhaustedKey = "showExhausted"
@@ -195,10 +206,13 @@ public final class DashboardViewModel: ObservableObject {
     let zoneChangesFetcher: ZoneChangesFetcher?
     let subscriptionManager: CKSubscriptionManager?
     let warningNotificationScheduler: WarningNotificationScheduling?
+    let resetNotificationScheduler: ResetNotificationScheduling?
     let notificationAuthorizationSource: NotificationAuthorizationSource?
     let liveLifecycleGate: LiveLifecycleGate?
     let widgetSnapshotPublisher: WidgetSnapshotPublisher?
     let userDefaults: UserDefaults
+    let resetDeviceID: String
+    var resetAlertState: ResetAlertState
     var allProviders: [ProviderStatus] = []
     var isReconcilingLiveLifecycle = false
     /// Build 12 stored a direct column count. Keep that value until the first
@@ -210,7 +224,8 @@ public final class DashboardViewModel: ObservableObject {
     /// must be constructed without any live CloudKit/account/notification seam.
     var hasLiveLifecycleDependencies: Bool {
         fetcher != nil || accountSource != nil || zoneChangesFetcher != nil || subscriptionManager != nil
-            || warningNotificationScheduler != nil || notificationAuthorizationSource != nil
+            || warningNotificationScheduler != nil || resetNotificationScheduler != nil
+            || notificationAuthorizationSource != nil
     }
 
     private struct CardColumnPreferenceMigration {
@@ -264,6 +279,7 @@ public final class DashboardViewModel: ObservableObject {
         zoneChangesFetcher: ZoneChangesFetcher? = nil,
         subscriptionManager: CKSubscriptionManager? = nil,
         warningNotificationScheduler: WarningNotificationScheduling? = nil,
+        resetNotificationScheduler: ResetNotificationScheduling? = nil,
         notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
         initialAccountStatus: CKAccountStatus = .couldNotDetermine,
         userDefaults: UserDefaults = .standard
@@ -272,6 +288,7 @@ public final class DashboardViewModel: ObservableObject {
             cache: cache, fetcher: fetcher, accountSource: accountSource,
             zoneChangesFetcher: zoneChangesFetcher, subscriptionManager: subscriptionManager,
             warningNotificationScheduler: warningNotificationScheduler,
+            resetNotificationScheduler: resetNotificationScheduler,
             notificationAuthorizationSource: notificationAuthorizationSource,
             liveLifecycleGate: nil,
             widgetSnapshotPublisher: nil,
@@ -287,6 +304,7 @@ public final class DashboardViewModel: ObservableObject {
         zoneChangesFetcher: ZoneChangesFetcher? = nil,
         subscriptionManager: CKSubscriptionManager? = nil,
         warningNotificationScheduler: WarningNotificationScheduling? = nil,
+        resetNotificationScheduler: ResetNotificationScheduling? = nil,
         notificationAuthorizationSource: NotificationAuthorizationSource? = nil,
         liveLifecycleGate: LiveLifecycleGate?,
         widgetSnapshotPublisher: WidgetSnapshotPublisher? = nil,
@@ -299,28 +317,28 @@ public final class DashboardViewModel: ObservableObject {
         self.zoneChangesFetcher = zoneChangesFetcher
         self.subscriptionManager = subscriptionManager
         self.warningNotificationScheduler = warningNotificationScheduler
+        self.resetNotificationScheduler = resetNotificationScheduler
         self.notificationAuthorizationSource = notificationAuthorizationSource
         self.liveLifecycleGate = liveLifecycleGate
         self.widgetSnapshotPublisher = widgetSnapshotPublisher
         self.userDefaults = userDefaults
+        resetDeviceID = DevicePresenceInstallationStore(defaults: userDefaults).installationID()
+        resetAlertState = (userDefaults.data(forKey: Self.resetAlertStateKey)
+            .flatMap { try? JSONDecoder().decode(ResetAlertState.self, from: $0) }) ?? ResetAlertState()
         accountStatus = initialAccountStatus
         let migratedMode = RequiredICloudMigration.migrate(
             defaults: userDefaults, legacyKey: Self.syncEnabledKey
         )
         requiredICloudMode = migratedMode
         syncEnabled = migratedMode.allowsLiveWork
-        // Warning alerts are optional and fresh installs start off. Existing
-        // explicit choices are preserved by the key-presence branch above.
-        if userDefaults.object(forKey: Self.notificationsEnabledKey) != nil {
-            notificationsEnabled = userDefaults.bool(forKey: Self.notificationsEnabledKey)
-        } else {
-            notificationsEnabled = false
-        }
-        if userDefaults.object(forKey: Self.localWarningThresholdPercentKey) != nil {
-            localWarningThresholdPercent = userDefaults.double(forKey: Self.localWarningThresholdPercentKey)
-        } else {
-            localWarningThresholdPercent = Self.defaultLocalWarningThresholdPercent
-        }
+        // Warning alerts are optional and fresh installs start off. An
+        // explicit stored choice is preserved by UserDefaults.bool(forKey:).
+        notificationsEnabled = userDefaults.bool(forKey: Self.notificationsEnabledKey)
+        bankedResetAlertsEnabled = userDefaults.bool(forKey: Self.bankedResetAlertsEnabledKey)
+        usageRefillAlertsEnabled = userDefaults.bool(forKey: Self.usageRefillAlertsEnabledKey)
+        localWarningThresholdPercent = userDefaults.object(forKey: Self.localWarningThresholdPercentKey) == nil
+            ? Self.defaultLocalWarningThresholdPercent
+            : userDefaults.double(forKey: Self.localWarningThresholdPercentKey)
         let storedSortOption = userDefaults.string(forKey: Self.providerSortOptionKey) ?? ""
         providerSortOption = ProviderSortOption(rawValue: storedSortOption) ?? .mostUrgent
         let cardPreferenceMigration = Self.migrateCardColumnPreference(userDefaults: userDefaults)
@@ -335,6 +353,7 @@ public final class DashboardViewModel: ObservableObject {
             userDefaults.stringArray(forKey: Self.widgetExcludedProviderNamesKey) ?? []
         )
         allProviders = cache.loadCachedStatuses()
+        evaluateResetStatuses(allProviders, schedule: false)
         providers = Self.presentedProviders(
             allProviders,
             localThreshold: localWarningThresholdPercent,
@@ -344,10 +363,6 @@ public final class DashboardViewModel: ObservableObject {
         lastSyncedAt = cache.lastSyncedAt()
         updateConnectedSource()
         synchronizeWidgetSnapshot()
-    }
-
-    public func isProviderIncludedInWidget(_ providerName: String) -> Bool {
-        !widgetExcludedProviderNames.contains(providerName)
     }
 
     public func setProviderIncludedInWidget(_ providerName: String, included: Bool) {
@@ -372,5 +387,11 @@ public final class DashboardViewModel: ObservableObject {
               == Self.requiredICloudModeVersion
         else { return }
         userDefaults.removeObject(forKey: Self.syncEnabledKey)
+    }
+}
+
+public extension DashboardViewModel {
+    func isProviderIncludedInWidget(_ providerName: String) -> Bool {
+        !widgetExcludedProviderNames.contains(providerName)
     }
 }

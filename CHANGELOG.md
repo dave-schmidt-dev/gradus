@@ -9,6 +9,21 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## 1.11.0 — 2026-09-24
+
+### Added
+
+- Mac and iPhone/iPad offer separate opt-in local alerts for new Codex banked
+  reset credits and usage-window refills. Claude banked-credit arrival remains
+  unavailable; mobile alerts may wait until Gradus opens and CloudKit syncs.
+
+### TestFlight focus
+
+- On Mac and iPhone/iPad, opt in to each alert kind separately and verify both
+  new Codex banked reset credit and usage-window refill alerts.
+- Test denied notification permission, requesting permission again, and the
+  recovery path.
+
 ## 1.10.3 — 2026-09-05
 
 ### Fixed

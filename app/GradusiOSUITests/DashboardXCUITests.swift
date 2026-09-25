@@ -13,6 +13,10 @@ final class DashboardXCUITests: XCTestCase {
         case warningAlertsOff = "warning-alerts-off"
         case warningAlertsRequesting = "warning-alerts-requesting"
         case warningAlertsDenied = "warning-alerts-denied"
+        case resetAlertsOff = "reset-alerts-off"
+        case resetAlertsOn = "reset-alerts-on"
+        case resetAlertsRequesting = "reset-alerts-requesting"
+        case resetAlertsDenied = "reset-alerts-denied"
     }
 
     func testFreshAccountDiscoveryShowsLiveProgress() {
@@ -85,8 +89,15 @@ final class DashboardXCUITests: XCTestCase {
 
         XCTAssertFalse(app.buttons["explore-sample-settings"].exists)
         XCTAssertFalse(app.staticTexts["Explore Sample"].exists)
-        XCTAssertTrue(app.staticTexts["Dashboard card size"].exists)
+        let dashboardCardSize = app.staticTexts["Dashboard card size"]
+        for _ in 0 ..< 6 where !dashboardCardSize.exists {
+            app.swipeUp()
+        }
+        XCTAssertTrue(dashboardCardSize.exists)
         let automatic = app.switches["Automatic"]
+        for _ in 0 ..< 6 where !automatic.exists {
+            app.swipeUp()
+        }
         XCTAssertTrue(automatic.waitForExistence(timeout: 5))
         XCTAssertEqual(automatic.value as? String, "1")
         assertStaticTextAfterScrolling(containing: "This screen only chooses providers", in: app)
@@ -115,6 +126,52 @@ final class DashboardXCUITests: XCTestCase {
         let settings = app.buttons["Open iOS Settings"]
         XCTAssertTrue(settings.exists)
         XCTAssertTrue(app.switches["warning-alerts-toggle"].exists)
+    }
+
+    func testResetAlertsOffExplainsIndependentControlsAndMobileDelivery() {
+        let app = launch(.resetAlertsOff)
+        openSettings(in: app)
+
+        assertResetAlertSwitches(in: app, expectedValue: "0")
+        assertStaticTextAfterScrolling(containing: "Claude banked resets are unavailable to Gradus.", in: app)
+        assertStaticTextAfterScrolling(
+            containing: "On iPhone and iPad, delivery may wait until you open Gradus.",
+            in: app
+        )
+    }
+
+    func testResetAlertsOnShowsBothEnabled() {
+        let app = launch(.resetAlertsOn)
+        openSettings(in: app)
+
+        assertResetAlertSwitches(in: app, expectedValue: "1")
+        assertStaticTextAfterScrolling(containing: "Claude banked resets are unavailable to Gradus.", in: app)
+    }
+
+    func testResetAlertsRequestingShowsProgressWithoutSystemPrompt() {
+        let app = launch(.resetAlertsRequesting)
+        openSettings(in: app)
+
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-banked-toggle", in: app))
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-refill-toggle", in: app))
+        let banked = app.switches["reset-alerts-banked-toggle"]
+        let refilled = app.switches["reset-alerts-refill-toggle"]
+        XCTAssertTrue(banked.waitForExistence(timeout: 2))
+        XCTAssertTrue(refilled.waitForExistence(timeout: 2))
+        XCTAssertFalse(banked.isEnabled)
+        XCTAssertFalse(refilled.isEnabled)
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-permission-requesting", in: app))
+        XCTAssertFalse(permissionAlert(in: app).exists)
+    }
+
+    func testResetAlertsDeniedShowsRecovery() {
+        let app = launch(.resetAlertsDenied)
+        openSettings(in: app)
+
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-permission-denied", in: app))
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-banked-toggle", in: app))
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-refill-toggle", in: app))
+        XCTAssertTrue(app.buttons["Open iOS Settings"].exists)
     }
 
     func testWidgetProvidersCanBeExcludedWithoutHidingDashboardData() {
@@ -183,6 +240,29 @@ final class DashboardXCUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(element.waitForExistence(timeout: 2), "Missing Settings copy containing: \(text)")
+    }
+
+    private func assertResetAlertSwitches(in app: XCUIApplication, expectedValue: String) {
+        for identifier in ["reset-alerts-banked-toggle", "reset-alerts-refill-toggle"] {
+            XCTAssertTrue(elementAfterScrolling(identifier: identifier, in: app))
+            XCTAssertEqual(app.switches[identifier].value as? String, expectedValue)
+        }
+    }
+
+    private func permissionAlert(in app: XCUIApplication) -> XCUIElement {
+        let appAlert = app.alerts.firstMatch
+        if appAlert.waitForExistence(timeout: 2) {
+            return appAlert
+        }
+        return XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+    }
+
+    private func elementAfterScrolling(identifier: String, in app: XCUIApplication) -> Bool {
+        let target = element(identifier: identifier, in: app)
+        for _ in 0 ..< 6 where !target.exists {
+            app.swipeUp()
+        }
+        return target.waitForExistence(timeout: 2)
     }
 
     private func element(identifier: String, in app: XCUIApplication) -> XCUIElement {

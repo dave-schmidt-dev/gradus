@@ -5,7 +5,7 @@
 > in this project's CLAUDE.md/README, not globally.
 
 ### INV-1 — Canonical public state contains no credential material or account PII and has one nonaliasing root per runtime mode
-area: ["gradus/paths.py", "gradus/snapshot.py", "gradus/parsing.py", "gradus/history.py", "gradus/providers/*.py"]
+area: ["gradus/paths.py", "gradus/snapshot.py", "gradus/parsing.py", "gradus/history.py", "gradus/providers/*.py", "gradus/banked_observation.py", "gradus/banked_keychain.py"]
 gate_test: tests/test_snapshot.py::test_payload_data_is_safe_allowlist
 threshold: 3
 rationale: The snapshot files are read by a separate repo (review-plugin router). They are written to
@@ -19,12 +19,15 @@ rationale: The snapshot files are read by a separate repo (review-plugin router)
   account_email/account_organization/login_method/account_tier/raw_text. A denylist would silently
   pass a newly-added Status field; the gate is a POSITIVE allowlist check. Prevents leaking auth or
   personal identity into a cross-repo-readable file. The `error` field is the one free-text channel
-  copied verbatim into the file: it is held to the plain provider message (the raw `--debug` payload
-  is diverted to a non-persisted `debug_detail`) and hard-capped at the persistence boundary, pinned
+  copied verbatim into the file: it is held to a sanitized provider message (`--debug` retains only
+  safe status or exception type, never raw response text) and hard-capped at the persistence boundary, pinned
   by the companion gate test_payload_error_carries_no_raw_payload. Hence area now includes providers/*.py,
   where that error string is constructed. The history writer accepts only an existing, validated schema-v2
   payload plus fixed provider-owned safe provenance descriptors; it does not widen the allowlist or persist raw
   upstream data.
+  Codex banked count travels separately from ProviderSnapshot.data into an exact-shape 0600
+  sidecar only after successful v2 read-back and history append. Its public fields are bounded count,
+  random generation, and timestamps; identity and HMAC key stay out of all public state and logs.
   In source mode only, the schema-v2 writer also atomically mirrors that same allowlisted payload to
   `~/Library/Application Support/Gradus/snapshot-v2.json` for legacy GradusMac rollback. This consumer
   copy is not a router input and never aliases the source or installed canonical. Installed mode writes
@@ -41,6 +44,8 @@ rationale: Machine-readable --json and headless --write-snapshot surfaces must n
   INCLUDING on the cached-cred→HTTP-401 recovery path. --write-snapshot writes only its declared v1/v2
   snapshot outputs plus the credential-free history journal after schema-v2 read-back; --json and historical
   queries are read-only. Credential-aware background refresh is governed by INV-8.
+  The banked Keychain helper runs only after an explicit producer commit, or under the attended
+  --authorize-banked-access action. --json and legacy readers never invoke it.
   The frozen `GradusRuntime.app` ships these same surfaces, so the hermetic runtime build and
   relocation suite is part of this area: it runs the frozen binary with no host Python on PATH
   and with `_MEIPASS2`/`PYTHONHOME`/`PYTHONPATH`/`DYLD_*` poisoned, and fails if a provider child
@@ -80,6 +85,9 @@ rationale: The router asserts schema_version. Both versioned files always carry 
   Each file has a path- and schema-specific transient prior. The history envelope has an independent
   history_schema_version and is not a replacement or redirect for either router schema. Prevents silent schema
   drift that a version-asserting consumer cannot detect.
+  The banked observation has its own versioned sidecar and strict shape; it does not add data keys
+  to v1/v2 or alter the history journal envelope. Offset-aware Codex/Claude source reset instants
+  remain internal metadata and drive both reset_iso and pace_delta from the same target.
 
 ### INV-6 — Browser-derived credentials cross one app boundary and stay private at rest
 area: ["app/GradusCredentialBridge/**", "app/GradusCredentialBridgeCore/**", "app/GradusCredentialBridgeTests/**", "app/project.yml", "app/sign-mac-bundle.sh", "app/verify-mac-bundle.sh", "app/test-mac-bundle-structure.sh", "gradus/paths.py", "gradus/providers/*.py", "launchd/*", "gradus/history.py"]
@@ -100,12 +108,16 @@ rationale: Safari-derived provider cookies are read only by the Developer-ID-sig
   Desktop databases, or a credential file fallback. In the normal bundled path, macOS attributes the nested bridge's
   protected-file read to the outer `Gradus.app`, so Full Disk Access is granted once to that responsible bundle. The
   source boundary remains narrower than the TCC identity: only the nested bridge contains Safari-reading code, and
-  the UI, agent, Python runtime, and shell wrapper never receive cookie material. Codex auth.json and debug dumps
-  retain the Python private-write helper. The counted bridge gate proves fixed operations, typed recovery, structural isolation, parser allowlists,
+  the UI, agent, Python runtime, and shell wrapper never receive cookie material. Codex auth.json
+  retains the Python private-write helper; raw-body debug dumps are disabled. The counted bridge gate proves fixed operations, typed recovery, structural isolation, parser allowlists,
   nested identity/embedding, payload boundaries, and file modes; provider
   tests tripwire prohibited browser paths, and `tests/test_snapshot.py::RuntimePathPolicyTests` rejects
   aliasing between public state and private caches. Prevents private browser state from becoming available to
-  arbitrary Python processes or world-readable at rest.
+  arbitrary Python processes or world-readable at rest. Banked lineage uses a distinct random
+  HMAC key in the macOS file Keychain for each source/installed mode. Its isolated helper disables
+  SecurityAgent interaction before unattended item access, passes identity only on stdin, and
+  returns a generation only. A locked/denied item yields typed private backoff and Unavailable
+  banked state without failing normal usage; attended repair requires an explicit user action.
   Retiring the OpenCode Go and Cursor browser transports is one-way by construction: the bridge deletes any
   legacy `cursor_token.json` or `opencode_go_cookies.json` it finds rather than reading it, so the rollback shape
   is a new bridge release plus a fresh Full Disk Access grant, never a flag flip on a dormant browser path.
@@ -147,6 +159,10 @@ rationale: The Mac app runs on the same machine holding live credentials in `.ca
   still carries only SnapshotPayload provider/window fields to CloudKit and never a credential, and renaming
   the shipped wrapper to `Gradus.app` leaves the `com.zerodelta.gradus.mac` bundle identifier and the
   `iCloud.com.zerodelta.gradus` container exactly as they were.
+  Reset-alert observation derives `agent-status.json` and `banked-observation-v1.json` from that same
+  injected snapshot URL. The local observers stay within the canonical Installed directory and never
+  consult the private cache or legacy mirror. Mac-local observation and permission recovery start
+  independently of CloudKit setup; test fixtures use temporary paths and fake schedulers.
 
 ### INV-8 — Credential-aware background refresh is explicit, single-flight, and progress-visible
 area: ["gradus/paths.py", "gradus/__main__.py", "gradus/publisher_watchdog.py", "gradus/providers/*.py", "launchd/*", "app/GradusRefreshAgent/**", "app/GradusRefreshAgentTests/**", "app/GradusMac/Resources/com.zerodelta.gradus.refresh-agent.plist", "app/verify-mac-bundle.sh", "app/GradusMac/LegacyRuntimeMigrator.swift"]
@@ -173,6 +189,13 @@ rationale: Only the explicit --refresh-snapshot command may use non-headless pro
   --write-snapshot through credential-aware behavior. One Antigravity probe supplies both the direct
   entry and the schema-v2 Antigravity (Claude) synthetic projection; no second credential request is
   implied. Overlap, lock failure, safe status, and one-probe behavior are binary-tested.
+  The Mac reset-observation pipeline uses successful agent status as the commit barrier for installed
+  cycles: alert evaluation waits for a matching committed snapshot token and reread v2 snapshot, plus
+  any matching sidecar. Failed, cancelled, and restoring cycles discard pending alerts and reread the
+  restored snapshot. Source or external producers wait at most 15 seconds for a sidecar, then evaluate
+  once without it; a late matching sidecar may add count without evaluating a refill again. Bounded
+  waits expose non-sensitive progress, while status from older agents without the commit token decodes
+  without authorizing an installed-cycle commit.
   Because the supervised refresh feeds an unsupervised GUI publisher, the job additionally runs one bounded
   publisher-liveness check per successful cycle via the opt-in `--publisher-watchdog` command. It relaunches
   only an absent publisher, only by absolute bundle path, and only when a fresh snapshot sits behind lagging
@@ -205,6 +228,13 @@ rationale: GradusiOS is a consumer of the Mac publisher, not an independent data
   makes the dependency decision explicit, requires both sides to pass their gates, and records the
   producer-publish evidence alongside the consumer upload evidence. The candidate ledger binds source, project,
   artifact, version, producer, iOS, IPA, and walkthrough digests and permits only validated state transitions.
+  The v14 local checkpoint now includes the banked sidecar producer, Mac and iOS consumers, shared
+  refill/grant detection, independent local notification preferences, permission-recovery UI, and
+  fixture-backed snapshot/walkthrough evidence. Local phase checks and visual comparisons do not
+  substitute for the canonical full gate, signed-runtime Keychain access, an installed Mac-to-CloudKit-to-iOS
+  observation, physical-device notification delivery, or owner review of the exact release candidate;
+  those remain required before a cross-platform reset-alert release. Claude banked-credit arrival is
+  unavailable because no source observation is implemented.
   Credential-free legacy-candidate compatibility is checked during readiness, before the
   expensive local gate. A delivered-but-unassigned predecessor can be superseded only when its
   candidate-local delivery receipt, chain-valid central uploaded transition, central allocation

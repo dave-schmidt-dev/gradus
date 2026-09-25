@@ -64,35 +64,30 @@ COUNTING_LEG_REPORTERS=(
 # evidence can hide a zero-test result in the other.
 #
 # GradusiOS-iPhone's floor (index 6) is pinned to its exact integrated-gate
-# count (211) rather than a loose lower bound, so a test silently dropping out
+# count (232) rather than a loose lower bound, so a test silently dropping out
 # of selection fails the gate instead of hiding under slack. Raise it
 # deliberately when adding tests there -- and take the number from a real gate
 # run, not from the self-check's fixtures, which echo the declared floor back
 # and so always look like an exact match. The leg mixes Swift Testing and
 # XCTest in one target, so its reporter is `aggregate-xctest-swift` (sum of
-# both frameworks' max-seen counts, 188 + 23 here), not `xctest` (max across
+# both frameworks' max-seen counts, 209 + 23 here), not `xctest` (max across
 # patterns) -- the latter would let the smaller XCTest count silently ride
 # under the larger Swift Testing one without ever binding to the
 # reported/floor-checked total.
 #
-# The `swift-testing` (index 0) and `pytest` (index 1) floors read 2 until
-# 2026-08-31, against observed counts of 100 and 1077: those two legs would
-# have passed with 98% and 99.8% of their tests silently gone, which is the
-# exact failure the floors exist to catch. Both are now sized just under their
-# observed counts. They are deliberately NOT pinned exactly like index 6 --
+# The 2026-09-24 gate observed 130 SwiftPM and 1240 pytest tests. Their floors
+# are sized just under those counts, rather than pinned exactly like index 6 --
 # GradusiOS-iPhone is a fixed scenario set, while these two grow on most
 # commits, and an exact floor there would make every added test a gate edit.
 # Slack of a few tests still fails a leg that collapses.
 #
-# `GradusMac` (index 2) is now sized: the 2026-08-31 full gate observed 119,
-# and the Task 3.1 background-agent suites took it to 138. Sized like index 0
-# rather than pinned -- this bundle grows on most commits -- with enough slack
-# that an added suite is not a gate edit and a collapsed one still fails.
+# `GradusMac` (index 2) observed 240 tests on 2026-09-24. It retains five tests
+# of growth slack, like index 0, while still failing a collapsed suite.
 #
 # `GradusMacUI` (index 3) is pinned exactly, like index 6: it is a fixed
 # scenario set (menu, required-iCloud, quit lifecycle), so losing one is a lost
 # behavior rather than ordinary churn.
-COUNTING_LEG_MINIMUMS=(100 1000 170 4 15 12 211 3 9 10 12 6 5 5 15 5 5 4 31 12)
+COUNTING_LEG_MINIMUMS=(125 1200 235 4 16 20 232 3 9 20 16 6 5 5 15 5 5 4 31 16)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -739,6 +734,7 @@ echo "    Swept $swept_count stale gate device(s)."
 derived_data_dir="$(gate_derived_data)"
 gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"
 gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"
+gradus_mac_banked_fixture_path="$derived_data_dir/fixtures/banked-observation-v1.json"
 gradus_bridge_stage_root="$derived_data_dir/bridge-source"
 gradus_bridge_source_root="$gradus_bridge_stage_root/app"
 
@@ -777,12 +773,24 @@ if [[ ! -d "$gradus_mac_snapshot_root" ]] ||
   echo "FAIL: could not stage non-empty GradusMac snapshot baselines" >&2
   exit 1
 fi
+gradus_mac_banked_fixture_source="$GATE_REPO_ROOT/tests/fixtures/banked-observation-v1.json"
+if [[ ! -s "$gradus_mac_banked_fixture_source" ]]; then
+  echo "FAIL: GradusMac banked-observation test fixture is missing or empty" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$gradus_mac_banked_fixture_path")"
+/bin/cp "$gradus_mac_banked_fixture_source" "$gradus_mac_banked_fixture_path"
+if [[ ! -s "$gradus_mac_banked_fixture_path" ]]; then
+  echo "FAIL: could not stage non-empty GradusMac banked-observation test fixture" >&2
+  exit 1
+fi
 assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests" env \
   TZ="America/New_York" \
   TEST_RUNNER_TZ="America/New_York" \
   GRADUS_DISABLE_PIPELINE=1 \
   TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
   TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
+  TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH="$gradus_mac_banked_fixture_path" \
   xcodebuild test \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \

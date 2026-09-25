@@ -54,6 +54,9 @@ from gradus.__main__ import (
     main,
     parse_args,
 )
+from gradus.banked_observation import BankedCandidate, write_sidecar
+from gradus.parsing import CodexStatus
+from gradus.paths import installed_runtime_paths
 from gradus.providers import ProviderSnapshot, set_headless
 from gradus.snapshot import (
     ANTIGRAVITY_AUTH_RETRY_MESSAGE,
@@ -3514,6 +3517,113 @@ class CanonicalAuthGraceRetentionTests(unittest.TestCase):
                 snapshot = self._entry("Codex", "provider probe timed out", for_display=for_display)
                 self.assertTrue(snapshot.ok)
                 self.assertIsNotNone(snapshot.cached_since)
+
+
+class InstalledBankedProducerTests(unittest.TestCase):
+    def test_actual_refresh_path_commits_history_before_sidecar_with_optional_account(self) -> None:
+        class CodexOnly:
+            def __init__(self) -> None:
+                self.count = 1
+
+            def fetch(self) -> CodexStatus:
+                self.last_observed = datetime.now(timezone.utc)
+                return CodexStatus(
+                    credits=12.5,
+                    five_hour_percent_left=None,
+                    weekly_percent_left=50,
+                    five_hour_reset=None,
+                    weekly_reset="Resets Jan 01 at 12:00 AM",
+                    spark_weekly_percent_left=None,
+                    spark_weekly_reset=None,
+                    spark_five_hour_percent_left=None,
+                    spark_five_hour_reset=None,
+                    raw_text="private-response-sentinel",
+                    banked_candidate=(
+                        BankedCandidate(
+                            count=self.count,
+                            user_id="synthetic-user",
+                            account_id=None,
+                            observed_at=self.last_observed,
+                        )
+                        if self.count is not None
+                        else None
+                    ),
+                )
+
+            def close(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            real_support = Path(directory) / "app-support-real"
+            real_support.mkdir()
+            support_alias = Path(directory) / "app-support-link"
+            support_alias.symlink_to(real_support, target_is_directory=True)
+            paths = installed_runtime_paths(
+                application_support_root=support_alias,
+                logs_root=Path(directory) / "logs",
+            )
+            paths.public_state_root.parent.mkdir(parents=True, exist_ok=True)
+            provider = CodexOnly()
+            phase_order: list[str] = []
+
+            def identity_stub(
+                user_id: str, account_id: str | None, *, seconds_remaining: float
+            ) -> str:
+                self.assertEqual((user_id, account_id), ("synthetic-user", None))
+                self.assertGreaterEqual(seconds_remaining, 5)
+                self.assertTrue(paths.snapshot_v2_path.exists())
+                self.assertTrue((paths.public_state_root / "history").exists())
+                phase_order.append("identity-after-history")
+                return "8a596d59-294c-4efc-81a3-0caab767abbb"
+
+            with (
+                patch("sys.argv", ["gradus", "--refresh-snapshot"]),
+                patch("gradus.__main__.RUNTIME_PATHS", paths),
+                patch("gradus.__main__.SNAPSHOT_PATH", paths.snapshot_path),
+                patch("gradus.__main__.SNAPSHOT_V2_PATH", paths.snapshot_v2_path),
+                patch("gradus.__main__._setup_logging"),
+                patch("gradus.__main__._load_config", return_value={}),
+                patch(
+                    "gradus.__main__._legacy_claude_ownership",
+                    return_value=_LegacyClaudeOwnership.INACTIVE,
+                ),
+                patch(
+                    "gradus.__main__.initialize_providers",
+                    return_value=([("Codex", provider)], [provider]),
+                ),
+                patch("gradus.banked_keychain.get_generation", side_effect=identity_stub),
+                patch(
+                    "gradus.banked_observation.write_sidecar", wraps=write_sidecar
+                ) as sidecar_write,
+            ):
+                self.assertEqual(main(), 0)
+                first = json.loads(paths.banked_observation_path.read_text())
+                provider.count = 2
+                self.assertEqual(main(), 0)
+                second = json.loads(paths.banked_observation_path.read_text())
+                self.assertEqual(second["observed_at"], provider.last_observed.isoformat())
+                provider.count = None
+                self.assertEqual(main(), 0)
+                self.assertEqual(json.loads(paths.banked_observation_path.read_text()), second)
+
+            self.assertEqual(phase_order, ["identity-after-history", "identity-after-history"])
+            self.assertEqual(
+                [call.args[0] for call in sidecar_write.call_args_list],
+                [paths.banked_observation_path, paths.banked_observation_path],
+            )
+            self.assertEqual((first["count"], second["count"]), (1, 2))
+            self.assertEqual(first["generation"], second["generation"])
+            v2 = json.loads(paths.snapshot_v2_path.read_text())
+            codex = next(item for item in v2["providers"] if item["name"] == "Codex")
+            self.assertNotEqual(second["snapshot_updated_at"], v2["updated_at"])
+            self.assertNotEqual(second["observed_at"], codex["observed_at"])
+            for path in (paths.snapshot_path, paths.snapshot_v2_path):
+                self.assertNotIn("synthetic-user", path.read_text())
+                self.assertNotIn("private-response-sentinel", path.read_text())
+                self.assertNotIn("available_count", path.read_text())
+            for path in paths.history_dir.rglob("*.jsonl"):
+                self.assertNotIn("synthetic-user", path.read_text())
+                self.assertNotIn("private-response-sentinel", path.read_text())
 
 
 if __name__ == "__main__":

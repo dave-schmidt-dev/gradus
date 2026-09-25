@@ -113,6 +113,40 @@ def test_source_backed_route_and_control_coverage_fails_closed(tmp_path):
         validate_source_coverage(tmp_path)
 
 
+def test_reset_alert_routes_cover_independent_controls_and_permission_recovery():
+    screens = {screen["id"]: screen for screen in default_manifest()["screens"]}
+    expected = {
+        "settings.reset-alerts-off": ("reset-alerts-off", "reset-alerts-banked-toggle"),
+        "settings.reset-alerts-on": ("reset-alerts-on", "reset-alerts-refill-toggle"),
+        "settings.reset-alerts-requesting": (
+            "reset-alerts-requesting",
+            "reset-alerts-permission-requesting",
+        ),
+        "settings.reset-alerts-denied": (
+            "reset-alerts-denied",
+            "reset-alerts-permission-denied",
+        ),
+    }
+    routes = {route["screenId"]: route for route in capture_routes()}
+    for screen_id, (fixture, marker) in expected.items():
+        assert routes[screen_id]["fixture"] == fixture
+        assert routes[screen_id]["marker"] == marker
+        assert routes[screen_id]["image"] == f"{fixture}.png"
+    for screen_id in ("settings.reset-alerts-off", "settings.reset-alerts-on"):
+        controls = {control["id"]: control for control in screens[screen_id]["controls"]}
+        assert controls["reset-alerts-banked-toggle"]["kind"] == "switch"
+        assert controls["reset-alerts-refill-toggle"]["kind"] == "switch"
+        assert "Claude banked resets are unavailable to Gradus." in screens[screen_id]["logic"][0]
+        assert (
+            "On iPhone and iPad, delivery may wait until you open Gradus."
+            in screens[screen_id]["logic"][0]
+        )
+    assert any(
+        control["id"] == "open-ios-settings"
+        for control in screens["settings.reset-alerts-denied"]["controls"]
+    )
+
+
 def test_stale_candidate_source_and_artifact_are_rejected(tmp_path):
     ledger, artifact, screenshots = _candidate(tmp_path)
     with pytest.raises(WalkthroughError, match="source revision mismatch"):

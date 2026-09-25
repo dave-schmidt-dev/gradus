@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
+from dataclasses import field as dataclass_field
+from datetime import datetime
 from typing import Any
 
 
@@ -29,6 +31,8 @@ class CodexStatus:
     spark_five_hour_percent_left: float | None
     spark_five_hour_reset: str | None
     raw_text: str
+    banked_candidate: Any = dataclass_field(default=None, repr=False)
+    source_reset_instants: dict[str, datetime] | None = dataclass_field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for field in (
@@ -52,7 +56,11 @@ class CodexStatus:
             object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            member.name: getattr(self, member.name)
+            for member in fields(self)
+            if member.name not in {"banked_candidate", "source_reset_instants"}
+        }
 
 
 @dataclass(slots=True)
@@ -68,6 +76,7 @@ class ClaudeStatus:
     login_method: str | None
     raw_text: str
     credit_balance: float | None = None
+    source_reset_instants: dict[str, datetime] | None = dataclass_field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for field in ("session_percent_left", "weekly_percent_left", "opus_percent_left"):
@@ -90,7 +99,11 @@ class ClaudeStatus:
             object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            member.name: getattr(self, member.name)
+            for member in fields(self)
+            if member.name != "source_reset_instants"
+        }
 
 
 @dataclass(slots=True)

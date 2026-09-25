@@ -1,3 +1,6 @@
+// This coordinator keeps CloudKit ordering, retry state, and record encoding
+// together because they share one actor-isolated publish transaction.
+// swiftlint:disable file_length
 import CloudKit
 import Foundation
 import GradusKit
@@ -23,6 +26,9 @@ private struct ProducerPublishEvidence: Encodable {
     let publishedAt: Date
 }
 
+// Kept as one actor because queueing, retries, and state mutation share
+// isolation; extracting these would expand a lint-only repair.
+// swiftlint:disable type_body_length
 /// Implements `GradusKit.CloudPublisher`: idempotent zone creation (PM-8),
 /// content-hash save-suppression (PM-2), non-atomic per-record
 /// partial-failure handling with retry/backoff (CV-4/PM-17), and warning
@@ -37,6 +43,11 @@ public actor PublishCoordinator: CloudPublisher {
     private let producerSourceRevision: String?
     private let producerProjectSha256: String?
     private var state: [String: ProviderPublishState] = [:]
+    private var latestUsageStatuses: [ProviderStatus] = []
+    private var latestUsageDate: Date?
+    private var latestBankedEvidence: BankedResetEvidence?
+    private var queuedWaiters: [CheckedContinuation<Void, Error>] = []
+    private var isPublishing = false
 
     /// Providers whose `isWarning` flipped false→true on the most recently
     /// processed `upsert` call — consumed by Phase 4's push trigger. Cleared
@@ -71,6 +82,95 @@ public actor PublishCoordinator: CloudPublisher {
     }
 
     public func upsert(_ statuses: [ProviderStatus]) async throws {
+        try await withCheckedThrowingContinuation { (waiter: CheckedContinuation<Void, Error>) in
+            enqueue(statuses, waiter: waiter)
+        }
+    }
+
+    /// Capture both clocks before any suspension. CloudKit writes then run in
+    /// one drain loop, so a delayed retry cannot finish after a newer write.
+    private func enqueue(_ statuses: [ProviderStatus], waiter: CheckedContinuation<Void, Error>) {
+        for status in statuses where status.providerName == "Codex" {
+            var rawData = status.data
+            Self.removeBankedKeys(from: &rawData)
+            guard let evidence = BankedResetEvidence(data: status.data),
+                  addingBankedEvidence(evidence, to: rawData) != rawData
+            else { continue }
+            if let previous = latestBankedEvidence,
+               evidence.observedDate < previous.observedDate {
+                continue
+            }
+            latestBankedEvidence = evidence
+        }
+
+        if !statuses.isEmpty {
+            let incomingDate = statuses.compactMap {
+                BankedResetEvidence.parseTimestamp($0.snapshotUpdatedAt)
+            }.max()
+            let isNewer = incomingDate.map { incoming in
+                latestUsageDate.map { incoming >= $0 } ?? true
+            } ?? false
+            if latestUsageStatuses.isEmpty || isNewer {
+                latestUsageStatuses = statuses
+                latestUsageDate = incomingDate
+            }
+        }
+        queuedWaiters.append(waiter)
+        if !isPublishing {
+            isPublishing = true
+            Task { await drainQueuedPublishes() }
+        }
+    }
+
+    private func drainQueuedPublishes() async {
+        while !queuedWaiters.isEmpty {
+            let waiters = queuedWaiters
+            queuedWaiters.removeAll()
+            let statuses = latestUsageStatuses.map { statusWithLatestBankedEvidence($0) }
+            do {
+                try await publishOnce(statuses)
+                for waiter in waiters {
+                    waiter.resume()
+                }
+            } catch {
+                for waiter in waiters {
+                    waiter.resume(throwing: error)
+                }
+            }
+        }
+        isPublishing = false
+    }
+
+    private func statusWithLatestBankedEvidence(_ status: ProviderStatus) -> ProviderStatus {
+        guard status.providerName == "Codex" else { return status }
+        var data = status.data
+        Self.removeBankedKeys(from: &data)
+        if let evidence = latestBankedEvidence {
+            data = addingBankedEvidence(evidence, to: data)
+        }
+        return ProviderStatus(
+            providerName: status.providerName,
+            providerDisplayName: status.providerDisplayName,
+            ok: status.ok,
+            errorMessage: status.errorMessage,
+            windows: status.windows,
+            data: data,
+            observedAt: status.observedAt,
+            snapshotUpdatedAt: status.snapshotUpdatedAt,
+            publishedAt: status.publishedAt,
+            isWarning: status.isWarning,
+            isDepleted: status.isDepleted,
+            syncSource: status.syncSource
+        )
+    }
+
+    private static func removeBankedKeys(from data: inout [String: JSONValue]) {
+        data.removeValue(forKey: "banked_reset_count")
+        data.removeValue(forKey: "banked_reset_generation")
+        data.removeValue(forKey: "banked_reset_observed_at")
+    }
+
+    private func publishOnce(_ statuses: [ProviderStatus]) async throws {
         try await database.saveZoneIfNeeded(CKRecordZone(zoneID: zoneID))
 
         let (newlyWarning, toSave) = diffAgainstState(statuses)
@@ -329,3 +429,6 @@ public actor PublishCoordinator: CloudPublisher {
         return encoded.base64EncodedString()
     }
 }
+
+// swiftlint:enable type_body_length
+// swiftlint:enable file_length

@@ -208,3 +208,136 @@ import Testing
     try await coordinator.upsert([status(name: "A", percentLeft: 0.0)]) // re-arms after recovery
     #expect(await coordinator.newlyWarningProviders == ["A"])
 }
+
+// MARK: - Latest usage and independent banked evidence under actor reentrancy
+
+private func racedStatus(
+    percentLeft: Double, snapshotAt: String, bankedCount: Int? = nil,
+    bankedObservedAt: String = "2026-08-02T20:00:00-04:00"
+) -> ProviderStatus {
+    let base = status(name: "Codex", percentLeft: percentLeft)
+    var data: [String: JSONValue] = [:]
+    if let bankedCount {
+        data = [
+            "banked_reset_count": .double(Double(bankedCount)),
+            "banked_reset_generation": .string("01234567-89ab-4cde-8f01-23456789abcd"),
+            "banked_reset_observed_at": .string(bankedObservedAt)
+        ]
+    }
+    return ProviderStatus(
+        providerName: base.providerName, providerDisplayName: base.providerDisplayName,
+        ok: base.ok, errorMessage: base.errorMessage, windows: base.windows,
+        data: data, observedAt: snapshotAt, snapshotUpdatedAt: snapshotAt,
+        publishedAt: base.publishedAt
+    )
+}
+
+private actor HoldingCloudDatabase: CloudDatabase {
+    private(set) var calls: [[CKRecord]] = []
+    private var firstStarted = false
+    private var firstStartedWaiter: CheckedContinuation<Void, Never>?
+    private var firstRelease: CheckedContinuation<Void, Never>?
+
+    func saveZoneIfNeeded(_: CKRecordZone) async throws {}
+
+    func modifyRecords(
+        toSave records: [CKRecord], savePolicy _: CKModifyRecordsOperation.RecordSavePolicy
+    ) async -> RecordSaveOutcome {
+        calls.append(records)
+        if calls.count == 1 {
+            firstStarted = true
+            firstStartedWaiter?.resume()
+            await withCheckedContinuation { firstRelease = $0 }
+        }
+        return RecordSaveOutcome(results: Dictionary(uniqueKeysWithValues: records.map {
+            ($0.recordID, Result<CKRecord, Error>.success($0))
+        }))
+    }
+
+    func fetchRecord(_ id: CKRecord.ID) async throws -> CKRecord {
+        CKRecord(recordType: CloudKitConstants.recordType, recordID: id)
+    }
+
+    func waitForFirstSave() async {
+        if firstStarted {
+            return
+        }
+        await withCheckedContinuation { firstStartedWaiter = $0 }
+    }
+
+    func releaseFirstSave() {
+        firstRelease?.resume()
+        firstRelease = nil
+    }
+}
+
+@Test func delayedOlderSaveCannotFinishAfterNewerUsageAndLateBankedEvidence() async throws {
+    let database = HoldingCloudDatabase()
+    let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
+    let olderSnapshotAt = "2026-08-02T20:00:00-04:00"
+    let newerSnapshotAt = "2026-08-02T20:02:00-04:00"
+
+    let first = Task { try await coordinator.upsert([racedStatus(percentLeft: 80, snapshotAt: olderSnapshotAt)]) }
+    await database.waitForFirstSave()
+    let newer = Task { try await coordinator.upsert([racedStatus(percentLeft: 30, snapshotAt: newerSnapshotAt)]) }
+    let late = Task {
+        try await coordinator.upsert([racedStatus(percentLeft: 80, snapshotAt: olderSnapshotAt, bankedCount: 5)])
+    }
+    // Give the queued calls a chance to enter the actor while the first
+    // CloudKit call is held. Final assertions are valid for either ordering.
+    await Task.yield()
+    await database.releaseFirstSave()
+    try await first.value
+    try await newer.value
+    try await late.value
+
+    let calls = await database.calls
+    let lastRecord = try #require(calls.last?.first)
+    #expect(lastRecord["snapshotUpdatedAt"] as? String == newerSnapshotAt)
+    let decoded = try ProviderStatus(record: lastRecord)
+    #expect(decoded.windows.first?.percentLeft == 30)
+    #expect(decoded.data["banked_reset_count"] == .double(5))
+    #expect(decoded.data["banked_reset_observed_at"] == .string(olderSnapshotAt))
+}
+
+@Test func staleUsageArrivalDoesNotReplaceSavedNewerSnapshot() async throws {
+    let database = MockCloudDatabase()
+    let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
+    let olderSnapshotAt = "2026-08-02T20:00:00-04:00"
+    let newerSnapshotAt = "2026-08-02T20:02:00-04:00"
+    try await coordinator.upsert([racedStatus(percentLeft: 30, snapshotAt: newerSnapshotAt)])
+    try await coordinator.upsert([racedStatus(percentLeft: 80, snapshotAt: olderSnapshotAt)])
+    #expect(await database.modifyCallCount == 1)
+    let savedState = await coordinator.publishState(for: "Codex")
+    #expect(savedState?.lastSavedContentHash
+        == PublishCoordinator.contentHash(for: racedStatus(percentLeft: 30, snapshotAt: newerSnapshotAt)))
+}
+
+@Test func backoffRetryCompletesBeforeNewerSnapshotSave() async throws {
+    let database = MockCloudDatabase()
+    await database.setScriptedResponses([
+        [recordID("Codex"): .failure(CKError(.zoneBusy, userInfo: [CKErrorRetryAfterKey: 0.05]))],
+        [recordID("Codex"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("Codex")))],
+        [recordID("Codex"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("Codex")))]
+    ])
+    let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
+    let olderSnapshotAt = "2026-08-02T20:00:00-04:00"
+    let newerSnapshotAt = "2026-08-02T20:02:00-04:00"
+    let older = Task { try await coordinator.upsert([racedStatus(percentLeft: 80, snapshotAt: olderSnapshotAt)]) }
+    // Wait for the first response so the newer observation arrives during
+    // bounded backoff, independent of Task scheduling order.
+    for _ in 0 ..< 100 {
+        if await database.modifyCallCount > 0 {
+            break
+        }
+        try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    #expect(await database.modifyCallCount == 1)
+    let newer = Task { try await coordinator.upsert([racedStatus(percentLeft: 30, snapshotAt: newerSnapshotAt)]) }
+    try await older.value
+    try await newer.value
+    let calls = await database.recordsPerCall
+    #expect(calls.count == 3)
+    let lastRecord = try #require(calls.last?.first)
+    #expect(lastRecord["snapshotUpdatedAt"] as? String == newerSnapshotAt)
+}

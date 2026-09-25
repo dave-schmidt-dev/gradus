@@ -262,6 +262,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         application: UIApplication? = nil
     ) {
         let application = application ?? UIApplication.shared
+        // Turning on a second visible alert while the shared iOS prompt is
+        // already open must keep the first completion valid. Only a genuine
+        // off transition cancels that in-flight intent.
+        if enabled, warningAlertsEnabled, warningAlertAuthorization == .requesting {
+            return
+        }
         warningAlertIntentGeneration &+= 1
         let generation = warningAlertIntentGeneration
         warningAlertsEnabled = enabled
@@ -269,7 +275,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
             warningAlertAuthorization = .off
             return
         }
-        if let knownAuthorization {
+        if let knownAuthorization, warningAlertAuthorization != .requesting {
             warningAlertAuthorization = knownAuthorization
         }
 

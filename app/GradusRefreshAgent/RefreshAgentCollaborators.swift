@@ -3,6 +3,7 @@
 // Split out of `RefreshAgent.swift` to keep both files inside the 400-line
 // limit; each type here is a seam the tests substitute.
 
+import CoreFoundation
 import Darwin
 import Foundation
 
@@ -172,10 +173,34 @@ enum SnapshotPrior {
     case missing
     case complete(Data)
     case incomplete
+    case invalidSidecar(Data)
 }
 
 struct PublicSnapshotPreserver {
     let fileURLs: [URL]
+
+    private func completeSidecar(_ dictionary: [String: Any]) -> Bool {
+        guard Set(dictionary.keys) == Set([
+            "schema_version", "count", "generation", "snapshot_updated_at", "observed_at"
+        ]),
+            let schema = dictionary["schema_version"] as? NSNumber,
+            schema.intValue == 1, CFGetTypeID(schema) != CFBooleanGetTypeID(),
+            !["f", "d"].contains(String(cString: schema.objCType)),
+            let count = dictionary["count"] as? NSNumber,
+            CFGetTypeID(count) != CFBooleanGetTypeID(),
+            !["f", "d"].contains(String(cString: count.objCType)),
+            count.doubleValue == Double(count.intValue),
+            (0 ... 1_000_000).contains(count.intValue),
+            let generation = dictionary["generation"] as? String,
+            UUID(uuidString: generation)?.uuidString.lowercased() == generation,
+            let snapshotTime = dictionary["snapshot_updated_at"] as? String,
+            let observedTime = dictionary["observed_at"] as? String
+        else { return false }
+        return [snapshotTime, observedTime].allSatisfy { value in
+            !value.isEmpty && (value.hasSuffix("Z") ||
+                value.range(of: #"[+-]\d\d:\d\d$"#, options: .regularExpression) != nil)
+        }
+    }
 
     func capture() -> [URL: SnapshotPrior] {
         Dictionary(uniqueKeysWithValues: fileURLs.map { fileURL in
@@ -184,9 +209,11 @@ struct PublicSnapshotPreserver {
             }
             guard let object = try? JSONSerialization.jsonObject(with: data),
                   let dictionary = object as? [String: Any],
-                  dictionary["schema_version"] is NSNumber
+                  dictionary["schema_version"] is NSNumber,
+                  fileURL.lastPathComponent != "banked-observation-v1.json" || completeSidecar(dictionary)
             else {
-                return (fileURL, .incomplete)
+                return (fileURL, fileURL.lastPathComponent == "banked-observation-v1.json"
+                    ? .invalidSidecar(data) : .incomplete)
             }
             return (fileURL, .complete(data))
         })
@@ -199,6 +226,9 @@ struct PublicSnapshotPreserver {
             case let .complete(data):
                 try data.write(to: fileURL, options: .atomic)
                 try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            case let .invalidSidecar(data):
+                try data.write(to: fileURL, options: .atomic)
+                try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
             case .missing:
                 if manager.fileExists(atPath: fileURL.path) {
                     try manager.removeItem(at: fileURL)
@@ -207,5 +237,39 @@ struct PublicSnapshotPreserver {
                 break
             }
         }
+    }
+}
+
+final class AgentCancellation {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var sources: [DispatchSourceSignal] = []
+
+    init() {
+        for signalNumber in [SIGTERM, SIGINT] {
+            signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
+            source.setEventHandler { [weak self] in
+                self?.lock.lock()
+                self?.cancelled = true
+                self?.lock.unlock()
+            }
+            source.resume()
+            sources.append(source)
+        }
+    }
+
+    deinit {
+        for source in sources {
+            source.cancel()
+        }
+        signal(SIGTERM, SIG_DFL)
+        signal(SIGINT, SIG_DFL)
+    }
+
+    func isCancelled() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
     }
 }

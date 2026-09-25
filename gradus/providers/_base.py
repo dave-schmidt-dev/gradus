@@ -41,6 +41,10 @@ class ProviderSnapshot:
     error: str | None = None
     cached_since: datetime | None = None
     debug_detail: str | None = None
+    # Probe-only metadata. Neither field is part of ProviderSnapshot.data or a
+    # persisted snapshot/history document.
+    banked_candidate: Any = None
+    source_reset_instants: dict[str, datetime] | None = None
 
 
 class ProbeFailure(RuntimeError):
@@ -94,15 +98,29 @@ def _format_reset_time(value: str | int | float | None) -> str | None:
         return None
 
 
+def _source_reset_instant(value: object) -> datetime | None:
+    """Keep an offset-aware provider instant out of serialized status data."""
+    try:
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.utcoffset() is not None else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            seconds = float(value) / 1000 if float(value) > 1e12 else float(value)
+            return datetime.fromtimestamp(seconds, timezone.utc)
+    except (ValueError, TypeError, OverflowError, OSError):
+        pass
+    return None
+
+
 def _debug_dump_path(name: str) -> Path:
-    safe_name = name.lower().replace(" ", "_")
-    return Path("/tmp") / f"gradus_{safe_name}_capture.txt"
+    """Legacy import compatibility; raw captures are disabled."""
+    del name
+    return Path(os.devnull)
 
 
 def _write_debug_dump(name: str, raw_text: str) -> None:
-    if _is_headless():
-        return
-    _write_private(_debug_dump_path(name), raw_text, harden_parent=False)
+    """Legacy import compatibility; never persist provider response bodies."""
+    del name, raw_text
 
 
 def _write_private(path: Path, text: str, *, harden_parent: bool = True) -> None:
@@ -246,21 +264,15 @@ def fetch_provider_snapshot(
         status = fetcher.fetch()
         data = status.to_dict()
     except ProbeFailure as exc:
-        if debug:
-            _write_debug_dump(name, exc.raw_text or "")
         error = str(exc)
-        debug_detail = None
-        if debug:
-            tail = exc.raw_text[-1600:] if exc.raw_text else ""
-            # Only name the dump file when one was actually written.
-            # `_write_debug_dump` is a no-op under headless (INV-2: --json must
-            # have zero side effects), so the hint used
-            # to point at a path that does not exist on exactly the paths
-            # where a human is most likely to go looking for it.
-            dump_hint = "" if _is_headless() else f"raw dump: {_debug_dump_path(name)}"
-            debug_detail = "\n\n".join(part for part in (error, dump_hint, tail) if part).strip()
+        # ProbeFailure.raw_text is transient input for provider classification
+        # (for example refresh_token_invalidated). Never dump or echo it.
         return ProviderSnapshot(
-            name=name, ok=False, source=source, error=error, debug_detail=debug_detail
+            name=name,
+            ok=False,
+            source=source,
+            error=error,
+            debug_detail=error if debug else None,
         )
     except Exception as exc:
         # Log the type unconditionally. Until now this branch swallowed the
@@ -269,17 +281,19 @@ def fetch_provider_snapshot(
         # withheld because AGENTS.md forbids secrets in logs as firmly as on
         # screen; it goes to the --debug channel instead.
         log.warning("provider %s probe raised %s", name, type(exc).__name__)
-        if debug:
-            log.debug("provider %s probe exception detail", name, exc_info=True)
         return ProviderSnapshot(
             name=name,
             ok=False,
             source=source,
             error=_safe_probe_error(exc),
-            debug_detail=str(exc) if debug else None,
+            debug_detail=type(exc).__name__ if debug else None,
         )
-    if debug:
-        _write_debug_dump(name, str(data.get("raw_text", "")))
-    if not debug:
-        data.pop("raw_text", None)
-    return ProviderSnapshot(name=name, ok=True, source=source, data=data)
+    data.pop("raw_text", None)
+    return ProviderSnapshot(
+        name=name,
+        ok=True,
+        source=source,
+        data=data,
+        banked_candidate=getattr(status, "banked_candidate", None),
+        source_reset_instants=getattr(status, "source_reset_instants", None),
+    )

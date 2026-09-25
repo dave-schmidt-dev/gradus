@@ -1,3 +1,4 @@
+import AppKit
 import GradusKit
 import SwiftUI
 
@@ -144,6 +145,103 @@ struct MacSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Reset Alerts") {
+                Text("Reset alerts are separate from low-usage warnings and apply on this Mac only.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Toggle(
+                    "New banked resets",
+                    isOn: Binding(
+                        get: { viewModel.resetGrantAlertsEnabled },
+                        set: { enabled in
+                            Task { await viewModel.setResetGrantAlertsEnabled(enabled) }
+                        }
+                    )
+                )
+                .accessibilityIdentifier("settings-reset-grants")
+                Text("Alert when a new Codex redeemable reset credit is observed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle(
+                    "Usage refilled",
+                    isOn: Binding(
+                        get: { viewModel.resetRefillAlertsEnabled },
+                        set: { enabled in
+                            Task { await viewModel.setResetRefillAlertsEnabled(enabled) }
+                        }
+                    )
+                )
+                .accessibilityIdentifier("settings-reset-refills")
+                Text("Alert when a reported allowance refills for Codex, Codex (Spark), or Claude.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("Codex banked resets", value: viewModel.bankedCreditStatusText)
+                    .accessibilityIdentifier("settings-banked-status")
+                if let lastObserved = viewModel.lastObservedBankedCreditText {
+                    Text(lastObserved)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings-banked-last-observed")
+                }
+                Text("Claude banked resets: Unavailable. Gradus cannot read their count or arrival.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if viewModel.bankedCreditCount == nil {
+                    switch viewModel.bankedAccessRecoveryState {
+                    case .idle, .denied:
+                        Button(
+                            viewModel.bankedAccessRecoveryState == .denied
+                                ? "Retry Background Access" : "Allow Background Access"
+                        ) {
+                            Task { await viewModel.authorizeBankedBackgroundAccess() }
+                        }
+                        .accessibilityIdentifier("settings-banked-access-action")
+                    case .requesting:
+                        Text("Requesting background access…")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("settings-banked-access-requesting")
+                    case .allowed:
+                        Text("Access allowed. The next refresh will check for banked resets.")
+                            .foregroundStyle(.secondary)
+                    }
+                    if viewModel.bankedAccessRecoveryState == .denied {
+                        Text("Background access was not allowed. You can retry here.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("settings-banked-access-denied")
+                    }
+                }
+
+                if viewModel.resetGrantAlertsEnabled || viewModel.resetRefillAlertsEnabled {
+                    switch viewModel.resetNotificationAuthorization {
+                    case .notDetermined:
+                        Text("Notification permission has not been checked yet.")
+                            .foregroundStyle(.secondary)
+                    case .requesting:
+                        Text("Requesting notification permission…")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("settings-reset-permission-requesting")
+                    case .denied:
+                        Text("Notifications are blocked for Gradus. Alerts will not appear.")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("settings-reset-permission-denied")
+                        Button("Open Notification Settings…") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .accessibilityIdentifier("settings-reset-permission-recovery")
+                    case .authorized:
+                        Text("System notifications are allowed.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
             Section("Connected Devices") {
                 if viewModel.connectedDevicesUnavailable {
                     // Never fold a failed read into the empty state: they look
@@ -185,7 +283,10 @@ struct MacSettingsView: View {
         .frame(idealHeight: 700)
         // Read when Settings opens, not on every snapshot: this is the only
         // screen that renders it, and it costs two `launchctl` calls.
-        .onAppear { viewModel.refreshLegacyMigration() }
+        .onAppear {
+            viewModel.refreshLegacyMigration()
+            Task { await viewModel.refreshResetNotificationAuthorization() }
+        }
     }
 
     static func wholePercent(_ value: Double) -> Double {

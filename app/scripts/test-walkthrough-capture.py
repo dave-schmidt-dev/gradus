@@ -47,7 +47,7 @@ class CaptureContractTests(unittest.TestCase):
         routes = re.findall(
             r'^\s+"([^|]+)\|([^|]+)\|([^|]+)\|([^"|]+\.png)"', self.shell, re.MULTILINE
         )
-        self.assertEqual(len(routes), 41)
+        self.assertEqual(len(routes), 45)
         self.assertEqual(len({route[0] for route in routes}), len(routes))
         self.assertEqual(len({route[3] for route in routes}), len(routes))
         self.assertEqual(
@@ -86,6 +86,63 @@ class CaptureContractTests(unittest.TestCase):
         self.assertIn("widget-render-blocked.log", self.shell)
         self.assertIn("$fixture-blocked.log", self.shell)
         self.assertIn("persistent simulator selection is not supported", self.shell)
+
+    def test_reset_alert_routes_match_declared_fixtures_markers_and_images(self) -> None:
+        reset_routes = {
+            (
+                "settings.reset-alerts-off",
+                "reset-alerts-off",
+                "reset-alerts-banked-toggle",
+                "reset-alerts-off.png",
+            ),
+            (
+                "settings.reset-alerts-on",
+                "reset-alerts-on",
+                "reset-alerts-refill-toggle",
+                "reset-alerts-on.png",
+            ),
+            (
+                "settings.reset-alerts-requesting",
+                "reset-alerts-requesting",
+                "reset-alerts-permission-requesting",
+                "reset-alerts-requesting.png",
+            ),
+            (
+                "settings.reset-alerts-denied",
+                "reset-alerts-denied",
+                "reset-alerts-permission-denied",
+                "reset-alerts-denied.png",
+            ),
+        }
+        routes = re.findall(
+            r'^\s+"([^|]+)\|([^|]+)\|([^|]+)\|([^"|]+\.png)"', self.shell, re.MULTILINE
+        )
+        declared = {(route[0], route[1], route[2], route[3]) for route in routes}
+        self.assertTrue(reset_routes <= declared)
+        self.assertTrue(
+            reset_routes
+            <= {
+                (route["screenId"], route["fixture"], route["marker"], route["image"])
+                for route in capture_routes()
+            }
+        )
+        for case, fixture in (
+            ("resetAlertsOff", "reset-alerts-off"),
+            ("resetAlertsOn", "reset-alerts-on"),
+            ("resetAlertsRequesting", "reset-alerts-requesting"),
+            ("resetAlertsDenied", "reset-alerts-denied"),
+        ):
+            self.assertIn(f'case {case} = "{fixture}"', self.fixtures)
+        self.assertIn('case "reset-alerts-off": return "reset-alerts-off"', self.swift)
+        self.assertIn('case "reset-alerts-on": return "reset-alerts-on"', self.swift)
+        self.assertIn(
+            'case "reset-alerts-requesting": return "reset-alerts-requesting"', self.swift
+        )
+        self.assertIn('case "reset-alerts-denied": return "reset-alerts-denied"', self.swift)
+        self.assertIn(
+            'case "reset-alerts-off", "reset-alerts-on", "reset-alerts-requesting", "reset-alerts-denied":',
+            self.swift,
+        )
 
     def test_progress_and_widget_states_have_deterministic_test_hooks(self) -> None:
         self.assertIn('case sampleEntryInProgress = "sample-entry-in-progress"', self.fixtures)

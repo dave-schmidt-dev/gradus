@@ -22,9 +22,11 @@ struct SettingsView: View {
     /// Only supplied by the UI-test launch fixture. Normal launches start
     /// false and enter this state only after the user enables Warning alerts.
     let initialWarningAlertsPending: Bool
+    let onAboutVersionFrame: ((CGRect) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State private var warningAlertPermissionRequestPending = false
+    @State private var resetAlertFixtureRequestPending = false
     @State var showingWidgetProviders = false
 
     init(
@@ -32,15 +34,22 @@ struct SettingsView: View {
         isSampleMode: Bool = false,
         onExitSample: @escaping () -> Void = {},
         onResetSample: @escaping () -> Void = {},
-        initialWarningAlertsPending: Bool = false
+        initialWarningAlertsPending: Bool = false,
+        initialResetAlertsPending: Bool = false,
+        onAboutVersionFrame: ((CGRect) -> Void)? = nil
     ) {
         self.dashboardViewModel = dashboardViewModel
         self.isSampleMode = isSampleMode
         self.onExitSample = onExitSample
         self.onResetSample = onResetSample
         self.initialWarningAlertsPending = initialWarningAlertsPending
+        self.onAboutVersionFrame = onAboutVersionFrame
         _warningAlertPermissionRequestPending = State(
             initialValue: initialWarningAlertsPending
+        )
+        _resetAlertFixtureRequestPending = State(
+            initialValue: initialResetAlertsPending
+                || (GradusUITestFixture.current?.startsResetAlertRequest ?? false)
         )
     }
 
@@ -72,6 +81,21 @@ struct SettingsView: View {
     static let warningAlertsRequestingDescription =
         "Waiting for your iOS notification choice. iCloud syncing continues either way."
 
+    static let bankedResetAlertsDescription =
+        "Alert when a new Codex banked reset credit is observed. Existing credits set the starting balance."
+
+    static let usageRefillAlertsDescription =
+        "Alert when a reported Codex, Codex (Spark), or Claude usage window refills."
+
+    static let claudeBankedUnavailableDescription =
+        "Claude banked resets are unavailable to Gradus."
+
+    static let mobileResetDeliveryDescription =
+        "On iPhone and iPad, delivery may wait until you open Gradus."
+
+    static let resetAlertSourceDescription =
+        "Alerts depend on Mac refreshes and sync to this device."
+
     var body: some View {
         VStack(spacing: 0) {
             MobileNavBar(title: "Settings") {
@@ -83,6 +107,7 @@ struct SettingsView: View {
                     sampleSection
                 } else {
                     warningAlertsSection
+                    resetAlertsSection
                 }
                 connectedComputerSection
                 localDisplaySection
@@ -100,6 +125,17 @@ struct SettingsView: View {
         .onChange(of: dashboardViewModel.notificationsEnabled) {
             if !dashboardViewModel.notificationsEnabled {
                 warningAlertPermissionRequestPending = false
+            }
+        }
+        .onChange(of: dashboardViewModel.systemNotificationAuthorization) {
+            if dashboardViewModel.systemNotificationAuthorization != .notDetermined {
+                resetAlertFixtureRequestPending = false
+            }
+        }
+        .coordinateSpace(name: "settings-frame")
+        .onPreferenceChange(AboutVersionFramePreferenceKey.self) { frame in
+            if let frame {
+                onAboutVersionFrame?(frame)
             }
         }
         .sheet(isPresented: $showingWidgetProviders) {
@@ -155,6 +191,80 @@ struct SettingsView: View {
         warningAlertPermissionRequestPending ? "Requesting warning-alert permission…" : "Warning alerts"
     }
 
+    private var bankedResetAlertsBinding: Binding<Bool> {
+        Binding(
+            get: { dashboardViewModel.bankedResetAlertsEnabled },
+            set: { dashboardViewModel.setBankedResetAlertsEnabled($0) }
+        )
+    }
+
+    private var usageRefillAlertsBinding: Binding<Bool> {
+        Binding(
+            get: { dashboardViewModel.usageRefillAlertsEnabled },
+            set: { dashboardViewModel.setUsageRefillAlertsEnabled($0) }
+        )
+    }
+
+    private var resetAlertsSection: some View {
+        Section("Reset alerts") {
+            ListRow.toggle(
+                icon: Icon.bell,
+                label: "New banked resets",
+                isOn: bankedResetAlertsBinding,
+                accessibilityIdentifier: "reset-alerts-banked-toggle"
+            )
+            .disabled(resetAlertPermissionRequestPending)
+            Text(Self.bankedResetAlertsDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            BankedResetStatusRow(status: dashboardViewModel.bankedResetStatus)
+            Text(Self.claudeBankedUnavailableDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ListRow.toggle(
+                icon: Icon.clock,
+                label: "Usage refilled",
+                isOn: usageRefillAlertsBinding,
+                accessibilityIdentifier: "reset-alerts-refill-toggle"
+            )
+            .disabled(resetAlertPermissionRequestPending)
+            Text(Self.usageRefillAlertsDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(Self.mobileResetDeliveryDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(Self.resetAlertSourceDescription)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if resetAlertPermissionRequestPending {
+                Label("Waiting for your iOS notification choice.", systemImage: "hourglass")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("reset-alerts-permission-requesting")
+            }
+            if dashboardViewModel.resetAlertsSuppressedBySystem {
+                resetAlertPermissionDeniedRow
+            }
+        }
+    }
+
+    private var resetAlertPermissionDeniedRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("iOS is not allowing Gradus to show reset alerts. Usage still refreshes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let settingsURL = URL(string: UIApplication.openSettingsURLString) {
+                Button("Open iOS Settings") { openURL(settingsURL) }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reset-alerts-permission-denied")
+    }
+
     private var warningAlertsAccessibilityHint: String {
         if warningAlertPermissionRequestPending {
             return "Waiting for your iOS notification choice. This does not affect iCloud syncing."
@@ -200,5 +310,33 @@ struct SettingsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private extension SettingsView {
+    var resetAlertPermissionRequestPending: Bool {
+        resetAlertFixtureRequestPending || dashboardViewModel.resetAlertAuthorizationRequestInProgress
+    }
+}
+
+private struct BankedResetStatusRow: View {
+    let status: ResetBankedStatus
+
+    var body: some View {
+        Group {
+            switch status {
+            case let .current(count, _):
+                Text("Codex banked resets: \(count) available")
+            case let .unavailable(lastObservedCount, _):
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Codex banked resets: Unavailable")
+                    if let lastObservedCount {
+                        Text("Last observed: \(lastObservedCount)")
+                    }
+                }
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 }

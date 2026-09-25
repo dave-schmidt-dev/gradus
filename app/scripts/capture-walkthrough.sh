@@ -47,6 +47,10 @@ ROUTES=(
   "widget.gallery|widget-system-gallery|Search Widgets|widget-system-gallery.png"
   "widget.add-surface|widget-system-add|Add Widget|widget-system-add.png"
   "widget.tap-result|widget-system-tap|explore-sample|widget-system-tap.png"
+  "settings.reset-alerts-off|reset-alerts-off|reset-alerts-banked-toggle|reset-alerts-off.png"
+  "settings.reset-alerts-on|reset-alerts-on|reset-alerts-refill-toggle|reset-alerts-on.png"
+  "settings.reset-alerts-requesting|reset-alerts-requesting|reset-alerts-permission-requesting|reset-alerts-requesting.png"
+  "settings.reset-alerts-denied|reset-alerts-denied|reset-alerts-permission-denied|reset-alerts-denied.png"
 )
 
 fail() { echo "FAIL: $*" >&2; exit 1; }

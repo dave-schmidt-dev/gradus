@@ -1,8 +1,28 @@
 import Foundation
+import GradusKit
 
 /// Warning-alert opt-in (`notificationsEnabled`) and the system-level
 /// authorization it depends on. P5/T5.1.
 public extension DashboardViewModel {
+    /// Reset alerts have independent consent; the silent zone push and warning
+    /// subscription remain controlled by their existing paths.
+    var resetAlertsSuppressedBySystem: Bool {
+        (bankedResetAlertsEnabled || usageRefillAlertsEnabled)
+            && systemNotificationAuthorization == .denied
+    }
+
+    func setBankedResetAlertsEnabled(_ enabled: Bool) {
+        guard bankedResetAlertsEnabled != enabled else { return }
+        bankedResetAlertsEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.bankedResetAlertsEnabledKey)
+    }
+
+    func setUsageRefillAlertsEnabled(_ enabled: Bool) {
+        guard usageRefillAlertsEnabled != enabled else { return }
+        usageRefillAlertsEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.usageRefillAlertsEnabledKey)
+    }
+
     /// True when our own opt-in is on but iOS will not display the result. The
     /// only state worth surfacing: every warning transition schedules a
     /// notification that is silently dropped, so the feature reads as broken
@@ -76,5 +96,114 @@ public extension DashboardViewModel {
         // but still need an accurate permission state to render their alert
         // recovery controls deterministically.
         systemNotificationAuthorization = await notificationAuthorizationSource.currentAuthorization()
+        resetAlertAuthorizationRequestInProgress = false
+    }
+}
+
+extension DashboardViewModel {
+    /// Called only after a successful full or delta fetch. Re-evaluating the
+    /// cached complete set is safe: source observedAt cursors dedupe unchanged
+    /// entries, including a late count at the same Codex usage timestamp.
+    func evaluateResetStatuses(_ statuses: [ProviderStatus], schedule: Bool = true) {
+        let priorState = resetAlertState
+        var alerts: [ResetAlert] = []
+        var codexRecord: ProviderStatus?
+        var codexResult: ResetEvaluation?
+
+        for status in statuses.sorted(by: { $0.providerName < $1.providerName }) {
+            guard Self.isResetProvider(status.providerName) else { continue }
+            if status.providerName == "Codex" {
+                codexRecord = status
+            }
+            guard let result = evaluateResetStatus(status) else { continue }
+            alerts += result.alerts
+            if status.providerName == "Codex" {
+                codexResult = result
+            }
+        }
+        let status = currentBankedStatus(record: codexRecord, result: codexResult)
+        guard persistResetAlertState() else {
+            resetAlertState = priorState
+            return
+        }
+        bankedResetStatus = status
+        if schedule {
+            scheduleResetAlerts(alerts)
+        }
+    }
+
+    private func scheduleResetAlerts(_ alerts: [ResetAlert]) {
+        guard systemNotificationAuthorization == .authorized else { return }
+        for alert in alerts {
+            switch alert {
+            case .bankedGrant where bankedResetAlertsEnabled:
+                resetNotificationScheduler?.scheduleResetNotification(alert)
+            case .usageRefill where usageRefillAlertsEnabled:
+                resetNotificationScheduler?.scheduleResetNotification(alert)
+            default: break
+            }
+        }
+    }
+
+    private func evaluateResetStatus(_ status: ProviderStatus) -> ResetEvaluation? {
+        guard let observation = ResetUsageObservation(status: status) else { return nil }
+        let banked = status.providerName == "Codex" ? Self.bankedObservation(status) : nil
+        let matchingBanked = banked?.observedAt == observation.observedAt ? banked : nil
+        return ResetAlertDetector.evaluate(
+            state: &resetAlertState, deviceID: resetDeviceID,
+            observation: observation, banked: matchingBanked
+        )
+    }
+
+    private func currentBankedStatus(
+        record: ProviderStatus?, result: ResetEvaluation?
+    ) -> ResetBankedStatus {
+        if let result, Self.hasObservedCount(result.bankedStatus) {
+            return result.bankedStatus
+        }
+        let prior = ResetAlertDetector.evaluateBankedCount(
+            state: &resetAlertState, deviceID: resetDeviceID, banked: nil
+        ).bankedStatus
+        if Self.hasObservedCount(prior) {
+            return prior
+        }
+        // A carried count belongs under Last observed. It is not a fresh
+        // grant and must not advance the alert cursor.
+        if let record, let banked = Self.bankedObservation(record) {
+            return .unavailable(lastObservedCount: banked.count, lastObservedAt: banked.observedAt)
+        }
+        return prior
+    }
+
+    private static func hasObservedCount(_ status: ResetBankedStatus) -> Bool {
+        switch status {
+        case .current: true
+        case let .unavailable(lastObservedCount, _): lastObservedCount != nil
+        }
+    }
+
+    private func persistResetAlertState() -> Bool {
+        guard let encoded = try? JSONEncoder().encode(resetAlertState) else { return false }
+        userDefaults.set(encoded, forKey: Self.resetAlertStateKey)
+        return userDefaults.data(forKey: Self.resetAlertStateKey) == encoded
+    }
+
+    private static func isResetProvider(_ name: String) -> Bool {
+        name == "Codex" || name == "Codex (Spark)" || name == "Claude"
+    }
+
+    private static func bankedObservation(_ status: ProviderStatus) -> ResetBankedObservation? {
+        guard case let .double(rawCount)? = status.data["banked_reset_count"],
+              rawCount.isFinite, rawCount.rounded() == rawCount,
+              (0 ... 1_000_000).contains(rawCount),
+              case let .string(generation)? = status.data["banked_reset_generation"],
+              let parsedGeneration = UUID(uuidString: generation),
+              parsedGeneration.uuidString.lowercased() == generation,
+              case let .string(rawObservedAt)? = status.data["banked_reset_observed_at"],
+              let observedAt = ResetAlertDetector.parseInstant(rawObservedAt)
+        else { return nil }
+        return ResetBankedObservation(
+            count: Int(rawCount), generation: generation, observedAt: observedAt
+        )
     }
 }

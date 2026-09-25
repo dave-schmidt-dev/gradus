@@ -45,6 +45,7 @@ extension DashboardViewModel {
         case let .success(changed, deletedProviderNames, newToken):
             lastSyncFailed = false
             reconcile(changed: changed, deletedProviderNames: deletedProviderNames)
+            evaluateResetStatuses(allProviders)
             try? cache.saveChangeToken(newToken)
             commitCachedProvidersAndWidget(at: Date())
         case let .successWithPresence(changed, deletedProviderNames, _, _, newToken):
@@ -53,6 +54,7 @@ extension DashboardViewModel {
             // separately typed outcome here prevents a mobile-device deletion
             // from ever entering provider reconciliation.
             reconcile(changed: changed, deletedProviderNames: deletedProviderNames)
+            evaluateResetStatuses(allProviders)
             try? cache.saveChangeToken(newToken)
             commitCachedProvidersAndWidget(at: Date())
         case .changeTokenExpired:
@@ -75,6 +77,7 @@ extension DashboardViewModel {
             lastSyncFailed = false
             allProviders = []
             providers = []
+            evaluateResetStatuses([])
             connectedSource = nil
             connectedSourcePublishedAt = nil
             lastSyncedAt = nil
@@ -156,6 +159,7 @@ extension DashboardViewModel {
         // a fresh notification on the next full sync.
         notifyForWarningTransitions(from: allProviders, to: fetched)
         allProviders = fetched
+        evaluateResetStatuses(fetched)
         applyPresentationPreferences()
         commitCachedProvidersAndWidget(at: Date())
         return true

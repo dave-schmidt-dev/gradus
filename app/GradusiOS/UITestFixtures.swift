@@ -17,6 +17,10 @@ enum GradusUITestFixture: String {
     case warningAlertsRequesting = "warning-alerts-requesting"
     case warningAlertsDenied = "warning-alerts-denied"
     case warningAlertsAllowed = "warning-alerts-allowed"
+    case resetAlertsOff = "reset-alerts-off"
+    case resetAlertsOn = "reset-alerts-on"
+    case resetAlertsRequesting = "reset-alerts-requesting"
+    case resetAlertsDenied = "reset-alerts-denied"
     case sampleEntryInProgress = "sample-entry-in-progress"
 
     static var current: Self? {
@@ -34,14 +38,25 @@ enum GradusUITestFixture: String {
 
     var notificationAuthorization: NotificationAuthorization {
         switch self {
-        case .warningAlertsDenied: .denied
-        case .warningAlertsAllowed: .authorized
+        case .warningAlertsDenied, .resetAlertsDenied: .denied
+        case .warningAlertsAllowed, .resetAlertsOn: .authorized
         default: .notDetermined
         }
     }
 
     var startsWarningAlertRequest: Bool {
         self == .warningAlertsRequesting
+    }
+
+    var resetAlertsEnabled: Bool {
+        switch self {
+        case .resetAlertsOn, .resetAlertsRequesting, .resetAlertsDenied: true
+        default: false
+        }
+    }
+
+    var startsResetAlertRequest: Bool {
+        self == .resetAlertsRequesting
     }
 
     var startsSampleEntryInProgress: Bool {
@@ -70,6 +85,8 @@ enum GradusUITestFixture: String {
 
     @MainActor
     func apply(to viewModel: DashboardViewModel) {
+        viewModel.setBankedResetAlertsEnabled(resetAlertsEnabled)
+        viewModel.setUsageRefillAlertsEnabled(resetAlertsEnabled)
         if let rawColumns = ProcessInfo.processInfo.environment[Self.cardColumnsEnvironmentKey],
            let columns = Int(rawColumns), columns > 1 {
             viewModel.setAvailableCardColumns(columns)

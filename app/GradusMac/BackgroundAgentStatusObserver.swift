@@ -7,6 +7,10 @@ import Foundation
 public final class BackgroundAgentStatusObserver {
     public static let canonicalFilename = "agent-status.json"
 
+    public static func statusFileURL(for snapshotFileURL: URL) -> URL {
+        snapshotFileURL.deletingLastPathComponent().appendingPathComponent(canonicalFilename)
+    }
+
     private enum FileRevision: Equatable {
         case missing
         case contents(Data)
@@ -52,6 +56,13 @@ public final class BackgroundAgentStatusObserver {
         self.init(statusFileURL: statusFileURL) { [weak viewModel] in
             viewModel?.refreshBackgroundAgentState()
         }
+    }
+
+    public convenience init(
+        snapshotFileURL: URL,
+        onChange: @escaping @MainActor @Sendable () -> Void
+    ) {
+        self.init(statusFileURL: Self.statusFileURL(for: snapshotFileURL), onChange: onChange)
     }
 
     deinit {

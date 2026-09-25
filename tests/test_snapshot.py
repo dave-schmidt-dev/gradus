@@ -530,14 +530,14 @@ class TestAllowlist(unittest.TestCase):
             def fetch(self):
                 raise ProbeFailure("Boom", raw_text=f"SECRET-BODY-{sentinel}")
 
-        # Patch the debug-dump writer so the test never writes the real /tmp dump.
+        # The legacy writer is inert; the raw body must never reach debug.
         with patch("gradus.providers._write_debug_dump"):
             s = fetch_provider_snapshot("Claude", _Boom(), debug=True)
 
-        # error is plain; the raw tail lives only in debug_detail (never persisted).
+        # Error and debug detail are both sanitized.
         self.assertEqual(s.error, "Boom")
         self.assertIsNotNone(s.debug_detail)
-        self.assertIn(sentinel, s.debug_detail)
+        self.assertNotIn(sentinel, s.debug_detail)
 
         payload = snap.build_snapshot_payload([s], NOW)
         entry = next(p for p in payload["providers"] if p["name"] == "Claude")
@@ -801,6 +801,29 @@ class TestReconcile(unittest.TestCase):
 
 
 class TestBuildWindows(unittest.TestCase):
+    def test_source_instant_drives_reset_and_pace_across_dst(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        now = datetime(2026, 3, 8, 1, 30, tzinfo=ZoneInfo("America/New_York"))
+        target = datetime(2026, 3, 8, 8, 30, tzinfo=timezone.utc)
+        for name, percent_key, reset_key in (
+            ("Codex", "weekly_percent_left", "weekly_reset"),
+            ("Claude", "weekly_percent_left", "secondary_reset"),
+        ):
+            with self.subTest(provider=name):
+                provider = ProviderSnapshot(
+                    name=name,
+                    ok=True,
+                    source="api",
+                    data={percent_key: 50.0, reset_key: "Resets Dec 31 at 11:59 PM"},
+                    source_reset_instants={reset_key: target},
+                )
+                window = snap.build_windows(provider, now)[0]
+                self.assertEqual(window["reset_iso"], target.isoformat())
+                self.assertEqual(
+                    window["pace_delta"], snap.pace_delta(50.0, target, 168 * 3600.0, now)
+                )
+
     def test_cursor_full_precision_mixed_tz(self) -> None:
         """Cursor v1 has one billing cycle from remaining credit percentage."""
         cursor = _ps(

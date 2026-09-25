@@ -162,11 +162,11 @@ final class PublishPipeline {
     static let shared = PublishPipeline()
 
     private var coordinator: PublishCoordinator?
-    private var watcher: SnapshotWatcher?
-    private var backgroundAgentStatusObserver: BackgroundAgentStatusObserver?
+    private var observationPipeline: ResetObservationPipeline?
     private var accountMonitor: AccountStatusMonitor?
     private var presenceDirectory: DevicePresenceDirectoryStore?
-    private var started = false
+    private var localStarted = false
+    private var publisherStarted = false
 
     /// Local display state + required-iCloud status -- the menu content view's
     /// single source of truth.
@@ -236,16 +236,13 @@ final class PublishPipeline {
     /// evaluated in a nonisolated context, which Swift 6 mode rejects for a
     /// MainActor-isolated static property.
     func start(snapshotPath: URL? = nil) {
-        guard !started else { return }
-        guard viewModel.requiredICloudMode.allowsLiveWork else { return }
-        started = true
-
         let snapshotPath = snapshotPath ?? Self.defaultSnapshotPath
-        let statusObserver = makeBackgroundAgentStatusObserver(
-            statusFileURL: Self.agentStatusPath(for: snapshotPath)
-        )
-        backgroundAgentStatusObserver = statusObserver
-        statusObserver.start()
+        if !localStarted {
+            localStarted = true
+            startLocalObservation(snapshotPath: snapshotPath)
+        }
+        guard !publisherStarted, viewModel.requiredICloudMode.allowsLiveWork else { return }
+        publisherStarted = true
 
         let container = CKContainer(identifier: CloudKitConstants.containerIdentifier)
         let zoneID = CKRecordZone.ID(zoneName: CloudKitConstants.zoneName, ownerName: CKCurrentUserDefaultName)
@@ -271,15 +268,31 @@ final class PublishPipeline {
 
         let accountMonitor = makeAccountMonitor()
         self.accountMonitor = accountMonitor
-        Task { await accountMonitor.start() }
+        Task { [weak self] in
+            await accountMonitor.start()
+            self?.observationPipeline?.publishCurrentIfCommitted()
+        }
+    }
 
-        let watcher = makeWatcher(
-            snapshotPath: snapshotPath,
-            coordinator: coordinator,
-            accountMonitor: accountMonitor
+    private func startLocalObservation(snapshotPath: URL) {
+        let pipeline = ResetObservationPipeline(
+            snapshotURL: snapshotPath,
+            mode: .installed,
+            onDisplay: { [weak self] payload in self?.viewModel.apply(payload) },
+            onEvaluation: { [weak self] evaluation in self?.applyResetEvaluation(evaluation) },
+            onCommit: { [weak self] payload, banked in
+                Task { @MainActor [weak self] in
+                    await self?.publish(payload, bankedObservation: banked)
+                }
+            },
+            onProgress: { [weak self] progress in
+                self?.viewModel.updateResetObservationProgress(progress)
+            },
+            onStatusChange: { [weak self] in self?.viewModel.refreshBackgroundAgentState() }
         )
-        self.watcher = watcher
-        Task { await watcher.start() }
+        observationPipeline = pipeline
+        pipeline.start()
+        Task { await viewModel.refreshResetNotificationAuthorization() }
     }
 
     func refreshPresence() async {
@@ -314,55 +327,53 @@ final class PublishPipeline {
         return AccountStatusMonitor(source: accountSource) { _ in }
     }
 
-    private func makeWatcher(
-        snapshotPath: URL,
-        coordinator: PublishCoordinator,
-        accountMonitor: AccountStatusMonitor
-    ) -> SnapshotWatcher {
-        let viewModel = viewModel
-        return SnapshotWatcher(path: snapshotPath) { payload in
-            Task {
-                // Local display always reflects the on-device snapshot;
-                // CloudKit publishing is gated by required-iCloud mode and
-                // account availability.
-                await viewModel.apply(payload)
-
-                guard await viewModel.syncEnabled else { return }
-                let status = await accountMonitor.lastKnownStatus
-                guard AccountStatusMonitor.publishingState(for: status) == .ready else { return }
-                guard let operationID = await viewModel.cloudSyncDidStart() else { return }
-                do {
-                    let publishedAt = Date()
-                    let syncSource = LocalSyncSource.current
-                    let statuses = try payload.providers.map {
-                        try makeProviderStatus(
-                            from: $0,
-                            snapshotUpdatedAt: payload.updatedAt,
-                            publishedAt: publishedAt,
-                            syncSource: syncSource
-                        )
-                    }
-                    try await coordinator.upsert(statuses)
-                    await viewModel.cloudSyncDidSucceed(operationID: operationID)
-                } catch {
-                    // Do not put CloudKit's error description in the UI: it
-                    // can include record metadata. The menu exposes a stable,
-                    // actionable state without reflecting payload contents.
-                    GradusLog.publish.warning(
-                        "cloud sync failed (operation \(operationID), error \(PublishCoordinator.describe(error)))"
-                    )
-                    await viewModel.cloudSyncDidFail(operationID: operationID)
-                }
+    private func applyResetEvaluation(_ evaluation: ResetEvaluation) {
+        switch evaluation.bankedStatus {
+        case let .current(count, _):
+            viewModel.updateBankedCreditObservation(count: count)
+        case let .unavailable(lastObservedCount, _):
+            viewModel.updateBankedCreditObservation(count: nil, lastObservedCount: lastObservedCount)
+        }
+        for alert in evaluation.alerts {
+            let event = switch alert {
+            case .bankedGrant:
+                ResetNotificationEvent(kind: .grant, providerName: "Codex")
+            case let .usageRefill(providerName, windowID):
+                ResetNotificationEvent(
+                    kind: .refill, providerName: providerName, windowLabel: windowID
+                )
             }
+            Task { await viewModel.scheduleResetAlert(event) }
         }
     }
 
-    /// Agent status only changes the local presentation. In particular, this
-    /// path does not feed the snapshot watcher, start provider collection, or
-    /// publish to CloudKit.
-    private func makeBackgroundAgentStatusObserver(
-        statusFileURL: URL
-    ) -> BackgroundAgentStatusObserver {
-        BackgroundAgentStatusObserver(statusFileURL: statusFileURL, viewModel: viewModel)
+    private func publish(_ payload: SnapshotPayload, bankedObservation: BankedObservation?) async {
+        guard viewModel.requiredICloudMode.allowsLiveWork,
+              viewModel.syncEnabled,
+              let coordinator, let accountMonitor
+        else { return }
+        let status = await accountMonitor.lastKnownStatus
+        guard AccountStatusMonitor.publishingState(for: status) == .ready else { return }
+        guard let operationID = viewModel.cloudSyncDidStart() else { return }
+        do {
+            let publishedAt = Date()
+            let syncSource = LocalSyncSource.current
+            let statuses = try payload.providers.map {
+                try makeProviderStatus(
+                    from: $0,
+                    snapshotUpdatedAt: payload.updatedAt,
+                    publishedAt: publishedAt,
+                    syncSource: syncSource,
+                    bankedObservation: bankedObservation
+                )
+            }
+            try await coordinator.upsert(statuses)
+            viewModel.cloudSyncDidSucceed(operationID: operationID)
+        } catch {
+            GradusLog.publish.warning(
+                "cloud sync failed (operation \(operationID), error \(PublishCoordinator.describe(error)))"
+            )
+            viewModel.cloudSyncDidFail(operationID: operationID)
+        }
     }
 }

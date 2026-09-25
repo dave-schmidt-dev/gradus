@@ -593,7 +593,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--debug", action="store_true", help="Show full exception strings from probes."
+        "--debug", action="store_true", help="Show sanitized probe type and status details."
     )
     parser.add_argument(
         "--providers",
@@ -628,6 +628,12 @@ def parse_args() -> argparse.Namespace:
             "Refresh credential-aware router snapshots once and exit; this command may "
             "access authenticated provider sessions."
         ),
+    )
+    parser.add_argument("--banked-keychain-helper", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--authorize-banked-access",
+        action="store_true",
+        help="Allow attended macOS access to the local banked-observation key.",
     )
     parser.add_argument(
         "--verify-refresh-health",
@@ -907,6 +913,7 @@ def _write_snapshot_versions(
     lock_poll_interval: float = 0.1,
     journal_history: bool = False,
     projected_claude_entry: Mapping[str, object] | None = None,
+    on_committed: Callable[[Mapping[str, object]], None] | None = None,
 ) -> tuple[bool, bool] | tuple[bool, bool, bool]:
     """Write v1 and v2 independently, optionally journaling committed v2.
 
@@ -1036,6 +1043,13 @@ def _write_snapshot_versions(
                 "just written nor a newer one"
             )
     status(f"history {'persisted' if history_ok else 'persistence failed'}")
+    if history_ok and on_committed is not None and committed_v2 == v2_payload:
+        try:
+            on_committed(committed_v2)
+        except Exception:
+            # The sidecar is optional to ordinary usage. Its absence makes the
+            # banked state Unavailable to the next consumer join.
+            status("banked observation unavailable")
     return v1_ok, v2_ok, history_ok
 
 
@@ -1129,6 +1143,7 @@ def _refresh_snapshot_once(
         return 1
 
     cleanup: list[object] = []
+    started = time.monotonic()
     try:
         _refresh_progress("started")
         # This explicit mode is the only command path allowed to retain the
@@ -1206,6 +1221,51 @@ def _refresh_snapshot_once(
             on_waiting=lambda pending: _refresh_progress(f"waiting for {pending} provider(s)"),
             safe_errors=True,
         )
+
+        def write_banked_after_commit(committed: Mapping[str, object]) -> None:
+            from .banked_keychain import get_generation
+            from .banked_observation import BankedCandidate, write_sidecar
+
+            codex = next((snap for snap in snapshots if snap.name == "Codex" and snap.ok), None)
+            candidate = codex.banked_candidate if codex is not None else None
+            if not isinstance(candidate, BankedCandidate):
+                _refresh_progress("banked observation unavailable")
+                return
+            entries = committed.get("providers")
+            if not isinstance(entries, list):
+                return
+            entry = next(
+                (
+                    item
+                    for item in entries
+                    if isinstance(item, Mapping) and item.get("name") == "Codex"
+                ),
+                None,
+            )
+            if not isinstance(entry, Mapping) or entry.get("ok") is not True:
+                return
+            updated_at = committed.get("updated_at")
+            observed_at = entry.get("observed_at")
+            if not isinstance(updated_at, str) or not isinstance(observed_at, str):
+                return
+            _refresh_progress("banked observation checking access")
+            generation = get_generation(
+                candidate.user_id,
+                candidate.account_id,
+                seconds_remaining=105.0 - (time.monotonic() - started),
+            )
+            if generation is None:
+                _refresh_progress("banked observation unavailable")
+                return
+            write_sidecar(
+                RUNTIME_PATHS.banked_observation_path,
+                count=candidate.count,
+                generation=generation,
+                snapshot_updated_at=updated_at,
+                observed_at=observed_at,
+            )
+            _refresh_progress("banked observation persisted")
+
         v1_ok, v2_ok, history_ok = _write_snapshot_versions(
             snapshots,
             datetime.now(),
@@ -1220,6 +1280,7 @@ def _refresh_snapshot_once(
             ),
             journal_history=True,
             projected_claude_entry=projected_claude_entry,
+            on_committed=write_banked_after_commit,
         )
         success = v1_ok and v2_ok and history_ok
         _refresh_progress("completed" if success else "failed")
@@ -1655,6 +1716,12 @@ def _history_query_once(
 
 def main() -> int:
     args = parse_args()
+    if getattr(args, "banked_keychain_helper", False) or getattr(
+        args, "authorize_banked_access", False
+    ):
+        from .banked_keychain import helper_main
+
+        return helper_main(attended=getattr(args, "authorize_banked_access", False))
     if getattr(args, "publisher_watchdog", False):
         from .publisher_watchdog import main as _publisher_watchdog_main
 

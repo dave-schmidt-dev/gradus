@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gradus · reset alerts mockup</title>
+  <style>
+    :root { color-scheme: dark; --bg:#141419; --panel:#1c1c1c; --raised:#303030; --line:#4e4e4e; --ink:#e4e4e4; --muted:#bcbcbc; --blue:#87afff; --pink:#ffafff; --cyan:#87d7ff; --green:#87d787; --yellow:#ffd75f; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    button { font:inherit; cursor:pointer; }
+    .shell { width:min(1120px,100%); margin:auto; padding:28px clamp(16px,4vw,44px) 54px; }
+    header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:28px; }
+    .brand { font-weight:750; letter-spacing:.04em; text-transform:uppercase; font-size:13px; color:var(--cyan); }
+    h1 { font-size:clamp(25px,3vw,34px); line-height:1.1; margin:8px 0 7px; }
+    .muted { color:var(--muted); }
+    .intro { margin:0; max-width:700px; }
+    .sample { color:var(--yellow); border:1px solid #766335; background:#302a1b; border-radius:999px; padding:6px 10px; white-space:nowrap; font-size:12px; font-weight:650; }
+    .tabs { display:flex; gap:8px; border-bottom:1px solid var(--line); margin:26px 0; overflow:auto; }
+    .tabs button { background:none; border:0; border-bottom:2px solid transparent; color:var(--muted); padding:12px 16px; white-space:nowrap; }
+    .tabs button.active { color:var(--ink); border-color:var(--cyan); font-weight:700; }
+    .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(300px,.8fr); gap:20px; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:22px; }
+    .panel h2 { font-size:20px; margin:0 0 6px; }
+    .panel h3 { font-size:13px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted); margin:26px 0 8px; }
+    .panel p { margin:6px 0 0; }
+    .row { display:flex; align-items:flex-start; gap:14px; padding:15px 0; border-top:1px solid var(--line); }
+    .row:first-of-type { border-top:0; }
+    .row-main { flex:1; min-width:0; }
+    .row-title { font-weight:650; }
+    .row-desc { font-size:13px; color:var(--muted); margin-top:4px; }
+    .switch { position:relative; width:48px; height:29px; border:1px solid #74818a; border-radius:16px; background:#3a4248; flex:none; margin-top:1px; }
+    .switch::after { content:""; position:absolute; top:3px; left:3px; width:21px; height:21px; border-radius:50%; background:white; transition:transform .15s; }
+    .switch[aria-checked="true"] { border-color:var(--green); background:#256b40; }
+    .switch[aria-checked="true"]::after { transform:translateX(19px); }
+    .fact { display:flex; justify-content:space-between; gap:15px; padding:12px 0; border-top:1px solid var(--line); }
+    .fact:first-of-type { border-top:0; }
+    .fact b { font-variant-numeric:tabular-nums; text-align:right; }
+    .provider { display:flex; align-items:center; gap:9px; font-weight:650; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--blue); }
+    .dot.claude { background:var(--pink); }
+    .pill { display:inline-block; border:1px solid var(--line); border-radius:20px; padding:3px 8px; color:var(--muted); font-size:12px; }
+    .notice { padding:12px 14px; border-radius:9px; background:#243039; border:1px solid #456173; font-size:13px; color:#d1e8f5; margin-top:18px; }
+    .preview { border:1px solid #687079; border-radius:17px; padding:15px; background:#32363c; margin-top:14px; box-shadow:0 10px 30px #0005; }
+    .preview .app { display:flex; justify-content:space-between; color:#c9cdd1; font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+    .preview strong { display:block; margin-top:8px; }
+    .preview p { font-size:13px; margin-top:3px; }
+    .action { border:1px solid var(--line); background:var(--raised); color:var(--ink); border-radius:9px; padding:8px 12px; margin:12px 8px 0 0; }
+    .action:hover,.action:focus-visible { border-color:var(--cyan); }
+    .empty { color:var(--muted); font-size:13px; padding:15px; border:1px dashed var(--line); border-radius:9px; margin-top:14px; }
+    footer { color:var(--muted); font-size:12px; margin-top:24px; }
+    @media(max-width:740px) { header { flex-wrap:wrap; } .grid { grid-template-columns:1fr; } .panel { padding:18px; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div><div class="brand">Gradus · design proposal</div><h1>Reset alerts</h1><p class="intro muted">Get an alert when a new banked reset appears or a usage window refills. Each device chooses its own alerts.</p></div>
+      <span class="sample">Illustrative data · no live account actions</span>
+    </header>
+    <div class="tabs" role="tablist" aria-label="Device preview"><button data-device="mac" role="tab">Mac</button><button data-device="mobile" role="tab">iPhone / iPad</button></div>
+    <main id="content"></main>
+    <footer>Mockup only. Alerts depend on refreshes from your Mac and delivery to each device. No reset is redeemed by Gradus.</footer>
+  </div>
+  <script>
+    const model = {
+      device: 'mac',
+      providers: [
+        { id:'codex', name:'Codex', banked:{ status:'known', count:2 }, windows:[{ id:'weekly', label:'Weekly', percentLeft:2 }] },
+        { id:'spark', name:'Codex (Spark)', banked:{ status:'not-applicable' }, windows:[{ id:'five-hour', label:'Five-hour when reported', percentLeft:18 },{ id:'weekly', label:'Weekly when reported', percentLeft:2 }] },
+        { id:'claude', name:'Claude', banked:{ status:'unavailable' }, windows:[{ id:'five-hour', label:'Five-hour', percentLeft:90 },{ id:'weekly', label:'Weekly', percentLeft:70 }] }
+      ],
+      preferences: {
+        mac: { grants:true, refills:true },
+        mobile: { grants:true, refills:true }
+      },
+      systemPermission: { mac:'allowed', mobile:'allowed' },
+      scenario: 'grant',
+      events: [
+        { id:'codex-grant', provider:'codex', kind:'grant', title:'New Codex reset available', body:'A full reset was added. You now have 2 banked resets.', status:'Example notification' },
+        { id:'claude-refill', provider:'claude', kind:'refill', title:'Claude usage refilled', body:'Your five-hour allowance is available again.', status:'Example notification' },
+        { id:'codex-refill', provider:'codex', kind:'refill', title:'Codex usage refilled', body:'Your weekly allowance is available again.', status:'Example notification' },
+        { id:'spark-refill', provider:'spark', kind:'refill', title:'Codex (Spark) usage refilled', body:'Your reported Spark five-hour allowance is available again.', status:'Example notification' }
+      ]
+    };
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    function toggleRow(key, title, detail) {
+      const on = model.preferences[model.device][key];
+      return `<div class="row"><div class="row-main"><div class="row-title">${esc(title)}</div><div class="row-desc">${esc(detail)}</div></div><button class="switch" type="button" role="switch" aria-label="${esc(title)}" aria-checked="${on}" data-toggle="${key}"></button></div>`;
+    }
+    function providerFacts() {
+      return model.providers.map(p => `<h3><span class="provider"><span class="dot ${p.id}"></span>${esc(p.name)}</span></h3>
+        <div class="fact"><span>Banked reset credits</span><b>${p.banked.status === 'known' ? esc(p.banked.count) + ' available' : p.banked.status === 'not-applicable' ? 'Tracked under Codex' : 'Unavailable to Gradus'}</b></div>
+        <div class="fact"><span>Usage refills</span><b>${p.windows.map(w => esc(w.label)).join(' · ')}</b></div>`).join('');
+    }
+    function preview() {
+      const event = model.events.find(e => e.id === (model.scenario === 'grant' ? 'codex-grant' : model.scenario === 'claude' ? 'claude-refill' : model.scenario === 'spark' ? 'spark-refill' : 'codex-refill'));
+      const enabled = model.preferences[model.device][event.kind === 'grant' ? 'grants' : 'refills'];
+      if (!enabled) return '<div class="empty">This alert is off on this device. Turn its setting on to preview it.</div>';
+      if (model.systemPermission[model.device] !== 'allowed') return '<div class="empty">System notifications are blocked on this device. Gradus still refreshes usage.</div>';
+      return `<div class="preview" data-event-id="${esc(event.id)}"><div class="app"><span>Gradus</span><span>Now · ${esc(event.status)}</span></div><strong>${esc(event.title)}</strong><p>${esc(event.body)}</p></div>`;
+    }
+    function render() {
+      document.querySelectorAll('[data-device]').forEach(b => { b.classList.toggle('active',b.dataset.device === model.device); b.setAttribute('aria-selected',b.dataset.device === model.device); });
+      const deviceName = model.device === 'mac' ? 'Mac' : 'iPhone / iPad';
+      document.getElementById('content').innerHTML = `<div class="grid">
+        <section class="panel"><h2>${deviceName} settings</h2><p class="muted">Reset alerts are separate from low-usage warning alerts.</p>
+          <h3>Notifications</h3>
+          ${toggleRow('grants','New banked resets','Alert when a new redeemable reset credit is observed. Available for Codex; Claude banked credits cannot currently be read.')}
+          ${toggleRow('refills','Usage refilled','Alert when a reported five-hour or weekly allowance refills. Codex, Codex (Spark), and Claude are included.')}
+          <div class="notice">Claude banked resets: Gradus cannot see the count or arrival. Your Claude account may have credits even while this shows “Unavailable.”</div>
+          <h3>Notification permission</h3><div class="fact"><span>System notifications</span><b>${model.systemPermission[model.device] === 'allowed' ? 'Allowed' : 'Blocked'}</b></div>
+          <button class="action" data-permission type="button">Simulate ${model.systemPermission[model.device] === 'allowed' ? 'blocked' : 'allowed'} permission</button>
+        </section>
+        <section class="panel"><h2>Current source coverage</h2><p class="muted">Example values show the difference between known and unavailable data.</p>${providerFacts()}
+          <h3>Notification preview</h3><div class="pill">Choose a sample event</div><div>
+          <button class="action" data-scenario="grant" type="button">Codex credit added</button>
+          <button class="action" data-scenario="claude" type="button">Claude refilled</button>
+          <button class="action" data-scenario="spark" type="button">Spark refilled</button>
+          <button class="action" data-scenario="codex" type="button">Codex refilled</button></div>${preview()}
+          <div class="notice">Existing credits establish a starting balance. Gradus alerts only after it observes a later grant; opening the app for the first time does not generate an “added” alert.</div>
+        </section></div>`;
+    }
+    document.addEventListener('click', e => {
+      const device=e.target.closest('[data-device]'); if(device){model.device=device.dataset.device;render();return;}
+      const toggle=e.target.closest('[data-toggle]'); if(toggle){const k=toggle.dataset.toggle;model.preferences[model.device][k]=!model.preferences[model.device][k];render();return;}
+      const scenario=e.target.closest('[data-scenario]'); if(scenario){model.scenario=scenario.dataset.scenario;render();return;}
+      if(e.target.closest('[data-permission]')){model.systemPermission[model.device]=model.systemPermission[model.device] === 'allowed' ? 'blocked' : 'allowed';render();}
+    });
+    render();
+  </script>
+</body>
+</html>

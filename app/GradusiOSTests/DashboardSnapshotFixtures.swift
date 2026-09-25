@@ -21,6 +21,10 @@ func iosSnapshotDirectory(
     }
     let fileURL = URL(fileURLWithPath: file.description)
     let testFileName = fileURL.deletingPathExtension().lastPathComponent
+    if testFileName == "SettingsViewSnapshotTests",
+       let stagedRoot = environment["GRADUS_SETTINGS_SNAPSHOT_ROOT"] {
+        return URL(fileURLWithPath: stagedRoot, isDirectory: true)
+    }
     return fileURL
         .deletingLastPathComponent()
         .appendingPathComponent("__Snapshots__", isDirectory: true)

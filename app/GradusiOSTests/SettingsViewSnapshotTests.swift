@@ -3,6 +3,8 @@ import GradusKit
 import SnapshotTesting
 import SwiftUI
 import Testing
+import UIKit
+import Vision
 
 // P5/T5.3 gate: four-group `SettingsView` layout (Warning alerts,
 // Local Display, Warning Threshold, About), notification-on/off states, light+dark -- following
@@ -77,7 +79,9 @@ private struct StubAuthorizationSource: NotificationAuthorizationSource {
 
 @MainActor
 private func makeViewModel(
-    notificationsEnabled: Bool, systemAuthorization: NotificationAuthorization? = nil,
+    notificationsEnabled: Bool,
+    resetAlertsEnabled: Bool = false,
+    systemAuthorization: NotificationAuthorization? = nil,
     test: String = #function
 ) -> DashboardViewModel {
     let directory = FileManager.default.temporaryDirectory
@@ -89,11 +93,14 @@ private func makeViewModel(
     try? cache.saveCachedStatuses(providers, syncedAt: fixedNow)
     let defaults = isolatedDefaults(test)
     defaults.set(notificationsEnabled, forKey: DashboardViewModel.notificationsEnabledKey)
-    return DashboardViewModel(
+    let viewModel = DashboardViewModel(
         cache: cache,
         notificationAuthorizationSource: systemAuthorization.map { StubAuthorizationSource(authorization: $0) },
         userDefaults: defaults
     )
+    viewModel.setBankedResetAlertsEnabled(resetAlertsEnabled)
+    viewModel.setUsageRefillAlertsEnabled(resetAlertsEnabled)
+    return viewModel
 }
 
 @MainActor
@@ -141,6 +148,19 @@ private func makeViewModel(
     #expect(NotificationAuthorization.denied == .denied)
 }
 
+@Test func resetAlertsCopyNamesCoverageAndMobileDelivery() {
+    #expect(SettingsView.bankedResetAlertsDescription.contains("Codex"))
+    #expect(SettingsView.bankedResetAlertsDescription.contains("starting balance"))
+    #expect(SettingsView.usageRefillAlertsDescription.contains("Codex (Spark)"))
+    #expect(SettingsView.usageRefillAlertsDescription.contains("Claude"))
+    #expect(SettingsView.claudeBankedUnavailableDescription == "Claude banked resets are unavailable to Gradus.")
+    #expect(
+        SettingsView.mobileResetDeliveryDescription
+            == "On iPhone and iPad, delivery may wait until you open Gradus."
+    )
+    #expect(SettingsView.resetAlertSourceDescription.contains("Mac refreshes"))
+}
+
 @Test func settingsCopyDistinguishesDashboardCardsFromWidgetSizing() {
     #expect(SettingsView.dashboardCardSizeTitle == "Dashboard card size")
     #expect(SettingsView.dashboardCardSizeDescription.contains("dashboard cards only"))
@@ -149,25 +169,90 @@ private func makeViewModel(
     #expect(SettingsView.widgetDescription.contains("widget gallery"))
 }
 
-/// Tall enough to contain every control, including the last one.
-///
-/// Raised from 500 when the density picker was added (2026-08-06): at 500 the
-/// new control fell below the viewport, so the baselines would have been
-/// re-recorded — showing a real diff, since the section caption above it also
-/// changed — while covering none of the pixels of the thing that was added. A
-/// fixed-height snapshot of a scrolling screen silently stops testing whatever
-/// grows past its bottom edge, and it does so by *passing*.
-///
-/// Raised again from 760 (2026-08-07), because 760 did not in fact satisfy the
-/// sentence above: it cut off mid-`Slider`, so the warning threshold's own
-/// control, its caption, and the entire About group were outside every
-/// baseline. Measured by recording once at 1400 and reading where the content
-/// actually ended (~1085pt), then trimming to leave roughly one row of slack —
-/// slack is deliberate, so a single appended row lands inside the frame and
-/// gets covered instead of silently falling past the edge.
-///
-/// Anything appended to `SettingsView` must check it still fits here.
-private let settingsSnapshotHeight: CGFloat = 1150
+/// 1750pt clipped the final Version row in denied settings; 2050pt leaves a
+/// 24pt OCR margin below the final About text.
+private let settingsSnapshotHeight: CGFloat = 2050
+
+private func assertVersionVisible(in image: UIImage, testName: String) {
+    guard let cgImage = image.cgImage else {
+        Issue.record("\(testName): snapshot has no CGImage")
+        return
+    }
+    let scale = image.scale > 0 ? image.scale : 1
+    let cropHeight = min(cgImage.height, Int((image.size.height * 0.35 * scale).rounded()))
+    let cropRect = CGRect(
+        x: 0,
+        y: cgImage.height - cropHeight,
+        width: cgImage.width,
+        height: cropHeight
+    )
+    guard let croppedCGImage = cgImage.cropping(to: cropRect) else {
+        Issue.record("\(testName): could not crop the bottom of the Settings snapshot")
+        return
+    }
+    let croppedImage = UIImage(cgImage: croppedCGImage, scale: scale, orientation: .up)
+
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = false
+    do {
+        try VNImageRequestHandler(cgImage: croppedCGImage, orientation: .up).perform([request])
+    } catch {
+        Issue.record("\(testName): Vision could not inspect the snapshot: \(error)")
+        return
+    }
+    guard let observation = request.results?.first(where: {
+        $0.topCandidates(1).first?.string.range(of: "Version", options: .caseInsensitive) != nil
+    }) else {
+        Issue.record("\(testName): final About Version text is outside the snapshot")
+        return
+    }
+    let bounds = observation.boundingBox
+    let inside = !bounds.isEmpty && bounds.minX >= 0 && bounds.minY >= 0 && bounds.maxX <= 1 && bounds.maxY <= 1
+    if !inside {
+        Issue.record("\(testName): final About Version text lies outside the snapshot image")
+    }
+    let bottomMargin = bounds.minY * croppedImage.size.height // Vision's origin is bottom-left.
+    if bottomMargin < 24 {
+        Issue.record("\(testName): final About Version text has less than 24pt below it")
+    }
+}
+
+/// Verify the final About label in the same fixed image that SnapshotTesting compares.
+@MainActor
+private func assertResetSettingsSnapshot(
+    viewModel: DashboardViewModel,
+    style: UIUserInterfaceStyle,
+    requesting: Bool = false,
+    testName: String
+) {
+    let view = SettingsView(
+        dashboardViewModel: viewModel,
+        initialResetAlertsPending: requesting
+    )
+    let viewSnapshotting = Snapshotting<SettingsView, UIImage>.image(
+        layout: .fixed(width: 390, height: settingsSnapshotHeight),
+        traits: UITraitCollection(userInterfaceStyle: style)
+    )
+    let checkedSnapshotting = Snapshotting<SettingsView, UIImage>(
+        pathExtension: viewSnapshotting.pathExtension,
+        diffing: viewSnapshotting.diffing,
+        asyncSnapshot: { snapshotView in
+            Async<UIImage> { callback in
+                viewSnapshotting.snapshot(snapshotView).run { image in
+                    assertVersionVisible(in: image, testName: testName)
+                    callback(image)
+                }
+            }
+        }
+    )
+    assertIOSSnapshot(
+        of: view,
+        as: checkedSnapshotting,
+        record: settingsSnapshotRecording,
+        testName: testName
+    )
+}
 
 @MainActor
 @Test func settingsViewNotificationsOnLight() {
@@ -260,4 +345,54 @@ private let settingsSnapshotHeight: CGFloat = 1150
         ),
         record: settingsSnapshotRecording
     )
+}
+
+@MainActor
+@Test func settingsViewResetAlertsOnLight() async {
+    let viewModel = makeViewModel(
+        notificationsEnabled: true, resetAlertsEnabled: true, systemAuthorization: .authorized
+    )
+    await viewModel.refreshNotificationAuthorization()
+    assertResetSettingsSnapshot(viewModel: viewModel, style: .light, testName: #function)
+}
+
+@MainActor
+@Test func settingsViewResetAlertsOnDark() async {
+    let viewModel = makeViewModel(
+        notificationsEnabled: true, resetAlertsEnabled: true, systemAuthorization: .authorized
+    )
+    await viewModel.refreshNotificationAuthorization()
+    assertResetSettingsSnapshot(viewModel: viewModel, style: .dark, testName: #function)
+}
+
+@MainActor
+@Test func settingsViewResetAlertsRequestingLight() {
+    let viewModel = makeViewModel(notificationsEnabled: false, resetAlertsEnabled: true)
+    assertResetSettingsSnapshot(viewModel: viewModel, style: .light, requesting: true, testName: #function)
+}
+
+@MainActor
+@Test func settingsViewResetAlertsRequestingDark() {
+    let viewModel = makeViewModel(notificationsEnabled: false, resetAlertsEnabled: true)
+    assertResetSettingsSnapshot(viewModel: viewModel, style: .dark, requesting: true, testName: #function)
+}
+
+@MainActor
+@Test func settingsViewResetAlertsDeniedLight() async {
+    let viewModel = makeViewModel(
+        notificationsEnabled: true, resetAlertsEnabled: true, systemAuthorization: .denied
+    )
+    await viewModel.refreshNotificationAuthorization()
+    #expect(viewModel.resetAlertsSuppressedBySystem)
+    assertResetSettingsSnapshot(viewModel: viewModel, style: .light, testName: #function)
+}
+
+@MainActor
+@Test func settingsViewResetAlertsDeniedDark() async {
+    let viewModel = makeViewModel(
+        notificationsEnabled: true, resetAlertsEnabled: true, systemAuthorization: .denied
+    )
+    await viewModel.refreshNotificationAuthorization()
+    #expect(viewModel.resetAlertsSuppressedBySystem)
+    assertResetSettingsSnapshot(viewModel: viewModel, style: .dark, testName: #function)
 }

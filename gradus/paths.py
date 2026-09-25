@@ -32,6 +32,10 @@ class RuntimePaths:
         return self.public_state_root / "snapshot-v2.json"
 
     @property
+    def banked_observation_path(self) -> Path:
+        return self.public_state_root / "banked-observation-v1.json"
+
+    @property
     def history_dir(self) -> Path:
         return self.public_state_root / "history"
 

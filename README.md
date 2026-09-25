@@ -113,9 +113,13 @@ the interpreter's own store is empty and every probe fails with
 `CERTIFICATE_VERIFY_FAILED` (2026-09-06). The report's `interpreter_ca_certificates`
 shows that unaided count; `ca_certificates` is what probes actually use.
 
-When `--debug` is enabled on the credential-aware `--refresh-snapshot` producer, raw captures are written to `/tmp/gradus_*_capture.txt` (mode `0600`, via the same atomic private-write path as the credential caches). Reader commands (`--json`, `--once`, and the TUI) do not probe providers or write debug captures.
+`--debug` reports sanitized provider status and exception types. Provider response bodies are never dumped, including on probe failure. Reader commands (`--json`, `--once`, and the TUI) do not probe providers.
 
-The raw payload is **not** written into the router-facing `.state/snapshot-v2.json`: the snapshot's `error` field carries only the plain provider message (bounded and credential-free). The debug-augmented `debug_detail` goes to **stderr** under `--debug`, never into the JSON document — `--json` on stdout is a machine contract consumed by the review-plugin router, and INV-1 keeps raw HTTP bodies and credential material off it (enforced by `test_render_json_data_is_safe_allowlist`). So `gradus --json --debug > out.json` leaves `out.json` parseable while the detail lands on your terminal.
+The raw payload is **not** written into the router-facing `.state/snapshot-v2.json`: the snapshot's `error` field carries only a bounded provider message. Sanitized `debug_detail` goes to **stderr** under `--debug`, never into the JSON document. `gradus --json --debug > out.json` leaves `out.json` parseable while safe detail lands on your terminal.
+
+The explicit `--refresh-snapshot` producer can observe Codex's bounded banked manual-reset count from its existing usage GET. After the v2 snapshot is read back and its history entry is appended, it writes a separate 0600 `banked-observation-v1.json` beside v2. This sidecar contains only schema version, count, random generation UUID, snapshot timestamp, and Codex observation timestamp. Missing, invalid, failed, or cadence-carried observations emit no new sidecar; a consumer must treat the current banked state as Unavailable while any prior valid count remains only a last observation. The private identity cache holds a keyed digest and generation; its HMAC key is generated in the macOS file Keychain under distinct source and installed service items. A two-second isolated helper disables system interaction for background reads. Denied/locked access uses a typed retry backoff and does not fail ordinary usage. `--authorize-banked-access` is an explicit attended repair action that may show a macOS access prompt. A personal credential without an account ID uses the usage user ID alone, so two such accounts reporting the same user ID cannot be distinguished. Signed-runtime Keychain access still needs physical acceptance.
+
+Mac and iPhone/iPad Settings offer separate, initially off switches for new banked resets and usage refills. Each installation silently establishes its own first-observation baseline, then schedules local notifications only after an opted-in kind crosses a fresh observed edge and system permission allows it. Codex banked counts come from the Mac sidecar; Codex, Codex (Spark), and Claude reported usage windows can signal refills. Claude banked-credit arrival remains Unavailable. An absent current Codex count stays Unavailable even when a labeled last observed count exists. Mobile delivery depends on Mac refresh and CloudKit sync and may wait until Gradus opens. The v14 local checkpoint has fixture, simulator, snapshot, and walkthrough evidence: [iPhone/iPad reset-alert states](docs/walkthroughs/2026-09-24-gradus-ios-reset-alerts.md) and [Mac Settings states](docs/walkthroughs/2026-09-23-gradus-mac-reset-alerts.md). The canonical local gate passed; see the [v14 verification record](verifications/2026-09-25-gradus-v14-phase4-verification.md). Signed Keychain access, live APNs/CloudKit delivery, installed runtime, physical-device acceptance, and release acceptance remain separate gates.
 
 The stderr channel is wired on the non-interactive reader paths (`--json` and `--once`) and the producer path (`--refresh-snapshot`). The live TUI reports through `.logs/gradus.log` while Rich owns the alt screen.
 
@@ -968,8 +972,12 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
   a separate owner gate. Supply the commit preceding your changes, for example
   `GRADUS_STATIC_BASE=<base-commit> caffeinate -disu bash app/test-gate.sh`.
   Static checks cover changed Swift files before app automation starts.
-  For focused Mac image checks, run `bash app/test-mac-snapshots.sh`; the
-  test child uses America/New_York and a staged copy of the baselines.
+  For focused Mac image checks, run `bash app/test-mac-snapshots.sh`; its 13
+  selectors include six light/dark Reset Alerts Settings states. The test child
+  uses America/New_York and a staged copy of the baselines. To refresh only
+  those six Mac images after a reviewed visual change, run
+  `bash app/scripts/record-mac-settings-snapshots.sh`; it validates the staged
+  capture before copying the named files and protects the seven older Mac PNGs.
   Its three UI legs each take the machine-wide `apple-ui-test-lock` themselves,
   and that lock is not re-entrant, so launching the gate underneath an outer
   hold hangs those legs on a lock their own ancestor owns.

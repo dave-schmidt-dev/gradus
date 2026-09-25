@@ -290,8 +290,20 @@ struct BackgroundAgentStateTests {
         #expect(decoded.phase == .producerWaiting)
         #expect(decoded.health == .normal)
         #expect(decoded.bridge == nil)
+        #expect(decoded.committedSnapshotUpdatedAt == nil)
         #expect(decoded.sequence == 4)
         #expect(decoded.isInFlight)
+    }
+
+    @Test func newAgentCommitTokenDecodesWithoutAffectingOldStatus() throws {
+        let json = """
+        {"schemaVersion":1,"phase":"succeeded","health":"normal","sequence":5,\
+        "updatedAt":"2026-09-23T10:00:01-04:00",\
+        "committedSnapshotUpdatedAt":"2026-09-23T10:00:00-04:00"}
+        """
+        let decoded = try JSONDecoder().decode(BackgroundAgentStatusFile.self, from: Data(json.utf8))
+        #expect(decoded.phase == .succeeded)
+        #expect(decoded.committedSnapshotUpdatedAt == "2026-09-23T10:00:00-04:00")
     }
 }
 

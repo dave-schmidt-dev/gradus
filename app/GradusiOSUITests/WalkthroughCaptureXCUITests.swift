@@ -1,6 +1,8 @@
 import XCTest
 
-/// Captures one deterministic, action-complete walkthrough state per run.
+// swiftlint:disable type_body_length
+/// Captures one deterministic, action-complete walkthrough state per run. The
+/// route inventory and its launch setup stay together for capture consistency.
 final class WalkthroughCaptureXCUITests: XCTestCase {
     func testWalkthroughCapture() throws {
         let env = ProcessInfo.processInfo.environment
@@ -17,7 +19,7 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
         }
         app.launch()
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 30))
-        prepare(route: route, in: app)
+        prepare(route: route, marker: marker, in: app)
         let expected = markerElement(route: route, marker: marker, app: app)
         XCTAssertTrue(expected.waitForExistence(timeout: 30), "Missing capture marker \(marker)")
         try XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: destination))
@@ -44,6 +46,13 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
         if route == "settings-alert-off-result" {
             return "warning-alerts-allowed"
         }
+        switch route {
+        case "reset-alerts-off": return "reset-alerts-off"
+        case "reset-alerts-on": return "reset-alerts-on"
+        case "reset-alerts-requesting": return "reset-alerts-requesting"
+        case "reset-alerts-denied": return "reset-alerts-denied"
+        default: break
+        }
         if route == "settings-denied-handoff" {
             return "warning-alerts-denied"
         }
@@ -61,7 +70,7 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
 
     // Each switch branch performs the interaction represented by one inventory route.
     // swiftlint:disable:next cyclomatic_complexity function_body_length
-    private func prepare(route: String, in app: XCUIApplication) {
+    private func prepare(route: String, marker: String, in app: XCUIApplication) {
         switch route {
         case "legacy-continue-result": tap("Continue", in: app)
         case "temporary-retry-result", "no-account-retry-result", "restricted-retry-result": tap("Try Again", in: app)
@@ -124,6 +133,9 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
             let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
             XCTAssertTrue(settings.wait(for: .runningForeground, timeout: 30))
         case "settings-alert-off-result": openSettings(in: app); tap("warning-alerts-toggle", in: app)
+        case "reset-alerts-off", "reset-alerts-on", "reset-alerts-requesting", "reset-alerts-denied":
+            openSettings(in: app)
+            revealInViewport(markerElement(route: route, marker: marker, app: app), in: app)
         case "widget-system-gallery": openWidgetGallery(app: app)
         case "widget-system-add": openGradusWidgetAddSurface(app: app)
         case "widget-system-tap":
@@ -160,6 +172,9 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
             return app.buttons.matching(identifier: "explore-sample")
                 .matching(NSPredicate(format: "value == %@", "In progress"))
                 .firstMatch
+        }
+        if route == "reset-alerts-requesting" {
+            return app.staticTexts.matching(identifier: marker).firstMatch
         }
         return app.descendants(matching: .any)[marker]
     }
@@ -252,6 +267,31 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
         XCTFail("Missing walkthrough state \(element)")
     }
 
+    private func revealInViewport(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0 ..< 16 {
+            if isVisibleInViewport(element, in: app) {
+                return
+            }
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.82))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.66))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        XCTAssertTrue(
+            isVisibleInViewport(element, in: app),
+            "Walkthrough marker is absent or outside the capture viewport: \(element.identifier)"
+        )
+    }
+
+    private func isVisibleInViewport(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        guard element.exists else {
+            return false
+        }
+        let frame = element.frame
+        let viewport = app.frame
+        let bottomMargin: CGFloat = 32
+        return !frame.isEmpty && viewport.contains(frame) && frame.maxY <= viewport.maxY - bottomMargin
+    }
+
     private func permissionAlert(in app: XCUIApplication) -> XCUIElement {
         let appAlert = app.alerts.firstMatch
         if appAlert.waitForExistence(timeout: 2) {
@@ -264,3 +304,5 @@ final class WalkthroughCaptureXCUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Add Widget")).firstMatch
     }
 }
+
+// swiftlint:enable type_body_length

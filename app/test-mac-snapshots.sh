@@ -46,6 +46,12 @@ selectors=(
   "GradusMacTests/providerListViewRendersEveryRampLevelOnTheDarkPanel()"
   "GradusMacTests/providerListViewRendersEmptyState()"
   "GradusMacTests/providerListViewReportsPinnedTestTimezone()"
+  "GradusMacTests/macSettingsResetAlertsOnLight()"
+  "GradusMacTests/macSettingsResetAlertsOnDark()"
+  "GradusMacTests/macSettingsResetAlertsRequestingLight()"
+  "GradusMacTests/macSettingsResetAlertsRequestingDark()"
+  "GradusMacTests/macSettingsResetAlertsDeniedLight()"
+  "GradusMacTests/macSettingsResetAlertsDeniedDark()"
 )
 selector_args=()
 for selector in "${selectors[@]}"; do
@@ -83,8 +89,8 @@ reported_count="$(awk '
   }
   END { if (maximum) print maximum }
 ' "$output_file")"
-if [[ -z "$reported_count" || "$reported_count" -lt "${#selectors[@]}" ]]; then
-  echo "FAIL: focused Mac snapshot selectors reported ${reported_count:-0} tests; expected at least ${#selectors[@]}" >&2
+if [[ -z "$reported_count" || "$reported_count" -ne "${#selectors[@]}" ]]; then
+  echo "FAIL: focused Mac snapshot selectors reported ${reported_count:-0} tests; expected exactly ${#selectors[@]}" >&2
   exit 1
 fi
 if ! grep -Fq "GRADUS_EFFECTIVE_TIME_ZONE=$SNAPSHOT_TIME_ZONE" "$output_file"; then

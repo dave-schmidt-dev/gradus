@@ -52,6 +52,21 @@ struct MenuContentView: View {
             )
             .id(viewModel.presentationRevision)
 
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Banked resets: \(viewModel.bankedCreditStatusText)")
+                    .accessibilityIdentifier("menu-banked-status")
+                if let lastObserved = viewModel.lastObservedBankedCreditText {
+                    Text(lastObserved)
+                        .accessibilityIdentifier("menu-banked-last-observed")
+                }
+                if let progress = viewModel.resetObservationProgress {
+                    Text(progress)
+                        .accessibilityIdentifier("menu-reset-observation-progress")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             Divider()
 
             cloudSyncStatus
@@ -232,7 +247,9 @@ struct MenuBarContentRoot: View {
                 backgroundAgent: BackgroundAgentManager(
                     service: agentService,
                     statusFileURL: agentService.absentStatusFileURL
-                )
+                ),
+                resetNotificationScheduler: UITestResetNotificationScheduler(),
+                bankedAccessAuthorizer: UITestBankedBackgroundAccessAuthorizer()
             )
             viewModel.apply(Self.fixturePayload)
             _viewModel = StateObject(wrappedValue: viewModel)
@@ -296,6 +313,26 @@ struct MenuBarContentRoot: View {
             // exposed the toggle but clipped its clickable bounds.
             .frame(minHeight: 760, alignment: .top)
             .padding(.top, 1)
+        }
+    }
+
+    @MainActor
+    private final class UITestResetNotificationScheduler: ResetNotificationScheduling {
+        func authorization() async -> ResetNotificationAuthorization {
+            .notDetermined
+        }
+
+        func requestAuthorization() async -> ResetNotificationAuthorization {
+            .denied
+        }
+
+        func schedule(_: ResetNotificationEvent) {}
+    }
+
+    @MainActor
+    private struct UITestBankedBackgroundAccessAuthorizer: BankedBackgroundAccessAuthorizing {
+        func authorize() async -> Bool {
+            false
         }
     }
 #endif

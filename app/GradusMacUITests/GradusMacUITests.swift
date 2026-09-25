@@ -59,13 +59,9 @@ final class GradusMacUITests: XCTestCase {
         _ = try requiredElement(descendingFrom: menuWindow, title: "5 Hour")
         _ = try requiredElement(descendingFrom: menuWindow, title: "Weekly")
         _ = try requiredElement(descendingFrom: menuWindow, title: "Exhausted")
+        _ = try requiredElement(descendingFrom: menuWindow, title: "Banked resets: Unavailable")
         XCTAssertLessThan(try position(of: codex).y, try position(of: cursor).y)
-        try attachWindowScreenshot(
-            window: menuWindow,
-            ownerPID: fixture.pid,
-            title: "Gradus UI Test Menu",
-            name: "Gradus menu fixture"
-        )
+        try attachMenuFixtureScreenshot(menuWindow, ownerPID: fixture.pid)
 
         let settings = try requiredElement(
             descendingFrom: menuWindow, role: kAXButtonRole as String, title: "Settings…"
@@ -77,19 +73,21 @@ final class GradusMacUITests: XCTestCase {
             title: "Gradus Settings",
             timeout: 5
         )
-        XCTAssertNil(findElement(descendingFrom: settingsWindow, title: "Enable iCloud Sync"))
-        XCTAssertNil(findElement(descendingFrom: settingsWindow, title: "iCloud Sync"))
-        _ = try requiredElement(descendingFrom: settingsWindow, title: "Menu bar")
-        _ = try requiredElement(
-            descendingFrom: settingsWindow,
-            title: "A selected bucket shows its remaining percentage. An asterisk marks stale data; "
-                + "a dash means unavailable. These choices apply on this Mac only."
-        )
+        try assertResetAlertControls(in: settingsWindow)
         try attachWindowScreenshot(
             window: settingsWindow,
             ownerPID: fixture.pid,
             title: "Gradus Settings",
             name: "Gradus Settings window"
+        )
+    }
+
+    private func attachMenuFixtureScreenshot(_ window: AXUIElement, ownerPID: pid_t) throws {
+        try attachWindowScreenshot(
+            window: window,
+            ownerPID: ownerPID,
+            title: "Gradus UI Test Menu",
+            name: "Gradus menu fixture"
         )
     }
 
@@ -274,5 +272,29 @@ final class GradusMacUITests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.05)
         }
         XCTAssertFalse(fixture.process.isRunning, "Retained GradusMac PID survived teardown")
+    }
+}
+
+private extension GradusMacUITests {
+    func assertResetAlertControls(in window: AXUIElement) throws {
+        XCTAssertNil(findElement(descendingFrom: window, title: "Enable iCloud Sync"))
+        XCTAssertNil(findElement(descendingFrom: window, title: "iCloud Sync"))
+        _ = try requiredElement(descendingFrom: window, title: "Menu bar")
+        for (title, identifier) in [
+            ("New banked resets", "settings-reset-grants"),
+            ("Usage refilled", "settings-reset-refills")
+        ] {
+            _ = try requiredElement(
+                descendingFrom: window, role: kAXStaticTextRole as String, title: title
+            )
+            _ = try requiredElement(
+                descendingFrom: window, role: kAXCheckBoxRole as String, identifier: identifier
+            )
+        }
+        _ = try requiredElement(
+            descendingFrom: window,
+            title: "A selected bucket shows its remaining percentage. An asterisk marks stale data; "
+                + "a dash means unavailable. These choices apply on this Mac only."
+        )
     }
 }

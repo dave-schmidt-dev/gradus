@@ -287,6 +287,7 @@ validate_inv7_staging_contract() {
   GRADUS_DISABLE_PIPELINE=1 \
   TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
   TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
+  TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH="$gradus_mac_banked_fixture_path" \
   xcodebuild test'* ]] || return 1
   grep -Fq 'environment[inv7SourceRootEnvironmentKey]' "$test_path" || return 1
   grep -Fq '!rawSourceRoot.isEmpty' "$test_path" || return 1
@@ -312,6 +313,24 @@ validate_inv7_staging_contract() {
 
 validate_inv7_staging_contract "$GATE_SCRIPT" ||
   fail "INV-7 hosted test does not use the staged, explicit source root"
+
+validate_banked_fixture_staging_contract() {
+  local gate_path="$1" test_path="$SCRIPT_DIR/GradusMacTests/BankedObservationTests.swift"
+  local stage_block mac_leg_block
+  stage_block="$(sed -n '/^# INV-7 runs inside/,/^echo "==> xcodebuild test — GradusMacUITests/p' "$gate_path")"
+  mac_leg_block="$(sed -n '/assert_counting_leg "GradusMac"/,/assert_counting_leg "GradusiOS-iPhone"/p' "$gate_path")"
+
+  grep -Fq "gradus_mac_banked_fixture_path=\"\$derived_data_dir/fixtures/banked-observation-v1.json\"" "$gate_path" || return 1
+  [[ "$stage_block" == *"gradus_mac_banked_fixture_source=\"\$GATE_REPO_ROOT/tests/fixtures/banked-observation-v1.json\""* ]] || return 1
+  [[ "$stage_block" == *"[[ ! -s \"\$gradus_mac_banked_fixture_source\" ]]"* ]] || return 1
+  [[ "$stage_block" == *"/bin/cp \"\$gradus_mac_banked_fixture_source\" \"\$gradus_mac_banked_fixture_path\""* ]] || return 1
+  [[ "$stage_block" == *"[[ ! -s \"\$gradus_mac_banked_fixture_path\" ]]"* ]] || return 1
+  [[ "$mac_leg_block" == *"TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH=\"\$gradus_mac_banked_fixture_path\""* ]] || return 1
+  grep -Fq 'environment["GRADUS_BANKED_FIXTURE_PATH"]' "$test_path" || return 1
+}
+
+validate_banked_fixture_staging_contract "$GATE_SCRIPT" ||
+  fail "GradusMac banked-observation tests do not use the staged, explicit fixture"
 
 validate_bridge_staging_contract() {
   local gate_path="$1"
@@ -725,8 +744,8 @@ leg_count="${#COUNTING_LEG_NAMES[@]}"
 # legs so neither count can hide a zero-test result in the other.
 snapshot_count="${#DENSITY_IMAGE_SNAPSHOT_TEST_SELECTORS[@]}"
 ios_ui_test_count="$(rg --no-heading '^\s*func test' "$SCRIPT_DIR/GradusiOSUITests" -g '*.swift' | wc -l | tr -d ' ')"
-[[ "$ios_ui_test_count" -eq 12 ]] ||
-  fail "expected 12 GradusiOSUITests workflows, found $ios_ui_test_count"
+[[ "$ios_ui_test_count" -eq 16 ]] ||
+  fail "expected 16 GradusiOSUITests workflows, found $ios_ui_test_count"
 ipad_leg_index=-1
 density_phone_leg_index=-1
 density_pad_leg_index=-1
@@ -793,8 +812,8 @@ for ((index = 0; index < leg_count; index++)); do
     iphone_leg_index="$index"
   fi
 done
-[[ "$iphone_leg_index" -ge 0 && "${COUNTING_LEG_MINIMUMS[iphone_leg_index]}" -eq 211 ]] ||
-  fail "iPhone integrated-gate floor must remain exactly 211"
+[[ "$iphone_leg_index" -ge 0 && "${COUNTING_LEG_MINIMUMS[iphone_leg_index]}" -eq 232 ]] ||
+  fail "iPhone integrated-gate floor must remain exactly 232"
 iphone_ui_block="$(sed -n '/assert_counting_leg "GradusiOSUI"/,/CODE_SIGNING_ALLOWED=NO/p' "$GATE_SCRIPT")"
 [[ "$iphone_ui_block" == *"-only-testing:GradusiOSUITests"* ]] ||
   fail "dedicated iPhone UI leg is missing its explicit selector"
@@ -962,7 +981,7 @@ validate_timezone_gate_contract() {
   [[ "$mac_block" == *'TEST_RUNNER_TZ="America/New_York"'* ]] || return 1
   grep -Fq 'TZ="$SNAPSHOT_TIME_ZONE"' "$focused_path" || return 1
   grep -Fq 'TEST_RUNNER_TZ="$SNAPSHOT_TIME_ZONE"' "$focused_path" || return 1
-  grep -Fq 'expected at least ${#selectors[@]}' "$focused_path" || return 1
+  grep -Fq 'expected exactly ${#selectors[@]}' "$focused_path" || return 1
   grep -Fq 'GRADUS_EFFECTIVE_TIME_ZONE=' "$focused_path" || return 1
   grep -Fq 'environment["TZ"] == expected' "$test_path" || return 1
   grep -Fq 'TimeZone.current.identifier == expected' "$test_path" || return 1
@@ -979,7 +998,7 @@ cat >"$fake_static_bin/xcodebuild" <<'FAKE'
 [[ "${TZ:-}" == "America/New_York" ]] || exit 41
 [[ "${TEST_RUNNER_TZ:-}" == "America/New_York" ]] || exit 42
 printf 'GRADUS_EFFECTIVE_TIME_ZONE=%s\n' "$TEST_RUNNER_TZ"
-printf 'Test run with %s tests\n' "${FAKE_SNAPSHOT_COUNT:-7}"
+printf 'Test run with %s tests\n' "${FAKE_SNAPSHOT_COUNT:-13}"
 FAKE
 chmod +x "$fake_static_bin/xcodebuild"
 for parent_tz in UTC America/New_York; do

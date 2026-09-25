@@ -66,7 +66,7 @@ class FetchProviderSnapshotTests(unittest.TestCase):
         self.assertFalse(snapshot.ok)
         self.assertEqual(snapshot.error, "provider probe failed")
         self.assertNotIn(sentinel, snapshot.error or "")
-        self.assertIn(sentinel, snapshot.debug_detail or "")
+        self.assertEqual(snapshot.debug_detail, "RuntimeError")
 
         quiet_snapshot = fetch_provider_snapshot("Codex", FakeProvider(), debug=False)
         self.assertIsNone(quiet_snapshot.debug_detail)
@@ -93,7 +93,7 @@ class FetchProviderSnapshotTests(unittest.TestCase):
         self.assertFalse(snapshot.ok)
         self.assertEqual(snapshot.error, "provider probe failed")
         self.assertNotIn(sentinel, snapshot.error or "")
-        self.assertIn(sentinel, snapshot.debug_detail or "")
+        self.assertEqual(snapshot.debug_detail, "RuntimeError")
 
         quiet_snapshot = fetch_provider_snapshot("Codex", FakeProvider(), debug=False)
         self.assertIsNone(quiet_snapshot.debug_detail)
@@ -155,7 +155,7 @@ class FetchProviderSnapshotTests(unittest.TestCase):
         ``AntigravityProvider._load_keychain_token`` embeds `security`
         subprocess output in its exception, so raw text on ``error`` would push
         credential-adjacent strings through CloudKit to both devices. Type is
-        safe to branch on; the message stays on the ``--debug`` channel.
+        safe to branch on; the message is withheld even from ``--debug``.
         """
         sentinel = "timeout-secret-sentinel"
 
@@ -167,7 +167,7 @@ class FetchProviderSnapshotTests(unittest.TestCase):
 
         self.assertEqual(snapshot.error, "provider probe timed out")
         self.assertNotIn(sentinel, snapshot.error or "")
-        self.assertIn(sentinel, snapshot.debug_detail or "")
+        self.assertNotIn(sentinel, snapshot.debug_detail or "")
 
         quiet = fetch_provider_snapshot("Antigravity", FakeProvider(), debug=False)
         self.assertIsNone(quiet.debug_detail)
@@ -179,7 +179,7 @@ class FetchProviderSnapshotTests(unittest.TestCase):
             self.assertNotIn(sentinel, payload_json)
 
     def test_subprocess_timeout_keeps_debug_detail_off_the_snapshot_surface(self) -> None:
-        """A CLI timeout is retryable, with command detail debug-only."""
+        """A CLI timeout is retryable, without command detail in debug."""
         sentinel = "credential-helper-timeout-detail"
 
         class FakeProvider:
@@ -190,7 +190,7 @@ class FetchProviderSnapshotTests(unittest.TestCase):
 
         self.assertFalse(snapshot.ok)
         self.assertEqual(snapshot.error, "provider probe timed out")
-        self.assertIn(sentinel, snapshot.debug_detail or "")
+        self.assertNotIn(sentinel, snapshot.debug_detail or "")
         self.assertNotIn(sentinel, snapshot.error or "")
 
         quiet_snapshot = fetch_provider_snapshot("Copilot", FakeProvider(), debug=False)
@@ -201,13 +201,7 @@ class FetchProviderSnapshotTests(unittest.TestCase):
         self.assertNotIn(sentinel, payload_json)
 
     def test_headless_debug_detail_omits_the_dump_hint_it_cannot_honor(self) -> None:
-        """Don't name a dump file that was never written.
-
-        `_write_debug_dump` is a no-op under headless (INV-2: `--json` and
-        `--write-snapshot` must have zero side effects), but `debug_detail`
-        used to embed `raw dump: <path>` unconditionally -- so the two paths a
-        human is most likely to be debugging pointed at a nonexistent file.
-        """
+        """Raw provider bodies stay private under headless and debug modes."""
         import gradus.providers as providers
 
         class FakeProvider:
@@ -221,12 +215,12 @@ class FetchProviderSnapshotTests(unittest.TestCase):
             providers.set_headless(False)
 
         self.assertNotIn("raw dump:", headless.debug_detail or "")
-        # The real content still survives; only the false pointer is dropped.
         self.assertIn("HTTP 500", headless.debug_detail or "")
-        self.assertIn("raw body text", headless.debug_detail or "")
+        self.assertNotIn("raw body text", headless.debug_detail or "")
 
         interactive = fetch_provider_snapshot("Codex", FakeProvider(), debug=True)
-        self.assertIn("raw dump:", interactive.debug_detail or "")
+        self.assertNotIn("raw dump:", interactive.debug_detail or "")
+        self.assertNotIn("raw body text", interactive.debug_detail or "")
 
     def test_unrecognized_exception_type_stays_opaque(self) -> None:
         """Only the two known-retryable families get a specific message.
@@ -1107,6 +1101,71 @@ class CodexHttpProviderTests(unittest.TestCase):
         self.assertAlmostEqual(status.credits, 12.5)
         self.assertIsNotNone(status.five_hour_reset)
         self.assertIsNotNone(status.weekly_reset)
+
+    def test_banked_count_is_private_optional_and_distinct_from_paid_balance(self) -> None:
+        provider = self._make_provider()
+        payload = dict(self.NORMAL_RESPONSE)
+        payload.update(user_id="usage-user", rate_limit_reset_credits={"available_count": 3})
+        with patch("gradus.providers._base._http_json", return_value=payload):
+            status = provider.fetch()
+        self.assertEqual(status.banked_candidate.count, 3)
+        self.assertEqual(status.banked_candidate.user_id, "usage-user")
+        self.assertEqual(status.banked_candidate.account_id, "test_account_id")
+        encoded = json.dumps(status.to_dict())
+        self.assertNotIn("usage-user", encoded)
+        self.assertNotIn("test_account_id", encoded)
+        self.assertNotIn("available_count", encoded)
+        self.assertNotIn("banked_candidate", encoded)
+        self.assertEqual(status.credits, 12.5)
+
+        for count in (None, -1, 1.5, True, "3", 1_000_001):
+            payload["rate_limit_reset_credits"] = {"available_count": count}
+            with patch("gradus.providers._base._http_json", return_value=payload):
+                self.assertIsNone(provider.fetch().banked_candidate)
+        payload["rate_limit_reset_credits"] = {"available_count": 3}
+        payload.pop("user_id")
+        with patch("gradus.providers._base._http_json", return_value=payload):
+            self.assertIsNone(provider.fetch().banked_candidate)
+
+    def test_banked_candidate_allows_missing_or_malformed_auth_account_id(self) -> None:
+        payload = dict(self.NORMAL_RESPONSE)
+        payload.update(user_id="usage-user", rate_limit_reset_credits={"available_count": 3})
+        for present, account_id in (
+            (False, None),
+            (True, None),
+            (True, 42),
+            (True, ["wrong-type"]),
+            (True, "  "),
+        ):
+            with self.subTest(present=present, account_id=account_id):
+                auth_data = {"tokens": {"access_token": "test_access_token"}}
+                if present:
+                    auth_data["tokens"]["account_id"] = account_id
+                with (
+                    patch.object(CodexHttpProvider, "_AUTH_PATH") as auth_path,
+                    patch("gradus.providers._base._http_json", return_value=payload) as request,
+                ):
+                    auth_path.exists.return_value = True
+                    auth_path.read_text.return_value = json.dumps(auth_data)
+                    status = CodexHttpProvider().fetch()
+                self.assertEqual(status.banked_candidate.count, 3)
+                self.assertEqual(status.banked_candidate.user_id, "usage-user")
+                self.assertIsNone(status.banked_candidate.account_id)
+                self.assertNotIn("Account-Id", request.call_args.kwargs["headers"])
+
+    def test_banked_candidate_uses_final_response_after_401_retry(self) -> None:
+        provider = self._make_provider()
+        first = ProbeFailure("HTTP 401", "transient private body")
+        final = dict(self.NORMAL_RESPONSE)
+        final.update(user_id="final-user", rate_limit_reset_credits={"available_count": 4})
+        with (
+            patch.object(provider, "_request_usage", side_effect=[first, final]),
+            patch.object(provider, "_refresh_tokens", return_value=True),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.banked_candidate.count, 4)
+        self.assertEqual(status.banked_candidate.user_id, "final-user")
+        self.assertNotIn("transient private body", json.dumps(status.to_dict()))
 
     def test_percent_left_fields_are_float(self) -> None:
         provider = self._make_provider()
@@ -3032,14 +3091,8 @@ class TestCredentialCachePermissions(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(path.parent).st_mode), 0o700)
 
-    def test_debug_dump_is_private_without_hardening_shared_parent(self) -> None:
-        """The /tmp debug dump is written 0600 for privacy, but its parent (a
-        shared, root-owned 1777 dir in production) must NOT be chmod'd: as a
-        normal user that raises PermissionError and crashes --debug; as root it
-        would strip /tmp's sticky bit machine-wide. Regression for that bug —
-        against the pre-fix code (which chmod'd the parent to 0700) the final
-        assertion fails.
-        """
+    def test_debug_dump_compatibility_function_writes_nothing(self) -> None:
+        """Legacy import remains available but cannot create raw-body files."""
         with tempfile.TemporaryDirectory() as tmp:
             shared = Path(tmp) / "shared"  # stand-in for /tmp
             shared.mkdir()
@@ -3047,9 +3100,7 @@ class TestCredentialCachePermissions(unittest.TestCase):
             dump_path = shared / "gradus_test_capture.txt"
             with patch("gradus.providers._base._debug_dump_path", return_value=dump_path):
                 _write_debug_dump("Test", "raw capture output")
-            # The dump file itself is private...
-            self.assertEqual(stat.S_IMODE(os.stat(dump_path).st_mode), 0o600)
-            # ...but the shared parent dir is left exactly as it was (never chmod'd).
+            self.assertFalse(dump_path.exists())
             self.assertEqual(stat.S_IMODE(os.stat(shared).st_mode), 0o777)
 
 

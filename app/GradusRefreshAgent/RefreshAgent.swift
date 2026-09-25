@@ -21,40 +21,6 @@ public func runInstalledRefreshAgent(executableURL: URL, homeDirectory: URL) -> 
     }
 }
 
-private final class AgentCancellation {
-    private let lock = NSLock()
-    private var cancelled = false
-    private var sources: [DispatchSourceSignal] = []
-
-    init() {
-        for signalNumber in [SIGTERM, SIGINT] {
-            signal(signalNumber, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
-            source.setEventHandler { [weak self] in
-                self?.lock.lock()
-                self?.cancelled = true
-                self?.lock.unlock()
-            }
-            source.resume()
-            sources.append(source)
-        }
-    }
-
-    deinit {
-        for source in sources {
-            source.cancel()
-        }
-        signal(SIGTERM, SIG_DFL)
-        signal(SIGINT, SIG_DFL)
-    }
-
-    func isCancelled() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return cancelled
-    }
-}
-
 enum AgentExit: Int32 {
     case success = 0
     case failed = 1
@@ -120,13 +86,15 @@ struct AgentStatus: Codable, Equatable {
     let bridge: AgentBridgeOutcome?
     let sequence: Int
     let updatedAt: String
+    let committedSnapshotUpdatedAt: String?
 
     init(
         phase: AgentPhase,
         health: AgentHealth = .normal,
         bridge: AgentBridgeOutcome? = nil,
         sequence: Int,
-        date: Date
+        date: Date,
+        committedSnapshotUpdatedAt: String? = nil
     ) {
         schemaVersion = 1
         self.phase = phase
@@ -134,10 +102,11 @@ struct AgentStatus: Codable, Equatable {
         self.bridge = bridge
         self.sequence = sequence
         updatedAt = ISO8601DateFormatter().string(from: date)
+        self.committedSnapshotUpdatedAt = committedSnapshotUpdatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, phase, health, bridge, sequence, updatedAt
+        case schemaVersion, phase, health, bridge, sequence, updatedAt, committedSnapshotUpdatedAt
     }
 
     func encode(to encoder: Encoder) throws {
@@ -148,6 +117,7 @@ struct AgentStatus: Codable, Equatable {
         try container.encodeIfPresent(bridge, forKey: .bridge)
         try container.encode(sequence, forKey: .sequence)
         try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(committedSnapshotUpdatedAt, forKey: .committedSnapshotUpdatedAt)
     }
 }
 
@@ -195,7 +165,8 @@ struct AgentPaths: Equatable {
             lockFile: publicRoot.appending(path: ".refresh-agent.lock"),
             snapshotFiles: [
                 publicRoot.appending(path: "snapshot.json"),
-                publicRoot.appending(path: "snapshot-v2.json")
+                publicRoot.appending(path: "snapshot-v2.json"),
+                publicRoot.appending(path: "banked-observation-v1.json")
             ]
         )
     }
@@ -260,11 +231,14 @@ struct RefreshAgent {
         var sequence = 0
         var health = AgentHealth.normal
         var bridgeResult: AgentBridgeOutcome?
+        var committedSnapshotUpdatedAt: String?
         func emit(_ phase: AgentPhase) -> Bool {
             sequence += 1
             do {
                 try statusWriter.write(AgentStatus(
-                    phase: phase, health: health, bridge: bridgeResult, sequence: sequence, date: now()
+                    phase: phase, health: health, bridge: bridgeResult, sequence: sequence,
+                    date: now(),
+                    committedSnapshotUpdatedAt: phase == .succeeded ? committedSnapshotUpdatedAt : nil
                 ))
                 return true
             } catch {
@@ -345,11 +319,24 @@ struct RefreshAgent {
             return finishFailure(producerOutcome, emit: emit, snapshots: snapshots, priors: priors)
         }
 
+        committedSnapshotUpdatedAt = Self.snapshotToken(at: paths.snapshotFiles[1])
+
         guard emit(.succeeded) else {
             try? snapshots.restore(priors)
             return .failed
         }
         return .success
+    }
+
+    private static func snapshotToken(at fileURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: fileURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["schema_version"] as? Int == 2,
+              let token = object["updated_at"] as? String,
+              !token.isEmpty,
+              token.hasSuffix("Z") || token.range(of: #"[+-]\d\d:\d\d$"#, options: .regularExpression) != nil
+        else { return nil }
+        return token
     }
 
     private func finishFailure(

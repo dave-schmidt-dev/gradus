@@ -1,3 +1,6 @@
+// This view model is the existing convergence point for menu, settings,
+// sync, and migration state; splitting it would widen this lint-only repair.
+// swiftlint:disable file_length
 import Foundation
 import GradusKit
 
@@ -48,6 +51,14 @@ public enum CloudSyncState: Equatable, Sendable {
     case failed
 }
 
+public enum BankedAccessRecoveryState: Equatable, Sendable {
+    case idle
+    case requesting
+    case allowed
+    case denied
+}
+
+// swiftlint:disable type_body_length
 /// Observable state the menu content view renders from, and the single
 /// place the required-iCloud mode / snapshot data converge. Decoupled from
 /// `PublishPipeline`'s CloudKit plumbing so `MenuContentView` can be
@@ -94,6 +105,16 @@ public final class PublisherViewModel: ObservableObject {
     /// collapsing them is what hid a permanently failing fetch behind an
     /// ordinary-looking empty state.
     @Published public private(set) var connectedDevicesUnavailable = false
+
+    /// These opt-ins live only in this Mac's defaults domain. A first install
+    /// starts with both off, independently of any existing warning preference.
+    @Published public private(set) var resetGrantAlertsEnabled: Bool
+    @Published public private(set) var resetRefillAlertsEnabled: Bool
+    @Published public private(set) var resetNotificationAuthorization: ResetNotificationAuthorization = .notDetermined
+    @Published public private(set) var bankedCreditCount: Int?
+    @Published public private(set) var lastObservedBankedCreditCount: Int?
+    @Published public private(set) var bankedAccessRecoveryState: BankedAccessRecoveryState = .idle
+    @Published public private(set) var resetObservationProgress: String?
 
     /// Device-local display preferences, mirroring `DashboardViewModel`'s on
     /// iOS down to the `UserDefaults` key names. They are deliberately *not*
@@ -153,6 +174,8 @@ public final class PublisherViewModel: ObservableObject {
     /// preference sets sees one concept, not two similar ones.
     static let showExhaustedKey = "showExhausted"
     static let menuBarDisplaySelectionKey = "menuBarDisplaySelection"
+    static let resetGrantAlertsEnabledKey = "resetGrantAlertsEnabled"
+    static let resetRefillAlertsEnabledKey = "resetRefillAlertsEnabled"
 
     /// Matches `DashboardViewModel.defaultLocalWarningThresholdPercent`. A
     /// different default here would mean the same provider counts as "low" on
@@ -167,6 +190,9 @@ public final class PublisherViewModel: ObservableObject {
     /// the moment `cloudSyncDidSucceed` started persisting one.
     private let defaults: UserDefaults
     private let backgroundAgent: BackgroundAgentManager
+    private let resetNotificationScheduler: ResetNotificationScheduling
+    private let bankedAccessAuthorizer: BankedBackgroundAccessAuthorizing
+    private var resetAuthorizationRequestInFlight = false
 
     /// `nil` on a Mac with no legacy runtime and in every fixture, which is why
     /// the whole section disappears rather than rendering an empty state.
@@ -184,12 +210,16 @@ public final class PublisherViewModel: ObservableObject {
         backgroundAgent: BackgroundAgentManager? = nil,
         legacyMigrator: LegacyRuntimeMigrator? = nil,
         legacyWrapperURL: URL? = nil,
-        legacyBridgeURL: URL? = nil
+        legacyBridgeURL: URL? = nil,
+        resetNotificationScheduler: ResetNotificationScheduling? = nil,
+        bankedAccessAuthorizer: BankedBackgroundAccessAuthorizing? = nil
     ) {
         let backgroundAgent = backgroundAgent ?? BackgroundAgentManager()
         let home = FileManager.default.homeDirectoryForCurrentUser
         self.defaults = defaults
         self.backgroundAgent = backgroundAgent
+        self.resetNotificationScheduler = resetNotificationScheduler ?? LocalResetNotificationScheduler()
+        self.bankedAccessAuthorizer = bankedAccessAuthorizer ?? BundledBankedBackgroundAccessAuthorizer()
         self.legacyMigrator = legacyMigrator
         self.legacyWrapperURL = legacyWrapperURL ?? LegacyRuntimePaths.legacyWrapper(homeDirectory: home)
         self.legacyBridgeURL = legacyBridgeURL ?? LegacyRuntimePaths.standaloneBridge()
@@ -226,6 +256,97 @@ public final class PublisherViewModel: ObservableObject {
         menuBarDisplaySelection = MenuBarDisplaySelection(
             storedValue: defaults.string(forKey: Self.menuBarDisplaySelectionKey)
         )
+        resetGrantAlertsEnabled = defaults.bool(forKey: Self.resetGrantAlertsEnabledKey)
+        resetRefillAlertsEnabled = defaults.bool(forKey: Self.resetRefillAlertsEnabledKey)
+    }
+
+    /// This explicit read can run at local watcher startup or when Settings
+    /// opens. It never presents the system permission sheet.
+    public func refreshResetNotificationAuthorization() async {
+        guard resetGrantAlertsEnabled || resetRefillAlertsEnabled else { return }
+        guard !resetAuthorizationRequestInFlight else { return }
+        resetNotificationAuthorization = await resetNotificationScheduler.authorization()
+    }
+
+    public func setResetGrantAlertsEnabled(_ enabled: Bool) async {
+        resetGrantAlertsEnabled = enabled
+        defaults.set(enabled, forKey: Self.resetGrantAlertsEnabledKey)
+        if enabled {
+            await requestResetNotificationAuthorizationIfNeeded()
+        }
+    }
+
+    public func setResetRefillAlertsEnabled(_ enabled: Bool) async {
+        resetRefillAlertsEnabled = enabled
+        defaults.set(enabled, forKey: Self.resetRefillAlertsEnabledKey)
+        if enabled {
+            await requestResetNotificationAuthorizationIfNeeded()
+        }
+    }
+
+    private func requestResetNotificationAuthorizationIfNeeded() async {
+        guard !resetAuthorizationRequestInFlight else { return }
+        resetAuthorizationRequestInFlight = true
+        defer { resetAuthorizationRequestInFlight = false }
+        let current = await resetNotificationScheduler.authorization()
+        resetNotificationAuthorization = current
+        guard current == .notDetermined else { return }
+        resetNotificationAuthorization = .requesting
+        resetNotificationAuthorization = await resetNotificationScheduler.requestAuthorization()
+    }
+
+    /// The detector calls this only after a committed fresh edge. The local
+    /// system-state read avoids dropping an event when permission changed while
+    /// Settings was closed, and never asks for permission on its own.
+    public func scheduleResetAlert(_ event: ResetNotificationEvent) async {
+        let enabled = event.kind == .grant ? resetGrantAlertsEnabled : resetRefillAlertsEnabled
+        guard enabled else { return }
+        guard !resetAuthorizationRequestInFlight else { return }
+        resetNotificationAuthorization = await resetNotificationScheduler.authorization()
+        guard resetNotificationAuthorization == .authorized else { return }
+        resetNotificationScheduler.schedule(event)
+    }
+
+    /// An absent fresh observation is Unavailable even when a prior count is
+    /// retained for context. The pipeline supplies only validated counts.
+    public func updateBankedCreditObservation(
+        count: Int?, lastObservedCount: Int? = nil
+    ) {
+        let validCount = count.flatMap { (0 ... 1_000_000).contains($0) ? $0 : nil }
+        let validLast = lastObservedCount.flatMap { (0 ... 1_000_000).contains($0) ? $0 : nil }
+        bankedCreditCount = validCount
+        if let validCount {
+            lastObservedBankedCreditCount = validCount
+        } else if let validLast {
+            lastObservedBankedCreditCount = validLast
+        }
+    }
+
+    public var bankedCreditStatusText: String {
+        guard let bankedCreditCount else { return "Unavailable" }
+        return "\(bankedCreditCount) available"
+    }
+
+    public var lastObservedBankedCreditText: String? {
+        guard bankedCreditCount == nil, let lastObservedBankedCreditCount else { return nil }
+        return "Last observed: \(lastObservedBankedCreditCount) available"
+    }
+
+    /// The pipeline calls this when a bounded local sidecar wait starts and
+    /// clears it on completion/cancellation. Never render caller-supplied
+    /// detail: paths, timestamps, or identifiers may accidentally reach it.
+    public func updateResetObservationProgress(_ text: String?) {
+        resetObservationProgress = text == nil ? nil : "Waiting for reset observation…"
+    }
+
+    /// Only the Settings button calls this attended helper. It clears the
+    /// producer's private retry backoff on success; the next refresh observes
+    /// the count without Settings reading the private cache itself.
+    public func authorizeBankedBackgroundAccess() async {
+        guard bankedAccessRecoveryState != .requesting else { return }
+        bankedAccessRecoveryState = .requesting
+        let allowed = await bankedAccessAuthorizer.authorize()
+        bankedAccessRecoveryState = allowed ? .allowed : .denied
     }
 
     /// Confirms the required iCloud setup from the concrete Continue action.
@@ -381,3 +502,6 @@ public final class PublisherViewModel: ObservableObject {
         }
     }
 }
+
+// swiftlint:enable type_body_length
+// swiftlint:enable file_length

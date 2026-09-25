@@ -22,3 +22,27 @@ from pathlib import Path
 _TEST_LOG_DIR = Path(tempfile.gettempdir()) / "gradus-pytest-logs"
 _TEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("GRADUS_LOG_PATH", str(_TEST_LOG_DIR / "gradus-test.log"))
+
+
+def pytest_runtest_setup(item):
+    """Fail closed if a test accidentally reaches the real banked Keychain."""
+    from unittest.mock import patch
+
+    from gradus import banked_keychain
+
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("live banked Keychain access is forbidden in tests")
+
+    item._banked_keychain_guard = patch.object(
+        banked_keychain.SecurityAdapter, "get_or_create", blocked
+    )
+    item._banked_keychain_guard.start()
+    item._banked_helper_guard = patch.object(banked_keychain, "_helper_command", blocked)
+    item._banked_helper_guard.start()
+
+
+def pytest_runtest_teardown(item):
+    for name in ("_banked_helper_guard", "_banked_keychain_guard"):
+        guard = getattr(item, name, None)
+        if guard is not None:
+            guard.stop()

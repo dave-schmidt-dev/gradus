@@ -80,6 +80,7 @@ struct GradusiOSApp: App {
             cache: cache, fetcher: dependencies.fetcher, accountSource: dependencies.accountSource,
             zoneChangesFetcher: dependencies.zoneChangesFetcher, subscriptionManager: dependencies.subscriptionManager,
             warningNotificationScheduler: warningNotificationScheduler,
+            resetNotificationScheduler: Self.isUITesting ? nil : LocalResetNotificationScheduler(),
             notificationAuthorizationSource: notificationAuthorizationSource,
             liveLifecycleGate: liveLifecycleGate,
             widgetSnapshotPublisher: widgetSnapshotPublisher
@@ -192,7 +193,7 @@ struct GradusiOSApp: App {
                 // is handled separately, success-gated, by
                 // `DashboardViewModel.setNotificationsEnabled(_:)`
                 // itself calling `unsubscribeFromWarnings()` directly.
-                appDelegate.setWarningAlertsEnabled(enabled)
+                updateVisibleAlertPermission()
                 guard enabled,
                       Self.shouldRunLiveLifecycle(
                           isUITesting: Self.isUITesting,
@@ -201,6 +202,12 @@ struct GradusiOSApp: App {
                       )
                 else { return }
                 Task { await reconcileLiveSubscriptions() }
+            }
+            .onChange(of: viewModel.bankedResetAlertsEnabled) { _ in
+                updateVisibleAlertPermission()
+            }
+            .onChange(of: viewModel.usageRefillAlertsEnabled) { _ in
+                updateVisibleAlertPermission()
             }
         }
     }
@@ -285,6 +292,19 @@ extension GradusiOSApp {
         await viewModel.reconcileLiveLifecycle()
     }
 
+    /// All visible local alerts share one iOS permission. Each feature keeps
+    /// its own persisted consent; no reset toggle changes CloudKit push work.
+    private func updateVisibleAlertPermission() {
+        guard !sampleModeActive, !Self.isUITesting else { return }
+        appDelegate.setWarningAlertsEnabled(
+            viewModel.notificationsEnabled || viewModel.bankedResetAlertsEnabled
+                || viewModel.usageRefillAlertsEnabled,
+            knownAuthorization: viewModel.systemNotificationAuthorization
+        )
+        viewModel.resetAlertAuthorizationRequestInProgress =
+            appDelegate.warningAlertAuthorization == .requesting
+    }
+
     /// Re-enters the same live sequence after leaving the local sample. This
     /// is explicit because changing the sample state is not guaranteed to
     /// recreate the surrounding scene task.
@@ -298,9 +318,12 @@ extension GradusiOSApp {
         }
         await viewModel.refreshNotificationAuthorization()
         appDelegate.setWarningAlertsEnabled(
-            viewModel.notificationsEnabled,
+            viewModel.notificationsEnabled || viewModel.bankedResetAlertsEnabled
+                || viewModel.usageRefillAlertsEnabled,
             knownAuthorization: viewModel.systemNotificationAuthorization
         )
+        viewModel.resetAlertAuthorizationRequestInProgress =
+            appDelegate.warningAlertAuthorization == .requesting
         appDelegate.updateWarningAlertAuthorization(viewModel.systemNotificationAuthorization)
         guard !sampleModeActive, liveLifecycleGate.isLive else { return }
         await liveLifecycleGate.withOperation { operationEpoch in

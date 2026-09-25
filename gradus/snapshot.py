@@ -481,6 +481,15 @@ def local_iso(dt: datetime) -> str:
     return (dt if dt.tzinfo else dt.astimezone()).isoformat()
 
 
+def _fresh_observed_at(snapshot: ProviderSnapshot, fallback: str) -> str:
+    """Use the final Codex response instant when a banked candidate exists."""
+    candidate = snapshot.banked_candidate if snapshot.name == "Codex" else None
+    observed = getattr(candidate, "observed_at", None)
+    if isinstance(observed, datetime) and observed.utcoffset() is not None:
+        return local_iso(observed)
+    return fallback
+
+
 def reconcile(a: datetime, b: datetime) -> tuple[datetime, datetime]:
     """Coerce the second datetime's tz-awareness to match the first.
 
@@ -833,7 +842,13 @@ def _build_windows(
                     # contract (percent_left is always numeric); omit it instead.
                     continue
                 reset_raw = data.get(spec.reset_key) if spec.reset_key else None
-                target = parse_reset_target(str(reset_raw) if reset_raw is not None else None, now)
+                instants = snapshot.source_reset_instants or {}
+                source_target = instants.get(spec.reset_key) if spec.reset_key else None
+                target = (
+                    source_target
+                    if isinstance(source_target, datetime) and source_target.utcoffset() is not None
+                    else parse_reset_target(str(reset_raw) if reset_raw is not None else None, now)
+                )
                 reset_iso = local_iso(target) if target else None
                 window_hours = spec.window_hours
                 delta = pace_delta(pct, target, (window_hours or 0.0) * 3600.0, now)
@@ -1576,7 +1591,7 @@ def _build_snapshot_payload(
                 "error": None,
                 "windows": _build_windows(snap, updated_at, window_specs),
                 "data": project_fn(snap),
-                "observed_at": updated_at_iso,
+                "observed_at": _fresh_observed_at(snap, updated_at_iso),
                 "probe_attempted_at": updated_at_iso,
             }
         # ok is False: default to a fresh failure entry, but carry a recent
@@ -1704,7 +1719,7 @@ def _build_snapshot_payload(
                     "error": None,
                     "windows": _build_windows(snap, updated_at, specs_by_provider),
                     "data": project_data(snap),
-                    "observed_at": updated_at_iso,
+                    "observed_at": _fresh_observed_at(snap, updated_at_iso),
                     "probe_attempted_at": updated_at_iso,
                 }
             )

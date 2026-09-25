@@ -267,7 +267,6 @@ class ClaudeHttpProvider:
 
         if not isinstance(payload, dict):
             raise ProbeFailure("Claude usage response is invalid", "")
-        raw_text = json.dumps(payload, indent=2, sort_keys=True)
 
         session_percent_left: float | None = None
         weekly_percent_left: float | None = None
@@ -296,6 +295,14 @@ class ClaudeHttpProvider:
                 return None
             return _format_reset_time(bucket.get("resets_at"))
 
+        def _reset_instant(key: str) -> datetime.datetime | None:
+            bucket = payload.get(key)
+            return (
+                _base._source_reset_instant(bucket.get("resets_at"))
+                if isinstance(bucket, dict)
+                else None
+            )
+
         session_percent_left = _util("five_hour")
         primary_reset = _reset("five_hour")
         weekly_percent_left = _util("seven_day")
@@ -320,7 +327,7 @@ class ClaudeHttpProvider:
             value is None
             for value in (session_percent_left, weekly_percent_left, opus_percent_left)
         ):
-            raise ProbeFailure("Claude usage data not available yet", raw_text)
+            raise ProbeFailure("Claude usage data not available yet", "")
 
         return ClaudeStatus(
             session_percent_left=session_percent_left,
@@ -332,8 +339,17 @@ class ClaudeHttpProvider:
             account_email=None,
             account_organization=None,
             login_method=None,
-            raw_text=raw_text,
+            raw_text="",
             credit_balance=credit_balance,
+            source_reset_instants={
+                key: instant
+                for key, instant in (
+                    ("primary_reset", _reset_instant("five_hour")),
+                    ("secondary_reset", _reset_instant("seven_day")),
+                    ("opus_reset", _reset_instant("seven_day_opus")),
+                )
+                if instant is not None
+            },
         )
 
     def close(self) -> None:

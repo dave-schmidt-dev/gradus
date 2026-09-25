@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..banked_observation import BankedCandidate, bounded_count
 from ..parsing import CodexStatus
 from . import _base
-from ._base import ProbeFailure, _format_reset_time, _is_headless, register
+from ._base import ProbeFailure, _format_reset_time, _is_headless, _source_reset_instant, register
 from ._codex_helpers import (
     _classify_codex_windows,
     _codex_percent_left,
@@ -47,19 +48,22 @@ class CodexHttpProvider:
         tokens = data.get("tokens") or {}
         self._access_token = tokens.get("access_token", "")
         self._refresh_token = tokens.get("refresh_token", "")
-        self._account_id = tokens.get("account_id", "")
+        account_id = tokens.get("account_id")
+        self._account_id = account_id.strip() if isinstance(account_id, str) else ""
         if not self._access_token:
             raise FileNotFoundError("Codex auth.json missing tokens.access_token")
 
     def _request_usage(self) -> dict[str, Any]:
+        headers = {
+            "Authorization": f"Bearer {self._access_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        if self._account_id:
+            headers["Account-Id"] = self._account_id
         return _base._http_json(
             self._USAGE_URL,
-            headers={
-                "Authorization": f"Bearer {self._access_token}",
-                "Account-Id": self._account_id,
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
 
     def _refresh_tokens(self) -> bool:
@@ -148,7 +152,27 @@ class CodexHttpProvider:
                         raise ProbeFailure(str(expired), str(retry_exc)) from retry_exc
                     raise
 
-        raw_text = json.dumps(payload, indent=2, sort_keys=True)
+        # The final successful response alone supplies the in-memory candidate.
+        # Neither a paid-credit balance nor a failed response may supply it.
+        user_id = payload.get("user_id") if isinstance(payload, dict) else None
+        reset_credits = (
+            payload.get("rate_limit_reset_credits") if isinstance(payload, dict) else None
+        )
+        count = (
+            bounded_count(reset_credits.get("available_count"))
+            if isinstance(reset_credits, dict)
+            else None
+        )
+        banked_candidate = (
+            BankedCandidate(
+                count=count,
+                user_id=user_id.strip(),
+                account_id=self._account_id or None,
+                observed_at=datetime.now(timezone.utc),
+            )
+            if count is not None and isinstance(user_id, str) and user_id.strip()
+            else None
+        )
 
         five_hour_percent_left: float | None = None
         weekly_percent_left: float | None = None
@@ -203,7 +227,31 @@ class CodexHttpProvider:
             spark_five_hour_percent_left=spark_five_hour_percent_left,
             spark_five_hour_reset=spark_five_hour_reset,
             credits=credits,
-            raw_text=raw_text,
+            raw_text="",
+            banked_candidate=banked_candidate,
+            source_reset_instants={
+                key: instant
+                for key, instant in (
+                    (
+                        "five_hour_reset",
+                        _source_reset_instant(
+                            five_hour_win.get("reset_at") if five_hour_win else None
+                        ),
+                    ),
+                    (
+                        "weekly_reset",
+                        _source_reset_instant(weekly_win.get("reset_at") if weekly_win else None),
+                    ),
+                    (
+                        "spark_five_hour_reset",
+                        _source_reset_instant(
+                            spark_five_hour_win.get("reset_at") if spark_five_hour_win else None
+                        ),
+                    ),
+                    ("spark_weekly_reset", _source_reset_instant(spark_reset_at)),
+                )
+                if instant is not None
+            },
         )
 
     def close(self) -> None:

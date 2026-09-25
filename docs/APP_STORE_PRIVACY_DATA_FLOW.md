@@ -14,6 +14,8 @@ Store Connect action was taken.
 | --- | --- | --- |
 | Terminal -> provider APIs | Provider quota/usage responses; local OAuth credentials or cached cookies are used for authentication | Read-only quota observation. `gradus/snapshot.py` projects only the `SAFE_DATA_KEYS` usage/reset allowlist. Credentials and raw responses are not projected. |
 | Terminal -> local state | Credential-free `.state/snapshot*.json`; credential-free, date-partitioned history | The latest snapshot feeds GradusMac. History stores safe usage observations and fixed provenance only. |
+| Codex usage GET -> local banked sidecar | Bounded manual-reset count, random generation UUID, and two observation timestamps in `banked-observation-v1.json` | Separate 0600 source/installed public sidecar, written only after v2 read-back and history append. Neither identity nor Keychain key enters the sidecar, v1/v2, or history. The Mac/mobile publication path for this new value is a later feature phase and is not represented as shipped here. |
+| Mac file Keychain -> isolated local helper | Random per-install HMAC key; Codex usage user ID and optional authenticated account ID arrive through private stdin | Noninteractive background access disables SecurityAgent before item operations. Only a keyed digest, random generation, and typed retry state remain in a mode-specific private 0600 cache. No identity or key is returned to the producer. |
 | GradusMac -> CloudKit | One `ProviderStatus` record per provider in private container `iCloud.com.zerodelta.gradus`, zone `GradusZone` | Explicit “Enable iCloud Sync” opt-in. `app/GradusKit/Sources/GradusKit/CloudKitMapping.swift` is the authoritative field map. |
 | CloudKit -> GradusiOS | Private-database record reads and zone-change notifications | Populate the dashboard and its offline last-synced cache. iOS does not write `CKRecord` values. |
 | CloudKit subscriptions | Zone-sync subscription and optional warning query subscription | Wake iOS to refresh; the warning subscription is removed when notifications are disabled. |
@@ -40,6 +42,11 @@ flow that requests record deletion.
   time-to-live for a still-valid credential cache.
 - The latest snapshots are replaced atomically. Credential-free Python history
   is pruned to the most recent seven days (`HISTORY_RETENTION_DAYS = 7`).
+- The banked sidecar is atomically replaced after successful history. A failed
+  bundled-agent cycle restores a valid prior sidecar or removes a newly created
+  one. The private digest/generation cache has no current automatic deletion
+  workflow; switching observed identity rotates the generation. Without an
+  optional account ID, identical usage user IDs cannot be distinguished.
 - GradusiOS stores the last-synced provider payload and change token in its
   Application Support directory. The cache has a `clear()` operation and is
   cleared when the zone is deleted/not found; there is no user-facing “delete
