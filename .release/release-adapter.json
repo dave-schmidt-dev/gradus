@@ -45,6 +45,11 @@
       "name": "LOGNAME",
       "required": true,
       "source": "caller"
+    },
+    {
+      "name": "GRADUS_STATIC_BASE",
+      "required": true,
+      "source": "caller"
     }
   ],
   "registeredConsumers": [
