@@ -229,14 +229,12 @@ candidate_workspace_sweep_roots() {
 }
 
 sweep_stale_candidate_workspaces() {
-  # An EXIT trap never runs under SIGKILL, and for the whole build phase there
-  # is no EXIT trap installed at all, so a killed or crashed run always leaves
-  # its tree behind. Sweeping at create time is the half that survives those
-  # cases. The age cutoff is what makes it safe without a lock: a concurrent
-  # run's live workspace is minutes old and never in range.
+  # An EXIT trap never runs under SIGKILL, so a forcibly killed run can still
+  # leave its tree behind. Sweeping at create time bounds those cases. The age
+  # cutoff is what makes it safe without a lock: a concurrent run's live
+  # workspace is minutes old and never in range.
   #
-  # Count goes to stdout and per-entry detail to stderr, because the caller
-  # captures create_candidate_workspace's stdout as the workspace path.
+  # Per-entry detail goes to stderr so callers can keep sweep output quiet.
   local max_age="${GRADUS_CANDIDATE_WORKSPACE_MAX_AGE_SECONDS:-86400}"
   local now cutoff root entry birth swept=0
   now="$(date +%s)"
@@ -245,7 +243,13 @@ sweep_stale_candidate_workspaces() {
     [[ -d "$root" ]] || continue
     for entry in "$root"/gradus-ios-candidate.*; do
       [[ -d "$entry" ]] || continue
-      [[ "$entry" != "$CANDIDATE_WORKSPACE_DIR" ]] || continue
+      if [[ -n "${CANDIDATE_WORKSPACE_DIR:-}" ]]; then
+        [[ "$entry" != "$CANDIDATE_WORKSPACE_DIR" ]] || continue
+        # Caller spellings may differ by trailing slash or /tmp versus /private/tmp.
+        if [[ "$entry" -ef "$CANDIDATE_WORKSPACE_DIR" ]]; then
+          continue
+        fi
+      fi
       # Birth time, not mtime: a long build writes into the tree throughout,
       # so mtime would keep resetting and a genuinely stale workspace would
       # never age out.
@@ -279,10 +283,24 @@ cleanup_candidate_workspace() {
 
 create_candidate_workspace() {
   local project_root="$1" workspace rsync_bin
-  # Creating implies sweeping, so a run that never reaches its own cleanup
-  # still bounds how much the previous ones left behind.
-  sweep_stale_candidate_workspaces >/dev/null || true
-  workspace="${GRADUS_CANDIDATE_WORKSPACE:-$(mktemp -d "${TMPDIR:-/tmp}/gradus-ios-candidate.XXXXXX")}"
+  if [[ -n "${GRADUS_CANDIDATE_WORKSPACE:-}" ]]; then
+    workspace="$GRADUS_CANDIDATE_WORKSPACE"
+    CANDIDATE_WORKSPACE_DIR="$workspace"
+    CANDIDATE_WORKSPACE_OWNED=0
+    sweep_stale_candidate_workspaces >/dev/null || true
+  else
+    # Creating implies sweeping, so a run that never reaches its own cleanup
+    # still bounds how much the previous ones left behind. The helper mutates
+    # caller-shell state; do not invoke it in command substitution.
+    sweep_stale_candidate_workspaces >/dev/null || true
+    workspace="$(mktemp -d "${TMPDIR:-/tmp}/gradus-ios-candidate.XXXXXX")"
+    CANDIDATE_WORKSPACE_DIR="$workspace"
+    CANDIDATE_WORKSPACE_OWNED=1
+    trap 'cleanup_candidate_workspace' EXIT
+    trap 'cleanup_candidate_workspace; exit 130' INT
+    trap 'cleanup_candidate_workspace; exit 143' TERM
+    trap 'cleanup_candidate_workspace; exit 129' HUP
+  fi
   mkdir -p "$workspace"
   if [[ -x /opt/homebrew/bin/rsync ]]; then
     rsync_bin=/opt/homebrew/bin/rsync
@@ -297,7 +315,6 @@ create_candidate_workspace() {
     --exclude='.pytest_cache' --exclude='.cache' --exclude='.build' \
     --exclude='DerivedData' --exclude='__pycache__' \
     "$project_root/" "$workspace/project/"
-  printf '%s\n' "$workspace/project"
 }
 
 persist_identity_allocation() {
@@ -1650,19 +1667,9 @@ main() {
   expected_project_digest="$(snapshot_project_digest "$SCRIPT_DIR/project.yml")"
   echo "==> Validating producer evidence before candidate allocation"
   validate_producer_evidence_boundary "$evidence_path" "$expected_mac_build" "$expected_cloudkit_environment" "$source_revision" "$expected_project_digest"
-  candidate_root="$(create_candidate_workspace "$project_root")"
-  candidate_workspace="$(dirname "$candidate_root")"
-  CANDIDATE_WORKSPACE_DIR="$candidate_workspace"
-  # create_candidate_workspace runs inside a command substitution, so its
-  # subshell cannot record ownership or install a trap that outlives it --
-  # both have to happen here, in the caller.
-  if [[ -z "${GRADUS_CANDIDATE_WORKSPACE:-}" ]]; then
-    CANDIDATE_WORKSPACE_OWNED=1
-    trap 'cleanup_candidate_workspace' EXIT
-    trap 'cleanup_candidate_workspace; exit 130' INT
-    trap 'cleanup_candidate_workspace; exit 143' TERM
-    trap 'cleanup_candidate_workspace; exit 129' HUP
-  fi
+  create_candidate_workspace "$project_root"
+  candidate_workspace="$CANDIDATE_WORKSPACE_DIR"
+  candidate_root="$candidate_workspace/project"
   candidate_script_dir="$candidate_root/app"
   failure_hook allocation
 

@@ -906,7 +906,17 @@ codesign_line="$(awk '/codesign --force --sign/ {print NR; exit}' "$UPLOAD_SCRIP
 
 project_hash_before="$(sha256_file "$SCRIPT_DIR/project.yml")"
 source_hash_before="$(snapshot_source_digest "$(cd "$SCRIPT_DIR/.." && pwd)")"
-candidate_project="$(create_candidate_workspace "$(cd "$SCRIPT_DIR/.." && pwd)")/app/project.yml"
+candidate_copy_tmp="$TEST_ROOT/candidate-copy-tmp"
+candidate_copy_sweep="$TEST_ROOT/candidate-copy-sweep"
+candidate_copy_workspace="$TEST_ROOT/candidate-copy-workspace"
+mkdir -p "$candidate_copy_tmp" "$candidate_copy_sweep"
+(
+  TMPDIR="$candidate_copy_tmp" \
+  GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS="$candidate_copy_sweep" \
+  GRADUS_CANDIDATE_WORKSPACE="$candidate_copy_workspace" \
+    create_candidate_workspace "$(cd "$SCRIPT_DIR/.." && pwd)"
+)
+candidate_project="$candidate_copy_workspace/project/app/project.yml"
 bump_ios_build_number 99 "$candidate_project"
 [[ "$(sha256_file "$SCRIPT_DIR/project.yml")" == "$project_hash_before" ]] || {
   echo "FAIL: isolated candidate preparation changed checked-out project.yml" >&2
@@ -1814,6 +1824,65 @@ fresh_swept="$(
   exit 1
 }
 
+# Exercise lifecycle traps in separate shells. Each process gets its own
+# TMPDIR and sweep root so these cases cannot touch a real candidate workspace.
+lifecycle_source="$TEST_ROOT/workspace-lifecycle-source"
+mkdir -p "$lifecycle_source"
+printf 'fixture\n' >"$lifecycle_source/source.txt"
+run_candidate_workspace_lifecycle_case() {
+  local case_name="$1" behavior="$2" expected_status="$3"
+  local case_root="$TEST_ROOT/workspace-lifecycle-$case_name"
+  local case_tmp="$case_root/tmp" case_sweep="$case_root/sweep"
+  local case_status leftover
+  mkdir -p "$case_tmp" "$case_sweep"
+  set +e
+  TMPDIR="$case_tmp" \
+  GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS="$case_sweep" \
+    bash -c '
+      set -euo pipefail
+      source "$1"
+      behavior="$2"
+      project="$3"
+      if [[ "$behavior" == copy-failure ]]; then
+        create_candidate_workspace "$project/missing-source"
+      else
+        create_candidate_workspace "$project"
+      fi
+      [[ -d "$CANDIDATE_WORKSPACE_DIR/project" ]]
+      case "$behavior" in
+        build-failure) false ;;
+        INT|TERM) kill -s "$behavior" "$$"; sleep 10 ;;
+      esac
+    ' bash "$UPLOAD_SCRIPT" "$behavior" "$lifecycle_source" >"$case_root/output.log" 2>&1
+  case_status=$?
+  set -e
+  if [[ "$expected_status" == nonzero ]]; then
+    [[ "$case_status" -ne 0 ]] || {
+      echo "FAIL: workspace $case_name case unexpectedly succeeded" >&2
+      cat "$case_root/output.log" >&2
+      return 1
+    }
+  else
+    [[ "$case_status" -eq "$expected_status" ]] || {
+      echo "FAIL: workspace $case_name case exited $case_status, expected $expected_status" >&2
+      cat "$case_root/output.log" >&2
+      return 1
+    }
+  fi
+  leftover="$(find "$case_tmp" -mindepth 1 -maxdepth 1 -type d \
+    -name 'gradus-ios-candidate.*' -print -quit)"
+  [[ -z "$leftover" ]] || {
+    echo "FAIL: workspace $case_name case left '$leftover' behind" >&2
+    return 1
+  }
+}
+
+run_candidate_workspace_lifecycle_case normal-exit normal 0
+run_candidate_workspace_lifecycle_case copy-failure copy-failure nonzero
+run_candidate_workspace_lifecycle_case build-failure build-failure 1
+run_candidate_workspace_lifecycle_case interrupt INT 130
+run_candidate_workspace_lifecycle_case terminate TERM 143
+
 # Even past the cutoff, the sweep must never remove the workspace the current
 # run is building in.
 CANDIDATE_WORKSPACE_DIR="$sweep_root/gradus-ios-candidate.CCCCCC"
@@ -1826,6 +1895,34 @@ own_swept="$(
   echo "FAIL: sweep removed the workspace belonging to the current run" >&2
   exit 1
 }
+
+# A caller-supplied workspace may spell the same directory with a trailing
+# slash. Make it sweep-eligible and keep a root sentinel so recreation after
+# an accidental sweep cannot make this regression pass.
+override_sweep_root="$TEST_ROOT/override-sweep-root"
+override_sweep_tmp="$TEST_ROOT/override-sweep-tmp"
+override_source="$TEST_ROOT/override-source"
+override_workspace="$override_sweep_root/gradus-ios-candidate.SUPPLIED"
+mkdir -p "$override_sweep_root" "$override_sweep_tmp" "$override_source" "$override_workspace"
+printf 'preserve me\n' >"$override_workspace/sentinel.txt"
+printf 'tiny fixture\n' >"$override_source/source.txt"
+(
+  TMPDIR="$override_sweep_tmp" \
+  GRADUS_CANDIDATE_WORKSPACE_SWEEP_ROOTS="$override_sweep_root" \
+  GRADUS_CANDIDATE_WORKSPACE_MAX_AGE_SECONDS=-1 \
+  GRADUS_CANDIDATE_WORKSPACE="$override_workspace/" \
+    create_candidate_workspace "$override_source"
+  [[ "$CANDIDATE_WORKSPACE_DIR" == "$override_workspace/" \
+    && "$CANDIDATE_WORKSPACE_OWNED" -eq 0 ]] || {
+    echo "FAIL: supplied workspace override was not preserved" >&2
+    exit 1
+  }
+  [[ -f "$override_workspace/sentinel.txt" \
+    && -f "$override_workspace/project/source.txt" ]] || {
+    echo "FAIL: stale sweep removed or failed to copy into the supplied workspace" >&2
+    exit 1
+  }
+)
 
 # Ownership: a workspace this script created is removed, a caller-supplied one
 # via GRADUS_CANDIDATE_WORKSPACE never is.
