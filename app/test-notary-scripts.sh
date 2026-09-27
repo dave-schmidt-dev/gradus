@@ -6,6 +6,8 @@ set -euo pipefail
 umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gradus-notary-tests.XXXXXX")"
+# The sweep resolves TMPDIR physically; match that spelling in fake lsof.
+TEST_ROOT="$(cd -P "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="$TEST_ROOT/bin"
 FAKE_RUNTIME="$TEST_ROOT/runtime"
 STATUS_SCRIPT="$SCRIPT_DIR/notary-status.sh"
