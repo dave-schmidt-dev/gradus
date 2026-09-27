@@ -869,6 +869,7 @@ assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECO
   TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
   TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH="$gradus_mac_banked_fixture_path" \
   xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
@@ -898,6 +899,7 @@ assert_counting_leg "GradusMacUI" \
   "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env \
   GRADUS_DISABLE_PIPELINE=1 \
   xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusMac \
@@ -940,6 +942,7 @@ done
 assert_counting_leg "GradusCredentialBridge" env \
   TEST_RUNNER_GRADUS_BRIDGE_SOURCE_ROOT="$gradus_bridge_source_root" \
   xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusCredentialBridge \
@@ -949,6 +952,7 @@ assert_counting_leg "GradusCredentialBridge" env \
 
 echo "==> xcodebuild test — GradusRefreshAgent (platform=macOS)"
 assert_counting_leg "GradusRefreshAgent" xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusRefreshAgent \
@@ -971,6 +975,7 @@ done
 
 echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
@@ -981,6 +986,7 @@ assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
 
 echo "==> xcodebuild test — GradusiOS phone density snapshots (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOS-DensityPhone" xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
@@ -990,6 +996,7 @@ assert_counting_leg "GradusiOS-DensityPhone" xcodebuild test \
 
 echo "==> xcodebuild test — GradusiOS pad density snapshots ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOS-DensityPad" xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
@@ -999,6 +1006,7 @@ assert_counting_leg "GradusiOS-DensityPad" xcodebuild test \
 
 echo "==> xcodebuild test — GradusWidget (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusWidget" xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusWidget \
@@ -1017,6 +1025,7 @@ assert_counting_leg "GradusWidget" xcodebuild test \
 # separate gate line so that loss is visible if anyone deletes it.
 echo "==> xcodebuild test — GradusiOS UI tests ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOS-iPad" gate_ui_test_lock --label "GradusiOS UI tests ($ipad_udid)" xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \
@@ -1044,6 +1053,7 @@ reset_simulator_ui_session_for_iphone
 # Keep both simulator UI legs adjacent.
 echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
 assert_counting_leg "GradusiOSUI" gate_ui_test_lock --label "GradusiOSUITests" xcodebuild test \
+  -collect-test-diagnostics never \
   -project Gradus.xcodeproj \
   -derivedDataPath "$derived_data_dir" \
   -scheme GradusiOS \

@@ -977,6 +977,8 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
   automation against candidate-bound source. Physical-device acceptance remains
   a separate owner gate. Supply the commit preceding your changes, for example
   `GRADUS_STATIC_BASE=<base-commit> caffeinate -disu bash app/test-gate.sh`.
+  Routine Xcode test legs disable automatic diagnostic collection; failed-leg
+  command output remains available for targeted follow-up.
   The gate and walkthrough remove their created simulators on exit; pre-push sweeps abandoned Gradus gate devices.
   Static checks cover changed Swift files before app automation starts.
   For focused Mac image checks, run `bash app/test-mac-snapshots.sh`; its 13

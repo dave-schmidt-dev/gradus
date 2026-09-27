@@ -92,6 +92,10 @@ It runs, in order:
 5. `xcodebuild test -only-testing:GradusiOSUITests` on the pinned **iPad**
    simulator.
 
+Routine `xcodebuild test` legs pass `-collect-test-diagnostics never` to avoid
+Xcode's automatic diagnostic collection. Failed legs still preserve their
+command output under `.release-state/evidence/test-gate/` for targeted follow-up.
+
 Physical device acceptance requires adding and removing the small widget
 (`systemSmall`) on hardware to verify system timeline reload and widget lifecycle,
 as headless CI cannot fully substitute for system WidgetKit presentation.

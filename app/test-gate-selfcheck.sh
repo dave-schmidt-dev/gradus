@@ -24,6 +24,45 @@ expect_failure() {
   fi
 }
 
+validate_routine_test_diagnostics_policy() {
+  local gate_path="$1"
+  awk '
+    {
+      if (!active && $0 !~ /^[[:space:]]*#/ &&
+          $0 !~ /^[[:space:]]*echo([[:space:]]|$)/ &&
+          $0 ~ /(^|[[:space:]])xcodebuild test([[:space:]]|$)/) {
+        active = 1
+        has_policy = 0
+        start_line = NR
+      }
+      if (active) {
+        if ($0 ~ /(^|[[:space:]])-collect-test-diagnostics never([[:space:]]|$)/) {
+          has_policy = 1
+        }
+        if ($0 !~ /\\[[:space:]]*$/) {
+          invocation_count++
+          if (!has_policy) {
+            printf "missing -collect-test-diagnostics never for xcodebuild test at line %d\n", start_line > "/dev/stderr"
+            failed = 1
+          }
+          active = 0
+        }
+      }
+    }
+    END {
+      if (active) {
+        printf "unterminated xcodebuild test invocation at line %d\n", start_line > "/dev/stderr"
+        failed = 1
+      }
+      if (invocation_count == 0) {
+        print "no routine xcodebuild test invocations found" > "/dev/stderr"
+        failed = 1
+      }
+      exit failed
+    }
+  ' "$gate_path"
+}
+
 emit_report() {
   local reporter="$1"
   local count="$2"
@@ -65,6 +104,21 @@ fi
 source "$GATE_SCRIPT"
 validate_counting_leg_declarations || fail "live counting-leg declarations are invalid"
 validate_density_image_snapshot_selectors || fail "live density image snapshot selectors are invalid"
+validate_routine_test_diagnostics_policy "$GATE_SCRIPT" ||
+  fail "routine xcodebuild test invocations must disable automatic diagnostics"
+missing_diagnostics_gate="$diagnostic_test_root/missing-test-diagnostics.sh"
+if ! awk '
+  !removed && /^[[:space:]]*-collect-test-diagnostics never([[:space:]]|$)/ {
+    removed = 1
+    next
+  }
+  { print }
+  END { if (!removed) exit 1 }
+' "$GATE_SCRIPT" >"$missing_diagnostics_gate"; then
+  fail "could not create missing-diagnostics self-check fixture"
+elif validate_routine_test_diagnostics_policy "$missing_diagnostics_gate" 2>/dev/null; then
+  fail "diagnostics policy self-check accepted an invocation with the option removed"
+fi
 stale_gate_transcript="$TMPDIR/gradus-test-gate.stale"
 : >"$stale_gate_transcript"
 touch -t 202001010000 "$stale_gate_transcript"
