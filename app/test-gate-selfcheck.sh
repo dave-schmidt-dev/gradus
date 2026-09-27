@@ -820,7 +820,7 @@ validate_gradus_mac_ui_lock_contract() {
   local gate_path="$1" ui_leg_block
   ui_leg_block="$(sed -n '/assert_counting_leg "GradusMacUI"/,/-only-testing:GradusMacUITests/p' "$gate_path" |
     sed 's/[[:space:]]*\\$//' | tr '\n' ' ' | tr -s ' ')"
-  [[ "$ui_leg_block" == *'assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- bash -c '\''run_with_deadline "$@"'\'' gradus-mac-ui-leg "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env GRADUS_DISABLE_PIPELINE=1 xcodebuild test'* ]] || return 1
+  [[ "$ui_leg_block" == *'assert_counting_leg "GradusMacUI" "$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- bash -c '\''run_with_deadline "$@"'\'' gradus-mac-ui-leg "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env GRADUS_DISABLE_PIPELINE=1 '*"xcodebuild test"* ]] || return 1
   # Both names, because `run_with_deadline` calls the reporter: exporting only
   # the wrapper leaves the re-entered shell without it, and the one leg most
   # exposed to an outside TERM loses the explanation it exists to print.
@@ -829,6 +829,15 @@ validate_gradus_mac_ui_lock_contract() {
 
 validate_gradus_mac_ui_lock_contract "$GATE_SCRIPT" ||
   fail "GradusMacUI leg is not serialized by apple-ui-test-lock outside its deadline"
+
+validate_gradus_mac_ui_screenshot_opt_out() {
+  local gate_path="$1" ui_leg_block
+  ui_leg_block="$(sed -n '/assert_counting_leg "GradusMacUI"/,/-only-testing:GradusMacUITests/p' "$gate_path")"
+  [[ "$ui_leg_block" == *'TEST_RUNNER_GRADUS_MAC_UI_SCREENSHOTS=0'* ]]
+}
+
+validate_gradus_mac_ui_screenshot_opt_out "$GATE_SCRIPT" ||
+  fail "GradusMacUI routine leg must disable screenshot attachments"
 
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-mac-ui-lock-contract.XXXXXX")"
 sed 's/"\$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- //' "$GATE_SCRIPT" > "$mutated_gate"
@@ -843,6 +852,10 @@ sed 's/^export -f run_with_deadline report_external_termination$/export -f run_w
   "$GATE_SCRIPT" > "$mutated_gate"
 if validate_gradus_mac_ui_lock_contract "$mutated_gate"; then
   fail "GradusMacUI lock contract accepted an export missing the termination reporter"
+fi
+sed 's/TEST_RUNNER_GRADUS_MAC_UI_SCREENSHOTS=0 //' "$GATE_SCRIPT" > "$mutated_gate"
+if validate_gradus_mac_ui_screenshot_opt_out "$mutated_gate"; then
+  fail "GradusMacUI opt-out contract accepted a leg missing screenshot opt-out"
 fi
 rm -f "$mutated_gate"
 

@@ -898,6 +898,7 @@ assert_counting_leg "GradusMacUI" \
   bash -c 'run_with_deadline "$@"' gradus-mac-ui-leg \
   "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env \
   GRADUS_DISABLE_PIPELINE=1 \
+  TEST_RUNNER_GRADUS_MAC_UI_SCREENSHOTS=0 \
   xcodebuild test \
   -collect-test-diagnostics never \
   -project Gradus.xcodeproj \

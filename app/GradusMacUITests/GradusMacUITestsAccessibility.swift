@@ -104,6 +104,11 @@ extension GradusMacUITests {
         title: String,
         name: String
     ) throws {
+        guard ProcessInfo.processInfo.environment["GRADUS_MAC_UI_SCREENSHOTS"] == "1" else {
+            print("STATUS GradusMacAXHarness screenshot capture skipped (GRADUS_MAC_UI_SCREENSHOTS is not 1)")
+            return
+        }
+
         let windowID = try waitForWindowID(
             window: window, ownerPID: ownerPID, title: title, timeout: 1
         )

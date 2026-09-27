@@ -95,6 +95,9 @@ It runs, in order:
 Routine `xcodebuild test` legs pass `-collect-test-diagnostics never` to avoid
 Xcode's automatic diagnostic collection. Failed legs still preserve their
 command output under `.release-state/evidence/test-gate/` for targeted follow-up.
+The routine GradusMac UI leg also skips window screenshot attachments. Set
+`TEST_RUNNER_GRADUS_MAC_UI_SCREENSHOTS=1` on a direct `xcodebuild test` invocation
+to opt into those screenshots.
 
 Physical device acceptance requires adding and removing the small widget
 (`systemSmall`) on hardware to verify system timeline reload and widget lifecycle,
