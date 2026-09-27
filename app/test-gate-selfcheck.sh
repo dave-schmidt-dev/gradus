@@ -65,6 +65,114 @@ fi
 source "$GATE_SCRIPT"
 validate_counting_leg_declarations || fail "live counting-leg declarations are invalid"
 validate_density_image_snapshot_selectors || fail "live density image snapshot selectors are invalid"
+stale_gate_transcript="$TMPDIR/gradus-test-gate.stale"
+: >"$stale_gate_transcript"
+touch -t 202001010000 "$stale_gate_transcript"
+sweep_stale_test_gate_transcripts
+[[ ! -e "$stale_gate_transcript" ]] || fail "gate did not sweep its stale transcript at startup"
+if command -v lsof >/dev/null 2>&1; then
+  open_gate_transcript="$TMPDIR/gradus-test-gate.open"
+  : >"$open_gate_transcript"
+  touch -t 202001010000 "$open_gate_transcript"
+  exec 9<"$open_gate_transcript"
+  sweep_stale_test_gate_transcripts
+  [[ -e "$open_gate_transcript" ]] || fail "gate swept an open stale transcript"
+  exec 9<&-
+  sweep_stale_test_gate_transcripts
+  [[ ! -e "$open_gate_transcript" ]] || fail "gate did not sweep a closed stale transcript"
+fi
+
+age_test_tree() {
+  find "$1" -depth -exec touch -t 202001010000 {} +
+}
+
+write_workspace_info() {
+  local directory="$1" workspace="$2"
+  mkdir -p "$directory/Index.noindex"
+  cat >"$directory/info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>WorkspacePath</key><string>$workspace</string></dict></plist>
+PLIST
+}
+
+if command -v lsof >/dev/null 2>&1; then
+  gate_derived_tmp="$diagnostic_test_root/gate-derived-sweep"
+  gate_derived_stale="$gate_derived_tmp/gate-derived-data.gradus-stale"
+  gate_derived_recent="$gate_derived_tmp/gate-derived-data.gradus-recent"
+  gate_derived_open="$gate_derived_tmp/gate-derived-data.gradus-open"
+  gate_derived_other="$gate_derived_tmp/gate-derived-data.other-project"
+  other_project="$diagnostic_test_root/Other.xcodeproj"
+  mkdir -p "$gate_derived_tmp" "$other_project"
+  write_workspace_info "$gate_derived_stale" "$GATE_SCRIPT_DIR/Gradus.xcodeproj"
+  write_workspace_info "$gate_derived_recent" "$GATE_SCRIPT_DIR/Gradus.xcodeproj"
+  write_workspace_info "$gate_derived_open" "$GATE_SCRIPT_DIR/Gradus.xcodeproj"
+  write_workspace_info "$gate_derived_other" "$other_project"
+  : >"$gate_derived_stale/Index.noindex/old.db"
+  : >"$gate_derived_recent/Index.noindex/old.db"
+  : >"$gate_derived_open/Index.noindex/open.db"
+  : >"$gate_derived_other/Index.noindex/old.db"
+  age_test_tree "$gate_derived_stale"
+  age_test_tree "$gate_derived_recent"
+  age_test_tree "$gate_derived_open"
+  age_test_tree "$gate_derived_other"
+  : >"$gate_derived_recent/Index.noindex/recent.db"
+  exec 17<"$gate_derived_open/Index.noindex/open.db"
+  prior_tmpdir="$TMPDIR"
+  TMPDIR="$gate_derived_tmp"
+  export TMPDIR
+  sweep_stale_gate_derived_data
+  [[ ! -e "$gate_derived_stale" ]] || fail "gate kept stale Gradus-owned DerivedData"
+  [[ -d "$gate_derived_recent" ]] || fail "gate swept DerivedData with a recent descendant"
+  [[ -d "$gate_derived_open" ]] || fail "gate swept open DerivedData"
+  [[ -d "$gate_derived_other" ]] || fail "gate swept DerivedData for another workspace"
+  exec 17<&-
+  sweep_stale_gate_derived_data
+  [[ ! -e "$gate_derived_open" ]] || fail "gate kept closed stale Gradus-owned DerivedData"
+  TMPDIR="$prior_tmpdir"
+  export TMPDIR
+fi
+
+capture_script="$SCRIPT_DIR/scripts/capture-walkthrough.sh"
+capture_sweep_definition="$(sed -n '/^sweep_stale_walkthrough_directories() {/,/^}/p' "$capture_script")"
+[[ -n "$capture_sweep_definition" ]] || fail "walkthrough stale-sweep helper is missing"
+eval "$capture_sweep_definition"
+status() { printf '==> %s\n' "$*" >&2; }
+if command -v lsof >/dev/null 2>&1; then
+  walkthrough_tmp="$diagnostic_test_root/walkthrough-sweep"
+  walkthrough_stale="$walkthrough_tmp/gradus-walkthrough.stale"
+  walkthrough_recent="$walkthrough_tmp/gradus-walkthrough.recent"
+  walkthrough_open="$walkthrough_tmp/gradus-walkthrough.open"
+  mkdir -p "$walkthrough_stale/nested" "$walkthrough_recent/nested" "$walkthrough_open/nested"
+  : >"$walkthrough_stale/nested/old.db"
+  : >"$walkthrough_recent/nested/old.db"
+  : >"$walkthrough_open/nested/open.db"
+  age_test_tree "$walkthrough_stale"
+  age_test_tree "$walkthrough_recent"
+  age_test_tree "$walkthrough_open"
+  : >"$walkthrough_recent/nested/recent.db"
+  exec 18<"$walkthrough_open/nested/open.db"
+  prior_tmpdir="$TMPDIR"
+  TMPDIR="$walkthrough_tmp"
+  export TMPDIR
+  sweep_stale_walkthrough_directories
+  [[ ! -e "$walkthrough_stale" ]] || fail "walkthrough kept stale temp output"
+  [[ -d "$walkthrough_recent" ]] || fail "walkthrough swept a recent descendant"
+  [[ -d "$walkthrough_open" ]] || fail "walkthrough swept open temp output"
+  exec 18<&-
+  sweep_stale_walkthrough_directories
+  [[ ! -e "$walkthrough_open" ]] || fail "walkthrough kept closed stale temp output"
+  TMPDIR="$prior_tmpdir"
+  export TMPDIR
+
+  capture_self_test_tmp="$diagnostic_test_root/capture-self-test-tmp"
+  capture_self_test_stale="$capture_self_test_tmp/gradus-walkthrough.stale"
+  mkdir -p "$capture_self_test_stale"
+  touch -t 202001010000 "$capture_self_test_stale"
+  TMPDIR="$capture_self_test_tmp" bash "$capture_script" --self-test >/dev/null
+  [[ -d "$capture_self_test_stale" ]] || fail "walkthrough self-test ran the startup stale sweep"
+  TMPDIR="$prior_tmpdir"
+  export TMPDIR
+fi
 
 macos_pin_fixture="$diagnostic_test_root/macos-version"
 printf '26.6.2\n' >"$macos_pin_fixture"
@@ -101,6 +209,73 @@ diagnostic_path="$(find "$GRADUS_TEST_GATE_DIAGNOSTIC_ROOT" -type f -name 'swift
   fail "failed counting leg did not preserve its diagnostic output"
 [[ -z "$diagnostic_path" || "$(/usr/bin/stat -f '%Lp' "$diagnostic_path")" == "600" ]] ||
   fail "counting-leg diagnostic output was not written 0600"
+
+# If the evidence destination itself is unusable, neither the original
+# transcript nor a partial diagnostic copy may remain in TMPDIR.
+unpreservable_diagnostic_root="$diagnostic_test_root/not-a-directory"
+: >"$unpreservable_diagnostic_root"
+unpreservable_tmp="$diagnostic_test_root/unpreservable-tmp"
+mkdir -p "$unpreservable_tmp"
+if ! (
+  TMPDIR="$unpreservable_tmp"
+  GRADUS_TEST_GATE_DIAGNOSTIC_ROOT="$unpreservable_diagnostic_root"
+  export TMPDIR GRADUS_TEST_GATE_DIAGNOSTIC_ROOT
+  emit_unpreservable_diagnostic_fixture() {
+    printf 'credential-free unpreserved failure detail\n'
+    return 37
+  }
+  if assert_counting_leg "swift-testing" emit_unpreservable_diagnostic_fixture; then
+    exit 1
+  fi
+  leftover_gate_transcript="$(find "$TMPDIR" -maxdepth 1 -type f -name 'gradus-test-gate.*' -print -quit)"
+  [[ -z "$leftover_gate_transcript" ]]
+); then
+  fail "counting-leg transcript remained after diagnostic preservation failed"
+fi
+
+# A TERM during an active counting leg must remove its temporary transcript.
+signal_test_root="$diagnostic_test_root/signal-cleanup"
+signal_tmp="$signal_test_root/tmp"
+signal_marker="$signal_test_root/entered"
+mkdir -p "$signal_tmp"
+(
+  TMPDIR="$signal_tmp"
+  export TMPDIR
+  # shellcheck source=./test-gate.sh
+  source "$GATE_SCRIPT"
+  COUNTING_LEG_NAMES=("signal-cleanup")
+  COUNTING_LEG_REPORTERS=("pytest")
+  COUNTING_LEG_MINIMUMS=(1)
+  COUNTING_LEG_SOURCES=("selfcheck-fixture")
+  wait_for_signal_fixture() {
+    printf '%s\n' "$(/bin/sh -c 'printf "%s\n" "$PPID"')" >"$signal_marker"
+    exec sleep 5
+  }
+  assert_counting_leg "signal-cleanup" wait_for_signal_fixture
+) >"$signal_test_root/output" 2>&1 &
+signal_pid=$!
+signal_attempt=0
+while [[ ! -s "$signal_marker" ]] && ((signal_attempt < 500)); do
+  sleep 0.01
+  ((signal_attempt += 1))
+done
+if [[ -s "$signal_marker" ]]; then
+  signal_child_pid="$(<"$signal_marker")"
+  [[ "$signal_child_pid" =~ ^[1-9][0-9]*$ ]] || fail "signal fixture did not publish its child PID"
+  kill -TERM "$signal_pid" 2>/dev/null || true
+  kill -TERM "$signal_child_pid" 2>/dev/null || true
+  set +e
+  wait "$signal_pid"
+  signal_status=$?
+  set -e
+  [[ "$signal_status" -eq 143 ]] || fail "counting leg did not exit 143 after TERM"
+else
+  kill -TERM "$signal_pid" 2>/dev/null || true
+  wait "$signal_pid" 2>/dev/null || true
+  fail "signal cleanup fixture did not enter its counting leg"
+fi
+signal_transcript="$(find "$signal_tmp" -maxdepth 1 -type f -name 'gradus-test-gate.*' -print -quit)"
+[[ -z "$signal_transcript" ]] || fail "counting leg leaked its transcript after TERM"
 
 # Regression: the executable gate cd's into app/ before a failed leg is
 # preserved. The default diagnostic root must remain the repository root even
@@ -798,6 +973,40 @@ for ((index = 0; index < leg_count; index++)); do
       fail "declared hermetic source has no counted invocation: $source_name"
   fi
 done
+
+[[ -f "$SCRIPT_DIR/GradusKit/Tests/GradusKitTests/WidgetSnapshotTests.swift" ]] ||
+  fail "widget temporary-directory hygiene tests are missing from the SwiftPM test target"
+grep -Fq 'widgetTempDirectoryIsRemovedAfterSuccessAndThrow' \
+  "$SCRIPT_DIR/GradusKit/Tests/GradusKitTests/WidgetSnapshotTests.swift" ||
+  fail "widget temp cleanup success/failure regression is missing"
+grep -Fq 'cacheTempStoreIsRemovedAfterSuccessAndThrow' \
+  "$SCRIPT_DIR/GradusKit/Tests/GradusKitTests/LocalCacheStoreTests.swift" ||
+  fail "cache temp cleanup success/failure regression is missing"
+grep -Fq 'run_gradus_kit_tests' "$GATE_SCRIPT" ||
+  fail "SwiftPM temp hygiene tests are not run by the canonical gate"
+[[ "${COUNTING_LEG_MINIMUMS[0]}" -ge 127 ]] ||
+  fail "SwiftPM runner floor does not cover the added temp hygiene regressions"
+
+grep -Fq -- '-derivedDataPath "$DERIVED_DATA_PATH"' "$SCRIPT_DIR/install-mac-local.sh" ||
+  fail "local Mac archive does not pin DerivedData"
+grep -Fq -- '-derivedDataPath "$derived_data_path"' "$SCRIPT_DIR/notarize-mac.sh" ||
+  fail "notarization archive does not pin DerivedData"
+[[ "$(grep -Fc -- '-derivedDataPath "$capture_root/DerivedData"' "$SCRIPT_DIR/scripts/capture-walkthrough.sh")" -eq 2 ]] ||
+  fail "walkthrough Xcode tests do not share a disposable DerivedData directory"
+for mac_archive_script in "$SCRIPT_DIR/install-mac-local.sh" "$SCRIPT_DIR/notarize-mac.sh"; do
+  grep -Fq 'sweep_stale_mac_derived_data "$STAGE_BASE"' "$mac_archive_script" ||
+    fail "Mac archive script does not sweep its stale DerivedData prefix: $mac_archive_script"
+  grep -Fq 'lsof -t +D "$candidate"' "$mac_archive_script" ||
+    fail "Mac archive stale sweep does not fail closed on open paths: $mac_archive_script"
+  grep -Fq 'find "$candidate" -mmin -1440' "$mac_archive_script" ||
+    fail "Mac archive stale sweep lacks the recursive 24-hour age guard: $mac_archive_script"
+done
+grep -Fq 'sweep_stale_gate_derived_data' "$GATE_SCRIPT" ||
+  fail "test gate does not sweep its scoped stale DerivedData prefix"
+grep -Fq 'plutil -extract WorkspacePath' "$GATE_SCRIPT" ||
+  fail "test gate stale sweep does not validate its owning workspace"
+grep -Fq 'sweep_stale_walkthrough_directories' "$SCRIPT_DIR/scripts/capture-walkthrough.sh" ||
+  fail "walkthrough capture does not sweep its stale temp prefix"
 
 # UI target-level legs remain explicit rather than hidden in broad schemes.
 grep -Fq -- "-only-testing:GradusiOSUITests" "$GATE_SCRIPT" ||

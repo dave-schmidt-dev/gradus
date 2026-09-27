@@ -272,6 +272,7 @@ rationale: Every new behavior has a test at the lowest layer that proves it; new
   GradusMacCloud is the sole GradusMacUITests runner.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
+  Swift widget and cache test fixtures remove their temp dirs on both pass and failure exit paths.
 
 ### INV-12 — iPhone and iPad show the same information and ship in the same release
 area: ["app/GradusiOS/**", "app/GradusiOSTests/**", "app/GradusiOSUITests/**", "app/test-gate.sh", "CHANGELOG.md"]

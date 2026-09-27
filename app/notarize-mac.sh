@@ -129,6 +129,7 @@ PROJECT_SHA256="$(/usr/bin/shasum -a 256 project.yml | /usr/bin/awk '{print $1}'
 ZIP_PATH="build/Gradus.app.zip"
 submit_output=""
 acceptance_output=""
+derived_data_path=""
 
 cleanup() {
   if [[ -n "$submit_output" ]]; then
@@ -137,6 +138,9 @@ cleanup() {
   if [[ -n "$acceptance_output" ]]; then
     rm -f "$acceptance_output" 2>/dev/null || true
   fi
+  if [[ -n "$derived_data_path" ]]; then
+    rm -rf "$derived_data_path" 2>/dev/null || true
+  fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -144,6 +148,41 @@ trap 'exit 130' INT TERM
 progress() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$1" >&2
 }
+
+sweep_stale_mac_derived_data() {
+  local tmp_root="$1" uid candidate owner recent foreign open_output open_status
+  [[ -d "$tmp_root" && ! -L "$tmp_root" ]] || return 0
+  tmp_root="$(cd -P "$tmp_root" && pwd -P)" || return 0
+  command -v lsof >/dev/null 2>&1 || return 0
+  uid="$(id -u)" || return 0
+  while IFS= read -r -d '' candidate; do
+    [[ ! -L "$candidate" ]] || continue
+    owner="$(stat -f '%u' "$candidate" 2>/dev/null)" || continue
+    [[ "$owner" == "$uid" ]] || continue
+    if recent="$(find "$candidate" -mmin -1440 -print -quit 2>/dev/null)"; then
+      [[ -z "$recent" ]] || continue
+    else
+      continue
+    fi
+    if foreign="$(find "$candidate" ! -uid "$uid" -print -quit 2>/dev/null)"; then
+      [[ -z "$foreign" ]] || continue
+    else
+      continue
+    fi
+    printf '==> Checking stale DerivedData for open files: %s\n' "$candidate" >&2
+    if open_output="$(lsof -t +D "$candidate" 2>&1)"; then
+      continue
+    else
+      open_status=$?
+    fi
+    [[ "$open_status" -eq 1 && -z "$open_output" ]] || continue
+    if rm -rf "$candidate" 2>/dev/null; then
+      printf '    Removed stale DerivedData: %s\n' "$candidate" >&2
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -name 'gradus-mac-derived-data.*' -print0 2>/dev/null)
+}
+
+sweep_stale_mac_derived_data "$STAGE_BASE"
 
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
   echo "FAIL: required tool is missing: $PYTHON" >&2
@@ -185,12 +224,14 @@ xcodegen generate
 # this script just insisted on and then fail inside Xcode's embed phase.
 rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$ZIP_PATH" "$MANIFEST_PATH"
 mkdir -p build
+derived_data_path="$(mktemp -d "$STAGE_BASE/gradus-mac-derived-data.XXXXXX")"
 
 echo "==> Archiving GradusMac"
 xcodebuild archive \
   -project Gradus.xcodeproj \
   -scheme GradusMac \
   -archivePath "$ARCHIVE_PATH" \
+  -derivedDataPath "$derived_data_path" \
   -destination "generic/platform=macOS" \
   GRADUS_SOURCE_REVISION="$SOURCE_REVISION" \
   GRADUS_PROJECT_SHA256="$PROJECT_SHA256"

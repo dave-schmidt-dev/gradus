@@ -129,6 +129,7 @@ PREVIOUS_APP="$INSTALL_DIR/.$PRODUCT_NAME.app.previous"
 
 dry_run=0
 skip_build=0
+DERIVED_DATA_PATH=""
 
 while (($# > 0)); do
   case "$1" in
@@ -150,6 +151,39 @@ progress() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$1" >&2
 }
 
+sweep_stale_mac_derived_data() {
+  local tmp_root="$1" uid candidate owner recent foreign open_output open_status
+  [[ -d "$tmp_root" && ! -L "$tmp_root" ]] || return 0
+  tmp_root="$(cd -P "$tmp_root" && pwd -P)" || return 0
+  command -v lsof >/dev/null 2>&1 || return 0
+  uid="$(id -u)" || return 0
+  while IFS= read -r -d '' candidate; do
+    [[ ! -L "$candidate" ]] || continue
+    owner="$(stat -f '%u' "$candidate" 2>/dev/null)" || continue
+    [[ "$owner" == "$uid" ]] || continue
+    if recent="$(find "$candidate" -mmin -1440 -print -quit 2>/dev/null)"; then
+      [[ -z "$recent" ]] || continue
+    else
+      continue
+    fi
+    if foreign="$(find "$candidate" ! -uid "$uid" -print -quit 2>/dev/null)"; then
+      [[ -z "$foreign" ]] || continue
+    else
+      continue
+    fi
+    printf '==> Checking stale DerivedData for open files: %s\n' "$candidate" >&2
+    if open_output="$(lsof -t +D "$candidate" 2>&1)"; then
+      continue
+    else
+      open_status=$?
+    fi
+    [[ "$open_status" -eq 1 && -z "$open_output" ]] || continue
+    if rm -rf "$candidate" 2>/dev/null; then
+      printf '    Removed stale DerivedData: %s\n' "$candidate" >&2
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -name 'gradus-mac-derived-data.*' -print0 2>/dev/null)
+}
+
 # Leaves the destination as it was found. The staged copy is disposable; the
 # previous bundle is not, so it is only ever removed once its replacement is
 # verified and in place.
@@ -162,6 +196,9 @@ restore_previous() {
     else
       rm -rf "$PREVIOUS_APP" 2>/dev/null || true
     fi
+  fi
+  if [[ -n "$DERIVED_DATA_PATH" ]]; then
+    rm -rf "$DERIVED_DATA_PATH" 2>/dev/null || true
   fi
 }
 trap restore_previous EXIT
@@ -226,6 +263,8 @@ verify_provenance() {
   fi
 }
 
+sweep_stale_mac_derived_data "$STAGE_BASE"
+
 if ((skip_build == 0)); then
   # The frozen Python runtime is a prerequisite, not a build step: producing it
   # downloads a pinned CPython package. Xcode hard-fails the Release embed
@@ -240,6 +279,7 @@ if ((skip_build == 0)); then
   fi
 
   echo "==> Regenerating Xcode project from project.yml"
+  DERIVED_DATA_PATH="$(mktemp -d "$STAGE_BASE/gradus-mac-derived-data.XXXXXX")"
   xcodegen generate
 
   # Deliberately not `rm -rf "$BUILD_DIR"`: it holds gradus-runtime, the
@@ -253,6 +293,7 @@ if ((skip_build == 0)); then
     -project Gradus.xcodeproj \
     -scheme "$SCHEME_NAME" \
     -archivePath "$ARCHIVE_PATH" \
+    -derivedDataPath "$DERIVED_DATA_PATH" \
     -destination "generic/platform=macOS" \
     GRADUS_SOURCE_REVISION="$SOURCE_REVISION" \
     GRADUS_PROJECT_SHA256="$PROJECT_SHA256"

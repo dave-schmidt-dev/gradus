@@ -87,7 +87,7 @@ COUNTING_LEG_REPORTERS=(
 # `GradusMacUI` (index 3) is pinned exactly, like index 6: it is a fixed
 # scenario set (menu, required-iCloud, quit lifecycle), so losing one is a lost
 # behavior rather than ordinary churn.
-COUNTING_LEG_MINIMUMS=(125 1200 235 4 16 20 232 3 9 20 16 6 5 5 15 5 5 4 31 16)
+COUNTING_LEG_MINIMUMS=(127 1200 235 4 16 20 232 3 9 20 16 6 5 5 15 5 5 4 31 16)
 COUNTING_LEG_SOURCES=(
   "GradusKit"
   "../tests"
@@ -262,7 +262,68 @@ persist_test_gate_diagnostic() {
     return 0
   fi
   echo "FAIL: could not preserve diagnostic output for counting leg '$leg_name'" >&2
+  [[ ! -d "$diagnostic_root" ]] || rm -f "$diagnostic_path"
+  rm -f "$output_file"
   return 1
+}
+
+sweep_stale_test_gate_transcripts() {
+  local tmp_root="${TMPDIR:-/tmp}" transcript lsof_result lsof_status
+  [[ -d "$tmp_root" ]] || return 0
+  command -v lsof >/dev/null 2>&1 || return 0
+  while IFS= read -r -d '' transcript; do
+    if lsof_result="$(lsof -t "$transcript" 2>&1)"; then
+      continue
+    else
+      lsof_status=$?
+    fi
+    # lsof exits 1 with no output when no process has the exact path open.
+    # Any warning, other status, or open descriptor makes the sweep skip it.
+    [[ "$lsof_status" -eq 1 && -z "$lsof_result" ]] || continue
+    rm -f "$transcript" 2>/dev/null || true
+  done < <(find "$tmp_root" -maxdepth 1 -type f -name 'gradus-test-gate.*' -mmin +1440 -print0 2>/dev/null)
+}
+
+sweep_stale_gate_derived_data() {
+  local tmp_root="${TMPDIR:-/tmp}" uid app_root candidate owner info_plist workspace_path
+  local recent foreign open_output open_status
+  [[ -d "$tmp_root" && ! -L "$tmp_root" ]] || return 0
+  tmp_root="$(cd -P "$tmp_root" && pwd -P)" || return 0
+  command -v lsof >/dev/null 2>&1 || return 0
+  app_root="$(cd -P "$GATE_SCRIPT_DIR" && pwd -P)" || return 0
+  uid="$(id -u)" || return 0
+  while IFS= read -r -d '' candidate; do
+    [[ ! -L "$candidate" ]] || continue
+    owner="$(stat -f '%u' "$candidate" 2>/dev/null)" || continue
+    [[ "$owner" == "$uid" ]] || continue
+    info_plist="$candidate/info.plist"
+    [[ -f "$info_plist" && ! -L "$info_plist" ]] || continue
+    workspace_path="$(/usr/bin/plutil -extract WorkspacePath raw -o - "$info_plist" 2>/dev/null)" || continue
+    [[ -d "$workspace_path" ]] || continue
+    workspace_path="$(cd -P "$workspace_path" && pwd -P)" || continue
+    [[ "$workspace_path" == "$app_root/Gradus.xcodeproj" || \
+       "$workspace_path" == "$app_root/Gradus.xcodeproj/project.xcworkspace" ]] || continue
+    if recent="$(find "$candidate" -mmin -1440 -print -quit 2>/dev/null)"; then
+      [[ -z "$recent" ]] || continue
+    else
+      continue
+    fi
+    if foreign="$(find "$candidate" ! -uid "$uid" -print -quit 2>/dev/null)"; then
+      [[ -z "$foreign" ]] || continue
+    else
+      continue
+    fi
+    echo "==> Checking stale gate DerivedData for open files: $candidate" >&2
+    if open_output="$(lsof -t +D "$candidate" 2>&1)"; then
+      continue
+    else
+      open_status=$?
+    fi
+    [[ "$open_status" -eq 1 && -z "$open_output" ]] || continue
+    if rm -rf "$candidate" 2>/dev/null; then
+      echo "    Removed stale gate DerivedData: $candidate" >&2
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -name 'gate-derived-data.*' -print0 2>/dev/null)
 }
 
 assert_counting_leg() {
@@ -283,6 +344,11 @@ assert_counting_leg() {
 
   local output_file
   output_file="$(mktemp "${TMPDIR:-/tmp}/gradus-test-gate.XXXXXX")"
+  local prior_int_trap prior_term_trap
+  prior_int_trap="$(trap -p INT || true)"
+  prior_term_trap="$(trap -p TERM || true)"
+  trap 'rm -f "$output_file"; exit 130' INT
+  trap 'rm -f "$output_file"; exit 143' TERM
   local command_status=0
   if "$@" 2>&1 | tee "$output_file"; then
     :
@@ -292,6 +358,8 @@ assert_counting_leg() {
   if [[ "$command_status" -ne 0 ]]; then
     echo "FAIL: counting leg '$leg_name' exited with status $command_status" >&2
     persist_test_gate_diagnostic "$leg_name" "$output_file" || true
+    if [[ -n "$prior_int_trap" ]]; then eval "$prior_int_trap"; else trap - INT; fi
+    if [[ -n "$prior_term_trap" ]]; then eval "$prior_term_trap"; else trap - TERM; fi
     return "$command_status"
   fi
 
@@ -348,14 +416,20 @@ assert_counting_leg() {
   if [[ -z "$reported_count" ]]; then
     echo "FAIL: counting leg '$leg_name' reported no recognized test count" >&2
     persist_test_gate_diagnostic "$leg_name" "$output_file" || true
+    if [[ -n "$prior_int_trap" ]]; then eval "$prior_int_trap"; else trap - INT; fi
+    if [[ -n "$prior_term_trap" ]]; then eval "$prior_term_trap"; else trap - TERM; fi
     return 1
   fi
   if [[ "$reported_count" -lt "${COUNTING_LEG_MINIMUMS[leg_index]}" ]]; then
     echo "FAIL: counting leg '$leg_name' reported $reported_count tests; minimum is ${COUNTING_LEG_MINIMUMS[leg_index]}" >&2
     persist_test_gate_diagnostic "$leg_name" "$output_file" || true
+    if [[ -n "$prior_int_trap" ]]; then eval "$prior_int_trap"; else trap - INT; fi
+    if [[ -n "$prior_term_trap" ]]; then eval "$prior_term_trap"; else trap - TERM; fi
     return 1
   fi
   rm -f "$output_file"
+  if [[ -n "$prior_int_trap" ]]; then eval "$prior_int_trap"; else trap - INT; fi
+  if [[ -n "$prior_term_trap" ]]; then eval "$prior_term_trap"; else trap - TERM; fi
 
   COUNTING_LEG_RUN_COUNT=$((COUNTING_LEG_RUN_COUNT + 1))
   echo "    $leg_name: $reported_count tests reported (minimum ${COUNTING_LEG_MINIMUMS[leg_index]}). OK."
@@ -512,6 +586,9 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
+
+sweep_stale_test_gate_transcripts
+sweep_stale_gate_derived_data
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 

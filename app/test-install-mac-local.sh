@@ -23,6 +23,7 @@ umask 077
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_SCRIPT="$SCRIPT_DIR/install-mac-local.sh"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gradus-install-tests.XXXXXX")"
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
 FAKE_BIN="$TEST_ROOT/bin"
 SOURCE_PLIST="$SCRIPT_DIR/GradusMac/Info.plist"
 DEBUG_PLIST="$SCRIPT_DIR/GradusMac/Info-Debug.plist"
@@ -167,27 +168,45 @@ cat >"$FAKE_BIN/xcodebuild" <<'FAKE'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$*" >>"${FAKE_RUNTIME:?}/xcodebuild-calls"
-if [[ "${1:-}" == "-exportArchive" ]]; then
-  export_path=""
-  while (($# > 0)); do
-    if [[ "$1" == "-exportPath" ]]; then
-      export_path="$2"
-    fi
-    shift
-  done
+action="${1:-}"
+derived_data_path=""
+archive_path=""
+export_path=""
+while (($# > 0)); do
+  case "$1" in
+    -derivedDataPath) derived_data_path="$2"; shift 2 ;;
+    -archivePath) archive_path="$2"; shift 2 ;;
+    -exportPath) export_path="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ -n "$derived_data_path" ]]; then
+  mkdir -p "$derived_data_path"
+  printf '%s\n' "$derived_data_path" >>"${FAKE_RUNTIME:?}/derived-data-paths"
+fi
+if [[ "$action" == "-exportArchive" ]]; then
   mkdir -p "$export_path/Gradus.app/Contents/MacOS"
   : >"$export_path/Gradus.app/Contents/Info.plist"
 fi
-if [[ "${1:-}" == "archive" ]]; then
-  archive_path=""
-  while (($# > 0)); do
-    if [[ "$1" == "-archivePath" ]]; then archive_path="$2"; fi
-    shift
-  done
+if [[ "$action" == "archive" ]]; then
   mkdir -p "$archive_path/Products/Applications/Gradus.app/Contents"
   : >"$archive_path/Products/Applications/Gradus.app/Contents/Info.plist"
 fi
-exit 0
+exit "${FAKE_XCODEBUILD_EXIT:-0}"
+FAKE
+
+cat >"$FAKE_BIN/lsof" <<'FAKE'
+#!/usr/bin/env bash
+candidate=""
+while (($# > 0)); do
+  if [[ "$1" == "+D" ]]; then shift; candidate="${1:-}"; fi
+  shift || true
+done
+if [[ -n "${FAKE_DERIVED_DATA_OPEN_PATH:-}" && "$candidate" == "$FAKE_DERIVED_DATA_OPEN_PATH" ]]; then
+  echo 12345
+  exit 0
+fi
+exit 1
 FAKE
 
 cat >"$FAKE_BIN/plistbuddy" <<'FAKE'
@@ -268,11 +287,12 @@ setup_case() {
   INSTALL_DIR="$CASE_ROOT/Applications"
   BUILD_DIR="$CASE_ROOT/build"
   FAKE_RUNTIME="$CASE_ROOT/runtime"
-  mkdir -p "$INSTALL_DIR" "$BUILD_DIR" "$FAKE_RUNTIME"
+  CASE_TMPDIR="$CASE_ROOT/tmp"
+  mkdir -p "$INSTALL_DIR" "$BUILD_DIR" "$FAKE_RUNTIME" "$CASE_TMPDIR"
   cp "$INSTALL_SCRIPT" "$CASE_INSTALL_SCRIPT"
   cp "$SCRIPT_DIR/project.yml" "$CASE_ROOT/project.yml"
   chmod 700 "$CASE_INSTALL_SCRIPT"
-  export INSTALL_DIR BUILD_DIR FAKE_RUNTIME
+  export INSTALL_DIR BUILD_DIR FAKE_RUNTIME CASE_TMPDIR
   export GRADUS_SOURCE_REVISION=fixture-revision
   FAKE_PROJECT_SHA256="$(/usr/bin/shasum -a 256 "$CASE_ROOT/project.yml" | /usr/bin/awk '{print $1}')"
   export FAKE_PROJECT_SHA256
@@ -292,6 +312,8 @@ setup_case() {
   unset FAKE_ARCHIVE_SOURCE_REVISION FAKE_ARCHIVE_PROJECT_SHA256
   unset FAKE_INCOMING_SOURCE_REVISION FAKE_INCOMING_PROJECT_SHA256
   unset FAKE_OPEN_EXIT FAKE_PKILL_EXIT FAKE_BUNDLE_IDENTIFIER
+  unset FAKE_XCODEBUILD_EXIT
+  unset FAKE_DERIVED_DATA_OPEN_PATH
   # The legacy-job notice must not depend on whether this developer's own Mac
   # still runs local.gradus-snapshot.
   export GRADUS_LEGACY_HOME="$CASE_ROOT/legacy-home"
@@ -324,7 +346,8 @@ make_bundle() {
 
 run_install() {
   set +e
-  PATH="$FAKE_BIN:$PATH" "$CASE_INSTALL_SCRIPT" "$@" >"$FAKE_RUNTIME/stdout" 2>"$FAKE_RUNTIME/stderr"
+  PATH="$FAKE_BIN:$PATH" TMPDIR="$CASE_TMPDIR" \
+    "$CASE_INSTALL_SCRIPT" "$@" >"$FAKE_RUNTIME/stdout" 2>"$FAKE_RUNTIME/stderr"
   local status=$?
   set -e
   return "$status"
@@ -583,12 +606,50 @@ end
 
 begin "the build path archives and exports before installing"
 setup_case build-path
+stale_derived="$CASE_TMPDIR/gradus-mac-derived-data.stale"
+recent_derived="$CASE_TMPDIR/gradus-mac-derived-data.recent"
+open_derived="$CASE_TMPDIR/gradus-mac-derived-data.open"
+mkdir -p "$stale_derived/SourcePackages" "$recent_derived/SourcePackages" "$open_derived/SourcePackages"
+: >"$stale_derived/SourcePackages/cache.db"
+: >"$recent_derived/SourcePackages/cache.db"
+: >"$open_derived/SourcePackages/cache.db"
+touch -t 202001010000 "$stale_derived/SourcePackages/cache.db" "$stale_derived/SourcePackages" "$stale_derived"
+touch -t 202001010000 "$recent_derived/SourcePackages" "$recent_derived"
+touch -t 202001010000 "$open_derived/SourcePackages/cache.db" "$open_derived/SourcePackages" "$open_derived"
+exec 8<"$open_derived/SourcePackages/cache.db"
+FAKE_DERIVED_DATA_OPEN_PATH="$open_derived"
+export FAKE_DERIVED_DATA_OPEN_PATH
 run_install || fail "full build path exited non-zero"
+unset FAKE_DERIVED_DATA_OPEN_PATH
 [[ -s "$FAKE_RUNTIME/xcodegen-calls" ]] || fail "project was not regenerated"
 grep -q "archive" "$FAKE_RUNTIME/xcodebuild-calls" || fail "no archive step"
 grep -q "exportArchive" "$FAKE_RUNTIME/xcodebuild-calls" || fail "no export step"
+derived_data_path="$(<"$FAKE_RUNTIME/derived-data-paths")"
+[[ "$derived_data_path" == "$CASE_TMPDIR"/gradus-mac-derived-data.* ]] ||
+  fail "archive did not use a run-scoped temporary DerivedData path"
+[[ ! -e "$derived_data_path" ]] || fail "successful archive leaked its DerivedData directory"
+[[ ! -e "$stale_derived" ]] || fail "startup sweep kept an old, closed DerivedData directory"
+[[ -d "$recent_derived" ]] || fail "startup sweep removed a DerivedData directory with recent contents"
+[[ -d "$open_derived" ]] || fail "startup sweep removed an open DerivedData directory"
+exec 8<&-
+run_install --skip-build || fail "skip-build install failed while checking the stale sweep"
+[[ ! -e "$open_derived" ]] || fail "startup sweep kept a closed stale DerivedData directory"
 [[ -d "$INSTALL_DIR/Gradus.app" ]] || fail "build path did not install"
 no_staging_artifacts
+end
+
+begin "archive failure removes run-scoped DerivedData"
+setup_case archive-fails
+FAKE_XCODEBUILD_EXIT=42
+export FAKE_XCODEBUILD_EXIT
+status=0
+run_install || status=$?
+unset FAKE_XCODEBUILD_EXIT
+expect_eq "$status" "42" "archive failure status is preserved"
+derived_data_path="$(<"$FAKE_RUNTIME/derived-data-paths")"
+[[ "$derived_data_path" == "$CASE_TMPDIR"/gradus-mac-derived-data.* ]] ||
+  fail "failed archive did not use a run-scoped temporary DerivedData path"
+[[ ! -e "$derived_data_path" ]] || fail "failed archive leaked its DerivedData directory"
 end
 
 begin "leaves a detected legacy job installed, untouched, and named"
@@ -675,8 +736,10 @@ run_install --skip-build || fail "install exited non-zero"
 # shapes -- vanished and still-present-under-build -- have to go.
 grep -Fq "unregister $CASE_ROOT/deleted-by-a-gate/Gradus.app" "$FAKE_RUNTIME/lsregister-calls" ||
   fail "a registration for a bundle that no longer exists was kept"
-grep -Fq "unregister $BUILD_DIR/quickcheck/Gradus.app" "$FAKE_RUNTIME/lsregister-calls" ||
+if ! grep -Fq "unregister $BUILD_DIR/quickcheck/Gradus.app" "$FAKE_RUNTIME/lsregister-calls"; then
+  cat "$FAKE_RUNTIME/lsregister-calls" >&2
   fail "a build-root bundle stayed registered"
+fi
 grep -Fq "unregister $INSTALL_DIR/Gradus.app" "$FAKE_RUNTIME/lsregister-calls" &&
   fail "the installer unregistered the app it had just installed"
 grep -Fq "unregister $CASE_ROOT/Other.app" "$FAKE_RUNTIME/lsregister-calls" &&
@@ -702,10 +765,9 @@ make_bundle "$GRADUS_EXPORT_ROOT/export/Gradus.app"
 mkdir -p "$CASE_ROOT/Elsewhere" "$CASE_ROOT/tmp"
 make_bundle "$CASE_ROOT/Elsewhere/Gradus.app"
 write_lsregister_dump "com.zerodelta.gradus.mac|$CASE_ROOT/Elsewhere/Gradus.app"
-# The case root itself normally sits under TMPDIR, which is a build root, so
-# without this the fixture would be disposable for the right reason and prove
-# nothing about the branch under test.
-TMPDIR="$CASE_ROOT/tmp" run_install --skip-build || fail "install exited non-zero"
+# The installer receives `$CASE_TMPDIR` as its per-case temporary root, so this
+# claimant stays outside every disposable build root and proves the refusal.
+run_install --skip-build || fail "install exited non-zero"
 grep -Fq "unregister $CASE_ROOT/Elsewhere/Gradus.app" "$FAKE_RUNTIME/lsregister-calls" &&
   fail "a bundle outside every build root was swept without being named"
 grep -Fq "outside every build root" "$FAKE_RUNTIME/stderr" ||

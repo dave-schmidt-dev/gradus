@@ -58,6 +58,39 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 status() { echo "==> $*" >&2; }
 usage() { echo "usage: capture-walkthrough.sh --output-dir DIRECTORY | --self-test" >&2; }
 
+sweep_stale_walkthrough_directories() {
+  local tmp_root="${TMPDIR:-/tmp}" uid candidate owner recent foreign open_output open_status
+  [[ -d "$tmp_root" && ! -L "$tmp_root" ]] || return 0
+  tmp_root="$(cd -P "$tmp_root" && pwd -P)" || return 0
+  command -v lsof >/dev/null 2>&1 || return 0
+  uid="$(id -u)" || return 0
+  while IFS= read -r -d '' candidate; do
+    [[ ! -L "$candidate" ]] || continue
+    owner="$(stat -f '%u' "$candidate" 2>/dev/null)" || continue
+    [[ "$owner" == "$uid" ]] || continue
+    if recent="$(find "$candidate" -mmin -1440 -print -quit 2>/dev/null)"; then
+      [[ -z "$recent" ]] || continue
+    else
+      continue
+    fi
+    if foreign="$(find "$candidate" ! -uid "$uid" -print -quit 2>/dev/null)"; then
+      [[ -z "$foreign" ]] || continue
+    else
+      continue
+    fi
+    status "Checking stale walkthrough directory for open files: $candidate"
+    if open_output="$(lsof -t +D "$candidate" 2>&1)"; then
+      continue
+    else
+      open_status=$?
+    fi
+    [[ "$open_status" -eq 1 && -z "$open_output" ]] || continue
+    if rm -rf "$candidate" 2>/dev/null; then
+      status "Removed stale walkthrough directory: $candidate"
+    fi
+  done < <(find "$tmp_root" -mindepth 1 -maxdepth 1 -type d -name 'gradus-walkthrough.*' -print0 2>/dev/null)
+}
+
 active_capture_pid=""
 active_clone_snapshot=""
 active_clone_source_name=""
@@ -188,6 +221,7 @@ start_at="${GRADUS_WALKTHROUGH_START_AT:-1}"
 [[ "$start_at" =~ ^[1-9][0-9]*$ ]] || fail "diagnostic start index must be a positive integer"
 mkdir -p "$output_dir"
 output_dir="$(cd -- "$output_dir" && pwd -P)"
+sweep_stale_walkthrough_directories
 capture_root="$(mktemp -d "${TMPDIR:-/tmp}/gradus-walkthrough.XXXXXX")"
 simulator_udid=""
 cleanup() {
@@ -246,6 +280,7 @@ run_widget_render() {
       xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
         -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
         -maximum-parallel-testing-workers 1 \
+        -derivedDataPath "$capture_root/DerivedData" \
         "-only-testing:GradusWidgetTests/exportWalkthroughWidgetStates()" \
         -resultBundlePath "$capture_root/widget-render.xcresult" CODE_SIGNING_ALLOWED=NO
 }
@@ -259,6 +294,7 @@ run_route_capture() {
       xcodebuild test -project "$PROJECT_PATH" -scheme GradusiOS \
         -destination "platform=iOS Simulator,id=$simulator_udid" -parallel-testing-enabled NO \
         -maximum-parallel-testing-workers 1 \
+        -derivedDataPath "$capture_root/DerivedData" \
         -only-testing:GradusiOSUITests/WalkthroughCaptureXCUITests/testWalkthroughCapture \
         -resultBundlePath "$capture_root/$fixture.xcresult" CODE_SIGNING_ALLOWED=NO
 }

@@ -148,22 +148,31 @@ FAKE
 cat >"$FAKE_BIN/xcodebuild" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
+action="${1:-}"
 if [[ -n "${FAKE_NOTARY_RUNTIME:-}" ]]; then
   printf '%s\n' "$*" >>"$FAKE_NOTARY_RUNTIME/xcodebuild-calls"
 fi
 export_path=""
+archive_path=""
+derived_data_path=""
 while (($#)); do
-  if [[ "$1" == "-exportPath" ]]; then
-    export_path="$2"
-    shift 2
-  else
-    shift
-  fi
+  case "$1" in
+    -exportPath) export_path="$2"; shift 2 ;;
+    -archivePath) archive_path="$2"; shift 2 ;;
+    -derivedDataPath) derived_data_path="$2"; shift 2 ;;
+    *) shift ;;
+  esac
 done
+if [[ -n "$derived_data_path" ]]; then
+  mkdir -p "$derived_data_path"
+  printf '%s\n' "$derived_data_path" >"$FAKE_NOTARY_RUNTIME/derived-data-path"
+fi
+[[ "$action" != "archive" || "${FAKE_XCODEBUILD_EXIT:-0}" -eq 0 ]] || exit "$FAKE_XCODEBUILD_EXIT"
 if [[ -n "$export_path" ]]; then
   mkdir -p "$export_path/Gradus.app/Contents"
   printf 'fixture\n' >"$export_path/Gradus.app/Contents/Info.plist"
 fi
+exit "${FAKE_XCODEBUILD_EXIT:-0}"
 FAKE
 
 for command_name in xattr codesign spctl; do
@@ -200,6 +209,20 @@ cat >"$FAKE_BIN/verify-stub" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_NOTARY_RUNTIME:?}/verify-calls"
 exit "${FAKE_VERIFY_EXIT:-0}"
+FAKE
+
+cat >"$FAKE_BIN/lsof" <<'FAKE'
+#!/usr/bin/env bash
+candidate=""
+while (($# > 0)); do
+  if [[ "$1" == "+D" ]]; then shift; candidate="${1:-}"; fi
+  shift || true
+done
+if [[ -n "${FAKE_DERIVED_DATA_OPEN_PATH:-}" && "$candidate" == "$FAKE_DERIVED_DATA_OPEN_PATH" ]]; then
+  echo 12345
+  exit 0
+fi
+exit 1
 FAKE
 
 chmod 700 "$FAKE_BIN"/*
@@ -751,7 +774,8 @@ chmod 700 "$release_app/notarize-mac.sh" "$release_app/notary-status.sh"
 # The frozen runtime is a prerequisite of archiving, not something the release
 # path builds: producing it downloads a pinned CPython.
 mkdir -p "$release_app/build/gradus-runtime/dist/GradusRuntime.app/Contents/MacOS"
-rm -f "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/sign-calls" "$FAKE_RUNTIME/verify-calls"
+rm -f "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/sign-calls" "$FAKE_RUNTIME/verify-calls" \
+  "$FAKE_RUNTIME/derived-data-path"
 set +e
 (
   cd "$release_app"
@@ -779,6 +803,15 @@ assert_contains "./notary-status.sh --watch --id 22222222-2222-2222-2222-2222222
 assert_contains "Direct Apple status: Accepted. OK." "release independently confirms exact acceptance"
 assert_contains "Requesting Apple notarization history for release preflight" "release preflight emits timestamped request progress"
 assert_contains "Requesting live Apple notarization info for submission 22222222-2222-2222-2222-222222222222" "independent acceptance query emits ID-specific progress"
+derived_data_path="$(<"$FAKE_RUNTIME/derived-data-path")"
+[[ "$derived_data_path" == "$TEST_ROOT/release-tmp"/gradus-mac-derived-data.* ]] || {
+  echo "FAIL: notarization archive did not use run-scoped temporary DerivedData" >&2
+  exit 1
+}
+[[ ! -e "$derived_data_path" ]] || {
+  echo "FAIL: successful notarization workflow leaked its DerivedData directory" >&2
+  exit 1
+}
 grep -q -- '--no-wait' "$FAKE_RUNTIME/submit-args" || {
   echo "FAIL: release submission did not explicitly use --no-wait" >&2
   exit 1
@@ -944,7 +977,8 @@ run_release_audit_case() {
   # submit-args included: these files are shared across cases, and a leftover
   # from an earlier submission would read as "this case uploaded".
   rm -f "$FAKE_RUNTIME/stapled" "$FAKE_RUNTIME/info-count" "$FAKE_RUNTIME/submit-args" \
-    "$FAKE_RUNTIME/sign-calls" "$FAKE_RUNTIME/verify-calls" "$FAKE_RUNTIME/xcodebuild-calls"
+    "$FAKE_RUNTIME/sign-calls" "$FAKE_RUNTIME/verify-calls" "$FAKE_RUNTIME/xcodebuild-calls" \
+    "$FAKE_RUNTIME/derived-data-path"
   set +e
   last_output="$(
     cd "$case_app" && \
@@ -998,6 +1032,51 @@ assert_contains "no submission was recorded" "submit failure reports that no led
 }
 assert_no_release_downstream "submit failure"
 echo "  ✓ submit failure leaves no ledger, poll, staple, package, or temp artifact"
+((tests_run += 1))
+
+export FAKE_XCODEBUILD_EXIT=42
+derived_sweep_tmp="$TEST_ROOT/audit-tmp-derived-data-failure"
+stale_derived="$derived_sweep_tmp/gradus-mac-derived-data.stale"
+recent_derived="$derived_sweep_tmp/gradus-mac-derived-data.recent"
+open_derived="$derived_sweep_tmp/gradus-mac-derived-data.open"
+mkdir -p "$stale_derived/SourcePackages" "$recent_derived/SourcePackages" "$open_derived/SourcePackages"
+: >"$stale_derived/SourcePackages/cache.db"
+: >"$recent_derived/SourcePackages/cache.db"
+: >"$open_derived/SourcePackages/cache.db"
+touch -t 202001010000 "$stale_derived/SourcePackages/cache.db" "$stale_derived/SourcePackages" "$stale_derived"
+touch -t 202001010000 "$recent_derived/SourcePackages" "$recent_derived"
+touch -t 202001010000 "$open_derived/SourcePackages/cache.db" "$open_derived/SourcePackages" "$open_derived"
+exec 9<"$open_derived/SourcePackages/cache.db"
+FAKE_DERIVED_DATA_OPEN_PATH="$open_derived"
+export FAKE_DERIVED_DATA_OPEN_PATH
+run_release_audit_case accepted derived-data-failure
+unset FAKE_XCODEBUILD_EXIT
+unset FAKE_DERIVED_DATA_OPEN_PATH
+exec 9<&-
+assert_status 42 "archive failure preserves the Xcode exit status"
+derived_data_path="$(<"$FAKE_RUNTIME/derived-data-path")"
+[[ "$derived_data_path" == "$audit_tmp"/gradus-mac-derived-data.* ]] || {
+  echo "FAIL: failed notarization archive did not use run-scoped temporary DerivedData" >&2
+  exit 1
+}
+[[ ! -e "$derived_data_path" ]] || {
+  echo "FAIL: failed notarization archive leaked its DerivedData directory" >&2
+  exit 1
+}
+[[ ! -e "$stale_derived" ]] || {
+  echo "FAIL: stale DerivedData with no recent contents was not swept" >&2
+  exit 1
+}
+[[ -d "$recent_derived" ]] || {
+  echo "FAIL: DerivedData with a recent descendant was swept" >&2
+  exit 1
+}
+[[ -d "$open_derived" ]] || {
+  echo "FAIL: open DerivedData was swept" >&2
+  exit 1
+}
+assert_no_release_downstream "failed archive"
+echo "  ✓ archive failure removes its temporary DerivedData"
 ((tests_run += 1))
 
 run_release_audit_case submit-no-id

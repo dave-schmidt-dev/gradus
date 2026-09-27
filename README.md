@@ -690,6 +690,12 @@ test gate hermetic; the installer is the explicit post-test handoff that
 replaces and relaunches the local app. Do this automatically unless David asks
 to defer installation.
 
+**Build artifact lifetimes.** `app/build/` retains the frozen runtime, credential
+bridge build, Mac archive, and bundle manifest for later runs. The signed export
+stays under `$TMPDIR/gradus-mac-export` so `--skip-build` can reuse it. Mac archive,
+test gate, and walkthrough builds place DerivedData in run-scoped temp directories
+and remove those directories when the command exits.
+
 ```bash
 cd app
 ./test-install-mac-local.sh   # hermetic; every Xcode/system tool faked, never touches /Applications

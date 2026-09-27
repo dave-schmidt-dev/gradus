@@ -2,11 +2,47 @@ import Foundation
 @testable import GradusKit
 import Testing
 
-private func makeTempDirectory() -> URL {
+private func sweepStaleWidgetTestDirectories() {
+    let manager = FileManager.default
+    let cutoff = Date().addingTimeInterval(-24 * 60 * 60)
+    guard let directories = try? manager.contentsOfDirectory(
+        at: manager.temporaryDirectory,
+        includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]
+    ) else { return }
+    for directory in directories where directory.lastPathComponent.hasPrefix("gradus-widget-snapshot-tests-") {
+        guard let values = try? directory.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey]),
+              values.isDirectory == true, let modifiedAt = values.contentModificationDate, modifiedAt < cutoff,
+              let descendants = manager.enumerator(
+                  at: directory, includingPropertiesForKeys: [.contentModificationDateKey]
+              )
+        else { continue }
+        let staleContents = descendants.allObjects.allSatisfy { item in
+            guard let url = item as? URL else { return false }
+            return (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                .map { $0 < cutoff } == true
+        }
+        if staleContents {
+            try? manager.removeItem(at: directory)
+        }
+    }
+}
+
+private func makeTempDirectory() throws -> URL {
+    sweepStaleWidgetTestDirectories()
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("gradus-widget-snapshot-tests-\(UUID().uuidString)", isDirectory: true)
-    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
+}
+
+private func removeTempDirectory(_ directory: URL) {
+    try? FileManager.default.removeItem(at: directory)
+}
+
+private func withTempDirectory<T>(_ body: (URL) throws -> T) throws -> T {
+    let directory = try makeTempDirectory()
+    defer { removeTempDirectory(directory) }
+    return try body(directory)
 }
 
 private let referenceDate = Date(timeIntervalSince1970: 1_785_000_000)
@@ -36,6 +72,23 @@ private func makeSampleSnapshot(
 }
 
 struct InjectedWriteError: Error, Equatable {}
+private enum InjectedTemporaryDirectoryError: Error { case expected }
+@Test func widgetTempDirectoryIsRemovedAfterSuccessAndThrow() throws {
+    let successfulDirectory = try withTempDirectory { directory in
+        #expect(FileManager.default.fileExists(atPath: directory.path))
+        return directory
+    }
+    #expect(!FileManager.default.fileExists(atPath: successfulDirectory.path))
+    var throwingDirectory: URL?
+    #expect(throws: InjectedTemporaryDirectoryError.self) {
+        try withTempDirectory { directory in
+            throwingDirectory = directory
+            throw InjectedTemporaryDirectoryError.expected
+        }
+    }
+    let removedDirectory = try #require(throwingDirectory)
+    #expect(!FileManager.default.fileExists(atPath: removedDirectory.path))
+}
 
 // MARK: - Round Trip & Schema Enforcement
 
@@ -85,23 +138,24 @@ struct InjectedWriteError: Error, Equatable {}
 
 // MARK: - Store Persistence, Replacement, and Injected Failure
 
-@Test func freshStoreReturnsNilWhenFileIsMissing() {
-    let dir = makeTempDirectory()
+@Test func freshStoreReturnsNilWhenFileIsMissing() throws {
+    let dir = try makeTempDirectory()
+    defer { removeTempDirectory(dir) }
     let store = FileWidgetSnapshotStore(directory: dir)
-
     #expect(store.loadSnapshot() == nil)
 }
 
 @Test func storeReturnsNilWhenFileIsMalformed() throws {
-    let dir = makeTempDirectory()
+    let dir = try makeTempDirectory()
+    defer { removeTempDirectory(dir) }
     let store = FileWidgetSnapshotStore(directory: dir)
     try Data("corrupted json payload".utf8).write(to: store.snapshotFileURL)
-
     #expect(store.loadSnapshot() == nil)
 }
 
 @Test func storeReturnsNilForUnknownSchemaVersion() throws {
-    let dir = makeTempDirectory()
+    let dir = try makeTempDirectory()
+    defer { removeTempDirectory(dir) }
     let store = FileWidgetSnapshotStore(directory: dir)
     let invalidSchemaJSON = """
     {
@@ -113,43 +167,39 @@ struct InjectedWriteError: Error, Equatable {}
     }
     """
     try invalidSchemaJSON.data(using: .utf8)?.write(to: store.snapshotFileURL)
-
     #expect(store.loadSnapshot() == nil)
 }
 
 @Test func storeSavesAndLoadsSnapshot() throws {
-    let dir = makeTempDirectory()
+    let dir = try makeTempDirectory()
+    defer { removeTempDirectory(dir) }
     let store = FileWidgetSnapshotStore(directory: dir)
     let snapshot = makeSampleSnapshot(providerName: "claude", providerDisplayName: "Claude")
-
     try store.saveSnapshot(snapshot)
     #expect(store.loadSnapshot() == snapshot)
 }
 
 @Test func storeReplacementReadsNewlyCommittedSnapshot() throws {
-    let dir = makeTempDirectory()
+    let dir = try makeTempDirectory()
+    defer { removeTempDirectory(dir) }
     let store = FileWidgetSnapshotStore(directory: dir)
-
     let snapshot1 = makeSampleSnapshot(providerName: "codex", providerDisplayName: "Codex")
     try store.saveSnapshot(snapshot1)
     #expect(store.loadSnapshot() == snapshot1)
-
     let snapshot2 = makeSampleSnapshot(providerName: "claude", providerDisplayName: "Claude")
     try store.saveSnapshot(snapshot2)
     #expect(store.loadSnapshot() == snapshot2)
 }
 
 @Test func injectedWriteFailurePreservesPriorFileBytesAndDecodedSnapshot() throws {
-    let dir = makeTempDirectory()
+    let dir = try makeTempDirectory()
+    defer { removeTempDirectory(dir) }
     let store = FileWidgetSnapshotStore(directory: dir)
-
     let initialSnapshot = makeSampleSnapshot(providerName: "codex", providerDisplayName: "Codex")
     try store.saveSnapshot(initialSnapshot)
-
     let initialBytes = try Data(contentsOf: store.snapshotFileURL)
     #expect(!initialBytes.isEmpty)
     #expect(store.loadSnapshot() == initialSnapshot)
-
     // Create a store pointing to the exact same file URL with an injected failing writer.
     let failingStore = FileWidgetSnapshotStore(fileURL: store.snapshotFileURL) { _, _ in
         throw InjectedWriteError()
@@ -167,13 +217,12 @@ struct InjectedWriteError: Error, Equatable {}
 }
 
 @Test func storeClearRemovesPersistedSnapshot() throws {
-    let dir = makeTempDirectory()
+    let dir = try makeTempDirectory()
+    defer { removeTempDirectory(dir) }
     let store = FileWidgetSnapshotStore(directory: dir)
     let snapshot = makeSampleSnapshot()
-
     try store.saveSnapshot(snapshot)
     #expect(store.loadSnapshot() == snapshot)
-
     try store.clear()
     #expect(store.loadSnapshot() == nil)
 }
@@ -299,58 +348,4 @@ struct InjectedWriteError: Error, Equatable {}
 @Test func selectorReturnsNilForEmptyInput() {
     #expect(selectWidgetWindow(from: []) == nil)
     #expect(selectWidgetWindowSnapshot(from: []) == nil)
-}
-
-// MARK: - Window Label Normalization & Projection
-
-@Test func normalizedWidgetWindowLabelNormalizesCanonicalIDsAndRetainsUnknown() {
-    #expect(normalizedWidgetWindowLabel(for: "five_hour") == "5 Hour")
-    #expect(normalizedWidgetWindowLabel(for: "weekly") == "Weekly")
-    #expect(normalizedWidgetWindowLabel(for: "monthly") == "Monthly")
-    #expect(normalizedWidgetWindowLabel(for: "premium") == "Monthly")
-    #expect(normalizedWidgetWindowLabel(for: "ac") == "Auto")
-    #expect(normalizedWidgetWindowLabel(for: "ap") == "API")
-    #expect(normalizedWidgetWindowLabel(for: "cg5") == "5 Hour (CG)")
-    #expect(normalizedWidgetWindowLabel(for: "cg1w") == "Weekly (CG)")
-    #expect(normalizedWidgetWindowLabel(for: "cg_five_hour") == "5 Hour (CG)")
-    #expect(normalizedWidgetWindowLabel(for: "cg_weekly") == "Weekly (CG)")
-    #expect(normalizedWidgetWindowLabel(for: "billing_cycle") == "Monthly")
-    #expect(normalizedWidgetWindowLabel(for: "custom_window_99") == "custom_window_99")
-}
-
-@Test func widgetWindowSnapshotProjectsNormalizedLabelAndResetDate() {
-    let iso = "2026-08-23T21:30:00-04:00"
-    let window = ProviderWindow(id: "five_hour", percentLeft: 50.0, resetISO: iso, windowHours: 5.0, paceDelta: 0.0)
-    let projection = WidgetWindowSnapshot(from: window)
-
-    #expect(projection.id == "five_hour")
-    #expect(projection.label == "5 Hour")
-    #expect(projection.percentLeft == 50.0)
-    #expect(projection.signalLevel == .green)
-    #expect(projection.resetDate != nil)
-}
-
-@Test func widgetWindowSnapshotParsesFractionalSecondResetTimestamps() {
-    let fractionalZ = "2026-08-23T21:30:00.123Z"
-    let windowZ = ProviderWindow(
-        id: "five_hour", percentLeft: 50.0, resetISO: fractionalZ, windowHours: 5.0, paceDelta: 0.0
-    )
-    let projectionZ = WidgetWindowSnapshot(from: windowZ)
-    #expect(projectionZ.resetDate != nil)
-    #expect(projectionZ.resetDate?.timeIntervalSince1970 == 1_787_520_600.123)
-
-    let fractionalOffset = "2026-08-23T21:30:00.500-04:00"
-    let windowOffset = ProviderWindow(
-        id: "five_hour", percentLeft: 50.0, resetISO: fractionalOffset, windowHours: 5.0, paceDelta: 0.0
-    )
-    let projectionOffset = WidgetWindowSnapshot(from: windowOffset)
-    #expect(projectionOffset.resetDate != nil)
-    #expect(projectionOffset.resetDate?.timeIntervalSince1970 == 1_787_535_000.5)
-
-    let invalidISO = "not-a-valid-date"
-    let windowInvalid = ProviderWindow(
-        id: "five_hour", percentLeft: 50.0, resetISO: invalidISO, windowHours: 5.0, paceDelta: 0.0
-    )
-    let projectionInvalid = WidgetWindowSnapshot(from: windowInvalid)
-    #expect(projectionInvalid.resetDate == nil)
 }
