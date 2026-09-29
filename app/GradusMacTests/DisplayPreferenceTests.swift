@@ -152,6 +152,24 @@ struct DisplayPreferenceTests {
             #expect(MenuContentView(viewModel: viewModel).visibleProviders.isEmpty)
         }
     }
+
+    @Test func retiredCodexSparkBucketIsDroppedFromTheMacDisplay() {
+        withScratchDefaults("retired") { defaults in
+            let viewModel = PublisherViewModel(defaults: defaults)
+            viewModel.apply(
+                SnapshotPayload(
+                    schemaVersion: 2,
+                    updatedAt: "2026-08-05T12:00:00Z",
+                    providers: [
+                        provider("Codex", percentLeft: 62),
+                        provider("Codex (Spark)", percentLeft: 90)
+                    ]
+                )
+            )
+
+            #expect(viewModel.providers.map(\.name) == ["Codex"])
+        }
+    }
 }
 
 /// The gate for the Settings window itself.

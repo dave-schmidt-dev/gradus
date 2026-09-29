@@ -358,7 +358,9 @@ final class PublishPipeline {
         do {
             let publishedAt = Date()
             let syncSource = LocalSyncSource.current
-            let statuses = try payload.providers.map {
+            let published = payload.providers
+                .filter { !PublisherViewModel.retiredProviderNames.contains($0.name) }
+            let statuses = try published.map {
                 try makeProviderStatus(
                     from: $0,
                     snapshotUpdatedAt: payload.updatedAt,

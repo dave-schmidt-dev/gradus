@@ -20,6 +20,8 @@ history from the overnight release train. New releases use
   percent-left threshold. The saved value resets to the default; the old
   percent setting is not carried over. The reset-alert explanations on
   iPhone/iPad moved behind an info button.
+- The retired "Codex (Spark)" bucket no longer appears on Mac or iPhone/iPad,
+  and the Mac no longer publishes it to iCloud.
 
 ## 1.11.0 — 2026-09-24
 
