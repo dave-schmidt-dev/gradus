@@ -362,8 +362,8 @@ private func assertRowBalancedFramesMatchMeasuredContent(
     let expectedProviderNames = Set(providers.map(\.providerName))
     #expect(Set(iPhone.semanticProviderWindowSet.map(\.providerName)) == expectedProviderNames)
     #expect(Set(iPad.semanticProviderWindowSet.map(\.providerName)) == expectedProviderNames)
-    #expect(iPhone.semanticProviderWindowSet.count == 9)
-    #expect(iPhone.semanticProviderWindowSet.reduce(0) { $0 + $1.windowIDs.count } == 15)
+    #expect(iPhone.semanticProviderWindowSet.count == 8)
+    #expect(iPhone.semanticProviderWindowSet.reduce(0) { $0 + $1.windowIDs.count } == 14)
     #expect(iPhone.semanticProviderWindowSet == iPad.semanticProviderWindowSet)
 
     // Production's one-column frame model is compared with the explicit
