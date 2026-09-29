@@ -23,14 +23,14 @@ FIXTURE_COUNTS = {
             _IOS_TESTS / "DashboardSnapshotTests.swift",
             _IOS_TESTS / "DashboardSnapshotFixtures.swift",
         ),
-        8,
+        6,
     ),
     "density-layout": (
         (
             _IOS_TESTS / "DensityLayoutSnapshotTests.swift",
             _IOS_TESTS / "DensityLayoutSnapshotFixtures.swift",
         ),
-        15,
+        14,
     ),
     "settings": ((_IOS_TESTS / "SettingsViewSnapshotTests.swift",), 1),
 }
