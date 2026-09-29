@@ -81,12 +81,12 @@ struct MenuBarBucketTests {
         withDefaults("identity") { defaults in
             let viewModel = PublisherViewModel(defaults: defaults)
             let codex = provider("Codex", percent: 0)
-            let spark = provider("Codex (Spark)", percent: 82)
-            viewModel.apply(payload([spark, codex]))
+            let other = provider("Claude", percent: 82)
+            viewModel.apply(payload([other, codex]))
 
             let identities = Set(viewModel.menuBarBucketChoices.map(\.selection))
             #expect(identities.contains(.bucket(providerName: "Codex", windowID: "weekly")))
-            #expect(identities.contains(.bucket(providerName: "Codex (Spark)", windowID: "weekly")))
+            #expect(identities.contains(.bucket(providerName: "Claude", windowID: "weekly")))
 
             viewModel.showExhausted = false
             viewModel.menuBarDisplaySelection = .bucket(providerName: "Codex", windowID: "weekly")
@@ -95,12 +95,12 @@ struct MenuBarBucketTests {
             }
             #expect(selected?.available == true)
 
-            viewModel.apply(payload([spark]))
+            viewModel.apply(payload([other]))
             #expect(viewModel.menuBarBucketChoices.last?.selection == viewModel.menuBarDisplaySelection)
             #expect(viewModel.menuBarBucketChoices.last?.available == false)
             #expect(presentation(viewModel).title == "Codex W —")
 
-            viewModel.apply(payload([codex, spark]))
+            viewModel.apply(payload([codex, other]))
             #expect(viewModel.menuBarDisplaySelection == .bucket(providerName: "Codex", windowID: "weekly"))
             #expect(presentation(viewModel).title == "Codex W 0.0%")
         }
