@@ -113,11 +113,6 @@ class CanonicalSyntheticHydrationTests(unittest.TestCase):
                         "weekly_reset": "in 7d",
                     },
                 },
-                {
-                    "name": "Codex (Spark)",
-                    "ok": True,
-                    "data": {"weekly_percent_left": 100, "weekly_reset": "in 7d"},
-                },
             )
         )
         assert snapshots is not None
@@ -130,16 +125,11 @@ class CanonicalSyntheticHydrationTests(unittest.TestCase):
                 "third_party_weekly_reset": "in 7d",
             },
         )
-        self.assertEqual(
-            self._primary(snapshots, "Codex").data,
-            {"spark_weekly_percent_left": 100, "spark_weekly_reset": "in 7d"},
-        )
         self.assertNotIn("Antigravity (Claude)", {snapshot.name for snapshot in snapshots})
-        self.assertNotIn("Codex (Spark)", {snapshot.name for snapshot in snapshots})
 
     def test_missing_or_malformed_synthetic_pools_are_omitted(self) -> None:
         cases = (
-            ((), False, False, False),
+            ((), False, False),
             (
                 (
                     {
@@ -150,30 +140,15 @@ class CanonicalSyntheticHydrationTests(unittest.TestCase):
                 ),
                 False,
                 True,
-                False,
-            ),
-            (
-                (
-                    {
-                        "name": "Codex (Spark)",
-                        "ok": True,
-                        "data": {"weekly_percent_left": None},
-                    },
-                ),
-                False,
-                False,
-                False,
             ),
         )
-        for entries, has_cg5, has_cg1w, has_sp1w in cases:
+        for entries, has_cg5, has_cg1w in cases:
             with self.subTest(entries=entries):
                 snapshots, _ = _canonical_snapshots(self._payload(*entries))
                 assert snapshots is not None
                 antigravity_data = self._primary(snapshots, "Antigravity").data
-                codex_data = self._primary(snapshots, "Codex").data
                 self.assertEqual("third_party_five_hour_percent_left" in antigravity_data, has_cg5)
                 self.assertEqual("third_party_weekly_percent_left" in antigravity_data, has_cg1w)
-                self.assertEqual("spark_weekly_percent_left" in codex_data, has_sp1w)
 
     def test_each_valid_pool_is_hydrated_independently(self) -> None:
         cases = (
@@ -222,11 +197,6 @@ class CanonicalSyntheticHydrationTests(unittest.TestCase):
                         "weekly_percent_left": 100,
                     },
                 },
-                {
-                    "name": "Codex (Spark)",
-                    "ok": True,
-                    "data": {"weekly_percent_left": 100},
-                },
             )
         )
         assert snapshots is not None
@@ -239,7 +209,6 @@ class CanonicalSyntheticHydrationTests(unittest.TestCase):
         output = console.file.getvalue()
         self.assertIn("cg5", output)
         self.assertIn("cg1w", output)
-        self.assertIn("sp1w", output)
 
     def test_hydrated_pool_keys_stay_out_of_router_json(self) -> None:
         snapshots, updated_at = _canonical_snapshots(
@@ -249,22 +218,15 @@ class CanonicalSyntheticHydrationTests(unittest.TestCase):
                     "ok": True,
                     "data": {"five_hour_percent_left": 100, "weekly_percent_left": 100},
                 },
-                {
-                    "name": "Codex (Spark)",
-                    "ok": True,
-                    "data": {"weekly_percent_left": 100},
-                },
             )
         )
         assert snapshots is not None
         rendered = json.loads(render_json(snapshots, updated_at))
         names = {provider["name"] for provider in rendered["providers"]}
         self.assertNotIn("Antigravity (Claude)", names)
-        self.assertNotIn("Codex (Spark)", names)
         for provider in rendered["providers"]:
             data_keys = provider["data"]
             self.assertFalse(any(key.startswith("third_party_") for key in data_keys))
-            self.assertFalse(any(key.startswith("spark_") for key in data_keys))
 
 
 class CursorWarningTests(unittest.TestCase):
@@ -1656,9 +1618,7 @@ class TestProviderRefreshSchedule(unittest.TestCase):
                 "five_hour_percent_left": 80.0,
                 "weekly_percent_left": 70.0,
             }
-            if name == "Codex":
-                data["spark_weekly_percent_left"] = 60.0
-            else:
+            if name != "Codex":
                 data["third_party_five_hour_percent_left"] = 50.0
                 data["third_party_weekly_percent_left"] = 40.0
             return ProviderSnapshot(name=name, ok=True, source="api", data=data)
@@ -1671,7 +1631,7 @@ class TestProviderRefreshSchedule(unittest.TestCase):
             prior=self._payload(),
         )
         by_name = {entry["name"]: entry for entry in payload["providers"]}
-        for name in ("Codex", "Codex (Spark)", "Antigravity", "Antigravity (Claude)"):
+        for name in ("Codex", "Antigravity", "Antigravity (Claude)"):
             self.assertEqual(by_name[name]["observed_at"], payload["updated_at"])
             self.assertEqual(by_name[name]["probe_attempted_at"], payload["updated_at"])
 
@@ -3533,10 +3493,6 @@ class InstalledBankedProducerTests(unittest.TestCase):
                     weekly_percent_left=50,
                     five_hour_reset=None,
                     weekly_reset="Resets Jan 01 at 12:00 AM",
-                    spark_weekly_percent_left=None,
-                    spark_weekly_reset=None,
-                    spark_five_hour_percent_left=None,
-                    spark_five_hour_reset=None,
                     raw_text="private-response-sentinel",
                     banked_candidate=(
                         BankedCandidate(

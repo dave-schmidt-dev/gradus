@@ -35,8 +35,8 @@ private struct ProducerPublishEvidence: Encodable {
 /// 0→1 edge tracking (CR-2, §5.2 — warning computation lives in the
 /// publisher).
 public actor PublishCoordinator: CloudPublisher {
-    private let database: CloudDatabase
-    private let zoneID: CKRecordZone.ID
+    let database: CloudDatabase
+    let zoneID: CKRecordZone.ID
     private let evidencePath: URL?
     private let producerBuildNumber: String?
     private let cloudKitEnvironment: String?
@@ -48,6 +48,7 @@ public actor PublishCoordinator: CloudPublisher {
     private var latestBankedEvidence: BankedResetEvidence?
     private var queuedWaiters: [CheckedContinuation<Void, Error>] = []
     private var isPublishing = false
+    var retiredProvidersPurged = false
 
     /// Providers whose `isWarning` flipped false→true on the most recently
     /// processed `upsert` call — consumed by Phase 4's push trigger. Cleared

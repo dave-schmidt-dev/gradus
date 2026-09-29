@@ -219,11 +219,11 @@ private func resetDefaults(_ test: String) -> (String, UserDefaults)? {
 
 @Test func resetNotificationCopyAndSystemStatusMappingStayGeneric() {
     let grant = ResetNotificationEvent(kind: .grant, providerName: "Codex")
-    let refill = ResetNotificationEvent(kind: .refill, providerName: "Codex (Spark)", windowLabel: "weekly")
+    let refill = ResetNotificationEvent(kind: .refill, providerName: "Claude", windowLabel: "weekly")
     #expect(grant.title == "New banked resets")
     #expect(grant.body.contains("Codex"))
     #expect(refill.title == "Usage refilled")
-    #expect(refill.body.contains("Codex (Spark)"))
+    #expect(refill.body.contains("Claude"))
     #expect(!grant.body.lowercased().contains("keychain"))
     #expect(ResetNotificationAuthorization(.denied) == .denied)
     #expect(ResetNotificationAuthorization(.provisional) == .authorized)

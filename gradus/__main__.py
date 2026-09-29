@@ -354,23 +354,6 @@ def _canonical_snapshots(
                 ),
             ),
         ),
-        "Codex": (
-            "Codex (Spark)",
-            (
-                (
-                    "five_hour_percent_left",
-                    "spark_five_hour_percent_left",
-                    "five_hour_reset",
-                    "spark_five_hour_reset",
-                ),
-                (
-                    "weekly_percent_left",
-                    "spark_weekly_percent_left",
-                    "weekly_reset",
-                    "spark_weekly_reset",
-                ),
-            ),
-        ),
     }
 
     def project_synthetic_data(name: str, data: dict[str, object]) -> None:

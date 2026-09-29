@@ -15,7 +15,6 @@ from ._base import ProbeFailure, _format_reset_time, _is_headless, _source_reset
 from ._codex_helpers import (
     _classify_codex_windows,
     _codex_percent_left,
-    _extract_spark_windows,
 )
 
 log = logging.getLogger(__name__)
@@ -192,22 +191,6 @@ class CodexHttpProvider:
         weekly_percent_left = _codex_percent_left(weekly_win)
         weekly_reset = _format_reset_time(weekly_win.get("reset_at")) if weekly_win else None
 
-        spark_five_hour_win, spark_weekly_win = _extract_spark_windows(payload)
-        spark_five_hour_percent_left = _codex_percent_left(spark_five_hour_win)
-        spark_five_hour_reset = (
-            _format_reset_time(spark_five_hour_win.get("reset_at"))
-            if spark_five_hour_win
-            and isinstance(spark_five_hour_win.get("reset_at"), (str, int, float))
-            else None
-        )
-        spark_weekly_percent_left = _codex_percent_left(spark_weekly_win)
-        spark_reset_at = spark_weekly_win.get("reset_at") if spark_weekly_win else None
-        spark_weekly_reset = (
-            _format_reset_time(spark_reset_at)
-            if spark_reset_at is None or isinstance(spark_reset_at, (str, int, float))
-            else None
-        )
-
         credits_obj = payload.get("credits") or {}
         if isinstance(credits_obj, dict):
             balance = credits_obj.get("balance")
@@ -222,10 +205,6 @@ class CodexHttpProvider:
             weekly_percent_left=weekly_percent_left,
             five_hour_reset=five_hour_reset,
             weekly_reset=weekly_reset,
-            spark_weekly_percent_left=spark_weekly_percent_left,
-            spark_weekly_reset=spark_weekly_reset,
-            spark_five_hour_percent_left=spark_five_hour_percent_left,
-            spark_five_hour_reset=spark_five_hour_reset,
             credits=credits,
             raw_text="",
             banked_candidate=banked_candidate,
@@ -242,13 +221,6 @@ class CodexHttpProvider:
                         "weekly_reset",
                         _source_reset_instant(weekly_win.get("reset_at") if weekly_win else None),
                     ),
-                    (
-                        "spark_five_hour_reset",
-                        _source_reset_instant(
-                            spark_five_hour_win.get("reset_at") if spark_five_hour_win else None
-                        ),
-                    ),
-                    ("spark_weekly_reset", _source_reset_instant(spark_reset_at)),
                 )
                 if instant is not None
             },

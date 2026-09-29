@@ -130,7 +130,6 @@ enum MenuBarBucketPresenter {
 
     private static func compactProvider(_ name: String) -> String {
         switch name {
-        case "Codex (Spark)": "Spark"
         case "OpenCode Go": "OpenCode"
         default: name
         }

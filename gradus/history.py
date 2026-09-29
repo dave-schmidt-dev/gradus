@@ -92,14 +92,6 @@ _SENSITIVE_TEXT_MARKERS = (
 _PROVENANCE_BY_PROVIDER: dict[str, dict[str, Any]] = {
     "Antigravity": ANTIGRAVITY_PROVENANCE,
     "Antigravity (Claude)": HISTORY_CLAUDE_PROVENANCE,
-    # "Codex (Spark)" is intentionally absent: ANTIGRAVITY_PROVENANCE and
-    # HISTORY_CLAUDE_PROVENANCE encode the Antigravity/Gemini HTTP probe's
-    # own method/endpoint/bucket_family (Task 3.2 research: both entries
-    # share HISTORY_ENDPOINT, a Gemini-specific URL). The primary "Codex"
-    # entry has no descriptor here either and already falls through to the
-    # ``{"provenance_available": False}`` default below, so the synthetic
-    # Spark entry sourced from that same Codex probe correctly inherits the
-    # same "no provenance" default rather than fabricating an endpoint.
     "OpenCode Go": OPENCODE_GO_PROVENANCE,
 }
 
@@ -345,16 +337,13 @@ def build_history_record(
         name = entry["name"]
         descriptor = _PROVENANCE_BY_PROVIDER.get(name, {"provenance_available": False})
         provenance[name] = _json_clone(descriptor)
-        source_name = {
-            "Antigravity (Claude)": "Antigravity",
-            "Codex (Spark)": "Codex",
-        }.get(name, name)
+        source_name = {"Antigravity (Claude)": "Antigravity"}.get(name, name)
         observations[name] = {
             "probe": _probe_metadata(by_name.get(source_name), entry),
             "capacity": _capacity_metadata(
                 entry,
                 updated_at,
-                synthetic=name in {"Antigravity (Claude)", "Codex (Spark)"},
+                synthetic=name == "Antigravity (Claude)",
             ),
         }
 

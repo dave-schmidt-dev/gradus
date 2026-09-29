@@ -15,8 +15,7 @@ let densityLayoutFixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 
 /// Every provider in David's actual set, with the window shape each really
 /// has (Cursor two pools, Antigravity's split Gemini/Claude quotas, Copilot
-/// monthly, Vibe on a monthly bucket, Codex (Spark) as its own weekly bucket
-/// alongside Codex).
+/// monthly, Vibe on a monthly bucket).
 @MainActor
 func fullProviderSet() -> [ProviderStatus] {
     func w(_ id: String, _ percent: Double, _ pace: Double?, _ reset: String?) -> ProviderWindow {
@@ -39,7 +38,6 @@ func fullProviderSet() -> [ProviderStatus] {
             w("weekly", 61, -0.12, "2026-08-01T20:00:00-04:00")
         ]),
         p("codex", "Codex", [w("weekly", 76, -0.05, "2026-07-28T09:19:00-04:00")]),
-        p("codex-spark", "Codex (Spark)", [w("weekly", 90, 0.12, "2026-08-08T05:00:00-04:00")]),
         p("antigravity", "Antigravity", [
             w("five_hour", 100, 0.22, "2026-07-25T15:00:00-04:00"),
             w("weekly", 80, 0.04, "2026-07-28T14:16:00-04:00")

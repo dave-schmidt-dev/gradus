@@ -151,7 +151,6 @@ private func makeViewModel(
 @Test func resetAlertsCopyNamesCoverageAndMobileDelivery() {
     #expect(SettingsView.bankedResetAlertsDescription.contains("Codex"))
     #expect(SettingsView.bankedResetAlertsDescription.contains("starting balance"))
-    #expect(!SettingsView.usageRefillAlertsDescription.contains("Spark"))
     #expect(SettingsView.usageRefillAlertsDescription.contains("Claude"))
     #expect(SettingsView.claudeBankedUnavailableDescription == "Claude banked resets are unavailable to Gradus.")
     #expect(

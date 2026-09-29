@@ -340,7 +340,7 @@ public enum ResetAlertDetector {
     }
 
     private static func supportedProvider(_ name: String) -> Bool {
-        name == "Codex" || name == "Claude" || name == "Codex (Spark)"
+        name == "Codex" || name == "Claude"
     }
 
     private static func validDeviceID(_ id: String) -> Bool {

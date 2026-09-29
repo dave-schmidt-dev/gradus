@@ -50,22 +50,21 @@ private func count(_ number: Int, at minute: Int, generation: String = generatio
 }
 
 @Test func refillUsesSourceTimeAndProviderSpecificDeadlineRules() {
-    for provider in ["Claude", "Codex (Spark)"] {
-        var state = ResetAlertState()
-        _ = ResetAlertDetector.evaluate(state: &state, deviceID: device,
-                                        observation: usage(provider, at: 1, percent: 10))
-        // An advanced deadline alone cannot overcome a high observation
-        // delivered before the source's old deadline elapsed.
-        #expect(ResetAlertDetector.evaluate(
-            state: &state, deviceID: device,
-            observation: usage(provider, at: 2, percent: 99, deadline: 120)
-        ).alerts.isEmpty)
-        _ = ResetAlertDetector.evaluate(state: &state, deviceID: device,
-                                        observation: usage(provider, at: 61, percent: 8, deadline: 120))
-        let eligible = ResetAlertDetector.evaluate(state: &state, deviceID: device,
-                                                   observation: usage(provider, at: 121, percent: 100, deadline: 180))
-        #expect(eligible.alerts == [.usageRefill(providerName: provider, windowID: "weekly")])
-    }
+    let provider = "Claude"
+    var state = ResetAlertState()
+    _ = ResetAlertDetector.evaluate(state: &state, deviceID: device,
+                                    observation: usage(provider, at: 1, percent: 10))
+    // An advanced deadline alone cannot overcome a high observation
+    // delivered before the source's old deadline elapsed.
+    #expect(ResetAlertDetector.evaluate(
+        state: &state, deviceID: device,
+        observation: usage(provider, at: 2, percent: 99, deadline: 120)
+    ).alerts.isEmpty)
+    _ = ResetAlertDetector.evaluate(state: &state, deviceID: device,
+                                    observation: usage(provider, at: 61, percent: 8, deadline: 120))
+    let eligible = ResetAlertDetector.evaluate(state: &state, deviceID: device,
+                                               observation: usage(provider, at: 121, percent: 100, deadline: 180))
+    #expect(eligible.alerts == [.usageRefill(providerName: provider, windowID: "weekly")])
 }
 
 @Test func nilNewDeadlineIsOneShotOnlyAfterOldDeadline() {
@@ -147,16 +146,16 @@ private func count(_ number: Int, at minute: Int, generation: String = generatio
         [.bankedGrant(increase: 1, currentCount: 2)])
 }
 
-@Test func generationSwitchIsSilentAndSparkCannotGrant() {
+@Test func generationSwitchIsSilentAndClaudeCannotGrant() {
     var state = ResetAlertState()
     _ = ResetAlertDetector.evaluateBankedCount(state: &state, deviceID: device, banked: count(5, at: 1))
     let changed = count(20, at: 2, generation: "3fd110f2-4656-4d85-a163-52464d54a12a")
     #expect(ResetAlertDetector.evaluateBankedCount(state: &state, deviceID: device, banked: changed).alerts.isEmpty)
-    let spark = ResetAlertDetector.evaluate(state: &state, deviceID: device,
-                                            observation: usage("Codex (Spark)", at: 3, percent: 5),
-                                            banked: count(22, at: 3))
-    #expect(spark.alerts.isEmpty)
-    #expect(spark.bankedStatus == .unavailable(lastObservedCount: 20, lastObservedAt: instant(2)))
+    let claude = ResetAlertDetector.evaluate(state: &state, deviceID: device,
+                                             observation: usage("Claude", at: 3, percent: 5),
+                                             banked: count(22, at: 3))
+    #expect(claude.alerts.isEmpty)
+    #expect(claude.bankedStatus == .unavailable(lastObservedCount: 20, lastObservedAt: instant(2)))
 }
 
 @Test func lateCountFromOlderUsageDoesNotLookCurrentForNewerDisplay() {
@@ -206,7 +205,7 @@ private func count(_ number: Int, at minute: Int, generation: String = generatio
 @Test func weeklyWinsWhenMultipleWindowsCross() {
     var state = ResetAlertState()
     func observation(_ minute: Int, _ percent: Double) -> ResetUsageObservation {
-        ResetUsageObservation(providerName: "Codex (Spark)", observedAt: instant(minute), windows: [
+        ResetUsageObservation(providerName: "Claude", observedAt: instant(minute), windows: [
             ProviderWindow(
                 id: "five_hour", percentLeft: percent, resetISO: iso(instant(minute == 1 ? 2 : 4)),
                 windowHours: 5, paceDelta: nil
@@ -219,7 +218,7 @@ private func count(_ number: Int, at minute: Int, generation: String = generatio
     }
     _ = ResetAlertDetector.evaluate(state: &state, deviceID: device, observation: observation(1, 3))
     #expect(ResetAlertDetector.evaluate(state: &state, deviceID: device, observation: observation(3, 100)).alerts ==
-        [.usageRefill(providerName: "Codex (Spark)", windowID: "weekly")])
+        [.usageRefill(providerName: "Claude", windowID: "weekly")])
 }
 
 @Test func providerEntryInitializerUsesSourceObservedAt() {

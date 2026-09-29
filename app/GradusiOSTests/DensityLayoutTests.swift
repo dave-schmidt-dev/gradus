@@ -313,8 +313,8 @@ private func assertRowBalancedFramesMatchMeasuredContent(
 @MainActor
 @Test func fullFixturePinsPortraitLandscapeMeasurementsAndLargeText() {
     let providers = fullProviderSet()
-    #expect(providers.count == 9)
-    #expect(providers.reduce(0) { $0 + $1.windows.count } == 15)
+    #expect(providers.count == 8)
+    #expect(providers.reduce(0) { $0 + $1.windows.count } == 14)
 
     let standard = DashboardDensity.standard.metrics
     let solverMetrics = DashboardDensity.compact.metrics

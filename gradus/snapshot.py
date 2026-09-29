@@ -746,58 +746,6 @@ THIRD_PARTY_WINDOW_SPECS: tuple[WindowSpec, ...] = (
 V2_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
 WARNING_WINDOW_SPECS["Antigravity (Claude)"] = THIRD_PARTY_WINDOW_SPECS
 
-# Spark windows are unioned onto Codex's native windows purely for interactive
-# alert purposes. The window id ``sp1w`` is deliberately NOT ``weekly``: warning
-# lookup (:func:`warning_window_ids`) resolves by the raw snapshot name
-# ("Codex"), and _provider_is_empty keys off window id, so reusing the
-# native "weekly" id here would make Spark depletion indistinguishable from
-# native Codex weekly depletion.
-CODEX_SPARK_ALERT_SPECS: tuple[WindowSpec, ...] = (
-    WindowSpec(
-        "sp5h",
-        "session",
-        "spark_five_hour_percent_left",
-        reset_key="spark_five_hour_reset",
-        window_hours=5.0,
-    ),
-    WindowSpec(
-        "sp1w",
-        "session",
-        "spark_weekly_percent_left",
-        reset_key="spark_weekly_reset",
-        window_hours=168.0,
-    ),
-)
-WARNING_WINDOW_SPECS["Codex"] = (*WINDOW_SPECS["Codex"], *CODEX_SPARK_ALERT_SPECS)
-
-# CODEX_SPARK_WINDOW_SPECS is a SEPARATE tuple from CODEX_SPARK_ALERT_SPECS
-# above, even though both read the same spark_weekly_percent_left/
-# spark_weekly_reset keys. This one uses the STANDARD "weekly" window id
-# (mirroring THIRD_PARTY_WINDOW_SPECS's convention) because it backs the
-# synthetic "Codex (Spark)" entry's OWN windows list, published to
-# iOS/router like any other provider's weekly window. Collapsing this onto
-# CODEX_SPARK_ALERT_SPECS's "sp1w" id would publish a nonstandard id;
-# collapsing CODEX_SPARK_ALERT_SPECS onto this "weekly" id would collide
-# with native Codex's own "weekly" window id in the union above.
-CODEX_SPARK_WINDOW_SPECS: tuple[WindowSpec, ...] = (
-    WindowSpec(
-        "five_hour",
-        "session",
-        "spark_five_hour_percent_left",
-        reset_key="spark_five_hour_reset",
-        window_hours=5.0,
-    ),
-    WindowSpec(
-        "weekly",
-        "session",
-        "spark_weekly_percent_left",
-        reset_key="spark_weekly_reset",
-        window_hours=168.0,
-    ),
-)
-V2_WINDOW_SPECS["Codex (Spark)"] = CODEX_SPARK_WINDOW_SPECS
-WARNING_WINDOW_SPECS["Codex (Spark)"] = CODEX_SPARK_WINDOW_SPECS
-
 
 def _build_windows(
     snapshot: ProviderSnapshot,
@@ -1078,36 +1026,6 @@ def _project_antigravity_claude_data(snapshot: ProviderSnapshot) -> dict:
     }
 
 
-def _project_codex_spark_data(snapshot: ProviderSnapshot) -> dict:
-    """Project the Spark weekly bucket into the synthetic entry's data,
-    under the same key name project_data() uses for a primary entry's
-    weekly headroom (Task 3.2).
-
-    A DEDICATED projection, not a reuse of SAFE_DATA_KEYS/project_data():
-    ``snapshot.data`` holds BOTH the native Codex bucket and the Spark
-    bucket under the SAME ProviderSnapshot, so adding raw spark_* key
-    names to SAFE_DATA_KEYS would leak them into the PRIMARY "Codex"
-    entry's data too (project_data(snapshot) is called on that exact same
-    object for that entry). Mapping to the standard weekly_percent_left/
-    weekly_reset names instead keeps the two entries' data namespaces
-    independent, and — since those names are already in SAFE_DATA_KEYS —
-    keeps _sanitize_prior_entry's ``set(data).issubset(SAFE_DATA_KEYS)``
-    check passing for CR-6 retention.
-    """
-    data = snapshot.data if isinstance(snapshot.data, Mapping) else {}
-    field_map = {
-        "spark_five_hour_percent_left": "five_hour_percent_left",
-        "spark_five_hour_reset": "five_hour_reset",
-        "spark_weekly_percent_left": "weekly_percent_left",
-        "spark_weekly_reset": "weekly_reset",
-    }
-    return {
-        out_key: value
-        for raw_key, out_key in field_map.items()
-        if raw_key in data and (value := _json_safe_value(data[raw_key])) is not _UNSAFE_JSON
-    }
-
-
 # Config table for schema-v2 synthetic entries that mirror a primary probe's
 # SAME snapshot under a different display name and window mapping. Keyed by
 # the primary provider's raw snapshot name; each value is
@@ -1121,11 +1039,6 @@ _SYNTHETIC_ENTRY_SPECS: dict[
         "Antigravity (Claude)",
         {"Antigravity": THIRD_PARTY_WINDOW_SPECS},
         _project_antigravity_claude_data,
-    ),
-    "Codex": (
-        "Codex (Spark)",
-        {"Codex": CODEX_SPARK_WINDOW_SPECS},
-        _project_codex_spark_data,
     ),
 }
 
@@ -1526,9 +1439,8 @@ def _build_snapshot_payload(
         A dict with ``schema_version``, ``updated_at`` (offset-aware ISO), and
         ``providers`` (a list of exactly seven entries — Codex, Claude,
         Antigravity, Copilot, Cursor, OpenCode Go, and Vibe; schema v2 adds
-        two more synthetic entries from those same probes: "Codex (Spark)"
-        right after "Codex", and "Antigravity (Claude)" right after
-        "Antigravity").
+        one more synthetic entry from those same probes: "Antigravity (Claude)"
+        right after "Antigravity").
     """
     updated_at_iso = local_iso(updated_at)
     updated_at_aware = updated_at if updated_at.tzinfo else updated_at.astimezone()

@@ -29,6 +29,10 @@ public protocol CloudDatabase: Sendable {
     /// Fetch the current server copy of a record (used for the
     /// fetch-merge-resave retry on `.serverRecordChanged`).
     func fetchRecord(_ recordID: CKRecord.ID) async throws -> CKRecord
+
+    /// Deletes the given records. Deleting a record that no longer exists is
+    /// not an error, so callers can repeat this until they are sure it stuck.
+    func deleteRecords(_ recordIDs: [CKRecord.ID]) async throws
 }
 
 /// Production adapter backed by a real `CKDatabase`.
@@ -74,5 +78,9 @@ public struct CKDatabaseAdapter: CloudDatabase {
 
     public func fetchRecord(_ recordID: CKRecord.ID) async throws -> CKRecord {
         try await database.record(for: recordID)
+    }
+
+    public func deleteRecords(_ recordIDs: [CKRecord.ID]) async throws {
+        _ = try await database.modifyRecords(saving: [], deleting: recordIDs)
     }
 }

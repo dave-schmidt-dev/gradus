@@ -312,7 +312,7 @@ def default_manifest() -> dict[str, Any]:
                     _control(
                         "reset-alerts-refill-toggle",
                         "Usage refilled",
-                        "Enables refill alerts for native Codex, Codex (Spark), and Claude.",
+                        "Alert when a reported Codex or Claude usage window refills.",
                         kind="switch",
                         states=["off"],
                     ),

@@ -105,7 +105,7 @@ extension DashboardViewModel {
         for name in deletedProviderNames {
             byName.removeValue(forKey: name)
         }
-        allProviders = Self.withoutRetiredProviders(Array(byName.values))
+        allProviders = Array(byName.values)
         applyPresentationPreferences()
     }
 
@@ -157,7 +157,7 @@ extension DashboardViewModel {
         // Compare the complete cached set, not the filtered presentation set,
         // so hiding exhausted providers cannot turn an unchanged warning into
         // a fresh notification on the next full sync.
-        let current = Self.withoutRetiredProviders(fetched)
+        let current = fetched
         notifyForWarningTransitions(from: allProviders, to: current)
         allProviders = current
         evaluateResetStatuses(current)
@@ -255,16 +255,6 @@ extension DashboardViewModel {
 
     /// Not `private`: also called directly from `init` in
     /// `DashboardViewModel.swift`.
-    /// Buckets the provider has retired. A CloudKit record for one can outlive
-    /// it (the Mac never deletes records, and an older Mac keeps publishing its
-    /// entry), so the phone drops it at ingest rather than rendering a card for
-    /// a bucket that no longer exists.
-    static let retiredProviderNames: Set<String> = ["Codex (Spark)"]
-
-    static func withoutRetiredProviders(_ providers: [ProviderStatus]) -> [ProviderStatus] {
-        providers.filter { !retiredProviderNames.contains($0.providerName) }
-    }
-
     static func presentedProviders(
         _ providers: [ProviderStatus],
         localThreshold: Double,

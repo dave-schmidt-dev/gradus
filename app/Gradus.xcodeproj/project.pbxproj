@@ -146,6 +146,7 @@
 		88C8C9343FE8013A26314410 /* CardLayoutSolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CD2A7EEE9BC5667647B000A /* CardLayoutSolver.swift */; };
 		894195E650F9C984B8E2AF1F /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 773E313969E9D2D0B3851CF3 /* DashboardViewModel.swift */; };
 		89FBC29750085B98F8AEEABF /* dashboardTruncatesPercentagesRatherThanRounding.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 7FDE0EEA5731FD11EC5D0B49 /* dashboardTruncatesPercentagesRatherThanRounding.1.png */; };
+		8AF6ACFCB5DA62C353340D60 /* PublishCoordinator+RetiredProviders.swift in Sources */ = {isa = PBXBuildFile; fileRef = E339C314887419AA2FF1B697 /* PublishCoordinator+RetiredProviders.swift */; };
 		8BEBB91956079BB7E763B59B /* ResetNotificationScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED8D5AFC9CD0F745A237A93B /* ResetNotificationScheduler.swift */; };
 		8C74BD59B5B3696C0428AEC6 /* SnapshotWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CC55D88A35E02B0DF269FF1 /* SnapshotWatcher.swift */; };
 		8D07620FBB9160DAD411F498 /* listRowValueLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 13A5FC8850CE01888DD7CDA7 /* listRowValueLight.1.png */; };
@@ -247,6 +248,7 @@
 		D8F758A3FF68827DE102DBC8 /* densityLargePadPortraitLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = D5188810F818DACE3F2A1277 /* densityLargePadPortraitLight.1.png */; };
 		D95F6187DFA1B3F3077688C5 /* sampleDataDashboardIPhone.1.png in Resources */ = {isa = PBXBuildFile; fileRef = AE971F7C1E1A30BE2BAA939A /* sampleDataDashboardIPhone.1.png */; };
 		DA0A44C938C9565A3E5BB201 /* Bridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C7EE09CE968570B512425C /* Bridge.swift */; };
+		DA0CE0B7BCC9BD42914BD154 /* PublishCoordinatorRetiredProvidersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BE3F5B75EF266DED01F4C0 /* PublishCoordinatorRetiredProvidersTests.swift */; };
 		DD6DC7D0ECBFA95D6E7E08DC /* emptyStateSyncDisabled.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 0B434805837160BE6A13F8EA /* emptyStateSyncDisabled.1.png */; };
 		DE4F962BAB51B05E4CA99D31 /* WidgetSnapshotPublisherFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC42989F2614BF0DFE121C06 /* WidgetSnapshotPublisherFixtures.swift */; };
 		DE7790C599C16492A0DD1AB1 /* GradusCredentialBridge.app in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 2CF77FD23BBBB24832E1A1FD /* GradusCredentialBridge.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -510,6 +512,7 @@
 		4E23074B5B721FFF5B612F62 /* Info-Debug.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-Debug.plist"; sourceTree = "<group>"; };
 		4EF211C0B300EF36E2B452FB /* DisplayPreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayPreferenceTests.swift; sourceTree = "<group>"; };
 		4FF66577A9DFE6FC94CD51E3 /* sampleDataDashboardIPhoneLarge.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = sampleDataDashboardIPhoneLarge.1.png; sourceTree = "<group>"; };
+		50BE3F5B75EF266DED01F4C0 /* PublishCoordinatorRetiredProvidersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishCoordinatorRetiredProvidersTests.swift; sourceTree = "<group>"; };
 		5220829C13343A2C85B19724 /* libGradusWidgetSupport.a */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = archive.ar; path = libGradusWidgetSupport.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		531644979102F233D15AFA32 /* GradusWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = GradusWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		54660D3F9A69487626A5623F /* densityCompactPhoneAccessibility1.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densityCompactPhoneAccessibility1.1.png; sourceTree = "<group>"; };
@@ -673,6 +676,7 @@
 		DC61613C19DAE6DF59BE17C0 /* DashboardViewModel+Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardViewModel+Notifications.swift"; sourceTree = "<group>"; };
 		DEBF453D28532A7764F4836A /* densityStandardPadPortraitLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densityStandardPadPortraitLight.1.png; sourceTree = "<group>"; };
 		E300B1FA30A62CAD4E2DC57C /* GradusKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = GradusKit; path = GradusKit; sourceTree = SOURCE_ROOT; };
+		E339C314887419AA2FF1B697 /* PublishCoordinator+RetiredProviders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PublishCoordinator+RetiredProviders.swift"; sourceTree = "<group>"; };
 		E4917825AA69205E648400EC /* densePadPortraitDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = densePadPortraitDark.1.png; sourceTree = "<group>"; };
 		E6BDE0A3257F0BCB9E72B0DD /* iconButtonSnapshotLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = iconButtonSnapshotLight.1.png; sourceTree = "<group>"; };
 		E96E6293B7AE6B35228F5620 /* SettingsView+SampleMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView+SampleMode.swift"; sourceTree = "<group>"; };
@@ -1087,6 +1091,7 @@
 				5651685B644BA9B4B6BF4E75 /* ProviderEntry+Ranking.swift */,
 				916CBC47B8228AFD5B2DBA17 /* PublishCoordinator.swift */,
 				B92DC1CA01A6E9C1C75DFDA1 /* PublishCoordinator+ErrorNaming.swift */,
+				E339C314887419AA2FF1B697 /* PublishCoordinator+RetiredProviders.swift */,
 				6ED6FF507C14BCA7CBE51FB6 /* PublisherViewModel.swift */,
 				ED8D5AFC9CD0F745A237A93B /* ResetNotificationScheduler.swift */,
 				2B167BC0ED1064175CD011CE /* ResetObservationPipeline.swift */,
@@ -1233,6 +1238,7 @@
 				21795607EC3DB4582CDD3475 /* ProviderRetryAccessibilityTests.swift */,
 				4B375FAC6E483EDBD2BA91F0 /* ProviderTriageTests.swift */,
 				93FA3B5A1065DD371B063C93 /* PublishCoordinatorFailureDescriptionTests.swift */,
+				50BE3F5B75EF266DED01F4C0 /* PublishCoordinatorRetiredProvidersTests.swift */,
 				3A74FD96A8FACB126615DC2A /* PublishCoordinatorSaveAndRetryTests.swift */,
 				16339AD680532557DEFD7C37 /* PublisherViewModelSyncTests.swift */,
 				A27408672EDF9C6F8291A30D /* ResetNotificationTests.swift */,
@@ -1965,6 +1971,7 @@
 				C46632E4AF77D3556E33D75F /* ProviderRanking.swift in Sources */,
 				4E6A698A6B2AE13FB49CD91A /* ProviderWindowLabel.swift in Sources */,
 				67DC0C0CB7FD476AF6CF7C13 /* PublishCoordinator+ErrorNaming.swift in Sources */,
+				8AF6ACFCB5DA62C353340D60 /* PublishCoordinator+RetiredProviders.swift in Sources */,
 				70813194B18C52B2B484587A /* PublishCoordinator.swift in Sources */,
 				2EFC80B9E2D42688B69A3FE5 /* PublisherViewModel.swift in Sources */,
 				8BEBB91956079BB7E763B59B /* ResetNotificationScheduler.swift in Sources */,
@@ -2149,6 +2156,7 @@
 				915BD888C707ED505F3016DA /* ProviderRetryAccessibilityTests.swift in Sources */,
 				3692E17716C3490385B969FD /* ProviderTriageTests.swift in Sources */,
 				9B25D1B241F329145DB21433 /* PublishCoordinatorFailureDescriptionTests.swift in Sources */,
+				DA0CE0B7BCC9BD42914BD154 /* PublishCoordinatorRetiredProvidersTests.swift in Sources */,
 				A6646E36F4CF419C88064C92 /* PublishCoordinatorSaveAndRetryTests.swift in Sources */,
 				FCADDB2664A2D8FFB2416447 /* PublisherViewModelSyncTests.swift in Sources */,
 				8741DB0B81B3409DED806AAC /* ResetNotificationTests.swift in Sources */,

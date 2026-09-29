@@ -26,10 +26,6 @@ class CodexStatus:
     weekly_percent_left: float | None
     five_hour_reset: str | None
     weekly_reset: str | None
-    spark_weekly_percent_left: float | None
-    spark_weekly_reset: str | None
-    spark_five_hour_percent_left: float | None
-    spark_five_hour_reset: str | None
     raw_text: str
     banked_candidate: Any = dataclass_field(default=None, repr=False)
     source_reset_instants: dict[str, datetime] | None = dataclass_field(default=None, repr=False)
@@ -38,16 +34,12 @@ class CodexStatus:
         for field in (
             "five_hour_percent_left",
             "weekly_percent_left",
-            "spark_weekly_percent_left",
-            "spark_five_hour_percent_left",
         ):
             val = _clamp_percent(getattr(self, field))
             object.__setattr__(self, field, val)
         for field in (
             "five_hour_reset",
             "weekly_reset",
-            "spark_weekly_reset",
-            "spark_five_hour_reset",
         ):
             val = getattr(self, field)
             if val is not None and not isinstance(val, str):

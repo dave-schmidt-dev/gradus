@@ -258,6 +258,8 @@ private actor HoldingCloudDatabase: CloudDatabase {
         CKRecord(recordType: CloudKitConstants.recordType, recordID: id)
     }
 
+    func deleteRecords(_: [CKRecord.ID]) async throws {}
+
     func waitForFirstSave() async {
         if firstStarted {
             return

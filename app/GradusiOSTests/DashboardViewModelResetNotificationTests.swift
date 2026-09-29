@@ -86,13 +86,10 @@ private func resetViewModel(
     let scheduler = RecordingResetScheduler()
     let low = [
         resetStatus("Codex", percent: 20, observedAt: resetLowTime, count: 1, countObservedAt: resetLowTime),
-        resetStatus("Codex (Spark)", percent: 20, observedAt: resetLowTime),
         resetStatus("Claude", percent: 20, observedAt: resetLowTime)
     ]
     let high = [
         resetStatus("Codex", percent: 100, observedAt: resetHighTime),
-        resetStatus("Codex (Spark)", percent: 100, observedAt: resetHighTime,
-                    deadline: "2026-09-24T13:00:00Z"),
         resetStatus("Claude", percent: 100, observedAt: resetHighTime,
                     deadline: "2026-09-24T13:00:00Z")
     ]
@@ -114,11 +111,8 @@ private func resetViewModel(
     #expect(await viewModel.sync())
     #expect(scheduler.alerts.isEmpty)
     await viewModel.handleRemoteNotification()
-    // The retired Codex (Spark) records above are dropped at ingest, so their
-    // refill raises no alert.
     #expect(scheduler.alerts.count == 2)
     #expect(scheduler.alerts.contains(.usageRefill(providerName: "Codex", windowID: "five_hour")))
-    #expect(!scheduler.alerts.contains(.usageRefill(providerName: "Codex (Spark)", windowID: "five_hour")))
     #expect(scheduler.alerts.contains(.usageRefill(providerName: "Claude", windowID: "five_hour")))
     await viewModel.handleRemoteNotification()
     #expect(scheduler.alerts.count == 3)

@@ -367,12 +367,8 @@ public final class PublisherViewModel: ObservableObject {
         defaults.removeObject(forKey: Self.syncEnabledKey)
     }
 
-    /// Buckets the provider has retired. The Python producer still emits a
-    /// synthetic entry for one, so the Mac drops it before display or publish.
-    nonisolated static let retiredProviderNames: Set<String> = ["Codex (Spark)"]
-
     public func apply(_ payload: SnapshotPayload) {
-        providers = payload.providers.filter { !Self.retiredProviderNames.contains($0.name) }
+        providers = payload.providers
         updatedAt = payload.updatedAt
         refreshBackgroundAgentState()
     }

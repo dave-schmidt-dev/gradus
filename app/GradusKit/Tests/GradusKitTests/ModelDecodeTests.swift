@@ -10,12 +10,12 @@ private func loadGoldenFixtureData() throws -> Data {
 @Test func decodesGoldenFixtureWithAllProviders() throws {
     let payload = try JSONDecoder().decode(SnapshotPayload.self, from: loadGoldenFixtureData())
     #expect(payload.schemaVersion == 2)
-    // Includes synthetic v2-only entries: "Codex (Spark)" and "Antigravity (Claude)".
-    #expect(payload.providers.count == 9)
+    // Includes the synthetic v2-only entry "Antigravity (Claude)".
+    #expect(payload.providers.count == 8)
     let names = Set(payload.providers.map(\.name))
     #expect(
         names == [
-            "Codex", "Codex (Spark)", "Claude", "Antigravity", "Antigravity (Claude)", "Copilot", "Cursor",
+            "Codex", "Claude", "Antigravity", "Antigravity (Claude)", "Copilot", "Cursor",
             "OpenCode Go", "Vibe"
         ]
     )

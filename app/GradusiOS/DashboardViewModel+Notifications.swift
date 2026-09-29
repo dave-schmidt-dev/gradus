@@ -189,7 +189,7 @@ extension DashboardViewModel {
     }
 
     private static func isResetProvider(_ name: String) -> Bool {
-        name == "Codex" || name == "Codex (Spark)" || name == "Claude"
+        name == "Codex" || name == "Claude"
     }
 
     private static func bankedObservation(_ status: ProviderStatus) -> ResetBankedObservation? {

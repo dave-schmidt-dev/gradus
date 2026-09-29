@@ -133,26 +133,6 @@ PROVIDER_RENDER_SPECS = {
                 "weekly_reset",
                 24.0 * 7.0,
             ),
-            WindowRenderSpec(
-                "spark_five_hour",
-                "sp5h",
-                "sp5h ↻",
-                None,
-                "spark_five_hour_percent_left",
-                "spark_five_hour_reset",
-                5.0,
-                omit_when_empty=True,
-            ),
-            WindowRenderSpec(
-                "spark_weekly",
-                "sp1w",
-                "sp1w ↻",
-                None,
-                "spark_weekly_percent_left",
-                "spark_weekly_reset",
-                24.0 * 7.0,
-                omit_when_empty=True,
-            ),
         ),
     ),
     "Claude": ProviderRenderSpec(
@@ -544,53 +524,11 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
         return native_blocked and third_party_blocked
 
     if name == "Codex":
-        # Native (5h/1w) and Spark (sp5h/sp1w) are independent pools, mirroring the
-        # Antigravity structure above. Spark is a newer bucket that most
-        # accounts don't have yet (spark_weekly_percent_left stays None), so
-        # this can't reuse the generic fallthrough's "any single depleted
-        # window empties the provider" rule -- that would empty the card the
-        # instant Spark alone hits 0% even with full native quota. It also
-        # can't be a bare AND of native-blocked/spark-blocked -- for accounts
-        # with no Spark access, spark_blocked would be permanently False,
-        # permanently suppressing the depleted view even when native quota is
-        # fully exhausted.
-        native_windows = tuple(
-            window
-            for window in PROVIDER_RENDER_SPECS[name].windows
-            if window.window_id in ("five_hour", "weekly")
-        )
-        spark_windows = tuple(
-            window
-            for window in PROVIDER_RENDER_SPECS[name].windows
-            if window.window_id in ("spark_five_hour", "spark_weekly")
-        )
-        values = [
-            snapshot.data.get(window.percent_key) for window in (*native_windows, *spark_windows)
-        ]
-        available = [value for value in values if percent_is_valid(value)]
-        if available and all(percent_is_depleted(value) for value in available):
-            return True
-        native_blocked = percent_is_depleted(
+        # Codex's 5h and 1w windows are tranches of one quota: either window
+        # at 0% empties the whole provider.
+        return percent_is_depleted(
             snapshot.data.get("five_hour_percent_left")
         ) or percent_is_depleted(snapshot.data.get("weekly_percent_left"))
-        # Unlike Antigravity's third-party pool, Codex's native 5h/1w windows
-        # already had an established, tested, currently-live rule *before*
-        # Spark existed: either window at 0% empties the whole provider (see
-        # the two windows are tranches of one quota, not independent pools).
-        # For the near-100% of accounts with no Spark bucket at all
-        # (spark_weekly_percent_left stays None), that must still hold --
-        # Spark isn't a second pool for them, it's simply not there. Treating
-        # an absent Spark value as "blocked" (rather than requiring it to be
-        # explicitly depleted) makes the AND below collapse to plain
-        # `native_blocked` for those accounts, preserving that legacy rule.
-        # Only an accessible-and-still-has-capacity Spark bucket can keep the
-        # provider out of the depleted view despite native exhaustion.
-        spark_values = [snapshot.data.get(window.percent_key) for window in spark_windows]
-        spark_present = any(percent_is_valid(value) for value in spark_values)
-        spark_blocked = not spark_present or any(
-            percent_is_depleted(value) for value in spark_values if percent_is_valid(value)
-        )
-        return native_blocked and spark_blocked
 
     windows = normalized_warning_windows(snapshot, now)
     depleted = {
@@ -1253,19 +1191,9 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
     if spec:
         # C+G rows use the same depleted presentation when every usable quota
         # is exhausted, while malformed/absent C+G values remain omitted
-        # rather than producing phantom rows. Codex's Spark bucket is its
-        # own independent pool too (see `_provider_is_empty`), so it is kept
-        # separate from native five_hour/weekly for the same blocking-reset
-        # computation below.
+        # rather than producing phantom rows.
         if name == "Antigravity":
             pools: tuple[tuple[WindowRenderSpec, ...], ...] = (spec.windows, ANTIGRAVITY_CG_WINDOWS)
-        elif name == "Codex":
-            pools = (
-                tuple(w for w in spec.windows if w.window_id in ("five_hour", "weekly")),
-                tuple(
-                    w for w in spec.windows if w.window_id in ("spark_five_hour", "spark_weekly")
-                ),
-            )
         else:
             pools = (spec.windows,)
         windows = tuple(window for pool in pools for window in pool)
@@ -1585,42 +1513,22 @@ def _extract_depleted_reset_str(snapshot: ProviderSnapshot, now: datetime) -> st
                         depleted_raw, key=lambda raw: _parse_reset_target(raw, now) or far_future
                     )
         elif name == "Codex":
-            native = tuple(w for w in spec.windows if w.window_id in ("five_hour", "weekly"))
-            spark = tuple(
-                w
-                for w in spec.windows
-                if w.percent_key in ("spark_five_hour_percent_left", "spark_weekly_percent_left")
-            )
-            if _pool_is_present(native, data) and _pool_is_present(spark, data):
-                pool_resets = [
-                    reset
-                    for pool in (native, spark)
-                    if (reset := _pool_free_reset(pool, data, now)) is not None
-                ]
-                if pool_resets:
-                    return min(
-                        pool_resets, key=lambda raw: _parse_reset_target(raw, now) or far_future
-                    )
-            else:
-                # Spark is absent for most accounts (see `_pool_is_present`),
-                # so `_provider_is_empty` falls back to its legacy Codex rule:
-                # native 5h/1w are tranches of one quota, and *either* window
-                # at 0% blocks the whole provider (OR, not AND -- see
-                # `_provider_is_empty`'s Codex branch). Unlike Antigravity's
-                # fallback (an AND of depleted windows, which un-blocks at the
-                # first/soonest recovery), an OR only clears once every
-                # currently-depleted window has reset -- the latest (max),
-                # same as `_pool_free_reset`.
-                depleted_raw = [
-                    str(data[window.reset_key])
-                    for window in (*native, *spark)
-                    if _is_empty_window(data.get(window.percent_key))
-                    and data.get(window.reset_key) is not None
-                ]
-                if depleted_raw:
-                    return max(
-                        depleted_raw, key=lambda raw: _parse_reset_target(raw, now) or far_future
-                    )
+            # 5h/1w are tranches of one quota, and *either* window at 0%
+            # blocks the whole provider (OR, not AND -- see
+            # `_provider_is_empty`). Unlike Antigravity's fallback (an AND of
+            # depleted windows, which un-blocks at the first/soonest recovery),
+            # an OR only clears once every currently-depleted window has reset
+            # -- the latest (max), same as `_pool_free_reset`.
+            depleted_raw = [
+                str(data[window.reset_key])
+                for window in spec.windows
+                if _is_empty_window(data.get(window.percent_key))
+                and data.get(window.reset_key) is not None
+            ]
+            if depleted_raw:
+                return max(
+                    depleted_raw, key=lambda raw: _parse_reset_target(raw, now) or far_future
+                )
         else:
             reset = _pool_free_reset(spec.windows, data, now)
             if reset is not None:

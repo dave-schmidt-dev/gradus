@@ -39,6 +39,12 @@ actor MockCloudDatabase: CloudDatabase {
         return RecordSaveOutcome(results: scriptedResponses[index])
     }
 
+    private(set) var deletedRecordIDs: [CKRecord.ID] = []
+
+    func deleteRecords(_ recordIDs: [CKRecord.ID]) async throws {
+        deletedRecordIDs.append(contentsOf: recordIDs)
+    }
+
     func fetchRecord(_ recordID: CKRecord.ID) async throws -> CKRecord {
         if let handler = fetchRecordHandler {
             return try handler(recordID)

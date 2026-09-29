@@ -68,15 +68,6 @@ private func makeProvider(
     #expect(localIsUrgent(makeWindow(percentLeft: 0, paceDelta: 0.5), threshold: 10))
 }
 
-// MARK: - retired providers
-
-@MainActor
-@Test func retiredCodexSparkRecordIsDroppedAtIngest() {
-    let codex = makeProvider(name: "Codex", windows: [makeWindow(percentLeft: 50)])
-    let spark = makeProvider(name: "Codex (Spark)", windows: [])
-    #expect(DashboardViewModel.withoutRetiredProviders([codex, spark]).map(\.providerName) == ["Codex"])
-}
-
 // MARK: - exhausted reset label
 
 @Test func exhaustedResetIgnoresAvailableOpenCodeWindows() {
