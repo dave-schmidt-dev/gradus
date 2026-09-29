@@ -17,29 +17,29 @@ private final class RecordingWarningNotificationScheduler: WarningNotificationSc
     }
 }
 
-@Test func warningNotificationNamesProviderWindowAndThreshold() {
+@Test func warningNotificationNamesProviderWindowAndPace() {
     let provider = ProviderStatus(
         providerName: "opencode-go", providerDisplayName: "OpenCode Go", ok: true,
         errorMessage: nil,
         windows: [
-            ProviderWindow(id: "five_hour", percentLeft: 20, resetISO: nil, windowHours: 5, paceDelta: nil),
-            ProviderWindow(id: "weekly", percentLeft: 80, resetISO: nil, windowHours: 168, paceDelta: nil)
+            ProviderWindow(id: "five_hour", percentLeft: 20, resetISO: nil, windowHours: 5, paceDelta: -0.30),
+            ProviderWindow(id: "weekly", percentLeft: 80, resetISO: nil, windowHours: 168, paceDelta: 0.10)
         ], data: [:], observedAt: nil, snapshotUpdatedAt: "2026-08-11T12:00:00Z",
         publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true
     )
 
-    let content = WarningNotificationContent.make(for: provider, thresholdPercent: 25)
+    let content = WarningNotificationContent.make(for: provider, thresholdPercent: 10)
 
     #expect(content?.title == "OpenCode Go 5 Hour warning")
-    #expect(content?.body == "20% remaining, below your 25% warning threshold.")
+    #expect(content?.body == "30% behind, 20% remaining.")
 }
 
-@Test func providerWarningWithoutALocallyReachedThresholdDoesNotClaimOne() {
+@Test func providerWarningWithNoWarningWindowGetsTheGenericBody() {
     let provider = ProviderStatus(
         providerName: "opencode-go", providerDisplayName: "OpenCode Go", ok: true,
         errorMessage: nil,
         windows: [
-            ProviderWindow(id: "five_hour", percentLeft: 62, resetISO: nil, windowHours: 5, paceDelta: -0.20)
+            ProviderWindow(id: "five_hour", percentLeft: 62, resetISO: nil, windowHours: 5, paceDelta: 0.05)
         ], data: [:], observedAt: nil, snapshotUpdatedAt: "2026-08-11T12:00:00Z",
         publishedAt: Date(timeIntervalSince1970: 1_786_000_000), isWarning: true
     )

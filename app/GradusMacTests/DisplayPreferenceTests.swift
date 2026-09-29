@@ -54,7 +54,7 @@ struct DisplayPreferenceTests {
 
             #expect(viewModel.showExhausted)
             #expect(viewModel.providerSortOption == .mostUrgent)
-            #expect(viewModel.localWarningThresholdPercent == 20.0)
+            #expect(viewModel.localWarningThresholdPercent == 10.0)
             #expect(
                 viewModel.localWarningThresholdPercent
                     == PublisherViewModel.defaultLocalWarningThresholdPercent
@@ -67,12 +67,12 @@ struct DisplayPreferenceTests {
             let viewModel = PublisherViewModel(defaults: defaults)
             viewModel.showExhausted = false
             viewModel.providerSortOption = .nameAZ
-            viewModel.localWarningThresholdPercent = 35
+            viewModel.localWarningThresholdPercent = 7
 
             let relaunched = PublisherViewModel(defaults: defaults)
             #expect(!relaunched.showExhausted)
             #expect(relaunched.providerSortOption == .nameAZ)
-            #expect(relaunched.localWarningThresholdPercent == 35)
+            #expect(relaunched.localWarningThresholdPercent == 7)
         }
     }
 
@@ -87,7 +87,7 @@ struct DisplayPreferenceTests {
             viewModel.showExhausted = false
             #expect(viewModel.presentationRevision == initial + 2)
 
-            viewModel.localWarningThresholdPercent = 35
+            viewModel.localWarningThresholdPercent = 7
             #expect(viewModel.presentationRevision == initial + 3)
         }
     }
@@ -105,10 +105,10 @@ struct DisplayPreferenceTests {
     }
 
     @Test func warningThresholdUsesWholePercentsWithoutSliderTickMarks() {
-        #expect(MacSettingsView.wholePercent(20.4) == 20)
-        #expect(MacSettingsView.wholePercent(20.6) == 21)
+        #expect(MacSettingsView.wholePercent(4.4) == 4)
+        #expect(MacSettingsView.wholePercent(4.6) == 5)
         #expect(MacSettingsView.wholePercent(-1) == 0)
-        #expect(MacSettingsView.wholePercent(101) == 100)
+        #expect(MacSettingsView.wholePercent(11) == MacSettingsView.maxWarningPointsBehind)
     }
 
     @Test func showExhaustedFiltersDepletedProvidersOutOfTheMenu() {

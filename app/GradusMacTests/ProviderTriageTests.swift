@@ -280,11 +280,13 @@ extension ProviderTriageTests {
     @Test func thresholdOnlyAddsToAttentionNeverRemoves() {
         let paceWarned = provider("Burning", percentLeft: 50, paceDelta: -0.40)
         #expect(paceWarned.rankingNeedsAttention(localThreshold: 0))
-        #expect(paceWarned.rankingNeedsAttention(localThreshold: 100))
+        #expect(paceWarned.rankingNeedsAttention(localThreshold: 10))
 
         let calm = provider("Calm", percentLeft: 50, paceDelta: 0.10)
-        #expect(!calm.rankingNeedsAttention(localThreshold: 20))
-        #expect(calm.rankingNeedsAttention(localThreshold: 50))
+        #expect(!calm.rankingNeedsAttention(localThreshold: 0))
+        let drifting = provider("Drifting", percentLeft: 50, paceDelta: -0.06)
+        #expect(!drifting.rankingNeedsAttention(localThreshold: 10))
+        #expect(drifting.rankingNeedsAttention(localThreshold: 5))
     }
 
     @Test func worstWindowIsTheOneClosestToDepletion() {

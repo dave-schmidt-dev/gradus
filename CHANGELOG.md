@@ -9,6 +9,18 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
+## Unreleased
+
+### Changed
+
+- The local Warning Threshold on Mac and iPhone/iPad is now points behind
+  expected pace (0-10, default 10) instead of percent left. Gradus always warns
+  at 10 points behind, so lowering it only warns sooner. Local warning
+  notifications now report the pace ("30% behind, 20% remaining") instead of a
+  percent-left threshold. The saved value resets to the default; the old
+  percent setting is not carried over. The reset-alert explanations on
+  iPhone/iPad moved behind an info button.
+
 ## 1.11.0 — 2026-09-24
 
 ### Added

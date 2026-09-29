@@ -133,17 +133,7 @@ struct MacSettingsView: View {
                 .foregroundStyle(.secondary)
             }
 
-            Section("Warning Threshold") {
-                Slider(
-                    value: warningThresholdBinding,
-                    in: 0 ... 100
-                ) {
-                    Text("Warn at or below \(Int(viewModel.localWarningThresholdPercent))%")
-                }
-                Text("Highlights providers at or below this level.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+            warningThresholdSection
 
             Section("Reset Alerts") {
                 Text("Reset alerts are separate from low-usage warnings and apply on this Mac only.")
@@ -174,7 +164,7 @@ struct MacSettingsView: View {
                     )
                 )
                 .accessibilityIdentifier("settings-reset-refills")
-                Text("Alert when a reported allowance refills for Codex, Codex (Spark), or Claude.")
+                Text("Alert when a reported allowance refills for Codex or Claude.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -289,8 +279,12 @@ struct MacSettingsView: View {
         }
     }
 
+    /// The shared ramp already warns at 10 points behind pace, so a larger
+    /// local threshold could never change anything.
+    static let maxWarningPointsBehind: Double = 10
+
     static func wholePercent(_ value: Double) -> Double {
-        min(100, max(0, value.rounded()))
+        min(maxWarningPointsBehind, max(0, value.rounded()))
     }
 
     /// Reads the same two Info.plist keys the iOS About section does, so a
@@ -300,5 +294,24 @@ struct MacSettingsView: View {
         let short = info?["CFBundleShortVersionString"] as? String ?? "—"
         let build = info?["CFBundleVersion"] as? String ?? "—"
         return "\(short) (\(build))"
+    }
+}
+
+extension MacSettingsView {
+    var warningThresholdSection: some View {
+        Section("Warning Threshold") {
+            Slider(
+                value: warningThresholdBinding,
+                in: 0 ... Self.maxWarningPointsBehind
+            ) {
+                Text("Warn at \(Int(viewModel.localWarningThresholdPercent)) points behind pace")
+            }
+            Text(
+                "Highlights providers this far behind their expected pace. Gradus always warns "
+                    + "at 10 points behind, so a lower value only warns sooner."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
     }
 }

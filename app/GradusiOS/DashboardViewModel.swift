@@ -114,9 +114,11 @@ public final class DashboardViewModel: ObservableObject {
         .unavailable(lastObservedCount: nil, lastObservedAt: nil)
     @Published public internal(set) var resetAlertAuthorizationRequestInProgress = false
 
-    /// P5/T5.2: iOS-local, per-device "locally urgent" percent-left
-    /// threshold (Key decision #1/#5) -- affects local display/ranking
-    /// only, never what CloudKit pushes. Plain `didSet`-persists, like
+    /// P5/T5.2: iOS-local, per-device "locally urgent" threshold, in points
+    /// behind expected pace (Key decision #1/#5) -- affects local
+    /// display/ranking only, never what CloudKit pushes. The property keeps
+    /// its historical name; it was percent left before the pace change, which
+    /// is why the stored key is new. Plain `didSet`-persists, like
     /// `syncEnabled`: unlike notifications, there's no network call to
     /// gate on.
     @Published public var localWarningThresholdPercent: Double {
@@ -179,7 +181,7 @@ public final class DashboardViewModel: ObservableObject {
     static let bankedResetAlertsEnabledKey = "bankedResetAlertsEnabled"
     static let usageRefillAlertsEnabledKey = "usageRefillAlertsEnabled"
     static let resetAlertStateKey = "mobileResetAlertStateV1"
-    static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
+    static let localWarningThresholdPercentKey = "localWarningPaceBehindPoints"
     static let providerSortOptionKey = "providerSortOption"
     static let showExhaustedKey = "showExhausted"
     static let widgetExcludedProviderNamesKey = "widgetExcludedProviderNames"
@@ -190,7 +192,7 @@ public final class DashboardViewModel: ObservableObject {
     static let pendingLegacyCardColumnPreferenceKey = "dashboardPendingLegacyCardColumnPreference"
     static let deferredCardSizePreferenceKey = "dashboardDeferredCardSizePreference"
     private static let cardColumnPreferenceFormatVersion = 1
-    private static let defaultLocalWarningThresholdPercent: Double = 20.0
+    private static let defaultLocalWarningThresholdPercent: Double = 10.0
 
     // None of the stored properties below are `private`: every one is read
     // or written from at least one sibling extension file
@@ -352,7 +354,7 @@ public final class DashboardViewModel: ObservableObject {
         widgetExcludedProviderNames = Set(
             userDefaults.stringArray(forKey: Self.widgetExcludedProviderNamesKey) ?? []
         )
-        allProviders = cache.loadCachedStatuses()
+        allProviders = Self.withoutRetiredProviders(cache.loadCachedStatuses())
         evaluateResetStatuses(allProviders, schedule: false)
         providers = Self.presentedProviders(
             allProviders,

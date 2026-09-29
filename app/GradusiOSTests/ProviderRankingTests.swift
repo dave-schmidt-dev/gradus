@@ -41,20 +41,40 @@ private func makeProvider(
 
 // MARK: - localIsUrgent boundaries
 
-@Test func localIsUrgentAboveThresholdIsFalse() {
-    #expect(!localIsUrgent(makeWindow(percentLeft: 21), threshold: 20))
+@Test func localIsUrgentLessBehindPaceThanThresholdIsFalse() {
+    #expect(!localIsUrgent(makeWindow(percentLeft: 50, paceDelta: -0.04), threshold: 5))
 }
 
-@Test func localIsUrgentAtThresholdIsTrue() {
-    #expect(localIsUrgent(makeWindow(percentLeft: 20), threshold: 20))
+@Test func localIsUrgentExactlyAtThresholdIsTrue() {
+    #expect(localIsUrgent(makeWindow(percentLeft: 50, paceDelta: -0.05), threshold: 5))
 }
 
-@Test func localIsUrgentBelowThresholdIsTrue() {
-    #expect(localIsUrgent(makeWindow(percentLeft: 5), threshold: 20))
+@Test func localIsUrgentFurtherBehindPaceThanThresholdIsTrue() {
+    #expect(localIsUrgent(makeWindow(percentLeft: 50, paceDelta: -0.30), threshold: 5))
 }
 
-@Test func localIsUrgentDepletedIsTrueRegardlessOfThreshold() {
+@Test func localIsUrgentOnOrAheadOfPaceIsFalseEvenAtZeroThreshold() {
+    #expect(!localIsUrgent(makeWindow(percentLeft: 50, paceDelta: 0), threshold: 0))
+    #expect(!localIsUrgent(makeWindow(percentLeft: 50, paceDelta: 0.20), threshold: 0))
+}
+
+@Test func localIsUrgentWithoutPaceIsFalseUnlessDepleted() {
+    #expect(!localIsUrgent(makeWindow(percentLeft: 5), threshold: 0))
+    #expect(!localIsUrgent(makeWindow(percentLeft: 5, paceDelta: .nan), threshold: 0))
+}
+
+@Test func localIsUrgentDepletedIsTrueRegardlessOfThresholdOrPace() {
     #expect(localIsUrgent(makeWindow(percentLeft: 0), threshold: 0))
+    #expect(localIsUrgent(makeWindow(percentLeft: 0, paceDelta: 0.5), threshold: 10))
+}
+
+// MARK: - retired providers
+
+@MainActor
+@Test func retiredCodexSparkRecordIsDroppedAtIngest() {
+    let codex = makeProvider(name: "Codex", windows: [makeWindow(percentLeft: 50)])
+    let spark = makeProvider(name: "Codex (Spark)", windows: [])
+    #expect(DashboardViewModel.withoutRetiredProviders([codex, spark]).map(\.providerName) == ["Codex"])
 }
 
 // MARK: - exhausted reset label
@@ -150,23 +170,25 @@ private func makeProvider(
 }
 
 @Test func attentionTierUnionPredicateCorrectness() {
-    // The exact bug the adjudicator caught: a window whose `isWarning` came
-    // from the pace-based trigger (paceDelta < -0.10), not the percent
-    // threshold. Constructed via the memberwise init with `isWarning: true`
-    // explicit, so it does not depend on `windowWarns` recomputation --
-    // the window's own percentLeft (50) sits well above the 20 threshold, so
-    // `localIsUrgent` alone would independently evaluate `false` for it.
+    // The exact bug the adjudicator caught: a provider whose `isWarning` came
+    // from the shared trigger rather than the device-local threshold.
+    // Constructed via the memberwise init with `isWarning: true` explicit, so
+    // it does not depend on `windowWarns` recomputation. The window carries no
+    // pace, so `localIsUrgent` alone would independently evaluate `false` for
+    // it -- the pace-carrying case can no longer separate the two predicates
+    // now that the local threshold is itself pace-based and capped at the
+    // shared ramp's 10 points.
     let paceWarned = makeProvider(
         name: "antigravity-claude",
-        windows: [makeWindow(percentLeft: 50, paceDelta: -0.30)],
+        windows: [makeWindow(percentLeft: 50)],
         isWarning: true
     )
     #expect(paceWarned.isWarning)
-    #expect(!paceWarned.windows.contains { localIsUrgent($0, threshold: 20) })
+    #expect(!paceWarned.windows.contains { localIsUrgent($0, threshold: 10) })
 
     let normal = makeProvider(name: "codex", windows: [makeWindow(percentLeft: 45)])
 
-    let ranked = rankProviders([normal, paceWarned], localThreshold: 20)
+    let ranked = rankProviders([normal, paceWarned], localThreshold: 10)
 
     // paceWarned must land in tier 2 (attention), ahead of codex's tier 3
     // (normal) -- ranking on `localIsUrgent` alone would have put codex

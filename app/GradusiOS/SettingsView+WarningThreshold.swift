@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The "Warning Threshold" section of `SettingsView`: the local, per-device
-/// percent-remaining threshold used to highlight providers. Split out of
+/// points-behind-pace threshold used to highlight providers. Split out of
 /// `SettingsView.swift` to keep that file's type body under SwiftLint's
 /// length gate.
 extension SettingsView {
@@ -11,14 +11,14 @@ extension SettingsView {
                 HStack {
                     Icon.warning
                         .frame(width: 24)
-                    Text("Local warning threshold")
+                    Text("Warn when behind pace by")
                     Spacer()
-                    Text("\(Int(dashboardViewModel.localWarningThresholdPercent))%")
+                    Text("\(Int(dashboardViewModel.localWarningThresholdPercent)) pts")
                         .foregroundStyle(.secondary)
                 }
                 Slider(
                     value: $dashboardViewModel.localWarningThresholdPercent,
-                    in: 0 ... 100,
+                    in: 0 ... 10,
                     step: 1,
                     onEditingChanged: { isEditing in
                         if !isEditing {
@@ -28,7 +28,8 @@ extension SettingsView {
                 )
                 .accessibilityIdentifier("warning-threshold-slider")
                 Text(
-                    "Highlights providers below this % on this device only -- does not change which alerts get pushed."
+                    "Highlights providers this many points behind their expected pace, on this device only. "
+                        + "Gradus always warns at 10 points behind, so a lower value only warns sooner."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

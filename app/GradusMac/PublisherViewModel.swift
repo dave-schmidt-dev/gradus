@@ -128,6 +128,8 @@ public final class PublisherViewModel: ObservableObject {
         }
     }
 
+    /// Points behind expected pace at which a window counts as locally urgent.
+    /// Keeps its historical name; the stored key changed when the meaning did.
     @Published public var localWarningThresholdPercent: Double {
         didSet {
             defaults.set(localWarningThresholdPercent, forKey: Self.localWarningThresholdPercentKey)
@@ -167,7 +169,7 @@ public final class PublisherViewModel: ObservableObject {
     static let requiredICloudModeVersion = RequiredICloudMigration.currentVersion
     static let lastSyncedAtKey = "iCloudLastSyncedAt"
     static let providerSortOptionKey = "providerSortOption"
-    static let localWarningThresholdPercentKey = "localWarningThresholdPercent"
+    static let localWarningThresholdPercentKey = "localWarningPaceBehindPoints"
     /// Deliberately the same key string as `DashboardViewModel.showExhaustedKey`.
     /// The two apps have separate defaults domains so nothing is shared at
     /// runtime, but keeping the names aligned means a reader comparing the two
@@ -181,7 +183,7 @@ public final class PublisherViewModel: ObservableObject {
     /// different default here would mean the same provider counts as "low" on
     /// the phone and not on the Mac, which is the class of drift this whole
     /// change exists to remove.
-    public static let defaultLocalWarningThresholdPercent: Double = 20.0
+    public static let defaultLocalWarningThresholdPercent: Double = 10.0
 
     /// Injectable so tests do not write to the shipping app's own preference
     /// domain. That is not hypothetical: this bundle is hosted, so
@@ -239,7 +241,7 @@ public final class PublisherViewModel: ObservableObject {
         ) ?? .mostUrgent
         // Same `object(forKey:)` guard as the timestamp above, for the same
         // reason: `double(forKey:)` returns 0 for a missing key, which would
-        // silently mean "warn me about nothing" instead of the 20% default.
+        // silently mean "warn at any pace deficit" instead of the 10-point default.
         if defaults.object(forKey: Self.localWarningThresholdPercentKey) != nil {
             localWarningThresholdPercent =
                 defaults.double(forKey: Self.localWarningThresholdPercentKey)

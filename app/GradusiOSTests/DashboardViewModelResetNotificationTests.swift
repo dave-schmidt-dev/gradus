@@ -114,12 +114,14 @@ private func resetViewModel(
     #expect(await viewModel.sync())
     #expect(scheduler.alerts.isEmpty)
     await viewModel.handleRemoteNotification()
-    #expect(scheduler.alerts.count == 3)
+    // The retired Codex (Spark) records above are dropped at ingest, so their
+    // refill raises no alert.
+    #expect(scheduler.alerts.count == 2)
     #expect(scheduler.alerts.contains(.usageRefill(providerName: "Codex", windowID: "five_hour")))
-    #expect(scheduler.alerts.contains(.usageRefill(providerName: "Codex (Spark)", windowID: "five_hour")))
+    #expect(!scheduler.alerts.contains(.usageRefill(providerName: "Codex (Spark)", windowID: "five_hour")))
     #expect(scheduler.alerts.contains(.usageRefill(providerName: "Claude", windowID: "five_hour")))
     await viewModel.handleRemoteNotification()
-    #expect(scheduler.alerts.count == 4)
+    #expect(scheduler.alerts.count == 3)
     #expect(scheduler.alerts.last == .bankedGrant(increase: 1, currentCount: 2))
     #expect(try viewModel.bankedResetStatus == .current(
         count: 2, observedAt: #require(ResetAlertDetector.parseInstant(resetHighTime))

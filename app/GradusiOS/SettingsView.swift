@@ -27,6 +27,7 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @State private var warningAlertPermissionRequestPending = false
     @State private var resetAlertFixtureRequestPending = false
+    @State private var showingResetAlertInfo = false
     @State var showingWidgetProviders = false
 
     init(
@@ -85,7 +86,7 @@ struct SettingsView: View {
         "Alert when a new Codex banked reset credit is observed. Existing credits set the starting balance."
 
     static let usageRefillAlertsDescription =
-        "Alert when a reported Codex, Codex (Spark), or Claude usage window refills."
+        "Alert when a reported Codex or Claude usage window refills."
 
     static let claudeBankedUnavailableDescription =
         "Claude banked resets are unavailable to Gradus."
@@ -206,7 +207,7 @@ struct SettingsView: View {
     }
 
     private var resetAlertsSection: some View {
-        Section("Reset alerts") {
+        Section {
             ListRow.toggle(
                 icon: Icon.bell,
                 label: "New banked resets",
@@ -214,13 +215,7 @@ struct SettingsView: View {
                 accessibilityIdentifier: "reset-alerts-banked-toggle"
             )
             .disabled(resetAlertPermissionRequestPending)
-            Text(Self.bankedResetAlertsDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
             BankedResetStatusRow(status: dashboardViewModel.bankedResetStatus)
-            Text(Self.claudeBankedUnavailableDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
             ListRow.toggle(
                 icon: Icon.clock,
                 label: "Usage refilled",
@@ -228,15 +223,6 @@ struct SettingsView: View {
                 accessibilityIdentifier: "reset-alerts-refill-toggle"
             )
             .disabled(resetAlertPermissionRequestPending)
-            Text(Self.usageRefillAlertsDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(Self.mobileResetDeliveryDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(Self.resetAlertSourceDescription)
-                .font(.caption)
-                .foregroundStyle(.secondary)
             if resetAlertPermissionRequestPending {
                 Label("Waiting for your iOS notification choice.", systemImage: "hourglass")
                     .font(.caption)
@@ -245,6 +231,20 @@ struct SettingsView: View {
             }
             if dashboardViewModel.resetAlertsSuppressedBySystem {
                 resetAlertPermissionDeniedRow
+            }
+        } header: {
+            HStack(spacing: 6) {
+                Text("Reset alerts")
+                Button {
+                    showingResetAlertInfo = true
+                } label: {
+                    Icon.infoCircle
+                }
+                .accessibilityLabel("About reset alerts")
+                .accessibilityIdentifier("reset-alerts-info-button")
+                .popover(isPresented: $showingResetAlertInfo) {
+                    resetAlertInfoPopover
+                }
             }
         }
     }
@@ -339,4 +339,27 @@ private struct BankedResetStatusRow: View {
         .font(.caption)
         .foregroundStyle(.secondary)
     }
+}
+
+extension SettingsView {
+    var resetAlertInfoPopover: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Self.resetAlertInfoLines, id: \.self) { line in
+                Text(line)
+            }
+        }
+        .font(.callout)
+        .padding()
+        .frame(minWidth: 260, idealWidth: 300)
+        .presentationCompactAdaptation(.popover)
+        .accessibilityIdentifier("reset-alerts-info-popover")
+    }
+
+    static let resetAlertInfoLines = [
+        bankedResetAlertsDescription,
+        claudeBankedUnavailableDescription,
+        usageRefillAlertsDescription,
+        mobileResetDeliveryDescription,
+        resetAlertSourceDescription
+    ]
 }

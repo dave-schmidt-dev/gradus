@@ -9,7 +9,7 @@ import Testing
     let syncedAt = Date(timeIntervalSince1970: 1_787_483_600)
     let cache = PublisherCacheStore(
         statuses: [
-            publisherStatus("alpha", percentLeft: 30),
+            publisherStatus("alpha", percentLeft: 30, paceDelta: -0.06),
             publisherStatus("beta", percentLeft: 80)
         ],
         syncedAt: syncedAt
@@ -28,12 +28,12 @@ import Testing
     viewModel.showExhausted = false
     #expect(reloader.reloadCount == 1)
 
-    viewModel.localWarningThresholdPercent = 35
+    viewModel.localWarningThresholdPercent = 5
     viewModel.commitWarningThreshold()
     #expect(store.snapshot?.status == .attention)
     #expect(reloader.reloadCount == 2)
 
-    viewModel.localWarningThresholdPercent = 35
+    viewModel.localWarningThresholdPercent = 5
     viewModel.commitWarningThreshold()
     #expect(reloader.reloadCount == 2)
 }
@@ -300,7 +300,7 @@ import Testing
 
 @MainActor
 @Test func oneReloadPerCommittedThresholdEdit() {
-    let cached = publisherStatus("cached", percentLeft: 45)
+    let cached = publisherStatus("cached", percentLeft: 45, paceDelta: -0.06)
     let syncedAt = Date(timeIntervalSince1970: 1_787_483_600)
     let cache = PublisherCacheStore(statuses: [cached], syncedAt: syncedAt)
 
@@ -313,11 +313,11 @@ import Testing
     #expect(store.snapshot?.status == .ok)
 
     // Simulating slider drag: multiple intermediate value changes
-    viewModel.localWarningThresholdPercent = 46
-    viewModel.localWarningThresholdPercent = 47
-    viewModel.localWarningThresholdPercent = 48
-    viewModel.localWarningThresholdPercent = 49
-    viewModel.localWarningThresholdPercent = 50
+    viewModel.localWarningThresholdPercent = 9
+    viewModel.localWarningThresholdPercent = 8
+    viewModel.localWarningThresholdPercent = 7
+    viewModel.localWarningThresholdPercent = 6
+    viewModel.localWarningThresholdPercent = 5
 
     // No intermediate reload fired during slider drag
     #expect(reloader.reloadCount == 1)

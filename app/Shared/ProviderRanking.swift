@@ -23,9 +23,17 @@ public enum ProviderSortOption: String, CaseIterable, Identifiable {
 }
 
 /// A window is locally urgent when it's depleted (mirrors
-/// `GradusKit.percentIsDepleted`) OR its `percentLeft` is at/below the
-/// caller-supplied local threshold. Invalid percentages are never urgent
-/// candidates, matching `windowWarns`'s own guard.
+/// `GradusKit.percentIsDepleted`) OR it is at least `threshold` points behind
+/// its expected pace (`paceDelta * 100 <= -threshold`). A window with no
+/// pace is not locally urgent unless depleted: the shared `windowWarns`
+/// ramp already covers it with its percent-left fallback, and ranking unions
+/// the two. Invalid percentages are never urgent candidates, matching
+/// `windowWarns`'s own guard.
+///
+/// `threshold` is points behind pace, not percent left. A window exactly on
+/// or ahead of pace is never urgent, even at a threshold of 0. Because the
+/// shared ramp already warns at 10 points behind, a threshold above 10 has no
+/// effect and lowering it only warns sooner.
 ///
 /// Device-local by definition, and must never be confused with the shared,
 /// fixed `GradusKit.windowWarns` (Key decision #5,
@@ -33,7 +41,14 @@ public enum ProviderSortOption: String, CaseIterable, Identifiable {
 /// in `GradusKit`, whose scope is governed by INV-7.
 func localIsUrgent(_ window: ProviderWindow, threshold: Double) -> Bool {
     guard percentIsValid(window.percentLeft) else { return false }
-    return percentIsDepleted(window.percentLeft) || window.percentLeft <= threshold
+    if percentIsDepleted(window.percentLeft) {
+        return true
+    }
+    guard let paceDelta = window.paceDelta, paceDelta.isFinite else {
+        return false
+    }
+    let pointsBehind = -paceDelta * 100
+    return pointsBehind > 0 && pointsBehind >= threshold
 }
 
 /// What ranking needs from a provider, independent of which model carries it.

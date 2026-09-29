@@ -151,7 +151,7 @@ private func makeViewModel(
 @Test func resetAlertsCopyNamesCoverageAndMobileDelivery() {
     #expect(SettingsView.bankedResetAlertsDescription.contains("Codex"))
     #expect(SettingsView.bankedResetAlertsDescription.contains("starting balance"))
-    #expect(SettingsView.usageRefillAlertsDescription.contains("Codex (Spark)"))
+    #expect(!SettingsView.usageRefillAlertsDescription.contains("Spark"))
     #expect(SettingsView.usageRefillAlertsDescription.contains("Claude"))
     #expect(SettingsView.claudeBankedUnavailableDescription == "Claude banked resets are unavailable to Gradus.")
     #expect(
@@ -159,6 +159,7 @@ private func makeViewModel(
             == "On iPhone and iPad, delivery may wait until you open Gradus."
     )
     #expect(SettingsView.resetAlertSourceDescription.contains("Mac refreshes"))
+    #expect(SettingsView.resetAlertInfoLines.count == 5)
 }
 
 @Test func settingsCopyDistinguishesDashboardCardsFromWidgetSizing() {
