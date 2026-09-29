@@ -133,10 +133,14 @@ final class DashboardXCUITests: XCTestCase {
         openSettings(in: app)
 
         assertResetAlertSwitches(in: app, expectedValue: "0")
-        assertStaticTextAfterScrolling(containing: "Claude banked resets are unavailable to Gradus.", in: app)
-        assertStaticTextAfterScrolling(
-            containing: "On iPhone and iPad, delivery may wait until you open Gradus.",
-            in: app
+        openResetAlertInfo(in: app)
+        XCTAssertTrue(
+            staticText(containing: "Claude banked resets are unavailable to Gradus.", in: app)
+                .waitForExistence(timeout: 3)
+        )
+        XCTAssertTrue(
+            staticText(containing: "On iPhone and iPad, delivery may wait until you open Gradus.", in: app)
+                .waitForExistence(timeout: 3)
         )
     }
 
@@ -145,7 +149,11 @@ final class DashboardXCUITests: XCTestCase {
         openSettings(in: app)
 
         assertResetAlertSwitches(in: app, expectedValue: "1")
-        assertStaticTextAfterScrolling(containing: "Claude banked resets are unavailable to Gradus.", in: app)
+        openResetAlertInfo(in: app)
+        XCTAssertTrue(
+            staticText(containing: "Claude banked resets are unavailable to Gradus.", in: app)
+                .waitForExistence(timeout: 3)
+        )
     }
 
     func testResetAlertsRequestingShowsProgressWithoutSystemPrompt() {
@@ -240,6 +248,11 @@ final class DashboardXCUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(element.waitForExistence(timeout: 2), "Missing Settings copy containing: \(text)")
+    }
+
+    private func openResetAlertInfo(in app: XCUIApplication) {
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-info-button", in: app))
+        element(identifier: "reset-alerts-info-button", in: app).tap()
     }
 
     private func assertResetAlertSwitches(in app: XCUIApplication, expectedValue: String) {
