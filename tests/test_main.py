@@ -186,6 +186,38 @@ class CanonicalSyntheticHydrationTests(unittest.TestCase):
                 if not has_five_hour:
                     self.assertNotIn("third_party_five_hour_reset", antigravity.data)
 
+    @staticmethod
+    def _vibe_entry(name: str, window_id: str, usage: float) -> dict[str, object]:
+        return {
+            "name": name,
+            "ok": True,
+            "error": None,
+            "windows": [{"id": window_id, "percent_left": 100 - usage}],
+            "data": {"usage_percent": usage, "reset_at": "Resets Oct 01 at 12:00 AM"},
+            "observed_at": NOW.replace(tzinfo=timezone.utc).isoformat(),
+        }
+
+    def test_legacy_single_vibe_entry_is_read_as_vibe_code(self) -> None:
+        """An old producer's lone "Vibe" entry is Vibe Code's window, not the API's."""
+        snapshots, _ = _canonical_snapshots(
+            self._payload(self._vibe_entry("Vibe", "billing_cycle", 66.3))
+        )
+        self.assertTrue(self._primary(snapshots, "Vibe Code").ok)
+        self.assertEqual(self._primary(snapshots, "Vibe Code").data["usage_percent"], 66.3)
+        api = self._primary(snapshots, "Vibe")
+        self.assertFalse(api.ok)
+        self.assertEqual(api.error, "snapshot unavailable")
+
+    def test_two_entry_vibe_payload_is_read_as_published(self) -> None:
+        snapshots, _ = _canonical_snapshots(
+            self._payload(
+                self._vibe_entry("Vibe", "api_billing", 100.0),
+                self._vibe_entry("Vibe Code", "billing_cycle", 66.3),
+            )
+        )
+        self.assertEqual(self._primary(snapshots, "Vibe").data["usage_percent"], 100.0)
+        self.assertEqual(self._primary(snapshots, "Vibe Code").data["usage_percent"], 66.3)
+
     def test_hydrated_pool_labels_reach_dashboard(self) -> None:
         snapshots, updated_at = _canonical_snapshots(
             self._payload(

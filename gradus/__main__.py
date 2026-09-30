@@ -413,8 +413,25 @@ def _canonical_snapshots(
         )
         return _is_transient_probe_error(probe)
 
+    # Older producers published one "Vibe" entry carrying the Vibe Code window
+    # (`billing_cycle`). Read it as "Vibe Code" so the API bar is not mislabelled
+    # with Vibe Code's numbers while the producer is still on the old build.
+    legacy_vibe = by_name.get("Vibe")
+    legacy_vibe_code = (
+        legacy_vibe
+        if isinstance(legacy_vibe, Mapping)
+        and "Vibe Code" not in by_name
+        and any(
+            isinstance(window, Mapping) and window.get("id") == "billing_cycle"
+            for window in (legacy_vibe.get("windows") or [])
+        )
+        else None
+    )
+
     for name in CANONICAL_PROVIDERS():
         entry = by_name.get(name)
+        if legacy_vibe_code is not None:
+            entry = legacy_vibe_code if name == "Vibe Code" else None if name == "Vibe" else entry
         if not isinstance(entry, Mapping):
             snapshots.append(
                 ProviderSnapshot(
