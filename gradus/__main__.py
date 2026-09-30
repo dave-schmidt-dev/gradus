@@ -1251,7 +1251,7 @@ def _refresh_snapshot_once(
 
         v1_ok, v2_ok, history_ok = _write_snapshot_versions(
             snapshots,
-            datetime.now(),
+            datetime.now().astimezone(),
             on_status=_refresh_progress,
             lock_timeout=(
                 _REFRESH_SNAPSHOT_LOCK_TIMEOUT_SECONDS if lock_timeout is None else lock_timeout

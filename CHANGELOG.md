@@ -11,6 +11,13 @@ history from the overnight release train. New releases use
 
 ## Unreleased
 
+### Fixed
+
+- Reset times and pace are now computed and emitted in local time. The refresh
+  agent compared a naive local clock against UTC resets, which showed Claude's
+  5h window as "51% behind" at 99% left. Snapshot timestamps now carry the local
+  UTC offset.
+
 ### Changed
 
 - The local Warning Threshold on Mac and iPhone/iPad is now points behind

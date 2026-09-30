@@ -3557,7 +3557,9 @@ class InstalledBankedProducerTests(unittest.TestCase):
                 provider.count = 2
                 self.assertEqual(main(), 0)
                 second = json.loads(paths.banked_observation_path.read_text())
-                self.assertEqual(second["observed_at"], provider.last_observed.isoformat())
+                self.assertEqual(
+                    second["observed_at"], provider.last_observed.astimezone().isoformat()
+                )
                 provider.count = None
                 self.assertEqual(main(), 0)
                 self.assertEqual(json.loads(paths.banked_observation_path.read_text()), second)

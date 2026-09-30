@@ -48,7 +48,7 @@ def test_rate_limit_retains_windows_fail_closed_and_carries_probe_attempt() -> N
 
     assert entry["ok"] is False
     assert entry["windows"]
-    assert entry["probe_attempted_at"] == limited_at.isoformat()
+    assert entry["probe_attempted_at"] == limited_at.astimezone().isoformat()
     assert not _claude_probe_is_due(
         limited, limited_at + timedelta(seconds=CLAUDE_MIN_PROBE_INTERVAL_SECONDS - 1)
     )
@@ -108,7 +108,7 @@ def test_bucketless_claude_response_retains_values_through_next_probe() -> None:
     entry = next(item for item in unavailable["providers"] if item["name"] == "Claude")
     assert entry["ok"] is False
     assert entry["windows"]
-    assert entry["observed_at"] == now.isoformat()
+    assert entry["observed_at"] == now.astimezone().isoformat()
     assert CLAUDE_EMPTY_RESPONSE_RETENTION_SECONDS > CLAUDE_MIN_PROBE_INTERVAL_SECONDS
 
 

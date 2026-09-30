@@ -541,7 +541,7 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
 
 
 def _copilot_monthly_reset_target(now: datetime) -> datetime:
-    utc_now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    utc_now = now.astimezone(timezone.utc)
     year = utc_now.year + (1 if utc_now.month == 12 else 0)
     month = 1 if utc_now.month == 12 else utc_now.month + 1
     return datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
@@ -1237,7 +1237,7 @@ def _add_copilot_rows(table: Table, data: dict[str, object], now: datetime) -> N
         data.get("premium_reset")
         or f"Resets {_copilot_monthly_reset_target(now).astimezone().strftime('%b %d at %H:%M')}"
     )
-    utc_now = now.astimezone(timezone.utc) if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    utc_now = now.astimezone(timezone.utc)
     start = utc_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     end = _copilot_monthly_reset_target(utc_now)
     pace_text = _billing_cycle_pace_label(percent_left, start.isoformat(), end.isoformat(), utc_now)

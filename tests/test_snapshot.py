@@ -79,7 +79,7 @@ class ProjectedLegacyClaudeTests(unittest.TestCase):
                 )
                 claude = next(entry for entry in payload["providers"] if entry["name"] == "Claude")
                 self.assertEqual(claude, expected)
-                self.assertEqual(payload["updated_at"], refresh_at.isoformat())
+                self.assertEqual(payload["updated_at"], snap.local_iso(refresh_at))
 
     def test_projected_legacy_claude_rejects_missing_malformed_duplicate_and_stale(self) -> None:
         now = NOW.replace(tzinfo=timezone.utc)
@@ -523,6 +523,18 @@ class TestVibeNormalization(unittest.TestCase):
 
 
 class TestPaceDelta(unittest.TestCase):
+    def test_naive_now_is_local_time_against_a_utc_reset(self) -> None:
+        """Regression: a UTC reset with a naive local ``now`` must not shift by
+        the UTC offset (Claude's 5h window showed 51% behind at 99% left)."""
+        naive_now = datetime(2026, 9, 29, 21, 10, 53)
+        reset = naive_now.astimezone() + timedelta(hours=3.5)
+        reset_utc = reset.astimezone(timezone.utc)
+        naive = snap.pace_delta(99.0, reset_utc, 5 * 3600.0, naive_now)
+        aware = snap.pace_delta(99.0, reset_utc, 5 * 3600.0, naive_now.astimezone())
+        self.assertIsNotNone(naive)
+        self.assertAlmostEqual(naive, aware)
+        self.assertAlmostEqual(naive, 0.99 - 0.7)
+
     def test_pace_delta_unit_and_sign(self) -> None:
         """INV-4: signed fraction, finite, unclamped, None on missing input."""
         # Plenty left early in the window -> positive (ahead/healthy).
@@ -662,6 +674,21 @@ class TestWarningPredicate(unittest.TestCase):
             )
 
 
+class TestLocalTime(unittest.TestCase):
+    def test_local_iso_converts_aware_utc_to_the_local_offset(self) -> None:
+        utc = datetime(2026, 9, 30, 4, 40, tzinfo=timezone.utc)
+        text = snap.local_iso(utc)
+        parsed = datetime.fromisoformat(text)
+        self.assertEqual(parsed, utc)
+        self.assertEqual(parsed.utcoffset(), utc.astimezone().utcoffset())
+
+    def test_reconcile_converts_naive_local_time_instead_of_relabelling_it(self) -> None:
+        naive_now = datetime(2026, 9, 29, 21, 10, 53)
+        utc_reset = naive_now.astimezone().astimezone(timezone.utc) + timedelta(hours=3)
+        reset, now = snap.reconcile(utc_reset, naive_now)
+        self.assertEqual(reset - now, timedelta(hours=3))
+
+
 class TestReconcile(unittest.TestCase):
     def test_reconcile_reset_vs_now(self) -> None:
         """reconcile aligns the second arg's tz-awareness to the first."""
@@ -712,7 +739,7 @@ class TestBuildWindows(unittest.TestCase):
                     source_reset_instants={reset_key: target},
                 )
                 window = snap.build_windows(provider, now)[0]
-                self.assertEqual(window["reset_iso"], target.isoformat())
+                self.assertEqual(window["reset_iso"], snap.local_iso(target))
                 self.assertEqual(
                     window["pace_delta"], snap.pace_delta(50.0, target, 168 * 3600.0, now)
                 )

@@ -7,7 +7,7 @@ import math
 import pathlib
 import re
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 
 from rich.console import Console
@@ -3108,7 +3108,7 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
             60,
             "2026-03-01T00:00:00+00:00",
             "2026-04-01T00:00:00+00:00",
-            self.now,
+            self.now.replace(tzinfo=timezone.utc),
         )
         self.assertEqual(result, "on pace")
 
@@ -3117,7 +3117,7 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
             70,
             "2026-03-01T00:00:00+00:00",
             "2026-04-01T00:00:00+00:00",
-            self.now,
+            self.now.replace(tzinfo=timezone.utc),
         )
         self.assertEqual(result, "13% ahead")
 
@@ -3126,7 +3126,7 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
             50,
             "2026-03-01T00:00:00+00:00",
             "2026-04-01T00:00:00+00:00",
-            self.now,
+            self.now.replace(tzinfo=timezone.utc),
         )
         self.assertEqual(result, "7% behind")
 

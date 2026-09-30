@@ -469,8 +469,8 @@ def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None
 def local_iso(dt: datetime) -> str:
     """Serialize a datetime to an ISO-8601 string that always carries an offset.
 
-    Naive datetimes are assumed to be local wall-clock time and are attached to
-    the local timezone; aware datetimes keep their existing offset.
+    Every instant is expressed in the local timezone: naive datetimes are
+    assumed to be local wall-clock time, and aware ones are converted.
 
     Args:
         dt: The datetime to serialize.
@@ -478,7 +478,7 @@ def local_iso(dt: datetime) -> str:
     Returns:
         An ISO-8601 string with a UTC offset.
     """
-    return (dt if dt.tzinfo else dt.astimezone()).isoformat()
+    return dt.astimezone().isoformat()
 
 
 def _fresh_observed_at(snapshot: ProviderSnapshot, fallback: str) -> str:
@@ -494,7 +494,9 @@ def reconcile(a: datetime, b: datetime) -> tuple[datetime, datetime]:
     """Coerce the second datetime's tz-awareness to match the first.
 
     This is the single tz-reconciliation site used for both reset<->now and
-    billing start<->end. ``a`` is authoritative and never modified.
+    billing start<->end. ``a`` is authoritative and never modified. A naive
+    datetime is local wall-clock time, so ``b`` is converted (never merely
+    relabelled) and the pair still describes the same instants.
 
     Args:
         a: The reference datetime whose tz-awareness is authoritative.
@@ -504,9 +506,9 @@ def reconcile(a: datetime, b: datetime) -> tuple[datetime, datetime]:
         The pair ``(a, b)`` where ``b`` is naive iff ``a`` is naive.
     """
     if a.tzinfo is None and b.tzinfo is not None:
-        b = b.replace(tzinfo=None)
+        b = b.astimezone().replace(tzinfo=None)
     elif a.tzinfo is not None and b.tzinfo is None:
-        b = b.replace(tzinfo=a.tzinfo)
+        b = b.astimezone(a.tzinfo)
     return a, b
 
 
