@@ -4,7 +4,7 @@ import GradusKit
 @testable import GradusMac
 import Testing
 
-@Test func purgingRetiredProvidersDeletesTheSparkRecordOnce() async {
+@Test func purgingRetiredProvidersDeletesEachRetiredRecordOnce() async {
     let database = MockCloudDatabase()
     let coordinator = PublishCoordinator(database: database, zoneID: zoneID)
 
@@ -12,5 +12,9 @@ import Testing
     await coordinator.purgeRetiredProviders()
 
     let deleted = await database.deletedRecordIDs
-    #expect(deleted == [CKRecord.ID(recordName: "Codex (Spark)", zoneID: zoneID)])
+    #expect(
+        deleted == ["Codex (Spark)", "Vibe", "Vibe Code"].map {
+            CKRecord.ID(recordName: $0, zoneID: zoneID)
+        }
+    )
 }

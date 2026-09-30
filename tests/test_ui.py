@@ -60,6 +60,7 @@ from gradus.ui import (
     history_select_provider,
     history_series,
     history_window_ids,
+    merge_mistral_snapshots,
     render_json,
 )
 
@@ -2091,7 +2092,7 @@ class DashboardTests(unittest.TestCase):
             width=92,
         )
         lines = output.splitlines()
-        for name in ("Codex", "Claude", "Antigravity", "Cursor", "Vibe"):
+        for name in ("Codex", "Claude", "Antigravity", "Cursor", "Mistral"):
             self.assertEqual(output.count(name), 1)
 
         first_panel_line = next(index for index, line in enumerate(lines) if line.startswith("╭"))
@@ -3187,7 +3188,7 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
         output = _capture(group, width=90)
         self.assertIn("Antigravity [!]", output)
         self.assertIn("Copilot [!]", output)
-        self.assertIn("Vibe [!]", output)
+        self.assertIn("Mistral [!]", output)
         self.assertEqual(output.count("0% until"), 3)
 
     def test_dashboard_single_exhausted_provider_uses_micro_card_style(self) -> None:
@@ -3268,10 +3269,94 @@ class PaceLabelCharacterizationTests(unittest.TestCase):
             "expected the first exhausted pair on the same micro-card row",
         )
         self.assertTrue(
-            any("Copilot" in line and "Vibe" in line for line in lines),
+            any("Copilot" in line and "Mistral" in line for line in lines),
             "expected the second exhausted pair on the same micro-card row",
         )
         self.assertEqual(output.count("0% until"), 4)
+
+    # ------------------------------------------------------------------
+    # Mistral: "Vibe" (API) and "Vibe Code" merge into one TUI card
+    # ------------------------------------------------------------------
+
+    def _mistral(self, name: str, usage: float | None, ok: bool = True) -> ProviderSnapshot:
+        if not ok:
+            return ProviderSnapshot(name=name, ok=False, source="api", error="boom")
+        return ProviderSnapshot(
+            name=name,
+            ok=True,
+            source="api",
+            data={
+                "usage_percent": usage,
+                "reset_at": "Resets Oct 01 at 12:00 AM",
+                "start_date": "2026-09-01T00:00:00+00:00",
+                "end_date": "2026-10-01T00:00:00+00:00",
+            },
+        )
+
+    def test_mistral_entries_render_as_one_card_with_two_bars(self) -> None:
+        output = _capture(
+            build_dashboard(
+                [self._mistral("Vibe", 20.0), self._mistral("Vibe Code", 60.0)], self.now, 30
+            ),
+            width=100,
+        )
+        self.assertEqual(output.count("Mistral"), 1)
+        self.assertNotIn("Vibe Code", output)
+        self.assertIn("API", output)
+        self.assertIn("80%", output)
+        self.assertIn("40%", output)
+
+    def test_exhausted_api_allowance_keeps_the_card_active_for_vibe(self) -> None:
+        output = _capture(
+            build_dashboard(
+                [self._mistral("Vibe", 100.0), self._mistral("Vibe Code", 60.0)], self.now, 30
+            ),
+            width=100,
+        )
+        self.assertNotIn("0% until", output)
+        self.assertIn("40%", output)
+
+    def test_both_allowances_exhausted_is_a_depleted_mistral_card(self) -> None:
+        output = _capture(
+            build_dashboard(
+                [self._mistral("Vibe", 100.0), self._mistral("Vibe Code", 100.0)], self.now, 30
+            ),
+            width=100,
+        )
+        self.assertIn("Mistral [!]", output)
+        self.assertIn("0% until Oct 01", output)
+
+    def test_one_failed_allowance_shows_only_the_other_bar(self) -> None:
+        merged = merge_mistral_snapshots(
+            [self._mistral("Vibe", None, ok=False), self._mistral("Vibe Code", 60.0)]
+        )
+        (card,) = merged
+        self.assertTrue(card.ok)
+        self.assertIn("vibe_usage_percent", card.data)
+        self.assertNotIn("api_usage_percent", card.data)
+
+    def test_both_failed_allowances_merge_to_one_error_card(self) -> None:
+        (card,) = merge_mistral_snapshots(
+            [self._mistral("Vibe", None, ok=False), self._mistral("Vibe Code", None, ok=False)]
+        )
+        self.assertFalse(card.ok)
+        self.assertEqual(card.name, "Mistral")
+
+    def test_merge_leaves_other_providers_and_position_alone(self) -> None:
+        codex = ProviderSnapshot(name="Codex", ok=True, source="cli", data={})
+        merged = merge_mistral_snapshots(
+            [codex, self._mistral("Vibe", 1.0), self._mistral("Vibe Code", 2.0)]
+        )
+        self.assertEqual([snap.name for snap in merged], ["Codex", "Mistral"])
+
+    def test_mistral_compact_line_carries_both_allowances(self) -> None:
+        (card,) = merge_mistral_snapshots(
+            [self._mistral("Vibe", 20.0), self._mistral("Vibe Code", 60.0)]
+        )
+        parts = [text for text, _ in _compact_window_parts(card, self.now)]
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(parts[0].startswith("api:80"))
+        self.assertTrue(parts[1].startswith("vibe:40"))
 
     # ------------------------------------------------------------------
     # _billing_cycle_pace_label — naive date-only billing cycle

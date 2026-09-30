@@ -704,6 +704,26 @@ WARNING_WINDOW_SPECS = {
             end_key="billing_cycle_end_iso",
         ),
     ),
+    # TUI-only merged card (see ``ui.merge_mistral_snapshots``). Never published:
+    # the snapshot file keeps "Vibe" and "Vibe Code" as separate entries.
+    "Mistral": (
+        WindowSpec(
+            "api_billing",
+            "billing",
+            "api_usage_percent",
+            normalize="used",
+            start_key="api_start_date",
+            end_key="api_end_date",
+        ),
+        WindowSpec(
+            "billing_cycle",
+            "billing",
+            "vibe_usage_percent",
+            normalize="used",
+            start_key="vibe_start_date",
+            end_key="vibe_end_date",
+        ),
+    ),
     # C+G quota buckets are interactive alert state only. Router v1/v2
     # snapshots intentionally continue to expose Antigravity's Gemini pools.
     "Antigravity": (

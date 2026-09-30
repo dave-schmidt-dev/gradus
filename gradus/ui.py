@@ -535,7 +535,7 @@ def _provider_is_empty(snapshot: ProviderSnapshot, now: datetime) -> bool:
         str(window["id"]) for window in windows if percent_is_depleted(window["percent_left"])
     }
     available = {str(window["id"]) for window in windows}
-    if name == "Cursor":
+    if name in ("Cursor", MISTRAL_NAME):
         return bool(available) and depleted == available
     return bool(depleted)
 
@@ -619,8 +619,18 @@ def _style_for_signal(percent: float | None, pace: float | None) -> str:
     return _SIGNAL_STYLES[signal_level(percent, pace)]
 
 
-# Mistral's two allowances share one data shape and one row layout.
-MISTRAL_PROVIDERS = frozenset({"Vibe", "Vibe Code"})
+# Mistral's two allowances are separate snapshot entries (Switchyard routes on
+# each by name) but one card in the TUI: "Vibe" is the API allowance and
+# "Vibe Code" the Vibe Code allowance. ``merge_mistral_snapshots`` folds them
+# into a synthetic MISTRAL_NAME snapshot whose data keys carry these prefixes.
+MISTRAL_NAME = "Mistral"
+MISTRAL_BARS: tuple[tuple[str, str, str], ...] = (
+    ("Vibe", "api_", "API"),
+    ("Vibe Code", "vibe_", "Vibe"),
+)
+MISTRAL_DATA_KEYS = ("usage_percent", "reset_at", "start_date", "end_date")
+# Standalone entry names (a direct panel render of one allowance, no merge).
+MISTRAL_ENTRY_NAMES = frozenset({"Vibe", "Vibe Code"})
 
 ACCENT_STYLES: dict[str, str] = {
     "Codex": "accent.codex",
@@ -630,6 +640,7 @@ ACCENT_STYLES: dict[str, str] = {
     "Cursor": "accent.cursor",
     "Vibe": "accent.vibe",
     "Vibe Code": "accent.vibe",
+    "Mistral": "accent.vibe",
     "OpenCode Go": "accent.opencode",
 }
 
@@ -980,7 +991,7 @@ def build_provider_panel(
     elif base_name == "Copilot":
         body = ResponsiveProviderBody()
         _add_copilot_rows(body, snapshot.data, now)
-    elif spec is None and base_name not in {"Cursor", *MISTRAL_PROVIDERS}:
+    elif spec is None and base_name not in {"Cursor", MISTRAL_NAME, *MISTRAL_ENTRY_NAMES}:
         # Generic status cards have no usage bar. Their two-column layout is
         # intentionally separate from the normal usage-row allocator.
         body = GenericProviderBody()
@@ -989,7 +1000,9 @@ def build_provider_panel(
         body = ResponsiveProviderBody()
         if base_name == "Cursor":
             _add_cursor_rows(body, snapshot.data, now)
-        elif base_name in MISTRAL_PROVIDERS:
+        elif base_name == MISTRAL_NAME:
+            _add_mistral_rows(body, snapshot.data, now)
+        elif base_name in MISTRAL_ENTRY_NAMES:
             _add_vibe_rows(body, snapshot.data, now)
         elif base_name == "Antigravity":
             _add_antigravity_rows(body, snapshot.data, now, spec.windows)
@@ -1228,9 +1241,15 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
         reset_str = str(reset_value) if isinstance(reset_value, str) else None
         for window in normalized_warning_windows(snapshot, now):
             _row(str(window["id"]), reset_str)
-    elif name in MISTRAL_PROVIDERS:
+    elif name in MISTRAL_ENTRY_NAMES:
         reset_value = data.get("reset_at")
         _row("mo", str(reset_value) if isinstance(reset_value, str) else None)
+    elif name == MISTRAL_NAME:
+        for _, prefix, label in MISTRAL_BARS:
+            if not isinstance(data.get(f"{prefix}usage_percent"), (int, float)):
+                continue
+            reset_value = data.get(f"{prefix}reset_at")
+            _row(label, str(reset_value) if isinstance(reset_value, str) else None)
 
 
 def _add_copilot_rows(table: Table, data: dict[str, object], now: datetime) -> None:
@@ -1315,18 +1334,31 @@ def _add_cursor_rows(table: Table, data: dict[str, object], now: datetime) -> No
 
 def _add_vibe_rows(table: Table, data: dict[str, object], now: datetime) -> None:
     """Add Mistral Vibe monthly usage rows."""
-    usage_percent = data.get("usage_percent")
+    _add_mistral_bar(table, "mo", data, "", now)
+
+
+def _add_mistral_rows(table: Table, data: dict[str, object], now: datetime) -> None:
+    """Add one monthly bar per Mistral allowance present in the merged card."""
+    for _, prefix, label in MISTRAL_BARS:
+        if isinstance(data.get(f"{prefix}usage_percent"), (int, float)):
+            _add_mistral_bar(table, label, data, prefix, now)
+
+
+def _add_mistral_bar(
+    table: Table, label: str, data: dict[str, object], prefix: str, now: datetime
+) -> None:
+    """Add one calendar-month allowance bar (percent used is inverted to percent left)."""
+    usage_percent = data.get(f"{prefix}usage_percent")
     if isinstance(usage_percent, (int, float)):
         percent_left = max(0.0, 100.0 - float(usage_percent))
     else:
         percent_left = None
 
-    reset_value = data.get("reset_at")
-
+    reset_value = data.get(f"{prefix}reset_at")
     value_text = _format_percent_value(percent_left)
     reset_display = _format_reset_display(None if reset_value is None else str(reset_value), now)
-    start_iso = data.get("start_date")
-    end_iso = data.get("end_date")
+    start_iso = data.get(f"{prefix}start_date")
+    end_iso = data.get(f"{prefix}end_date")
     cycle_start = str(start_iso) if isinstance(start_iso, str) else None
     cycle_end = str(end_iso) if isinstance(end_iso, str) else None
     style = _style_for_signal(
@@ -1334,17 +1366,12 @@ def _add_vibe_rows(table: Table, data: dict[str, object], now: datetime) -> None
     )
     pace_text = _billing_cycle_pace_label(percent_left, cycle_start, cycle_end, now)
     table.add_row(
-        Text("mo", style="text.muted"),
+        Text(label, style="text.muted"),
         Text(value_text, style=style),
         PercentageBar(
             percent_left,
             style,
-            _expected_billing_remaining(
-                percent_left,
-                str(start_iso) if isinstance(start_iso, str) else None,
-                str(end_iso) if isinstance(end_iso, str) else None,
-                now,
-            ),
+            _expected_billing_remaining(percent_left, cycle_start, cycle_end, now),
         ),
         Text(reset_display, style="text.cyan"),
         PaceLabel(pace_text),
@@ -1540,6 +1567,8 @@ def _extract_depleted_reset_str(snapshot: ProviderSnapshot, now: datetime) -> st
     for key in (
         "premium_reset",
         "reset_at",
+        "api_reset_at",
+        "vibe_reset_at",
         "billing_cycle_end",
         "weekly_reset_at",
         "session_reset_at",
@@ -2056,6 +2085,50 @@ def build_history_view(
     )
 
 
+def merge_mistral_snapshots(snapshots: list[ProviderSnapshot]) -> list[ProviderSnapshot]:
+    """Fold the "Vibe" (API) and "Vibe Code" entries into one MISTRAL_NAME card.
+
+    The published snapshot keeps them separate; only the TUI shows one card. The
+    merged card sits where the first of the two was, is ok when either is, and
+    carries only the allowances that probed successfully.
+    """
+    members = {snap.name: snap for snap in snapshots if snap.name in MISTRAL_ENTRY_NAMES}
+    if not members:
+        return snapshots
+    ok_members = {name: snap for name, snap in members.items() if snap.ok and snap.data}
+    first = next(snap for snap in snapshots if snap.name in MISTRAL_ENTRY_NAMES)
+    if ok_members:
+        data: dict[str, object] = {}
+        for entry_name, prefix, _ in MISTRAL_BARS:
+            member = ok_members.get(entry_name)
+            if member is not None and member.data is not None:
+                for key in MISTRAL_DATA_KEYS:
+                    if key in member.data:
+                        data[f"{prefix}{key}"] = member.data[key]
+        cached = [m.cached_since for m in ok_members.values() if m.cached_since]
+        merged = ProviderSnapshot(
+            name=MISTRAL_NAME,
+            ok=True,
+            source=next(iter(ok_members.values())).source,
+            data=data,
+            cached_since=min(cached) if len(cached) == len(ok_members) else None,
+        )
+    else:
+        merged = ProviderSnapshot(
+            name=MISTRAL_NAME, ok=False, source=first.source, error=first.error
+        )
+    out: list[ProviderSnapshot] = []
+    placed = False
+    for snap in snapshots:
+        if snap.name in MISTRAL_ENTRY_NAMES:
+            if not placed:
+                out.append(merged)
+                placed = True
+            continue
+        out.append(snap)
+    return out
+
+
 def build_dashboard(
     snapshots: list[ProviderSnapshot],
     updated_at: datetime,
@@ -2068,6 +2141,7 @@ def build_dashboard(
 ) -> Group:
     """Build the full dashboard as a Rich Group."""
     now = updated_at
+    snapshots = merge_mistral_snapshots(snapshots)
 
     # Header
     refresh_value = f"{update_elapsed:0.1f}s" if updating else f"{next_refresh_seconds}s"
@@ -2093,6 +2167,11 @@ def build_dashboard(
     if fix_actions:
         for key, (name, _, _) in fix_actions.items():
             fix_key_by_name[name] = key
+        fix_key_by_name[MISTRAL_NAME] = fix_key_by_name.get("Vibe") or fix_key_by_name.get(
+            "Vibe Code", ""
+        )
+        if not fix_key_by_name[MISTRAL_NAME]:
+            del fix_key_by_name[MISTRAL_NAME]
 
     active_panels = [
         build_provider_panel(snap, now, auth_fix_key=fix_key_by_name.get(snap.name))
@@ -2337,7 +2416,7 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
         return parts
 
     # --- Vibe (percent-used → percent-remaining, billing-cycle pace) ---
-    if spec is None and name in MISTRAL_PROVIDERS:
+    if spec is None and name in MISTRAL_ENTRY_NAMES:
         data = snapshot.data
         usage = data.get("usage_percent")
         if not isinstance(usage, (int, float)):
@@ -2353,6 +2432,26 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
         )
         part = f"mo:{_percent_str(pct_left)}% {_compact_pace(pace)}"
         return [(part, _pace_style(part))]
+
+    # --- Mistral (merged card: one part per allowance) ---
+    if spec is None and name == MISTRAL_NAME:
+        mistral_parts: list[tuple[str, str]] = []
+        for _, prefix, label in MISTRAL_BARS:
+            usage = snapshot.data.get(f"{prefix}usage_percent")
+            if not isinstance(usage, (int, float)):
+                continue
+            pct_left = max(0.0, 100.0 - float(usage))
+            start_iso = snapshot.data.get(f"{prefix}start_date")
+            end_iso = snapshot.data.get(f"{prefix}end_date")
+            pace = _billing_cycle_pace_label(
+                pct_left,
+                str(start_iso) if isinstance(start_iso, str) else None,
+                str(end_iso) if isinstance(end_iso, str) else None,
+                now,
+            )
+            part = f"{label.lower()}:{_percent_str(pct_left)}% {_compact_pace(pace)}"
+            mistral_parts.append((part, _pace_style(part)))
+        return mistral_parts
 
     # --- Unknown provider ---
     if spec is None:

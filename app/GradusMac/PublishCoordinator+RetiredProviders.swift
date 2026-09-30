@@ -5,7 +5,9 @@ extension PublishCoordinator {
     /// Provider buckets that no longer exist. The Mac used to publish a record
     /// for each and never deleted them, so they survive in iCloud and would keep
     /// showing on iPhone and iPad. Deleting the record removes it there too.
-    static let retiredProviderNames = ["Codex (Spark)"]
+    /// "Vibe" and "Vibe Code" are retired as records because they are now
+    /// published as the single merged "Mistral" card (`MistralMerge`).
+    static let retiredProviderNames = ["Codex (Spark)", "Vibe", "Vibe Code"]
 
     /// Deletes the records of retired provider buckets once per launch.
     /// Failure is logged and retried on the next launch; it never blocks a

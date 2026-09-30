@@ -32,7 +32,9 @@ public func normalizedWidgetWindowLabel(for id: String) -> String {
         "cg1w": "Weekly (CG)",
         "cg_five_hour": "5 Hour (CG)",
         "cg_weekly": "Weekly (CG)",
-        "billing_cycle": "Monthly"
+        "billing_cycle": "Monthly",
+        "api_billing": "API",
+        "vibe_billing": "Vibe"
     ]
     return labels[id] ?? id
 }

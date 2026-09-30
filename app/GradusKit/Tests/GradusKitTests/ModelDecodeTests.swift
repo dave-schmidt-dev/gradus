@@ -10,13 +10,15 @@ private func loadGoldenFixtureData() throws -> Data {
 @Test func decodesGoldenFixtureWithAllProviders() throws {
     let payload = try JSONDecoder().decode(SnapshotPayload.self, from: loadGoldenFixtureData())
     #expect(payload.schemaVersion == 2)
-    // Includes the synthetic v2-only entry "Antigravity (Claude)".
+    // Includes the synthetic v2-only entry "Antigravity (Claude)". The file has
+    // separate "Vibe" and "Vibe Code" entries; decoding merges them into one
+    // "Mistral" card, so nine entries in the file decode to eight providers.
     #expect(payload.providers.count == 8)
     let names = Set(payload.providers.map(\.name))
     #expect(
         names == [
             "Codex", "Claude", "Antigravity", "Antigravity (Claude)", "Copilot", "Cursor",
-            "OpenCode Go", "Vibe"
+            "OpenCode Go", "Mistral"
         ]
     )
 }

@@ -98,7 +98,7 @@ extension SnapshotPayload: Decodable {
         }
         schemaVersion = version
         updatedAt = try container.decode(String.self, forKey: .updatedAt)
-        providers = try container.decode([ProviderEntry].self, forKey: .providers)
+        providers = try MistralMerge.merge(container.decode([ProviderEntry].self, forKey: .providers))
     }
 }
 

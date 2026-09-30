@@ -13,11 +13,13 @@ history from the overnight release train. New releases use
 
 ### Added
 
-- Mistral now shows as two cards: "Vibe Code" (the included Vibe Code allowance,
-  what the old "Vibe" card showed) and "Vibe" (the included API allowance, read
-  from the Mistral admin console with the same Safari sign-in). The two are
-  separate so a router can treat an exhausted API allowance independently of the
-  Vibe Code one.
+- Mistral now tracks two allowances: the included API allowance (read from the
+  Mistral admin console with the same Safari sign-in) and the included Vibe Code
+  allowance (what the old "Vibe" card showed). The terminal dashboard, Mac menu
+  and iPhone/iPad show them as one "Mistral" card with two bars, "API" and
+  "Vibe". An exhausted API allowance no longer marks the whole card depleted
+  while Vibe has capacity. The published snapshot keeps them as separate
+  "Vibe" and "Vibe Code" entries so a router can veto on each independently.
 
 ### Fixed
 

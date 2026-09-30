@@ -131,11 +131,32 @@
       "name": "Vibe",
       "ok": true,
       "error": null,
-      "windows": [],
-      "data": {
-        "premium_percent_left": 45.5,
-        "premium_reset": "2026-08-15T00:00:00"
-      },
+      "windows": [
+        {
+          "id": "api_billing",
+          "percent_left": 0.0,
+          "reset_iso": "2026-08-31T20:00:00-04:00",
+          "window_hours": 744.0,
+          "pace_delta": -0.4
+        }
+      ],
+      "data": {},
+      "observed_at": "2026-08-02T20:00:00-04:00"
+    },
+    {
+      "name": "Vibe Code",
+      "ok": true,
+      "error": null,
+      "windows": [
+        {
+          "id": "billing_cycle",
+          "percent_left": 45.5,
+          "reset_iso": "2026-08-31T20:00:00-04:00",
+          "window_hours": 744.0,
+          "pace_delta": 0.1
+        }
+      ],
+      "data": {},
       "observed_at": "2026-08-02T20:00:00-04:00"
     }
   ]
