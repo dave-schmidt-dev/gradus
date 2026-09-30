@@ -615,7 +615,19 @@ WINDOW_SPECS: dict[str, tuple[WindowSpec, ...]] = {
             end_key="billing_cycle_end_iso",
         ),
     ),
+    # Mistral has two independent allowances. Switchyard's router vetoes on the
+    # minimum across an entry's windows, so each allowance is its own entry.
     "Vibe": (
+        WindowSpec(
+            "api_billing",
+            "billing",
+            "usage_percent",
+            normalize="used",
+            start_key="start_date",
+            end_key="end_date",
+        ),
+    ),
+    "Vibe Code": (
         WindowSpec(
             "billing_cycle",
             "billing",

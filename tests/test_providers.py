@@ -30,7 +30,8 @@ from gradus.providers import (
     OpenCodeGoProvider,
     ProbeFailure,
     ProviderSnapshot,
-    VibeProvider,
+    VibeApiProvider,
+    VibeCodeProvider,
     _classify_codex_windows,
     _codex_percent_left,
     _format_reset_time,
@@ -277,15 +278,15 @@ class NetworkFailureClassificationTests(unittest.TestCase):
         self.assertFalse(_is_auth_error(snapshot), f"{provider}: misread as an auth error")
 
     def test_vibe_dns_failure_is_transient(self) -> None:
-        provider = VibeProvider(project_root="/nonexistent")
+        provider = VibeCodeProvider(project_root="/nonexistent")
         provider._ory_name = "ory_session"
         provider._ory_value = "value"
         provider._csrf = "csrf"
 
         with patch("urllib.request.urlopen", side_effect=self._dns_failure()):
-            snapshot = fetch_provider_snapshot("Vibe", provider, debug=False)
+            snapshot = fetch_provider_snapshot("Vibe Code", provider, debug=False)
 
-        self._assert_transient(snapshot, provider="Vibe")
+        self._assert_transient(snapshot, provider="Vibe Code")
 
     def test_catch_all_backstop_maps_urlerror_but_not_httperror(self) -> None:
         """Ordering guard inside ``_safe_probe_error``.
@@ -625,11 +626,11 @@ class VibeProviderTests(unittest.TestCase):
     }
 
     def setUp(self) -> None:
-        # Isolate _CACHE_PATH so constructing VibeProvider can't overwrite the
+        # Isolate _CACHE_PATH so constructing VibeCodeProvider can't overwrite the
         # repo's real .cache/vibe_cookies.json with whatever cookies Safari holds.
         self._tmpdir = tempfile.TemporaryDirectory()
         self._cache_path = Path(self._tmpdir.name) / "vibe_cookies.json"
-        self._patcher = patch.object(VibeProvider, "_CACHE_PATH", self._cache_path)
+        self._patcher = patch.object(VibeCodeProvider, "_CACHE_PATH", self._cache_path)
         self._patcher.start()
 
     def tearDown(self) -> None:
@@ -637,7 +638,7 @@ class VibeProviderTests(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def test_usage_percentage_is_not_scaled_again(self) -> None:
-        provider = VibeProvider(".")
+        provider = VibeCodeProvider(".")
         provider._ory_name = "ory_session_test"
         provider._ory_value = "token"
         provider._csrf = "csrf"
@@ -660,7 +661,7 @@ class VibeProviderTests(unittest.TestCase):
             "payg_enabled": False,
             "reset_at": "2026-06-01T00:00:00Z",
         }
-        provider = VibeProvider(".")
+        provider = VibeCodeProvider(".")
         provider._ory_name = "ory_session_test"
         provider._ory_value = "token"
         provider._csrf = "csrf"
@@ -682,7 +683,7 @@ class VibeProviderTests(unittest.TestCase):
             "payg_enabled": False,
             "reset_at": "2027-01-01T00:00:00Z",
         }
-        provider = VibeProvider(".")
+        provider = VibeCodeProvider(".")
         provider._ory_name = "ory_session_test"
         provider._ory_value = "token"
         provider._csrf = "csrf"
@@ -702,7 +703,7 @@ class VibeProviderTests(unittest.TestCase):
             "usage_percentage": 4.2,
             "payg_enabled": False,
         }
-        provider = VibeProvider(".")
+        provider = VibeCodeProvider(".")
         provider._ory_name = "ory_session_test"
         provider._ory_value = "token"
         provider._csrf = "csrf"
@@ -747,13 +748,85 @@ class JwtExpiryTests(unittest.TestCase):
         self.assertFalse(_is_jwt_expired(f"{header}.{payload}."))
 
 
+class VibeApiProviderTests(unittest.TestCase):
+    """The "Vibe" entry reads only ``api_budget`` from billing.budget."""
+
+    BUDGET = {
+        "result": {
+            "data": {
+                "json": {
+                    "usage_percentage": 100,
+                    "initial_budget": 15,
+                    "currency": "USD",
+                    "reset_at": "2026-10-01T00:00:00Z",
+                    "api_budget": {
+                        "usage_percentage": 100,
+                        "initial_budget": 15,
+                        "currency": "USD",
+                        "reset_at": "2026-10-01T00:00:00Z",
+                    },
+                    "vibe_budget": {
+                        "usage_percentage": 66.3,
+                        "initial_budget": 150,
+                        "currency": "USD",
+                        "reset_at": "2026-10-01T00:00:00Z",
+                    },
+                }
+            }
+        }
+    }
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._patcher = patch.object(
+            VibeApiProvider, "_CACHE_PATH", Path(self._tmpdir.name) / "vibe_cookies.json"
+        )
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._tmpdir.cleanup()
+
+    def _fetch(self, payload: dict):
+        provider = VibeApiProvider(".")
+        provider._ory_name, provider._ory_value, provider._csrf = "ory_session_t", "tok", "csrf"
+        resp = MagicMock()
+        resp.read.return_value = json.dumps(payload).encode("utf-8")
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=resp) as urlopen:
+            return provider.fetch(), urlopen
+
+    def test_reads_api_budget_not_vibe_budget(self) -> None:
+        status, urlopen = self._fetch(self.BUDGET)
+        self.assertEqual(status.usage_percent, 100.0)
+        request = urlopen.call_args.args[0]
+        self.assertIn("admin.mistral.ai/api/local-trpc/billing.budget", request.full_url)
+
+    def test_cycle_is_the_calendar_month_ending_at_reset(self) -> None:
+        status, _ = self._fetch(self.BUDGET)
+        self.assertEqual(status.start_date, "2026-09-01T00:00:00+00:00")
+        self.assertEqual(status.end_date, "2026-10-01T00:00:00+00:00")
+
+    def test_missing_api_budget_is_a_probe_failure(self) -> None:
+        payload = {"result": {"data": {"json": {"vibe_budget": {"usage_percentage": 5}}}}}
+        with self.assertRaises(ProbeFailure):
+            self._fetch(payload)
+
+    def test_registered_under_both_entry_names(self) -> None:
+        from gradus.providers._base import _PROVIDER_REGISTRY
+
+        self.assertIs(_PROVIDER_REGISTRY["Vibe"], VibeApiProvider)
+        self.assertIs(_PROVIDER_REGISTRY["Vibe Code"], VibeCodeProvider)
+
+
 class VibeCookieCacheTests(unittest.TestCase):
     """Vibe reads bridge-written cache files only."""
 
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self._cache_path = Path(self._tmpdir.name) / "vibe_cookies.json"
-        self._patcher = patch.object(VibeProvider, "_CACHE_PATH", self._cache_path)
+        self._patcher = patch.object(VibeCodeProvider, "_CACHE_PATH", self._cache_path)
         self._patcher.start()
 
     def tearDown(self) -> None:
@@ -768,14 +841,14 @@ class VibeCookieCacheTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider = VibeCodeProvider(project_root=self._tmpdir.name)
         provider._acquire()
         self.assertEqual(provider._ory_name, "ory_session_x")
         self.assertEqual(provider._ory_value, "v")
         self.assertEqual(provider._csrf, "c")
 
     def test_missing_cache_does_not_create_credentials(self) -> None:
-        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider = VibeCodeProvider(project_root=self._tmpdir.name)
         provider._acquire()
         self.assertFalse(self._cache_path.exists())
 
@@ -787,7 +860,7 @@ class VibeCookieCacheTests(unittest.TestCase):
         from gradus.history import _probe_metadata
         from gradus.snapshot import _is_transient_probe_error
 
-        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider = VibeCodeProvider(project_root=self._tmpdir.name)
         with patch("gradus.providers._base._is_headless", return_value=False):
             with self.assertRaises(ProbeFailure) as ctx:
                 provider.fetch()
@@ -810,7 +883,7 @@ class VibeCookieCacheTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider = VibeCodeProvider(project_root=self._tmpdir.name)
         err = ue.HTTPError("u", 401, "Unauthorized", {}, None)  # type: ignore[arg-type]
         with patch("urllib.request.urlopen", side_effect=err):
             with self.assertRaises(ProbeFailure) as ctx:
@@ -826,7 +899,7 @@ class CacheResilienceTests(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self._vibe_cache = Path(self._tmpdir.name) / "vibe_cookies.json"
         self._patchers = [
-            patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
+            patch.object(VibeCodeProvider, "_CACHE_PATH", self._vibe_cache),
         ]
         for p in self._patchers:
             p.start()
@@ -839,7 +912,7 @@ class CacheResilienceTests(unittest.TestCase):
     def test_vibe_corrupted_cache_is_ignored(self) -> None:
         self._vibe_cache.parent.mkdir(parents=True, exist_ok=True)
         self._vibe_cache.write_text("{ NOT VALID JSON !!!", encoding="utf-8")
-        provider = VibeProvider(project_root=self._tmpdir.name)
+        provider = VibeCodeProvider(project_root=self._tmpdir.name)
         provider._acquire()
         self.assertFalse(provider._has_cookies)
 
@@ -2633,7 +2706,7 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         self._vibe_cache = self._root / "vibe_cookies.json"
         self._codex_auth = self._root / "auth.json"
         self._patchers = [
-            patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
+            patch.object(VibeCodeProvider, "_CACHE_PATH", self._vibe_cache),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2671,7 +2744,7 @@ class HeadlessReadOnlyTests(unittest.TestCase):
         construction — that is the correct outcome, so both are swallowed.
         """
         factories = [
-            lambda: VibeProvider(str(self._root)),
+            lambda: VibeCodeProvider(str(self._root)),
             OpenCodeGoProvider,
             CodexHttpProvider,
             ClaudeHttpProvider,
@@ -2722,7 +2795,7 @@ class HeadlessReadOnlyTests(unittest.TestCase):
             for headless in (False, True):
                 with patch("gradus.providers.subprocess.Popen") as popen:
                     providers.set_headless(headless)
-                    provider = VibeProvider(str(self._root))
+                    provider = VibeCodeProvider(str(self._root))
                     provider._acquire()
                     popen.assert_not_called()
         finally:
@@ -2750,7 +2823,7 @@ class LazyAcquireContractTests(unittest.TestCase):
         self._vibe_cache = self._root / "vibe_cookies.json"
         self._codex_auth = self._root / "auth.json"
         self._patchers = [
-            patch.object(VibeProvider, "_CACHE_PATH", self._vibe_cache),
+            patch.object(VibeCodeProvider, "_CACHE_PATH", self._vibe_cache),
             patch.object(CodexHttpProvider, "_AUTH_PATH", self._codex_auth),
         ]
         for p in self._patchers:
@@ -2780,7 +2853,7 @@ class LazyAcquireContractTests(unittest.TestCase):
                 AntigravityProvider()
                 CursorProvider()
                 OpenCodeGoProvider()
-                VibeProvider(str(self._root))
+                VibeCodeProvider(str(self._root))
             except Exception as exc:  # noqa: BLE001
                 self.fail(f"construction must never raise, got: {exc!r}")
 

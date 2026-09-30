@@ -619,6 +619,9 @@ def _style_for_signal(percent: float | None, pace: float | None) -> str:
     return _SIGNAL_STYLES[signal_level(percent, pace)]
 
 
+# Mistral's two allowances share one data shape and one row layout.
+MISTRAL_PROVIDERS = frozenset({"Vibe", "Vibe Code"})
+
 ACCENT_STYLES: dict[str, str] = {
     "Codex": "accent.codex",
     "Claude": "accent.claude",
@@ -626,6 +629,7 @@ ACCENT_STYLES: dict[str, str] = {
     "Copilot": "accent.copilot",
     "Cursor": "accent.cursor",
     "Vibe": "accent.vibe",
+    "Vibe Code": "accent.vibe",
     "OpenCode Go": "accent.opencode",
 }
 
@@ -976,7 +980,7 @@ def build_provider_panel(
     elif base_name == "Copilot":
         body = ResponsiveProviderBody()
         _add_copilot_rows(body, snapshot.data, now)
-    elif spec is None and base_name not in {"Cursor", "Vibe"}:
+    elif spec is None and base_name not in {"Cursor", *MISTRAL_PROVIDERS}:
         # Generic status cards have no usage bar. Their two-column layout is
         # intentionally separate from the normal usage-row allocator.
         body = GenericProviderBody()
@@ -985,7 +989,7 @@ def build_provider_panel(
         body = ResponsiveProviderBody()
         if base_name == "Cursor":
             _add_cursor_rows(body, snapshot.data, now)
-        elif base_name == "Vibe":
+        elif base_name in MISTRAL_PROVIDERS:
             _add_vibe_rows(body, snapshot.data, now)
         elif base_name == "Antigravity":
             _add_antigravity_rows(body, snapshot.data, now, spec.windows)
@@ -1224,7 +1228,7 @@ def _add_empty_view(table: Table, snapshot: ProviderSnapshot, now: datetime) -> 
         reset_str = str(reset_value) if isinstance(reset_value, str) else None
         for window in normalized_warning_windows(snapshot, now):
             _row(str(window["id"]), reset_str)
-    elif name == "Vibe":
+    elif name in MISTRAL_PROVIDERS:
         reset_value = data.get("reset_at")
         _row("mo", str(reset_value) if isinstance(reset_value, str) else None)
 
@@ -2333,7 +2337,7 @@ def _compact_window_parts(snapshot: ProviderSnapshot, now: datetime) -> list[tup
         return parts
 
     # --- Vibe (percent-used → percent-remaining, billing-cycle pace) ---
-    if spec is None and name == "Vibe":
+    if spec is None and name in MISTRAL_PROVIDERS:
         data = snapshot.data
         usage = data.get("usage_percent")
         if not isinstance(usage, (int, float)):

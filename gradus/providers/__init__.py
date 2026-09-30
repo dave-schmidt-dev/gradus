@@ -41,7 +41,7 @@ from .codex import CodexHttpProvider
 from .copilot import CopilotHttpProvider
 from .cursor import CursorProvider
 from .opencode_go import OpenCodeGoProvider
-from .vibe import VibeProvider
+from .vibe import VibeApiProvider, VibeCodeProvider
 
 __all__ = [
     "AntigravityProvider",
@@ -50,7 +50,8 @@ __all__ = [
     "CopilotHttpProvider",
     "CursorProvider",
     "OpenCodeGoProvider",
-    "VibeProvider",
+    "VibeApiProvider",
+    "VibeCodeProvider",
     "ProbeFailure",
     "ProviderSnapshot",
     "_AuthRejected",

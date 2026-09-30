@@ -94,6 +94,7 @@ AUTH_ACTIONS: dict[str, tuple[str, str]] = {
     "Copilot": ("cli", "gh auth login"),
     "Cursor": ("cli", "cursor-agent login"),
     "Vibe": ("browser", "https://console.mistral.ai"),
+    "Vibe Code": ("browser", "https://console.mistral.ai"),
     "OpenCode Go": ("browser", "https://opencode.ai"),
 }
 
@@ -550,7 +551,7 @@ def _launch_fix(kind: str, target: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Monitor Codex, Claude, Antigravity, Copilot, Cursor, and Vibe usage in real time."
+        description="Monitor Codex, Claude, Antigravity, Copilot, Cursor, Vibe, and Vibe Code usage in real time."
     )
     parser.add_argument("--interval", type=int, default=120, help="Refresh interval in seconds.")
     parser.add_argument(

@@ -139,7 +139,7 @@ enum MenuBarBucketPresenter {
         switch id {
         case "five_hour": "5h"
         case "weekly": "W"
-        case "monthly", "premium", "billing_cycle": "M"
+        case "monthly", "premium", "billing_cycle", "api_billing": "M"
         case "cg5", "cg_five_hour": "CG5"
         case "cg1w", "cg_weekly": "CGW"
         default: id.uppercased()

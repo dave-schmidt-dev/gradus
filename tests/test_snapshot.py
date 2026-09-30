@@ -522,6 +522,26 @@ class TestVibeNormalization(unittest.TestCase):
         self.assertEqual(windows[0]["percent_left"], 70.0)
 
 
+class TestMistralEntries(unittest.TestCase):
+    """Mistral's two allowances publish as separate one-window entries."""
+
+    DATA = {
+        "usage_percent": 100.0,
+        "start_date": "2026-09-01T00:00:00+00:00",
+        "end_date": "2026-10-01T00:00:00+00:00",
+    }
+
+    def test_each_entry_carries_its_own_window_id(self) -> None:
+        api = snap.build_windows(_ps("Vibe", True, data=self.DATA), NOW)
+        code = snap.build_windows(_ps("Vibe Code", True, data=self.DATA), NOW)
+        self.assertEqual([w["id"] for w in api], ["api_billing"])
+        self.assertEqual([w["id"] for w in code], ["billing_cycle"])
+
+    def test_exhausted_api_allowance_is_zero_percent_left(self) -> None:
+        (window,) = snap.build_windows(_ps("Vibe", True, data=self.DATA), NOW)
+        self.assertEqual(window["percent_left"], 0.0)
+
+
 class TestPaceDelta(unittest.TestCase):
     def test_naive_now_is_local_time_against_a_utc_reset(self) -> None:
         """Regression: a UTC reset with a naive local ``now`` must not shift by
@@ -927,7 +947,7 @@ class TestPayloadSchema(unittest.TestCase):
 
         names = [p["name"] for p in payload["providers"]]
         self.assertEqual(tuple(names), snap.CANONICAL_PROVIDERS())
-        self.assertEqual(len(payload["providers"]), 7)
+        self.assertEqual(len(payload["providers"]), 8)
 
         cursor = next(entry for entry in payload["providers"] if entry["name"] == "Cursor")
         self.assertIn("auto_percent_used", cursor["data"])
@@ -1065,12 +1085,12 @@ class TestPayloadSchema(unittest.TestCase):
         self.assertIsNotNone(windows["weekly"]["reset_iso"])
 
     def test_v1_antigravity_has_no_synthetic_claude_entry(self) -> None:
-        """The synthetic entry is schema-v2 only; v1 keeps its 7-entry shape."""
+        """The synthetic entry is schema-v2 only; v1 keeps its 8-entry shape."""
         antigravity = _ps("Antigravity", True, data={"five_hour_percent_left": 90})
         v1 = snap.build_snapshot_payload([antigravity], NOW)
         names = [entry["name"] for entry in v1["providers"]]
         self.assertEqual(tuple(names), snap.CANONICAL_PROVIDERS())
-        self.assertEqual(len(v1["providers"]), 7)
+        self.assertEqual(len(v1["providers"]), 8)
         self.assertNotIn("Antigravity (Claude)", names)
 
     def test_v2_antigravity_claude_disabled_when_not_enabled(self) -> None:
@@ -1190,14 +1210,14 @@ class TestPayloadSchema(unittest.TestCase):
                         self.assertFalse(entry["ok"])
                         self.assertEqual(entry["error"], "network error")
 
-    def test_v2_payload_has_eight_entries_in_canonical_order(self) -> None:
-        """v2 publishes 8 entries: 7 primaries plus the Antigravity (Claude)
+    def test_v2_payload_has_nine_entries_in_canonical_order(self) -> None:
+        """v2 publishes 9 entries: 8 primaries plus the Antigravity (Claude)
         synthetic, immediately following the primary it was synthesized from.
         """
         snapshots = [_ps(name, True, data={}) for name in snap.CANONICAL_PROVIDERS()]
         v2 = snap.build_snapshot_v2_payload(snapshots, NOW)
         names = [entry["name"] for entry in v2["providers"]]
-        self.assertEqual(len(names), 8)
+        self.assertEqual(len(names), 9)
         self.assertEqual(
             names,
             [
@@ -1209,6 +1229,7 @@ class TestPayloadSchema(unittest.TestCase):
                 "Cursor",
                 "OpenCode Go",
                 "Vibe",
+                "Vibe Code",
             ],
         )
 

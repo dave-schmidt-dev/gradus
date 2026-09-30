@@ -707,8 +707,17 @@ class IsAuthErrorTests(unittest.TestCase):
         snap = ProviderSnapshot(name="Claude", ok=False, source="api", error=None)
         self.assertFalse(_is_auth_error(snap))
 
-    def test_all_seven_providers_in_auth_actions(self) -> None:
-        expected = {"Claude", "Codex", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"}
+    def test_all_providers_in_auth_actions(self) -> None:
+        expected = {
+            "Claude",
+            "Codex",
+            "Antigravity",
+            "Copilot",
+            "Cursor",
+            "OpenCode Go",
+            "Vibe",
+            "Vibe Code",
+        }
         self.assertEqual(set(AUTH_ACTIONS.keys()), expected)
 
     def test_claude_action_opens_safari_for_bridge_managed_credentials(self) -> None:
@@ -2207,7 +2216,16 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             self.assertEqual(len(payloads), 2)
             self.assertEqual(
                 [entry["name"] for entry in payloads[0]["providers"]],
-                ["Codex", "Claude", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe"],
+                [
+                    "Codex",
+                    "Claude",
+                    "Antigravity",
+                    "Copilot",
+                    "Cursor",
+                    "OpenCode Go",
+                    "Vibe",
+                    "Vibe Code",
+                ],
             )
             self.assertIn(
                 "Antigravity (Claude)",

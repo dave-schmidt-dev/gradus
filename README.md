@@ -43,7 +43,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Monitors Antigravity (`agy`) usage via the Cloud Code `retrieveUserQuotaSummary` API — the same grouped quota `agy`'s own Models & Quota panel shows. Authenticates read-only with `agy`'s OAuth token from the macOS Keychain (service `gemini`, account `antigravity`); the monitor never refreshes or rewrites that token, so it can't disturb `agy`'s own auth.
 - Monitors Copilot usage via the GitHub REST API (using `gh` CLI credentials)
 - Monitors Cursor usage via its dashboard API, authenticating read-only with the Cursor CLI's OAuth token from the macOS Keychain (service `cursor-access-token`, account `cursor-user`); the monitor never refreshes or rewrites that token, so it can't disturb the CLI's own session
-- Monitors Vibe usage via the Mistral billing API
+- Monitors Mistral usage as two entries via the Mistral billing APIs: "Vibe Code" (the included Vibe Code allowance, window `billing_cycle`) and "Vibe" (the included API allowance, window `api_billing`, read from the admin console `billing.budget` route with the same Safari session). Switchyard routes on each entry's own minimum, so they cannot share one entry
 - Monitors OpenCode Go usage via its API-key endpoint (5h/1w/monthly quota), without Safari
 - Refreshes every 120 seconds by default
 - Shows Codex and Claude session-window usage, reset times, and pace indicators. Codex windows are slotted by the API's declared window span, not by position. The Codex 5-hour limit row is hidden entirely when the upstream API omits it (as OpenAI has done since 2026-07) and reappears automatically once the API reports it again.
@@ -136,7 +136,7 @@ Optional config file (`.gradus.json` in your current working directory; legacy `
 
 ```json
 {
-  "providers": ["Claude", "Codex", "Copilot", "Cursor", "Antigravity", "OpenCode Go", "Vibe"],
+  "providers": ["Claude", "Codex", "Copilot", "Cursor", "Antigravity", "OpenCode Go", "Vibe", "Vibe Code"],
   "interval": 120
 }
 ```
@@ -397,7 +397,7 @@ bridge without changing `~/Applications`.
 }
 ```
 
-All 7 canonical providers are always present (Codex, Claude, Antigravity, Copilot, Cursor, OpenCode Go, Vibe); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
+All 8 canonical providers are always present (Codex, Claude, Antigravity, Copilot, Cursor, OpenCode Go, Vibe, Vibe Code); a not-enabled or filtered provider appears as `ok: false, error: "provider not enabled"`. `percent_left` is always remaining (0–100). `pace_delta` is a signed fraction — positive means healthy (remaining capacity ahead of expected consumption rate), unclamped.
 
 `.state/snapshot-v2.json` is consumed by hermes-publisher's GradusCollector as well as review-plugin; consumers reject unsupported schema_version. Incompatible changes to top-level payload, provider-entry fields, or windows[] require a schema bump and coordinated compatibility updates in both consumer projects. Schema v2 includes the synthetic `Antigravity (Claude)` entry so the shared third-party pool is visible to consumers. `--json` is a reader presentation of the canonical snapshot and does not select or persist a router schema.
 

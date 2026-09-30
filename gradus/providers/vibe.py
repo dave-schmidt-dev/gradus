@@ -1,4 +1,4 @@
-"""Vibe (Mistral) provider."""
+"""Mistral providers: "Vibe Code" (Vibe allowance) and "Vibe" (API allowance)."""
 
 from __future__ import annotations
 
@@ -17,9 +17,15 @@ from ._base import (
 )
 
 
-@register("Vibe")
-class VibeProvider:
-    API_URL = "https://console.mistral.ai/api/billing/v2/vibe-usage"
+class _MistralSessionProvider:
+    """Shared Safari-session plumbing for both Mistral allowances.
+
+    Both endpoints authenticate with the same Ory session cookie the credential
+    bridge caches, so they share one cache file and one expiry path.
+    """
+
+    API_URL = ""
+    _EXTRA_HEADERS: dict[str, str] = {}
     _CACHE_PATH = _private_cache_path("vibe_cookies.json")
 
     def __init__(self, project_root: str) -> None:
@@ -66,7 +72,7 @@ class VibeProvider:
     def _has_cookies(self) -> bool:
         return bool(self._ory_name and self._ory_value and self._csrf)
 
-    def fetch(self) -> VibeStatus:
+    def _read_body(self) -> str:
         import urllib.error
         import urllib.request
 
@@ -91,13 +97,14 @@ class VibeProvider:
                 "Cookie": cookie_header,
                 "x-csrftoken": self._csrf,
                 "Accept": "application/json",
+                **self._EXTRA_HEADERS,
             },
         )
         try:
             with urllib.request.urlopen(req, timeout=15, context=default_ssl_context()) as resp:
                 body = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
-            if exc.code in (301, 302, 401, 403):
+            if exc.code in (301, 302, 307, 308, 401, 403):
                 self._ory_name = self._ory_value = self._csrf = ""
                 self._clear_cache()
                 raise ProbeFailure(
@@ -112,42 +119,98 @@ class VibeProvider:
             # material and is safe on the published surface.
             raise ProbeFailure(f"Mistral API network error: {exc.reason}", str(exc)) from exc
 
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError as exc:
-            raise ProbeFailure("Mistral API returned invalid JSON", body[:500]) from exc
+        return body
 
-        usage_pct_raw = payload.get("usage_percentage")
-        usage_percent = round(float(usage_pct_raw), 4) if usage_pct_raw is not None else None
-        reset_raw = payload.get("reset_at")
-        reset_at = reset_raw
-        reset_target: datetime | None = None
-        if reset_raw:
-            try:
-                reset_target = datetime.fromisoformat(reset_raw.replace("Z", "+00:00"))
-                reset_at = f"Resets {reset_target.astimezone().strftime('%b %d at %I:%M %p')}"
-            except ValueError:
-                pass
+    def close(self) -> None:
+        pass
 
+
+def _monthly_cycle(reset_raw: object) -> tuple[str | None, datetime | None, str | None, str | None]:
+    """Return (display reset, reset instant, start ISO, end ISO) for a calendar-month cycle."""
+    if not isinstance(reset_raw, str) or not reset_raw:
+        return None, None, None, None
+    try:
+        reset_target = datetime.fromisoformat(reset_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return reset_raw, None, None, None
+    display = f"Resets {reset_target.astimezone().strftime('%b %d at %I:%M %p')}"
+    cycle_end_utc = reset_target.astimezone(timezone.utc)
+    year = cycle_end_utc.year - (1 if cycle_end_utc.month == 1 else 0)
+    month = 12 if cycle_end_utc.month == 1 else cycle_end_utc.month - 1
+    start = datetime(year, month, 1, 0, 0, tzinfo=timezone.utc).isoformat()
+    return display, reset_target, start, reset_target.isoformat()
+
+
+def _parse_json(body: str) -> dict:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ProbeFailure("Mistral API returned invalid JSON", body[:500]) from exc
+    if not isinstance(payload, dict):
+        raise ProbeFailure("Mistral API returned an unexpected payload", body[:500])
+    return payload
+
+
+def _percent_or_none(raw: object) -> float | None:
+    return round(float(raw), 4) if isinstance(raw, (int, float)) else None
+
+
+@register("Vibe Code")
+class VibeCodeProvider(_MistralSessionProvider):
+    """Included Vibe Code allowance (what ``vibe -p`` bills)."""
+
+    API_URL = "https://console.mistral.ai/api/billing/v2/vibe-usage"
+
+    def fetch(self) -> VibeStatus:
+        body = self._read_body()
+        payload = _parse_json(body)
+        reset_at, reset_target, cycle_start, cycle_end = _monthly_cycle(payload.get("reset_at"))
         start_date = payload.get("start_date")
         end_date = payload.get("end_date")
         if reset_target is not None:
-            if not end_date:
-                end_date = reset_target.isoformat()
-            if not start_date:
-                cycle_end_utc = reset_target.astimezone(timezone.utc)
-                year = cycle_end_utc.year - (1 if cycle_end_utc.month == 1 else 0)
-                month = 12 if cycle_end_utc.month == 1 else cycle_end_utc.month - 1
-                start_date = datetime(year, month, 1, 0, 0, tzinfo=timezone.utc).isoformat()
-
+            end_date = end_date or cycle_end
+            start_date = start_date or cycle_start
         return VibeStatus(
-            usage_percent=usage_percent,
-            reset_at=reset_at,
+            usage_percent=_percent_or_none(payload.get("usage_percentage")),
+            reset_at=reset_at if reset_at is not None else payload.get("reset_at"),
             payg_enabled=payload.get("payg_enabled"),
             start_date=start_date,
             end_date=end_date,
             raw_text=body,
         )
 
-    def close(self) -> None:
-        pass
+
+@register("Vibe")
+class VibeApiProvider(_MistralSessionProvider):
+    """Included API/Studio allowance (what the Switchyard ``vibe`` target bills).
+
+    Read from the admin console's ``billing.budget`` route, which reports both
+    allowances; only ``api_budget`` is used here. ``usage_percentage`` is
+    percent used, and the cycle is the calendar month ending at ``reset_at``.
+    """
+
+    API_URL = (
+        "https://admin.mistral.ai/api/local-trpc/billing.budget"
+        "?input=%7B%22json%22%3Anull%2C%22meta%22%3A%7B%22values%22%3A%5B%22undefined%22%5D"
+        "%2C%22v%22%3A1%7D%7D"
+    )
+    _EXTRA_HEADERS = {"x-trpc-source": "nextjs-react"}
+
+    def fetch(self) -> VibeStatus:
+        body = self._read_body()
+        payload = _parse_json(body)
+        try:
+            budget = payload["result"]["data"]["json"]["api_budget"]
+        except (KeyError, TypeError) as exc:
+            raise ProbeFailure("Mistral API budget missing from billing response", "") from exc
+        if not isinstance(budget, dict):
+            raise ProbeFailure("Mistral API budget missing from billing response", "")
+        reset_at, _, start_date, end_date = _monthly_cycle(budget.get("reset_at"))
+        return VibeStatus(
+            usage_percent=_percent_or_none(budget.get("usage_percentage")),
+            reset_at=reset_at,
+            payg_enabled=None,
+            start_date=start_date,
+            end_date=end_date,
+            raw_text=body,
+        )

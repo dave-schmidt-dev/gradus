@@ -199,7 +199,16 @@ def register(name: str):
     return _decorator
 
 
-_REGISTRATION_ORDER = ("Codex", "Claude", "Antigravity", "Copilot", "Cursor", "OpenCode Go", "Vibe")
+_REGISTRATION_ORDER = (
+    "Codex",
+    "Claude",
+    "Antigravity",
+    "Copilot",
+    "Cursor",
+    "OpenCode Go",
+    "Vibe",
+    "Vibe Code",
+)
 
 
 def _canonical_providers() -> tuple[str, ...]:
