@@ -142,3 +142,22 @@ private func windowWarnsMatchesGeneratedTruthTable(_ testCase: WarnsTruthTableCa
     ]
     #expect(providerIsDepleted(providerName: "Codex", windows: windows) == true)
 }
+
+@Test func mistralIsDepletedOnlyWhenBothAllowancesAre() {
+    let apiOnly = [
+        ProviderWindow(id: "api_billing", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "vibe_billing", percentLeft: 33.7, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Mistral", windows: apiOnly) == false)
+
+    let both = [
+        ProviderWindow(id: "api_billing", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil),
+        ProviderWindow(id: "vibe_billing", percentLeft: 0.2, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Mistral", windows: both) == true)
+
+    let soleWindow = [
+        ProviderWindow(id: "vibe_billing", percentLeft: 0.0, resetISO: nil, windowHours: nil, paceDelta: nil)
+    ]
+    #expect(providerIsDepleted(providerName: "Mistral", windows: soleWindow) == true)
+}

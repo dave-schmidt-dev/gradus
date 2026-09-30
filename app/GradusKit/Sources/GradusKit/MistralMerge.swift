@@ -9,10 +9,10 @@ public enum MistralMerge {
     public static let mergedName = "Mistral"
     static let apiEntryName = "Vibe"
     static let codeEntryName = "Vibe Code"
-    static let apiWindowID = "api_billing"
+    public static let apiWindowID = "api_billing"
     /// The monitor's `billing_cycle` id is shared with Cursor, whose label is
     /// "Monthly"; the merged card renames it so it can be labelled "Vibe".
-    static let codeWindowID = "vibe_billing"
+    public static let codeWindowID = "vibe_billing"
 
     /// Replaces the two Mistral entries with one merged entry, in the position
     /// of whichever came first. The merged entry is `ok` when either allowance

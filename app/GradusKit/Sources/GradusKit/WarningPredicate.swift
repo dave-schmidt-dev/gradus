@@ -38,18 +38,22 @@ public func percentIsDepleted(_ percentLeft: Double?) -> Bool {
 /// Cursor's schema-v2 `ac` and `ap` windows are independent pools, so one
 /// healthy pool keeps Cursor active. Only recognized windows with valid
 /// percentages participate; an absent sibling does not prevent the one
-/// present pool from determining depletion. Other providers retain the
-/// original rule that any depleted window exhausts the provider.
+/// present pool from determining depletion. Mistral's merged card holds the
+/// API and Vibe allowances, which are billed separately, so an exhausted API
+/// bar leaves the card active while the Vibe bar has room (and the reverse).
+/// Other providers retain the original rule that any depleted window
+/// exhausts the provider.
 public func providerIsDepleted(providerName: String, windows: [ProviderWindow]) -> Bool {
-    guard providerName == "Cursor" else {
-        return windows.contains { percentIsDepleted($0.percentLeft) }
+    let independentPoolIDs: Set<String>
+    switch providerName {
+    case "Cursor": independentPoolIDs = ["ac", "ap"]
+    case MistralMerge.mergedName: independentPoolIDs = [MistralMerge.apiWindowID, MistralMerge.codeWindowID]
+    default: return windows.contains { percentIsDepleted($0.percentLeft) }
     }
 
-    let cursorWindows = windows.filter {
-        ($0.id == "ac" || $0.id == "ap") && percentIsValid($0.percentLeft)
-    }
-    guard !cursorWindows.isEmpty else { return false }
-    return cursorWindows.allSatisfy { percentIsDepleted($0.percentLeft) }
+    let pools = windows.filter { independentPoolIDs.contains($0.id) && percentIsValid($0.percentLeft) }
+    guard !pools.isEmpty else { return false }
+    return pools.allSatisfy { percentIsDepleted($0.percentLeft) }
 }
 
 /// A window warrants attention when the ramp classifies it orange or red —
