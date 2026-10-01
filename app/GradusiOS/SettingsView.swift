@@ -2,8 +2,8 @@ import GradusKit
 import SwiftUI
 import UIKit
 
-/// The Settings screen (P5/T5.3): Sync + Notifications, connected computer,
-/// local display, warning threshold, and About. Takes the live `DashboardViewModel`
+/// The Settings screen (P5/T5.3): warning alerts and threshold, reset alerts,
+/// local display, widget providers, connected computer, and About. Takes the live `DashboardViewModel`
 /// instance directly, `@ObservedObject`, **not** a separate
 /// `SettingsViewModel` -- per the plan's explicit reversal
 /// (`ios-design-system-2026-08-03.md`, Phase 5 section): a standalone view
@@ -104,16 +104,20 @@ struct SettingsView: View {
             }
 
             List {
+                // Alerts and the threshold that drives them sit together at the
+                // top; the read-only Connected Computer and About come last.
                 if isSampleMode {
                     sampleSection
                 } else {
                     warningAlertsSection
+                }
+                warningThresholdSection
+                if !isSampleMode {
                     resetAlertsSection
                 }
-                connectedComputerSection
                 localDisplaySection
                 widgetProvidersSection
-                warningThresholdSection
+                connectedComputerSection
                 aboutSection
             }
             .listStyle(.plain)

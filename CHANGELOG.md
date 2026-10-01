@@ -31,6 +31,10 @@ history from the overnight release train. New releases use
 
 ### Changed
 
+- iPhone and iPad Settings now keep Warning alerts and the Warning Threshold
+  slider together at the top, followed by Reset alerts, Local Display and Widget;
+  the read-only Connected Computer and About sections come last.
+
 - Usage-refill alerts now cover the weekly window only by default. A new
   "Include 5-hour refills" toggle in Mac and iPhone Settings brings the 5-hour
   alerts back; it is off by default and applies only while "Usage refilled" is
