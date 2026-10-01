@@ -229,3 +229,26 @@ private func resetDefaults(_ test: String) -> (String, UserDefaults)? {
     #expect(ResetNotificationAuthorization(.provisional) == .authorized)
     #expect(ResetNotificationAuthorization(.notDetermined) == .notDetermined)
 }
+
+@Test @MainActor func shortWindowRefillsNeedTheirOwnOptIn() async throws {
+    let scheduler = FakeResetScheduler()
+    scheduler.current = .authorized
+    let (suite, defaults) = try #require(resetDefaults(#function))
+    defer { removeScratchDefaultsSuite(suite, using: defaults) }
+    let model = makeResetModel(
+        scheduler: scheduler, authorizer: FakeBankedAuthorizer(), defaults: defaults
+    )
+    let weekly = ResetNotificationEvent(kind: .refill, providerName: "Claude", windowLabel: "weekly")
+    let fiveHour = ResetNotificationEvent(kind: .refill, providerName: "Claude", windowLabel: "five_hour")
+    #expect(!model.resetShortWindowRefillAlertsEnabled)
+
+    await model.setResetRefillAlertsEnabled(true)
+    await model.scheduleResetAlert(fiveHour)
+    await model.scheduleResetAlert(weekly)
+    #expect(scheduler.events == [weekly])
+
+    model.setResetShortWindowRefillAlertsEnabled(true)
+    #expect(defaults.bool(forKey: PublisherViewModel.resetShortWindowRefillAlertsEnabledKey))
+    await model.scheduleResetAlert(fiveHour)
+    #expect(scheduler.events == [weekly, fiveHour])
+}

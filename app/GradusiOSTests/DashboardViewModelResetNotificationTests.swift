@@ -107,6 +107,7 @@ private func resetViewModel(
     )
     viewModel.setBankedResetAlertsEnabled(true)
     viewModel.setUsageRefillAlertsEnabled(true)
+    viewModel.setShortWindowRefillAlertsEnabled(true)
 
     #expect(await viewModel.sync())
     #expect(scheduler.alerts.isEmpty)
@@ -174,6 +175,7 @@ private func resetViewModel(
     ])
     let first = await resetViewModel(defaults: defaults, cache: cache, scheduler: scheduler, deltaFetcher: delta)
     first.setUsageRefillAlertsEnabled(true)
+    first.setShortWindowRefillAlertsEnabled(true)
     await first.handleRemoteNotification()
     await first.handleRemoteNotification()
     await first.handleRemoteNotification()
@@ -217,6 +219,7 @@ private func resetViewModel(
     let viewModel = await resetViewModel(defaults: defaults, cache: cache,
                                          scheduler: scheduler, deltaFetcher: delta)
     viewModel.setUsageRefillAlertsEnabled(true)
+    viewModel.setShortWindowRefillAlertsEnabled(true)
     for _ in 0 ..< 4 {
         await viewModel.handleRemoteNotification()
     }
@@ -251,6 +254,7 @@ private func resetViewModel(
     let viewModel = await resetViewModel(defaults: defaults, cache: cache,
                                          scheduler: scheduler, deltaFetcher: delta)
     viewModel.setUsageRefillAlertsEnabled(true)
+    viewModel.setShortWindowRefillAlertsEnabled(true)
     await viewModel.handleRemoteNotification()
     await viewModel.handleRemoteNotification()
     #expect(scheduler.alerts.isEmpty)
@@ -317,6 +321,8 @@ private func resetViewModel(
     #expect(scheduler.alerts.isEmpty)
 
     viewModel.setUsageRefillAlertsEnabled(true)
+
+    viewModel.setShortWindowRefillAlertsEnabled(true)
     await viewModel.handleRemoteNotification()
     await viewModel.handleRemoteNotification()
     #expect(scheduler.alerts == [.usageRefill(providerName: "Codex", windowID: "five_hour")])
@@ -355,4 +361,34 @@ private func resetViewModel(
         await Task.yield()
     }
     #expect(delegate.warningAlertAuthorization == .authorized)
+}
+
+@MainActor
+@Test func shortWindowRefillsAreOffByDefaultAndPersistWhenEnabled() async {
+    let defaults = syncIsolatedDefaults()
+    let cache = syncTempCache()
+    let scheduler = RecordingResetScheduler()
+    let delta = MockZoneChangesFetcher(outcomes: [
+        resetStatus("Claude", percent: 20, observedAt: "2026-09-24T10:00:00Z"),
+        resetStatus("Claude", percent: 100, observedAt: "2026-09-24T12:00:00Z",
+                    deadline: "2026-09-24T17:00:00Z"),
+        resetStatus("Claude", percent: 20, observedAt: "2026-09-24T13:00:00Z",
+                    deadline: "2026-09-24T17:00:00Z"),
+        resetStatus("Claude", percent: 100, observedAt: "2026-09-24T18:00:00Z",
+                    deadline: "2026-09-24T22:00:00Z")
+    ].map { .success(changed: [$0], deletedProviderNames: [], newToken: nil) })
+    let viewModel = await resetViewModel(
+        defaults: defaults, cache: cache, scheduler: scheduler, deltaFetcher: delta
+    )
+    #expect(!viewModel.shortWindowRefillAlertsEnabled)
+    viewModel.setUsageRefillAlertsEnabled(true)
+    await viewModel.handleRemoteNotification()
+    await viewModel.handleRemoteNotification()
+    #expect(scheduler.alerts.isEmpty)
+
+    viewModel.setShortWindowRefillAlertsEnabled(true)
+    #expect(defaults.bool(forKey: DashboardViewModel.shortWindowRefillAlertsEnabledKey))
+    await viewModel.handleRemoteNotification()
+    await viewModel.handleRemoteNotification()
+    #expect(scheduler.alerts == [.usageRefill(providerName: "Claude", windowID: "five_hour")])
 }

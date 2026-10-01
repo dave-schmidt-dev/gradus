@@ -86,7 +86,7 @@ struct SettingsView: View {
         "Alert when a new Codex banked reset credit is observed. Existing credits set the starting balance."
 
     static let usageRefillAlertsDescription =
-        "Alert when a reported Codex or Claude usage window refills."
+        "Alert when a reported Codex or Claude weekly usage window refills."
 
     static let claudeBankedUnavailableDescription =
         "Claude banked resets are unavailable to Gradus."
@@ -192,20 +192,6 @@ struct SettingsView: View {
         warningAlertPermissionRequestPending ? "Requesting warning-alert permission…" : "Warning alerts"
     }
 
-    private var bankedResetAlertsBinding: Binding<Bool> {
-        Binding(
-            get: { dashboardViewModel.bankedResetAlertsEnabled },
-            set: { dashboardViewModel.setBankedResetAlertsEnabled($0) }
-        )
-    }
-
-    private var usageRefillAlertsBinding: Binding<Bool> {
-        Binding(
-            get: { dashboardViewModel.usageRefillAlertsEnabled },
-            set: { dashboardViewModel.setUsageRefillAlertsEnabled($0) }
-        )
-    }
-
     private var resetAlertsSection: some View {
         Section {
             ListRow.toggle(
@@ -223,6 +209,13 @@ struct SettingsView: View {
                 accessibilityIdentifier: "reset-alerts-refill-toggle"
             )
             .disabled(resetAlertPermissionRequestPending)
+            ListRow.toggle(
+                icon: Icon.clock,
+                label: "Include 5-hour refills",
+                isOn: shortWindowRefillAlertsBinding,
+                accessibilityIdentifier: "reset-alerts-refill-5h-toggle"
+            )
+            .disabled(resetAlertPermissionRequestPending || !dashboardViewModel.usageRefillAlertsEnabled)
             if resetAlertPermissionRequestPending {
                 Label("Waiting for your iOS notification choice.", systemImage: "hourglass")
                     .font(.caption)
@@ -310,6 +303,29 @@ struct SettingsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private extension SettingsView {
+    private var bankedResetAlertsBinding: Binding<Bool> {
+        Binding(
+            get: { dashboardViewModel.bankedResetAlertsEnabled },
+            set: { dashboardViewModel.setBankedResetAlertsEnabled($0) }
+        )
+    }
+
+    private var usageRefillAlertsBinding: Binding<Bool> {
+        Binding(
+            get: { dashboardViewModel.usageRefillAlertsEnabled },
+            set: { dashboardViewModel.setUsageRefillAlertsEnabled($0) }
+        )
+    }
+
+    private var shortWindowRefillAlertsBinding: Binding<Bool> {
+        Binding(
+            get: { dashboardViewModel.shortWindowRefillAlertsEnabled },
+            set: { dashboardViewModel.setShortWindowRefillAlertsEnabled($0) }
+        )
     }
 }
 

@@ -164,9 +164,19 @@ struct MacSettingsView: View {
                     )
                 )
                 .accessibilityIdentifier("settings-reset-refills")
-                Text("Alert when a reported allowance refills for Codex or Claude.")
+                Text("Alert when a reported weekly allowance refills for Codex or Claude.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle(
+                    "Include 5-hour refills",
+                    isOn: Binding(
+                        get: { viewModel.resetShortWindowRefillAlertsEnabled },
+                        set: { viewModel.setResetShortWindowRefillAlertsEnabled($0) }
+                    )
+                )
+                .disabled(!viewModel.resetRefillAlertsEnabled)
+                .accessibilityIdentifier("settings-reset-refills-5h")
 
                 LabeledContent("Codex banked resets", value: viewModel.bankedCreditStatusText)
                     .accessibilityIdentifier("settings-banked-status")

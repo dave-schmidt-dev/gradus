@@ -351,9 +351,15 @@ public enum ResetAlertDetector {
         !id.isEmpty && id.utf8.count <= 64
     }
 
+    /// True for the one-week window (`weekly`); every other window the
+    /// detector reports on (`five_hour`) is a short window.
+    public static func isWeeklyWindow(_ id: String) -> Bool {
+        id.lowercased().contains("week")
+    }
+
     private static func preferredWindow(_ lhs: String, _ rhs: String) -> Bool {
-        let lhsWeekly = lhs.lowercased().contains("week")
-        let rhsWeekly = rhs.lowercased().contains("week")
+        let lhsWeekly = isWeeklyWindow(lhs)
+        let rhsWeekly = isWeeklyWindow(rhs)
         return lhsWeekly == rhsWeekly ? lhs < rhs : lhsWeekly
     }
 }

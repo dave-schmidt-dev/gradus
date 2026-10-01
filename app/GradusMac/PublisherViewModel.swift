@@ -110,6 +110,9 @@ public final class PublisherViewModel: ObservableObject {
     /// starts with both off, independently of any existing warning preference.
     @Published public private(set) var resetGrantAlertsEnabled: Bool
     @Published public private(set) var resetRefillAlertsEnabled: Bool
+    /// Refill alerts cover the weekly window only unless this is on; a 5-hour
+    /// window refills several times a day and is rarely worth an alert.
+    @Published public private(set) var resetShortWindowRefillAlertsEnabled: Bool
     @Published public private(set) var resetNotificationAuthorization: ResetNotificationAuthorization = .notDetermined
     @Published public private(set) var bankedCreditCount: Int?
     @Published public private(set) var lastObservedBankedCreditCount: Int?
@@ -178,6 +181,7 @@ public final class PublisherViewModel: ObservableObject {
     static let menuBarDisplaySelectionKey = "menuBarDisplaySelection"
     static let resetGrantAlertsEnabledKey = "resetGrantAlertsEnabled"
     static let resetRefillAlertsEnabledKey = "resetRefillAlertsEnabled"
+    static let resetShortWindowRefillAlertsEnabledKey = "resetShortWindowRefillAlertsEnabled"
 
     /// Matches `DashboardViewModel.defaultLocalWarningThresholdPercent`. A
     /// different default here would mean the same provider counts as "low" on
@@ -260,6 +264,7 @@ public final class PublisherViewModel: ObservableObject {
         )
         resetGrantAlertsEnabled = defaults.bool(forKey: Self.resetGrantAlertsEnabledKey)
         resetRefillAlertsEnabled = defaults.bool(forKey: Self.resetRefillAlertsEnabledKey)
+        resetShortWindowRefillAlertsEnabled = defaults.bool(forKey: Self.resetShortWindowRefillAlertsEnabledKey)
     }
 
     /// This explicit read can run at local watcher startup or when Settings
@@ -286,6 +291,11 @@ public final class PublisherViewModel: ObservableObject {
         }
     }
 
+    public func setResetShortWindowRefillAlertsEnabled(_ enabled: Bool) {
+        resetShortWindowRefillAlertsEnabled = enabled
+        defaults.set(enabled, forKey: Self.resetShortWindowRefillAlertsEnabledKey)
+    }
+
     private func requestResetNotificationAuthorizationIfNeeded() async {
         guard !resetAuthorizationRequestInFlight else { return }
         resetAuthorizationRequestInFlight = true
@@ -303,6 +313,10 @@ public final class PublisherViewModel: ObservableObject {
     public func scheduleResetAlert(_ event: ResetNotificationEvent) async {
         let enabled = event.kind == .grant ? resetGrantAlertsEnabled : resetRefillAlertsEnabled
         guard enabled else { return }
+        if event.kind == .refill, !resetShortWindowRefillAlertsEnabled,
+           !ResetAlertDetector.isWeeklyWindow(event.windowLabel ?? "") {
+            return
+        }
         guard !resetAuthorizationRequestInFlight else { return }
         resetNotificationAuthorization = await resetNotificationScheduler.authorization()
         guard resetNotificationAuthorization == .authorized else { return }

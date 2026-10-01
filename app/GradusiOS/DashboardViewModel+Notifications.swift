@@ -11,6 +11,15 @@ public extension DashboardViewModel {
             && systemNotificationAuthorization == .denied
     }
 
+    static let shortWindowRefillAlertsEnabledKey = "shortWindowRefillAlertsEnabled"
+
+    /// Whether 5-hour refills alert as well as weekly ones; off until the user
+    /// turns it on. Read straight from the defaults so it needs no stored
+    /// property, and `setShortWindowRefillAlertsEnabled` publishes the change.
+    var shortWindowRefillAlertsEnabled: Bool {
+        userDefaults.bool(forKey: Self.shortWindowRefillAlertsEnabledKey)
+    }
+
     func setBankedResetAlertsEnabled(_ enabled: Bool) {
         guard bankedResetAlertsEnabled != enabled else { return }
         bankedResetAlertsEnabled = enabled
@@ -21,6 +30,12 @@ public extension DashboardViewModel {
         guard usageRefillAlertsEnabled != enabled else { return }
         usageRefillAlertsEnabled = enabled
         userDefaults.set(enabled, forKey: Self.usageRefillAlertsEnabledKey)
+    }
+
+    func setShortWindowRefillAlertsEnabled(_ enabled: Bool) {
+        guard shortWindowRefillAlertsEnabled != enabled else { return }
+        objectWillChange.send()
+        userDefaults.set(enabled, forKey: Self.shortWindowRefillAlertsEnabledKey)
     }
 
     /// True when our own opt-in is on but iOS will not display the result. The
@@ -138,7 +153,9 @@ extension DashboardViewModel {
             switch alert {
             case .bankedGrant where bankedResetAlertsEnabled:
                 resetNotificationScheduler?.scheduleResetNotification(alert)
-            case .usageRefill where usageRefillAlertsEnabled:
+            case let .usageRefill(_, windowID)
+                where usageRefillAlertsEnabled
+                && (shortWindowRefillAlertsEnabled || ResetAlertDetector.isWeeklyWindow(windowID)):
                 resetNotificationScheduler?.scheduleResetNotification(alert)
             default: break
             }

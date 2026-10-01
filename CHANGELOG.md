@@ -31,6 +31,11 @@ history from the overnight release train. New releases use
 
 ### Changed
 
+- Usage-refill alerts now cover the weekly window only by default. A new
+  "Include 5-hour refills" toggle in Mac and iPhone Settings brings the 5-hour
+  alerts back; it is off by default and applies only while "Usage refilled" is
+  on.
+
 - The local Warning Threshold on Mac and iPhone/iPad is now points behind
   expected pace (0-10, default 10) instead of percent left. Gradus always warns
   at 10 points behind, so lowering it only warns sooner. Local warning
