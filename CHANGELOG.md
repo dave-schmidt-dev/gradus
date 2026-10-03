@@ -53,6 +53,18 @@ history from the overnight release train. New releases use
   iPhone/iPad no longer show it. The Mac deletes its old iCloud record once,
   which removes the card from iPhone and iPad.
 
+- The Mac reset-alert notifications now use the iPhone wording: "Codex added N
+  banked resets. M available." and "<provider> <window> usage is available
+  again.", with readable window names such as "5 Hour" and "Weekly".
+
+### Removed
+
+- The DEBUG-only CloudKit spike and schema-gate launch modes (`--cloudkit-spike`,
+  `--t1-7-gate`, `--t2-5-schema-gate`) in the Mac and iOS apps.
+- Xcode Cloud validation: the `GradusMacCloud` scheme and the hosted-runner
+  snapshot and source-root branches in the test targets. The local gate is the
+  only validation path.
+
 ## 1.11.0 — 2026-09-24
 
 ### Added
