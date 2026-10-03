@@ -22,6 +22,7 @@ history from the overnight release train. New releases use
   "Vibe" and "Vibe Code" entries so a router can veto on each independently.
 
 ### Fixed
+- Claude usage now recovers on the next normal refresh after a temporary collector-check failure, instead of waiting through the ten-minute API cooldown.
 - The Mac and iOS apps no longer hide the Mistral card when only one of its two allowances (API or Vibe) is exhausted; it counts as exhausted only when both are.
 
 - Reset times and pace are now computed and emitted in local time. The refresh

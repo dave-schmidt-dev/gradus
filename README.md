@@ -257,6 +257,7 @@ consumer-visible provider on each cycle, concurrently, and commits one coherent
 snapshot. Refresh progress names each safe start/complete state. Claude probes are additionally
 limited to one attempt per ten minutes, with a one-hour backoff after HTTP 429;
 a 429 retains bounded windows but remains `ok: false` for fail-closed routing.
+The synthesized legacy-owner unavailable marker does not count as a probe attempt, so Claude can be probed on the next tick after that owner becomes inactive.
 Snapshot writers use a per-file lock and reject an older payload.
 
 Claude cooldown cycles preserve the prior observation and its original probe

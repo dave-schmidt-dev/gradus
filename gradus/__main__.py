@@ -45,6 +45,7 @@ from .providers._base import _PROVIDER_REGISTRY
 from .snapshot import (
     ANTIGRAVITY_AUTH_RETRY_MESSAGE,
     CANONICAL_PROVIDERS,
+    LEGACY_CLAUDE_UNAVAILABLE_ERROR,
     SNAPSHOT_PATH,
     SNAPSHOT_V2_PATH,
     STALE_THRESHOLD_SECONDS,
@@ -245,7 +246,10 @@ def _provider_next_probe_at(
     # This is a builder-synthesized absence marker, not an attempted Claude
     # probe. Never let a scoped snapshot write turn it into a 10-minute
     # cooldown that hides a newly re-enabled Claude provider.
-    if entry.get("error") == "provider not enabled":
+    if entry.get("error") in (
+        "provider not enabled",
+        LEGACY_CLAUDE_UNAVAILABLE_ERROR,
+    ):
         return now
     # This field is advanced only by a real probe.  A cooldown projection is
     # carried through the next payload unchanged, so the 120s producer tick
