@@ -43,12 +43,6 @@ struct GradusiOSApp: App {
             defaults: .standard, legacyKey: DashboardViewModel.syncEnabledKey
         )
 
-        #if DEBUG
-            if CommandLine.arguments.contains("--cloudkit-spike"), CloudKitRuntimeConfiguration.currentValue {
-                Task { await CloudKitSpike.run() }
-            }
-        #endif
-
         let launchSampleMode = SampleDataMode.isEnabled(
             arguments: CommandLine.arguments, isDebugBuild: Self.isDebugBuild
         )

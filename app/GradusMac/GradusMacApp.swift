@@ -16,20 +16,6 @@ struct GradusMacApp: App {
         _ = RequiredICloudMigration.migrate(
             defaults: .standard, legacyKey: PublisherViewModel.syncEnabledKey
         )
-        #if DEBUG
-            if CommandLine.arguments.contains("--cloudkit-spike") {
-                Task { await CloudKitSpike.run() }
-                return
-            }
-            if CommandLine.arguments.contains("--t1-7-gate") {
-                Task { await T17SeamGate.run() }
-                return
-            }
-            if CommandLine.arguments.contains("--t2-5-schema-gate") {
-                Task { await T25SchemaGate.run() }
-                return
-            }
-        #endif
         // `GradusMacTests` is a hosted unit-test bundle, so every
         // `xcodebuild test` run launches this app for real. A Debug host must
         // never start the live pipeline by default: doing so reads the local

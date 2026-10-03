@@ -25,7 +25,6 @@
 		167CF288EF2896C7CD8FF7D2 /* Colors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96D80F21CED971DF33B67739 /* Colors.swift */; };
 		16F7770E3B57F855CAED3BC3 /* emptyStateNotSignedIn.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 9EE69E71E9108183202A64A9 /* emptyStateNotSignedIn.1.png */; };
 		1872006B91CB3D52456F1901 /* exhaustedCompactCellsPhone.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 7718FF73075AC76A6B6E609E /* exhaustedCompactCellsPhone.1.png */; };
-		18CB2144EDEDAF390361FC81 /* T25SchemaGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25811B1BB194D66F99783364 /* T25SchemaGate.swift */; };
 		192212AA6F15B6A5AD692523 /* SettingsView+About.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBF01E9CE24816F7A5CA6B8D /* SettingsView+About.swift */; };
 		1AA9BBCD44700EDC81EC28F4 /* listRowToggleOffDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = F33CB6B4179DC3886881E21B /* listRowToggleOffDark.1.png */; };
 		1ADC47D3FE5DFF034ED74BB6 /* WindowRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6FB520E5C2035AE7E6123F /* WindowRow.swift */; };
@@ -64,7 +63,6 @@
 		35D2E2FE5CDAED8ADB33C5C6 /* ProviderWindowLabelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C0B004F460C3F9A27CFC461 /* ProviderWindowLabelTests.swift */; };
 		3692E17716C3490385B969FD /* ProviderTriageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B375FAC6E483EDBD2BA91F0 /* ProviderTriageTests.swift */; };
 		378D41469CE0E2E6B3EABBA7 /* DashboardSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F89A27D909F23C95F53189E /* DashboardSnapshotTests.swift */; };
-		3798F17A91B64A768EABF612 /* CloudKitSpike.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05C8F176108C96ED6428FC6 /* CloudKitSpike.swift */; };
 		3AEB7FB6FBFFBBAFD236B2E4 /* ProviderDetailViewSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75A2084D545343442EB1D707 /* ProviderDetailViewSnapshotTests.swift */; };
 		3CAFB60F009E4B1A7BC19B10 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2D56B2090BDA7E7E5B4DFCFF /* Assets.xcassets */; };
 		3D7323535EAE8D0C754800F1 /* BridgeStructureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05D161BFC0501A54651EE5E5 /* BridgeStructureTests.swift */; };
@@ -104,7 +102,6 @@
 		58C9513FE5E8DAF0366DB490 /* ProviderRankingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1ECD975EAE1D081810E74B0 /* ProviderRankingTests.swift */; };
 		5BB1A441FBFBBBCE6821DF20 /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 2598977A75079F3AF4A3C503 /* SnapshotTesting */; };
 		5E4DF970A1C64F45502B75F1 /* SampleDataSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A35C321F3E46D4781461836 /* SampleDataSession.swift */; };
-		5EAA9646FB0E96C48388B99B /* CloudKitSpike.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05C8F176108C96ED6428FC6 /* CloudKitSpike.swift */; };
 		5EBC9F3A0FE39EFADF92A93B /* listRowToggleOnDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 8DB5088B3E4B29318262D1D8 /* listRowToggleOnDark.1.png */; };
 		5F790A476A30F1C69FFF3142 /* LocalSyncSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22CAB472888607C347D6ADC2 /* LocalSyncSource.swift */; };
 		5F8448C0EE9DF090F5DAB915 /* GradusSmallWidgetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59969EFA3432FC7B6EFBEF5A /* GradusSmallWidgetView.swift */; };
@@ -137,7 +134,6 @@
 		7ABAB591929F484B8F2820A3 /* DashboardView+DenseGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 851236AC3CD7E98AA7FEDB69 /* DashboardView+DenseGrid.swift */; };
 		7B7C8918DE6C8D87BABABCEB /* settingsViewNotificationsOffLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 023357791F1E7BBE45066A54 /* settingsViewNotificationsOffLight.1.png */; };
 		7CCBE08EFA8238D7457DB45B /* macSettingsResetAlertsOnDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 6D8EB62D1217C9DA66224721 /* macSettingsResetAlertsOnDark.1.png */; };
-		7D89BC4B330E2CDEA939D028 /* T17SeamGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FF4BA2596FEC5DCC8EC7395 /* T17SeamGate.swift */; };
 		7F772E2FA6A54AEB8914620F /* BridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C65739F0A1AD5EF5B8322F3E /* BridgeTests.swift */; };
 		826A5ADD4C9DA941AB6C8295 /* GradusRefreshAgent in Embed Dependencies */ = {isa = PBXBuildFile; fileRef = 38EB67FAC53DBB9C5D698447 /* GradusRefreshAgent */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		836BBED46BFD814301C4A221 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png in Resources */ = {isa = PBXBuildFile; fileRef = 6C34AE581013767B89C84A00 /* providerListViewRendersEveryRampLevelOnTheDarkPanel.1.png */; };
@@ -439,7 +435,6 @@
 		0D54987E6FF59B5938C44010 /* WalkthroughCaptureXCUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalkthroughCaptureXCUITests.swift; sourceTree = "<group>"; };
 		0DD19F4FAF07BAE6A8EF9BBD /* settingsViewResetAlertsRequestingLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = settingsViewResetAlertsRequestingLight.1.png; sourceTree = "<group>"; };
 		0F960987512AA4C3C470DFF8 /* gradusMediumWidgetCurrentDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = gradusMediumWidgetCurrentDark.1.png; sourceTree = "<group>"; };
-		0FF4BA2596FEC5DCC8EC7395 /* T17SeamGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = T17SeamGate.swift; sourceTree = "<group>"; };
 		109C01DA009B3D835E59D3F8 /* macSettingsResetAlertsRequestingDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = macSettingsResetAlertsRequestingDark.1.png; sourceTree = "<group>"; };
 		12B11684A5D92598B5F73002 /* GradusRefreshAgentApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusRefreshAgentApp.swift; sourceTree = "<group>"; };
 		13A5FC8850CE01888DD7CDA7 /* listRowValueLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = listRowValueLight.1.png; sourceTree = "<group>"; };
@@ -461,7 +456,6 @@
 		22CAB472888607C347D6ADC2 /* LocalSyncSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSyncSource.swift; sourceTree = "<group>"; };
 		22E9EDCA74D938789D0FD71D /* CloudKitDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitDatabase.swift; sourceTree = "<group>"; };
 		24DF1EC44172B8BEEF3126BC /* MacSettingsSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsSnapshotTests.swift; sourceTree = "<group>"; };
-		25811B1BB194D66F99783364 /* T25SchemaGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = T25SchemaGate.swift; sourceTree = "<group>"; };
 		276E36A086AED288C3432DF9 /* iconButtonSnapshotDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = iconButtonSnapshotDark.1.png; sourceTree = "<group>"; };
 		29D7D415C57CBE53ACD646AD /* GradusiOSTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = GradusiOSTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2A243A4032EE2931153022DB /* NotificationAuthorizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationAuthorizationTests.swift; sourceTree = "<group>"; };
@@ -624,7 +618,6 @@
 		ADFDC0D08F1D8D015F79E6AC /* providerDetailRendersErrorStateLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = providerDetailRendersErrorStateLight.1.png; sourceTree = "<group>"; };
 		AE971F7C1E1A30BE2BAA939A /* sampleDataDashboardIPhone.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = sampleDataDashboardIPhone.1.png; sourceTree = "<group>"; };
 		AFA82E79F71C729ECB4F2411 /* WidgetSnapshotPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotPublisher.swift; sourceTree = "<group>"; };
-		B05C8F176108C96ED6428FC6 /* CloudKitSpike.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudKitSpike.swift; sourceTree = "<group>"; };
 		B11195274D6D880D13469AEE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B5DAB7794B4763BF74A55CE9 /* LegacyRuntimeAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyRuntimeAdapterTests.swift; sourceTree = "<group>"; };
 		B70C321E9E10684B8B7ED693 /* gradusSmallWidgetCurrentLight.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = gradusSmallWidgetCurrentLight.1.png; sourceTree = "<group>"; };
@@ -1098,8 +1091,6 @@
 				FBEAB51612B45DC6AE936D95 /* SettingsWindow.swift */,
 				3959C384884D098CE318B518 /* SnapshotDataValidation.swift */,
 				1CC55D88A35E02B0DF269FF1 /* SnapshotWatcher.swift */,
-				0FF4BA2596FEC5DCC8EC7395 /* T17SeamGate.swift */,
-				25811B1BB194D66F99783364 /* T25SchemaGate.swift */,
 				A7E129686BD36A5E66CCDFE8 /* Resources */,
 			);
 			path = GradusMac;
@@ -1170,7 +1161,6 @@
 			children = (
 				6CD2A7EEE9BC5667647B000A /* CardLayoutSolver.swift */,
 				945D4777AC3C4884A55C96BE /* CKZoneChangesFetcher.swift */,
-				B05C8F176108C96ED6428FC6 /* CloudKitSpike.swift */,
 				98B4FBEE1FE575C297ED2A0A /* DevicePresenceCloud.swift */,
 				D7DED0EBE9A35AD76A327674 /* ProviderRanking.swift */,
 				00241A1600CB85B81015297B /* ProviderWindowLabel.swift */,
@@ -1950,7 +1940,6 @@
 				C610287800CD7024105B8614 /* CKZoneChangesFetcher.swift in Sources */,
 				88C8C9343FE8013A26314410 /* CardLayoutSolver.swift in Sources */,
 				CB7750BAC229F6B6CBDAE612 /* CloudKitDatabase.swift in Sources */,
-				3798F17A91B64A768EABF612 /* CloudKitSpike.swift in Sources */,
 				3F6FCA712D71BC2CF7C30BF9 /* DevicePresenceCloud.swift in Sources */,
 				D193E089FA3A8C56D2A00584 /* GradusLog.swift in Sources */,
 				34442AD30A6B059B3FD71C93 /* GradusMacApp.swift in Sources */,
@@ -1980,8 +1969,6 @@
 				E88EF88698517A6B374A29FA /* SignalColor.swift in Sources */,
 				4D6924DEA987A8E40678A8F0 /* SnapshotDataValidation.swift in Sources */,
 				8C74BD59B5B3696C0428AEC6 /* SnapshotWatcher.swift in Sources */,
-				7D89BC4B330E2CDEA939D028 /* T17SeamGate.swift in Sources */,
-				18CB2144EDEDAF390361FC81 /* T25SchemaGate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1994,7 +1981,6 @@
 				EEDE44EE84280FB311CB2D27 /* CKSubscriptionManager.swift in Sources */,
 				8FD5396A710A51CD2C630FF3 /* CKZoneChangesFetcher.swift in Sources */,
 				9DA882DB1E8D1FBC6EB3D53C /* CardLayoutSolver.swift in Sources */,
-				5EAA9646FB0E96C48388B99B /* CloudKitSpike.swift in Sources */,
 				167CF288EF2896C7CD8FF7D2 /* Colors.swift in Sources */,
 				A0074F06914C7646FA97D499 /* DashboardDensity.swift in Sources */,
 				7ABAB591929F484B8F2820A3 /* DashboardView+DenseGrid.swift in Sources */,

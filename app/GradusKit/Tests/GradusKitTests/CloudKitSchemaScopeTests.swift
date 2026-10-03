@@ -16,7 +16,8 @@ import Testing
 // against that drift, in the same spirit as INV7Tests' credential-path scan.
 //
 // It found one real instance when it was written: `Shared/CloudKitSpike.swift`
-// hardcoded all three names in DEBUG code compiled into both apps.
+// hardcoded all three names in DEBUG code compiled into both apps (that spike
+// has since been retired).
 //
 // inv: INV-9 -- these names are the producer/consumer compatibility unit. The
 // scan below stops a literal from drifting away from the constant; the pins
@@ -142,6 +143,5 @@ private func strippingLineComments(_ contents: String) -> String {
     let root = appSourceRoot()
     #expect(!isProductionSource(root.appendingPathComponent("GradusiOSTests/DevicePresenceCloudTests.swift")))
     #expect(!isProductionSource(root.appendingPathComponent("GradusKit/.build/checkouts/x/Some.swift")))
-    #expect(isProductionSource(root.appendingPathComponent("Shared/CloudKitSpike.swift")))
     #expect(isProductionSource(root.appendingPathComponent("GradusiOS/CKZoneChangesFetcher.swift")))
 }
