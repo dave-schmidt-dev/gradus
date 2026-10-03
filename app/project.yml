@@ -588,18 +588,7 @@ schemes:
       # and watching a test run rewrite it with a live `Date()`.
       environmentVariables:
         GRADUS_DISABLE_PIPELINE: "1"
-  # Retained only for optional hosted diagnostics. Candidate release authority
-  # comes from the local GradusMac scheme and app/test-gate.sh.
-  GradusMacCloud:
-    build:
-      targets:
-        GradusMac: all
-    test:
-      targets:
-        - GradusMacTests
-        - GradusMacUITests
-      environmentVariables:
-        GRADUS_DISABLE_PIPELINE: "1"
+
   GradusiOS:
     build:
       targets:

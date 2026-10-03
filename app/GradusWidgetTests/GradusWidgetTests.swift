@@ -9,7 +9,6 @@ import XCTest
 
 private let widgetNow = Date(timeIntervalSince1970: 1_787_483_600)
 private let widgetTimeZone = TimeZone(identifier: "America/New_York")!
-private final class GradusWidgetTestsBundleToken {}
 
 /// Opt in only while intentionally refreshing these baselines:
 /// OTHER_SWIFT_FLAGS='$(inherited) -D WIDGET_SNAPSHOT_RECORD'
@@ -68,19 +67,9 @@ private func mediumWidgetSnapshot() -> WidgetSnapshot {
     )
 }
 
-private func defaultGradusWidgetTestsBundleResourceURL() -> URL? {
-    let bundle = Bundle(for: GradusWidgetTestsBundleToken.self)
-    return bundle.resourceURL ?? bundle.bundleURL
-}
-
 private func gradusWidgetSnapshotDirectory(
-    file: StaticString = #filePath,
-    environment: [String: String] = ProcessInfo.processInfo.environment,
-    bundleResourceURL: URL? = defaultGradusWidgetTestsBundleResourceURL()
+    file: StaticString = #filePath
 ) -> URL {
-    if environment["CI_XCODE_CLOUD"]?.uppercased() == "TRUE", let bundleResourceURL {
-        return bundleResourceURL
-    }
     let fileURL = URL(fileURLWithPath: file.description)
     let testFileName = fileURL.deletingPathExtension().lastPathComponent
     return fileURL
@@ -347,20 +336,8 @@ private func walkthroughWidgetView(state: GradusWidgetEntry.State) -> some View 
     )
 }
 
-@Test func widgetSnapshotDirectoryUsesBundleRootWhenRunningInXcodeCloud() {
-    let selected = gradusWidgetSnapshotDirectory(
-        file: #filePath,
-        environment: ["CI_XCODE_CLOUD": "TRUE"],
-        bundleResourceURL: URL(fileURLWithPath: "/tmp/GradusWidgetTests.bundle", isDirectory: true)
-    )
-    #expect(selected.path == "/tmp/GradusWidgetTests.bundle")
-}
-
 @Test func widgetSnapshotDirectoryUsesSourceRelativeSnapshotsWhenNotInCloud() {
-    let selected = gradusWidgetSnapshotDirectory(
-        file: #filePath,
-        environment: [:]
-    )
+    let selected = gradusWidgetSnapshotDirectory(file: #filePath)
     let testFileName = URL(fileURLWithPath: #filePath.description).deletingPathExtension().lastPathComponent
     #expect(selected.path.hasSuffix("/__Snapshots__/\(testFileName)"))
 }

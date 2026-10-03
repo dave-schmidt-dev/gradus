@@ -4,21 +4,10 @@ import SnapshotTesting
 import Testing
 import XCTest
 
-private final class GradusiOSTestsBundleToken {}
-
-func defaultGradusiOSTestsBundleResourceURL() -> URL? {
-    let bundle = Bundle(for: GradusiOSTestsBundleToken.self)
-    return bundle.resourceURL ?? bundle.bundleURL
-}
-
 func iosSnapshotDirectory(
     file: StaticString = #filePath,
-    environment: [String: String] = ProcessInfo.processInfo.environment,
-    bundleResourceURL: URL? = defaultGradusiOSTestsBundleResourceURL()
+    environment: [String: String] = ProcessInfo.processInfo.environment
 ) -> URL {
-    if environment["CI_XCODE_CLOUD"]?.uppercased() == "TRUE", let bundleResourceURL {
-        return bundleResourceURL
-    }
     let fileURL = URL(fileURLWithPath: file.description)
     let testFileName = fileURL.deletingPathExtension().lastPathComponent
     if testFileName == "SettingsViewSnapshotTests",

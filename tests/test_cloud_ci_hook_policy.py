@@ -438,7 +438,7 @@ def test_docs_name_candidate_bound_local_app_gate() -> None:
     assert "candidate-bound local gate" in docs
     assert "authoritative local app-validation gate" in docs
     assert "app-specific candidate evidence is collected by the source-bound local" in docs
-    assert "xcode cloud validation is optional and non-gating" in docs
+    assert "xcode cloud validation is retired" in docs
     assert "authoritative full gate" in docs or "authoritative full gradus local gate" in docs
     assert "gradus_static_base" in docs
     assert "merge-base" in docs

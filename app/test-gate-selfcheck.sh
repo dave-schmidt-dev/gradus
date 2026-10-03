@@ -521,10 +521,6 @@ validate_inv7_staging_contract() {
   grep -Fq 'environment[inv7SourceRootEnvironmentKey]' "$test_path" || return 1
   grep -Fq '!rawSourceRoot.isEmpty' "$test_path" || return 1
   grep -Fq 'fileExists(atPath: gradusMacDir.path, isDirectory: &isDirectory)' "$test_path" || return 1
-  grep -Fq 'CI_WORKSPACE_PATH' "$test_path" || return 1
-  grep -Fq 'app/GradusMac' "$test_path" || return 1
-  grep -Fq 'xcodeCloudSnapshotRoot' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
-  grep -Fq 'app/GradusMacTests/__Snapshots__' "$SCRIPT_DIR/GradusMacTests/SnapshotTestSupport.swift" || return 1
 
   snapshot_files=(
     "$SCRIPT_DIR/GradusMacTests/MenuContentSnapshotTests.swift"
@@ -598,7 +594,7 @@ validate_bridge_staging_contract "$GATE_SCRIPT" ||
 
 validate_local_macos_ui_contract() {
   local project_path="$1" local_block
-  local_block="$(sed -n '/^  GradusMac:$/,/^  GradusMacCloud:$/p' "$project_path")"
+  local_block="$(sed -n '/^  GradusMac:$/,/^  GradusiOS:$/p' "$project_path")"
   [[ "$local_block" == *'- GradusMacTests'* ]] || return 1
   [[ "$local_block" == *'- GradusMacUITests'* ]] || return 1
   [[ "$local_block" == *'GRADUS_DISABLE_PIPELINE: "1"'* ]] || return 1

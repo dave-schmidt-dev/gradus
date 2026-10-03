@@ -474,27 +474,17 @@ redline across the TUI, Mac, and iOS surfaces.
 - The expected-pace marker is defined once per concern: `expectedRemaining()` in GradusKit says *where* it goes, and `markerOffset(fraction:barWidth:markerWidth:)` beside it says how that maps to a leading-edge offset. Both apps call both. The offset moved into the kit after the two drifted — iOS clamped the marker inside its bar and the Mac did not, so a Mac window at 0% or 100% drew half a marker hanging off the end. Its colour is shared the same way, as `SignalColor.paceMarker` (`#005FD7`, matching the TUI's `bar.marker`) — deliberately outside the four-tier ramp, because the marker is a reference line rather than a signal level, and blue is the one hue no tier uses. Only the marker's *size* stays per-app, because the two bars are different heights. The TUI shares the colour but not the shape: it draws the marker as one whole cell of the bar's own fill glyph rather than a thin line. That is a constraint of the character grid, not a style choice — a thin stroke there has to change glyph to move within a cell, which changes its width, and can never ink as much of its cell as the fill does, so the terminal background shows through around it. The Swift bars position a real rectangle at a continuous offset and have neither problem.
 - Sync is opt-in per device (off by default) and independent per device — pairing two devices doesn't couple them beyond both reading the same published snapshot.
 
-Optional hosted diagnostics:
+Xcode Cloud validation is retired (2026-10-03): the `GradusMacCloud` scheme
+and the hosted-runner (`CI_XCODE_CLOUD`, `CI_WORKSPACE_PATH`) snapshot and source
+roots in the test targets were removed, so the local gate is the only validation
+path. `app/Gradus.xcodeproj` is generated from `project.yml`; shared
+project/workspace/scheme files are committed and per-user Xcode state remains
+ignored.
 
-```bash
-git push
-gh pr checks --watch
-```
-
-The Xcode Cloud workflows `Gradus macOS UI Trial` and `Gradus iOS Snapshot
-Trial` may validate a pull-request head after push, but they are optional and
-do not provide release authority. Their hosted runners
-derive checked-out source and snapshot roots from `CI_WORKSPACE_PATH`; they never
-ask a local Mac for Automation Mode. `app/Gradus.xcodeproj` is generated from
-`project.yml`, but shared
-project/workspace/scheme files are committed so Cloud can build a fresh clone;
-per-user Xcode state remains ignored.
-
-Xcode Cloud result bundles can be retrieved without browser automation through
-the existing `gradus-app-store-connect` BWS consumer. `allocate_identity.py`
-supports metadata-only `--list-result-bundles` and exact `--ci-artifact-id`
-selection; downloads keep the ASC bearer token off Apple's presigned artifact
-URL and write atomically with bounded stderr progress.
+The Xcode Cloud administration modes of `allocate_identity.py`
+(`--list-result-bundles`, `--ci-artifact-id`, the validation-workflow and
+pin-destination modes) and `app/xcode_cloud_artifact.py` are retained, unused,
+until that script can be edited; do not start them.
 
 ### App icons
 
@@ -593,31 +583,6 @@ minutes; the account's one Cloud product is bound to the GradusMac app record
 and cannot be rebound, so Cloud-built iOS builds are undeliverable. As of
 2026-09-08 all three workflows are disabled and the full local gate is the only
 authority confirming the snapshot baselines.
-
-Xcode Cloud validation is optional and non-gating. Its workflows use manual
-`main`-branch starts and remain disabled between diagnostics to prevent
-automatic billable runs. The credential-brokered
-`allocate_identity.py --convert-validation-workflow-to-manual` mode performs the
-one-time fail-closed conversion from each workflow's exact name-specific
-automatic condition to manual `main`. The `--start-validation-build` mode can
-start only those two named, enabled workflows for one attended release. Disable
-them again after the runs are accepted. The read-only
-`--read-validation-workflow-conditions` diagnostic
-emits only those workflows' identity, enabled state, and seven start-condition
-fields. `app/release-status` remains the safe read-only status command.
-
-Cloud renders snapshots on whichever simulator its TEST action names, which is
-not automatically the one `app/test-gate.sh` pins. The read-only
-`--resolve-workflow-toolchain` mode reports that device under
-`pinnedDestinations`; `--pin-test-destination` writes it, taking the exact
-action name plus `--sim-device-type-id` and `--sim-runtime-id`. The pin reads
-the workflow's whole `actions` array and sends it back with only the named TEST
-action's destinations replaced, because `PATCH /ciWorkflows` overwrites that
-array rather than merging into it, and re-reads afterwards so a rejected or
-silently normalised pin fails rather than reporting success. A runtime of
-`default` means "latest from the selected Xcode" and is what Apple's own
-interface writes; it is a floating value, so it tracks the Xcode pin rather
-than a fixed iOS release.
 
 New candidates' readiness and local-gate evidence is content-bound rather than
 time-bound: source or proof-contract drift invalidates it; elapsed time alone

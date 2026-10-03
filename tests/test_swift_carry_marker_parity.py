@@ -14,7 +14,7 @@ and Swift test stayed green, because each side was self-consistent.
 
 These tests are the missing edge.  They read the Swift sources as text rather
 than building them, so they run in the Python pre-push gate and fail in seconds
-instead of waiting on Xcode Cloud.
+instead of waiting on the Swift test legs.
 """
 
 from __future__ import annotations

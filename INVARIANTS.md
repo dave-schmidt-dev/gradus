@@ -269,7 +269,7 @@ rationale: Every new behavior has a test at the lowest layer that proves it; new
   declared minimum number of tests, and a successful command with no recognized count is not proof.
   The local canonical gate runs explicit target-level GradusiOSUITests legs with
   floors above a placeholder-only run, so a broad scheme leg cannot mask a missing iOS UI target.
-  GradusMacCloud is the sole GradusMacUITests runner.
+  The local GradusMac scheme and `app/test-gate.sh` are the sole GradusMacUITests runner.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
   Swift widget and cache test fixtures remove their temp dirs on both pass and failure exit paths.

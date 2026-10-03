@@ -9,19 +9,6 @@ import Testing
 // beta-hardening, not this gate.
 
 private let inv7SourceRootEnvironmentKey = "GRADUS_INV7_SOURCE_ROOT"
-private let xcodeCloudEnvironmentKey = "CI_XCODE_CLOUD"
-private let xcodeCloudWorkspaceEnvironmentKey = "CI_WORKSPACE_PATH"
-
-private func xcodeCloudPublisherSourceRoot(in environment: [String: String]) -> URL? {
-    guard
-        environment[xcodeCloudEnvironmentKey]?.uppercased() == "TRUE",
-        let workspacePath = environment[xcodeCloudWorkspaceEnvironmentKey],
-        !workspacePath.isEmpty
-    else { return nil }
-
-    return URL(fileURLWithPath: workspacePath, isDirectory: true)
-        .appendingPathComponent("app/GradusMac", isDirectory: true)
-}
 
 private func publisherSourceFiles(environment: [String: String] = ProcessInfo.processInfo.environment) -> [URL] {
     // This test is hosted by GradusMac.app. Never derive the source path from
@@ -30,8 +17,7 @@ private func publisherSourceFiles(environment: [String: String] = ProcessInfo.pr
     // test-gate.sh stages the source into its run-scoped DerivedData directory
     // and supplies this path explicitly.
     guard
-        let rawSourceRoot = environment[inv7SourceRootEnvironmentKey]
-        ?? xcodeCloudPublisherSourceRoot(in: environment)?.path,
+        let rawSourceRoot = environment[inv7SourceRootEnvironmentKey],
         !rawSourceRoot.isEmpty
     else { return [] }
 
@@ -48,26 +34,6 @@ private func publisherSourceFiles(environment: [String: String] = ProcessInfo.pr
         )
     else { return [] }
     return enumerator.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
-}
-
-@Test func xcodeCloudPublisherSourceRootUsesTheTemporaryWorkspace() {
-    let root = xcodeCloudPublisherSourceRoot(in: [
-        xcodeCloudEnvironmentKey: "TRUE",
-        xcodeCloudWorkspaceEnvironmentKey: "/tmp/xcode-cloud-workspace"
-    ])
-    #expect(root?.path == "/tmp/xcode-cloud-workspace/app/GradusMac")
-}
-
-@Test func publisherSourceRootDoesNotFallbackToTheCheckoutOutsideXcodeCloud() {
-    #expect(xcodeCloudPublisherSourceRoot(in: [:]) == nil)
-}
-
-@Test func xcodeCloudSnapshotRootUsesTheTemporaryWorkspace() {
-    let root = xcodeCloudSnapshotRoot(in: [
-        "CI_XCODE_CLOUD": "TRUE",
-        "CI_WORKSPACE_PATH": "/tmp/xcode-cloud-workspace"
-    ])
-    #expect(root?.path == "/tmp/xcode-cloud-workspace/app/GradusMacTests/__Snapshots__")
 }
 
 /// Dot-prefixed terms name *files*, so a following letter means the match is
