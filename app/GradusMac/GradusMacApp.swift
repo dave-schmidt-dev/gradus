@@ -322,8 +322,10 @@ final class PublishPipeline {
         }
         for alert in evaluation.alerts {
             let event = switch alert {
-            case .bankedGrant:
-                ResetNotificationEvent(kind: .grant, providerName: "Codex")
+            case let .bankedGrant(increase, currentCount):
+                ResetNotificationEvent(
+                    kind: .grant, providerName: "Codex", increase: increase, currentCount: currentCount
+                )
             case let .usageRefill(providerName, windowID):
                 ResetNotificationEvent(
                     kind: .refill, providerName: providerName, windowLabel: windowID

@@ -13,11 +13,18 @@ public struct ResetNotificationEvent: Equatable, Sendable {
     public let kind: ResetAlertKind
     public let providerName: String
     public let windowLabel: String?
+    public let increase: Int
+    public let currentCount: Int
 
-    public init(kind: ResetAlertKind, providerName: String, windowLabel: String? = nil) {
+    public init(
+        kind: ResetAlertKind, providerName: String, windowLabel: String? = nil,
+        increase: Int = 0, currentCount: Int = 0
+    ) {
         self.kind = kind
         self.providerName = providerName
         self.windowLabel = windowLabel
+        self.increase = increase
+        self.currentCount = currentCount
     }
 
     var title: String {
@@ -30,12 +37,12 @@ public struct ResetNotificationEvent: Equatable, Sendable {
     var body: String {
         switch kind {
         case .grant:
-            "A new Codex reset credit was observed. Open Gradus for the latest count."
+            "Codex added \(increase) banked reset\(increase == 1 ? "" : "s"). \(currentCount) available."
         case .refill:
             if let windowLabel, !windowLabel.isEmpty {
-                "\(providerName) \(windowLabel) usage refilled."
+                "\(providerName) \(ProviderWindowLabel.label(for: windowLabel)) usage is available again."
             } else {
-                "\(providerName) usage refilled."
+                "\(providerName) usage is available again."
             }
         }
     }
