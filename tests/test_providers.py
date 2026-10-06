@@ -16,6 +16,7 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from gradus import providers
@@ -1647,40 +1648,10 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         ):
             self.assertNotIn(classifier_substring, message)
 
-    def test_stale_token_recovery_nonpositive_retains_stale_status(self) -> None:
-        """A busy/nonpositive wrapper result keeps the stale fail-closed state."""
-        now_ms = datetime.now().timestamp() * 1000
-        stale_keychain = self._keychain(
-            expiresAt=now_ms - 60_000,
-            refreshTokenExpiresAt=now_ms + 30 * 86_400_000,
-        )
-        wrapper = subprocess.CompletedProcess(
-            [ClaudeHttpProvider._auth_recovery_wrapper(), "--verify-auth"],
-            5,
-            "",
-            "secret-adjacent wrapper output",
-        )
-        with patch(
-            "gradus.providers.claude.subprocess.run", side_effect=[stale_keychain, wrapper]
-        ) as run:
-            with patch("gradus.providers.claude._base._http_json") as http:
-                with self.assertRaisesRegex(ProbeFailure, f"^{CLAUDE_STALE_CREDENTIAL_MESSAGE}$"):
-                    ClaudeHttpProvider().fetch()
+    _OK_ENVELOPE = json.dumps({"type": "result", "is_error": False, "result": "OK"})
+    _CLAUDE_BIN = "/opt/homebrew/bin/claude"
 
-        http.assert_not_called()
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(
-            run.call_args.args[0], [ClaudeHttpProvider._auth_recovery_wrapper(), "--verify-auth"]
-        )
-
-    def test_recovery_wrapper_resolves_under_current_home(self) -> None:
-        with patch("gradus.providers.claude.Path.home", return_value=Path("/tmp/test-user")):
-            self.assertEqual(
-                ClaudeHttpProvider._auth_recovery_wrapper(),
-                "/tmp/test-user/.agent/bin/claude-headless",
-            )
-
-    def test_stale_token_recovery_accepts_exact_ok_and_reloads_fresh_credential(self) -> None:
+    def _stale_and_fresh(self) -> tuple[Any, Any]:
         now_ms = datetime.now().timestamp() * 1000
         stale = claude_provider_module._KeychainCredential(
             access_token="stale-token",
@@ -1692,21 +1663,54 @@ class ClaudeHttpProviderTests(unittest.TestCase):
             expires_at=now_ms + 3_600_000,
             refresh_expires_at=now_ms + 30 * 86_400_000,
         )
+        return stale, fresh
+
+    def _run_recovery(
+        self,
+        outcome: object,
+        *,
+        reloads: tuple[object, ...] = (),
+        executable: str | None = _CLAUDE_BIN,
+    ) -> tuple[list[str], MagicMock, MagicMock, Any]:
+        """Run one stale fetch with recovery patched; return statuses, mocks, logs."""
+        stale, _ = self._stale_and_fresh()
         statuses: list[str] = []
         with (
             patch.object(
-                ClaudeHttpProvider,
-                "_load_keychain_credential",
-                side_effect=[stale, fresh],
+                ClaudeHttpProvider, "_load_keychain_credential", side_effect=[stale, *reloads]
+            ),
+            patch.object(ClaudeHttpProvider, "_claude_executable", return_value=executable),
+            patch("gradus.providers.claude.subprocess.run", side_effect=[outcome]) as run,
+            patch("gradus.providers.claude._base._http_json") as http,
+            self.assertLogs("gradus.providers.claude", level="WARNING") as logs,
+        ):
+            with self.assertRaisesRegex(ProbeFailure, f"^{CLAUDE_STALE_CREDENTIAL_MESSAGE}$"):
+                ClaudeHttpProvider(on_status=statuses.append).fetch()
+        http.assert_not_called()
+        self.assertEqual(
+            statuses,
+            ["provider Claude recovery started", "provider Claude recovery unavailable"],
+        )
+        return statuses, run, http, logs
+
+    def test_stale_token_recovery_runs_claude_code_directly(self) -> None:
+        """Regression for 2026-10-06: recovery went through a retired wrapper flag.
+
+        `claude-headless --verify-auth` was removed on 2026-10-05, so every
+        refresh attempt exited 2 and Claude read "usage unavailable" until a
+        human session happened to refresh the token. Gradus now runs Claude
+        Code itself with a fixed, tool-free, transcript-free one-line prompt.
+        """
+        stale, fresh = self._stale_and_fresh()
+        statuses: list[str] = []
+        with (
+            patch.object(
+                ClaudeHttpProvider, "_load_keychain_credential", side_effect=[stale, fresh]
             ) as load,
+            patch.object(ClaudeHttpProvider, "_claude_executable", return_value=self._CLAUDE_BIN),
             patch(
                 "gradus.providers.claude.subprocess.run",
-                return_value=subprocess.CompletedProcess(
-                    [ClaudeHttpProvider._auth_recovery_wrapper(), "--verify-auth"],
-                    0,
-                    "OK\n",
-                    "ignored wrapper diagnostics",
-                ),
+                return_value=subprocess.CompletedProcess([], 0, self._OK_ENVELOPE, None),
             ) as run,
             patch(
                 "gradus.providers.claude._base._http_json", return_value=self.NORMAL_RESPONSE
@@ -1717,135 +1721,157 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertEqual(status.session_percent_left, 70.0)
         self.assertEqual(load.call_count, 2)
         self.assertEqual(http.call_args.kwargs["headers"]["Authorization"], "Bearer fresh-token")
-        run.assert_called_once_with(
-            [ClaudeHttpProvider._auth_recovery_wrapper(), "--verify-auth"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            timeout=ClaudeHttpProvider._AUTH_RECOVERY_TIMEOUT_SECONDS,
-            check=False,
+        run.assert_called_once()
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                self._CLAUDE_BIN,
+                "-p",
+                "--model",
+                "haiku",
+                "--tools",
+                "",
+                "--no-session-persistence",
+                "--strict-mcp-config",
+                "--disable-slash-commands",
+                "--settings",
+                '{"disableAllHooks":true}',
+                "--output-format",
+                "json",
+                "Reply with exactly OK.",
+            ],
         )
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+        self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(kwargs["text"], True)
+        self.assertIs(kwargs["check"], False)
+        self.assertEqual(kwargs["timeout"], ClaudeHttpProvider._AUTH_RECOVERY_TIMEOUT_SECONDS)
+        self.assertIn("gradus-claude-refresh-", kwargs["cwd"])
+        self.assertFalse(Path(kwargs["cwd"]).exists())
+        self.assertNotEqual(Path(kwargs["cwd"]).resolve(), Path.cwd().resolve())
         self.assertEqual(
             statuses,
             ["provider Claude recovery started", "provider Claude recovery complete"],
         )
 
-    def test_stale_token_recovery_reload_failure_retains_stale_status(self) -> None:
-        now_ms = datetime.now().timestamp() * 1000
-        stale = claude_provider_module._KeychainCredential(
-            access_token="stale-token",
-            expires_at=now_ms - 60_000,
-            refresh_expires_at=now_ms + 30 * 86_400_000,
-        )
-        statuses: list[str] = []
-        with (
-            patch.object(
-                ClaudeHttpProvider,
-                "_load_keychain_credential",
-                side_effect=[stale, RuntimeError("credential secret must not surface")],
-            ),
-            patch(
-                "gradus.providers.claude.subprocess.run",
-                return_value=subprocess.CompletedProcess([], 0, "OK\n", "ignored"),
-            ),
-            patch("gradus.providers.claude._base._http_json") as http,
-        ):
-            with self.assertRaisesRegex(ProbeFailure, f"^{CLAUDE_STALE_CREDENTIAL_MESSAGE}$"):
-                ClaudeHttpProvider(on_status=statuses.append).fetch()
-
-        http.assert_not_called()
-        self.assertEqual(
-            statuses,
-            ["provider Claude recovery started", "provider Claude recovery unavailable"],
-        )
-
-    def test_stale_token_recovery_rejects_nonpositive_timeout_and_missing_results(self) -> None:
-        now_ms = datetime.now().timestamp() * 1000
-        stale = claude_provider_module._KeychainCredential(
-            access_token="stale-token",
-            expires_at=now_ms - 60_000,
-            refresh_expires_at=now_ms + 30 * 86_400_000,
-        )
-        outcomes = (
-            subprocess.CompletedProcess([], 0, "not OK\n", "raw wrapper output"),
-            subprocess.TimeoutExpired([ClaudeHttpProvider._auth_recovery_wrapper()], 30),
-            FileNotFoundError("wrapper missing"),
-        )
-        for outcome in outcomes:
-            with self.subTest(outcome=type(outcome).__name__):
-                statuses: list[str] = []
-                with (
-                    patch.object(
-                        ClaudeHttpProvider, "_load_keychain_credential", return_value=stale
-                    ),
-                    patch("gradus.providers.claude.subprocess.run", side_effect=[outcome]) as run,
-                    patch("gradus.providers.claude._base._http_json") as http,
-                ):
-                    with self.assertRaisesRegex(
-                        ProbeFailure, f"^{CLAUDE_STALE_CREDENTIAL_MESSAGE}$"
-                    ):
-                        ClaudeHttpProvider(on_status=statuses.append).fetch()
-                http.assert_not_called()
+    def test_stale_token_recovery_rejects_inexact_envelopes(self) -> None:
+        envelopes = {
+            "is_error_true": {"type": "result", "is_error": True, "result": "OK"},
+            "is_error_missing": {"type": "result", "result": "OK"},
+            "is_error_falsy_non_bool": {"type": "result", "is_error": 0, "result": "OK"},
+            "wrong_type": {"type": "assistant", "is_error": False, "result": "OK"},
+            "wrong_result": {"type": "result", "is_error": False, "result": "OK then"},
+            "non_string_result": {"type": "result", "is_error": False, "result": None},
+        }
+        stdouts = {name: json.dumps(value) for name, value in envelopes.items()}
+        stdouts["invalid_json"] = "OK\n"
+        stdouts["json_list"] = "[]"
+        for name, stdout in stdouts.items():
+            with self.subTest(envelope=name):
+                _, run, _, logs = self._run_recovery(
+                    subprocess.CompletedProcess([], 0, stdout, None)
+                )
                 run.assert_called_once()
                 self.assertEqual(
-                    statuses,
+                    logs.output,
                     [
-                        "provider Claude recovery started",
-                        "provider Claude recovery unavailable",
+                        "WARNING:gradus.providers.claude:provider Claude recovery unavailable: "
+                        "bad_envelope"
                     ],
                 )
 
-    def test_stale_token_recovery_requires_fresh_access_expiry_and_hides_output(self) -> None:
-        now_ms = datetime.now().timestamp() * 1000
-        stale = claude_provider_module._KeychainCredential(
-            access_token="stale-token",
-            expires_at=now_ms - 60_000,
-            refresh_expires_at=now_ms + 30 * 86_400_000,
+    def test_stale_token_recovery_failure_reasons_are_fixed_and_hide_output(self) -> None:
+        cases = {
+            "nonzero_exit": subprocess.CompletedProcess([], 1, "secret-adjacent output", None),
+            "timeout": subprocess.TimeoutExpired(["claude"], 30, output="secret-adjacent"),
+            "spawn_error": OSError("secret-adjacent spawn detail"),
+        }
+        for reason, outcome in cases.items():
+            with self.subTest(reason=reason):
+                _, run, _, logs = self._run_recovery(outcome)
+                run.assert_called_once()
+                self.assertEqual(
+                    logs.output,
+                    [
+                        f"WARNING:gradus.providers.claude:provider Claude recovery unavailable: "
+                        f"{reason}"
+                    ],
+                )
+                self.assertNotIn("secret-adjacent", " ".join(logs.output))
+
+    def test_stale_token_recovery_without_claude_executable_never_spawns(self) -> None:
+        _, run, _, logs = self._run_recovery(AssertionError("must not run"), executable=None)
+        run.assert_not_called()
+        self.assertIn("recovery unavailable: not_found", logs.output[0])
+
+    def test_stale_token_recovery_reload_failure_retains_stale_status(self) -> None:
+        _, _, _, logs = self._run_recovery(
+            subprocess.CompletedProcess([], 0, self._OK_ENVELOPE, None),
+            reloads=(RuntimeError("credential secret must not surface"),),
         )
+        self.assertIn("recovery unavailable: keychain_reload_failed", logs.output[0])
+        self.assertNotIn("credential secret", " ".join(logs.output))
+
+    def test_stale_token_recovery_requires_fresh_access_expiry(self) -> None:
+        now_ms = datetime.now().timestamp() * 1000
         unchanged = claude_provider_module._KeychainCredential(
             access_token="still-stale-token",
             expires_at=now_ms - 1,
             refresh_expires_at=now_ms + 30 * 86_400_000,
         )
-        statuses: list[str] = []
-        with (
-            patch.object(
-                ClaudeHttpProvider,
-                "_load_keychain_credential",
-                side_effect=[stale, unchanged],
-            ),
-            patch(
-                "gradus.providers.claude.subprocess.run",
-                return_value=subprocess.CompletedProcess([], 0, "OK\n", "wrapper-secret"),
-            ),
-            patch("gradus.providers.claude._base._http_json") as http,
-        ):
-            with self.assertRaisesRegex(ProbeFailure, f"^{CLAUDE_STALE_CREDENTIAL_MESSAGE}$"):
-                ClaudeHttpProvider(on_status=statuses.append).fetch()
-
-        http.assert_not_called()
-        self.assertNotIn("wrapper-secret", " ".join(statuses))
-        self.assertEqual(
-            statuses,
-            ["provider Claude recovery started", "provider Claude recovery unavailable"],
+        _, _, _, logs = self._run_recovery(
+            subprocess.CompletedProcess([], 0, self._OK_ENVELOPE, None),
+            reloads=(unchanged,),
         )
+        self.assertIn("recovery unavailable: still_stale", logs.output[0])
+
+    def test_claude_executable_prefers_path_then_fixed_candidates_without_realpath(self) -> None:
+        with patch("gradus.providers.claude.shutil.which", return_value="/custom/bin/claude"):
+            self.assertEqual(ClaudeHttpProvider._claude_executable(), "/custom/bin/claude")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            target = home / "Caskroom" / "claude"
+            target.parent.mkdir()
+            target.write_text("#!/bin/sh\n")
+            target.chmod(0o755)
+            link = home / ".local" / "bin" / "claude"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(target)
+            with (
+                patch("gradus.providers.claude.shutil.which", return_value=None),
+                patch("gradus.providers.claude.Path.home", return_value=home),
+                patch.object(
+                    ClaudeHttpProvider,
+                    "_CLAUDE_EXECUTABLE_CANDIDATES",
+                    (str(home / "missing" / "claude"), ".local/bin/claude"),
+                ),
+            ):
+                self.assertEqual(ClaudeHttpProvider._claude_executable(), str(link))
+            with (
+                patch("gradus.providers.claude.shutil.which", return_value=None),
+                patch.object(
+                    ClaudeHttpProvider,
+                    "_CLAUDE_EXECUTABLE_CANDIDATES",
+                    (str(home / "missing" / "claude"),),
+                ),
+            ):
+                self.assertIsNone(ClaudeHttpProvider._claude_executable())
 
     def test_stale_token_recovery_is_attempted_once_per_provider(self) -> None:
-        now_ms = datetime.now().timestamp() * 1000
-        stale = claude_provider_module._KeychainCredential(
-            access_token="stale-token",
-            expires_at=now_ms - 60_000,
-            refresh_expires_at=now_ms + 30 * 86_400_000,
-        )
+        stale, _ = self._stale_and_fresh()
         provider = ClaudeHttpProvider()
         with (
             patch.object(ClaudeHttpProvider, "_load_keychain_credential", return_value=stale),
+            patch.object(ClaudeHttpProvider, "_claude_executable", return_value=self._CLAUDE_BIN),
             patch(
                 "gradus.providers.claude.subprocess.run",
-                return_value=subprocess.CompletedProcess([], 5, "", ""),
+                return_value=subprocess.CompletedProcess([], 5, "", None),
             ) as run,
             patch("gradus.providers.claude._base._http_json") as http,
+            self.assertLogs("gradus.providers.claude", level="WARNING"),
         ):
             for _ in range(2):
                 with self.assertRaisesRegex(ProbeFailure, f"^{CLAUDE_STALE_CREDENTIAL_MESSAGE}$"):

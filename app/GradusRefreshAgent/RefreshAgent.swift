@@ -359,9 +359,8 @@ struct RefreshAgent {
     /// Scrubbed on purpose, so every variable the producer needs is named here.
     /// Claude's stale-credential self-heal needs two that were missing until
     /// 2026-09-15, which is why the Claude card read offline every morning.
-    /// It shells out to `~/.agent/bin/claude-headless`: that wrapper's roster
-    /// lookup runs under a `uv run --script` shebang and exits 127 unless PATH
-    /// reaches `~/.local/bin`, and Claude Code itself answers `Not logged in`
+    /// It runs `claude` directly, so PATH must reach `/opt/homebrew/bin` and
+    /// `~/.local/bin` where Claude Code installs, and Claude Code answers `Not logged in`
     /// unless `USER`/`LOGNAME` name the account holding its stored credential.
     /// Either one missing makes a signed-in session look signed out.
     ///

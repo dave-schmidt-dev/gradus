@@ -2816,8 +2816,9 @@ class TestCredentialAwareRefresh(unittest.TestCase):
             wrapper,
         )
         # `~/.local/bin` leads the PATH for Claude's stale-credential self-heal:
-        # it shells out to ~/.agent/bin/claude-headless, whose roster lookup runs
-        # under a `uv run --script` shebang and exits 127 without `uv`.
+        # it runs `claude` directly, which may be installed there. (Until
+        # 2026-10-06 it went through ~/.agent/bin/claude-headless, which also
+        # needed `uv` from that directory.)
         # USER/LOGNAME are exported alongside it because Claude Code looks up its
         # stored credential by account name and reports "Not logged in" without
         # them -- launchd hands a user agent neither reliably. Both were missing

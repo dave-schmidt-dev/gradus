@@ -41,10 +41,9 @@ final class RefreshAgentTests: XCTestCase {
     /// because the scrubbed producer environment was missing two variables the
     /// stale-credential self-heal needs.
     ///
-    /// `~/.local/bin` on PATH: the self-heal runs `~/.agent/bin/claude-headless`,
-    /// whose roster lookup has a `#!/usr/bin/env -S uv run --script` shebang. With
-    /// the old PATH the roster exited 127 and the wrapper died before reaching
-    /// Claude Code at all.
+    /// `~/.local/bin` on PATH: the self-heal runs `claude` directly, and Claude
+    /// Code may be installed there. (Until 2026-10-06 it went through
+    /// `~/.agent/bin/claude-headless`, which died with exit 127 without `uv`.)
     ///
     /// `USER`/`LOGNAME`: Claude Code resolves its Keychain account from them and
     /// answers `Not logged in - Please run /login` without them, for a session

@@ -5,8 +5,12 @@ from __future__ import annotations
 import datetime
 import getpass
 import json
+import logging
 import math
+import os
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -18,6 +22,8 @@ from ._base import (
     _format_reset_time,
     register,
 )
+
+_LOG = logging.getLogger(__name__)
 
 
 def _epoch_ms(value: Any) -> float | None:
@@ -48,7 +54,32 @@ class ClaudeHttpProvider:
     _OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
     _KEYCHAIN_SERVICE = "Claude Code-credentials"
     _USER_AGENT = "gradus (claude oauth usage probe)"
-    _AUTH_RECOVERY_WRAPPER = ".agent/bin/claude-headless"
+    # Claude Code refreshes its own Keychain grant whenever it makes a request,
+    # so a one-line `claude -p` is the refresh trigger. Haiku, no tools, no MCP,
+    # no slash commands, no hooks, and no session transcript keep the side
+    # effects to one tiny model call. The prompt and expected reply are fixed.
+    _AUTH_RECOVERY_ARGS = (
+        "-p",
+        "--model",
+        "haiku",
+        "--tools",
+        "",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--disable-slash-commands",
+        "--settings",
+        '{"disableAllHooks":true}',
+        "--output-format",
+        "json",
+        "Reply with exactly OK.",
+    )
+    # Fallbacks for a producer launched with a scrubbed PATH. Never resolved
+    # through symlinks: Homebrew's Caskroom target moves on every update.
+    _CLAUDE_EXECUTABLE_CANDIDATES = (
+        "/opt/homebrew/bin/claude",
+        ".local/bin/claude",
+        "/usr/local/bin/claude",
+    )
     _AUTH_RECOVERY_TIMEOUT_SECONDS = 30.0
 
     def __init__(self, on_status: Callable[[str], None] | None = None) -> None:
@@ -69,42 +100,87 @@ class ClaudeHttpProvider:
         return expires_at > datetime.datetime.now().timestamp() * 1000
 
     @classmethod
-    def _auth_recovery_wrapper(cls) -> str:
-        """Resolve the approved wrapper beneath the current user's home."""
-        return str(Path.home() / cls._AUTH_RECOVERY_WRAPPER)
+    def _claude_executable(cls) -> str | None:
+        """Locate Claude Code on PATH, then at fixed install locations."""
+        found = shutil.which("claude")
+        if found:
+            return found
+        for candidate in cls._CLAUDE_EXECUTABLE_CANDIDATES:
+            path = Path(candidate) if candidate.startswith("/") else Path.home() / candidate
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
+        return None
+
+    @staticmethod
+    def _is_exact_ok_envelope(stdout: str) -> bool:
+        """Accept only Claude Code's successful JSON result whose reply is OK."""
+        try:
+            payload = json.loads(stdout)
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        result = payload.get("result")
+        return (
+            payload.get("type") == "result"
+            and payload.get("is_error") is False
+            and isinstance(result, str)
+            and result.strip() == "OK"
+        )
+
+    def _recovery_unavailable(self, reason: str) -> None:
+        """Report a failed recovery by fixed reason class only, never output."""
+        _LOG.warning("provider Claude recovery unavailable: %s", reason)
+        self._status("provider Claude recovery unavailable")
 
     def _recover_stale_credential(self) -> _KeychainCredential | None:
-        """Ask Claude Code to refresh once, accepting only its exact OK result."""
+        """Ask Claude Code to refresh its own grant once, then re-read the Keychain.
+
+        Gradus never mints or writes a token: Claude Code rotates the refresh
+        token and writes the successor itself. Gradus only triggers that and
+        accepts the result when the Keychain then holds an unexpired token.
+        """
         if self._recovery_attempted:
             return None
         self._recovery_attempted = True
         self._status("provider Claude recovery started")
-        wrapper = self._auth_recovery_wrapper()
+        executable = self._claude_executable()
+        if executable is None:
+            self._recovery_unavailable("not_found")
+            return None
         try:
-            result = subprocess.run(
-                [wrapper, "--verify-auth"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                text=True,
-                timeout=self._AUTH_RECOVERY_TIMEOUT_SECONDS,
-                check=False,
-            )
+            with tempfile.TemporaryDirectory(prefix="gradus-claude-refresh-") as workdir:
+                result = subprocess.run(
+                    [executable, *self._AUTH_RECOVERY_ARGS],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    cwd=workdir,
+                    timeout=self._AUTH_RECOVERY_TIMEOUT_SECONDS,
+                    check=False,
+                )
+        except subprocess.TimeoutExpired:
+            self._recovery_unavailable("timeout")
+            return None
         except (OSError, subprocess.SubprocessError):
-            self._status("provider Claude recovery unavailable")
+            self._recovery_unavailable("spawn_error")
             return None
 
-        if result.returncode != 0 or result.stdout != "OK\n":
-            self._status("provider Claude recovery unavailable")
+        if result.returncode != 0:
+            self._recovery_unavailable("nonzero_exit")
+            return None
+        if not self._is_exact_ok_envelope(result.stdout):
+            self._recovery_unavailable("bad_envelope")
             return None
 
         try:
             credential = self._load_keychain_credential()
         except Exception:  # noqa: BLE001 - recovery must retain the stale safe state
-            self._status("provider Claude recovery unavailable")
+            self._recovery_unavailable("keychain_reload_failed")
             return None
         if not self._access_is_fresh(credential):
-            self._status("provider Claude recovery unavailable")
+            self._recovery_unavailable("still_stale")
             return None
         self._status("provider Claude recovery complete")
         return credential
@@ -155,6 +231,8 @@ class ClaudeHttpProvider:
         writing the successor back would revoke Claude Code's own login. This
         classifier does not launch Claude Code: absent or invalid
         refresh-expiry metadata cannot establish that the grant is refreshable.
+        A stale grant with live refresh metadata is handed to
+        `_recover_stale_credential`, which asks Claude Code to refresh itself.
         """
         expires_at = credential.expires_at
         if expires_at is None:

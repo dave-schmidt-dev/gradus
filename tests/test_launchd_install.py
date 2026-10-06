@@ -304,12 +304,13 @@ exit 64
         """Regression for 2026-09-15: Claude read offline every morning.
 
         The producer's Claude probe self-heals a stale Claude Code credential by
-        shelling out to ``~/.agent/bin/claude-headless``. Two environment
-        variables that path needs were missing from every producer launch:
+        running ``claude`` directly (through ``~/.agent/bin/claude-headless``
+        until 2026-10-06). Two environment variables that path needs were
+        missing from every producer launch:
 
-        * ``~/.local/bin`` on ``PATH`` -- the wrapper's roster lookup runs under a
-          ``#!/usr/bin/env -S uv run --script`` shebang, so without ``uv`` it exits
-          127 and the self-heal never reaches Claude Code.
+        * ``~/.local/bin`` on ``PATH`` -- where Claude Code (and, for the old
+          wrapper, ``uv``) may be installed; without it the self-heal never
+          reaches Claude Code.
         * ``USER``/``LOGNAME`` -- Claude Code resolves its Keychain account from
           them and answers "Not logged in" without them, for a session that is
           signed in perfectly well.

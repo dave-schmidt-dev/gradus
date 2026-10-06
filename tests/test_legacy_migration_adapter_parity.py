@@ -138,9 +138,9 @@ class LegacyAdapterParityTests(unittest.TestCase):
                 self.assertEqual(entries.get(variable), "userName", f"{path.name} {variable}")
 
     def test_both_producer_launch_sites_put_the_local_bin_first_on_path(self) -> None:
-        # The self-heal shells out to ~/.agent/bin/claude-headless, whose roster
-        # lookup runs under a `#!/usr/bin/env -S uv run --script` shebang; without
-        # `uv` on PATH it exits 127 and never reaches Claude Code at all.
+        # The stale-credential self-heal runs `claude` directly, which may live
+        # in ~/.local/bin; without it on PATH the self-heal falls back to fixed
+        # install locations or never reaches Claude Code at all.
         tails = set()
         for path in PRODUCER_ENVIRONMENT_SOURCES:
             value = _producer_environment(path.read_text())["PATH"]
