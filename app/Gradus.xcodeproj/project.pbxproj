@@ -93,6 +93,7 @@
 		509BF571D3351EAC51D662E8 /* SyncStatusLine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98462A4E165668C09ABC36A /* SyncStatusLine.swift */; };
 		52F93F8AA2B3AF365AB14257 /* WidgetTimelineProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4CF2407ABF3975205F86DD3 /* WidgetTimelineProvider.swift */; };
 		5351404E6E9E56D30CDBE4D2 /* macSettingsResetAlertsDeniedDark.1.png in Resources */ = {isa = PBXBuildFile; fileRef = FF5A6FAA6C7633280F3B1628 /* macSettingsResetAlertsDeniedDark.1.png */; };
+		537FEF706B3E399CACF15890 /* DashboardViewModelDuplicateProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2061B390B51A656EDE2C8ACA /* DashboardViewModelDuplicateProviderTests.swift */; };
 		53D076932B7F4581DE4FFE29 /* SampleDataMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31A3E1E25595651B1F6D4BDC /* SampleDataMode.swift */; };
 		544698D97B82A75C2CD32664 /* com.zerodelta.gradus.refresh-agent.plist in Resources */ = {isa = PBXBuildFile; fileRef = 70946A22625EC5335461F009 /* com.zerodelta.gradus.refresh-agent.plist */; };
 		5537EC1FA42D07216AD55ECA /* DensityLayoutFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C344612899BD159138272014 /* DensityLayoutFixtures.swift */; };
@@ -451,6 +452,7 @@
 		1E43293520B5F8A2D1382371 /* GradusMacUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusMacUITests.swift; sourceTree = "<group>"; };
 		1F89A27D909F23C95F53189E /* DashboardSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSnapshotTests.swift; sourceTree = "<group>"; };
 		205857956B1F1198387896FB /* ProviderRowBalancedLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderRowBalancedLayout.swift; sourceTree = "<group>"; };
+		2061B390B51A656EDE2C8ACA /* DashboardViewModelDuplicateProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModelDuplicateProviderTests.swift; sourceTree = "<group>"; };
 		21179439A249EF36EA31EFC9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		21795607EC3DB4582CDD3475 /* ProviderRetryAccessibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderRetryAccessibilityTests.swift; sourceTree = "<group>"; };
 		22CAB472888607C347D6ADC2 /* LocalSyncSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalSyncSource.swift; sourceTree = "<group>"; };
@@ -1274,6 +1276,7 @@
 				37BF8208042ADC5386E996E8 /* DashboardSnapshotTests+EmptyStates.swift */,
 				2A8149E30488F918DE0FA5C7 /* DashboardSnapshotTests+SampleData.swift */,
 				F981B6544A15FD0B93AA224C /* DashboardViewModelAccountLifecycleTests.swift */,
+				2061B390B51A656EDE2C8ACA /* DashboardViewModelDuplicateProviderTests.swift */,
 				7C1474EC18E1702B8D04CA9E /* DashboardViewModelResetNotificationTests.swift */,
 				7D321757A9E1A52CCA278762 /* DashboardViewModelSyncFailureVisibilityTests.swift */,
 				A5D5940496F98F78CEBA905C /* DashboardViewModelSyncFixtures.swift */,
@@ -2181,6 +2184,7 @@
 				6182CF096FA577D092A7AFF9 /* DashboardSnapshotTests+SampleData.swift in Sources */,
 				378D41469CE0E2E6B3EABBA7 /* DashboardSnapshotTests.swift in Sources */,
 				5FCA8E667700958E424A5B8F /* DashboardViewModelAccountLifecycleTests.swift in Sources */,
+				537FEF706B3E399CACF15890 /* DashboardViewModelDuplicateProviderTests.swift in Sources */,
 				2F38DBC922452BBFA659F9A8 /* DashboardViewModelResetNotificationTests.swift in Sources */,
 				E09908407787BA0E81D44CC7 /* DashboardViewModelSyncFailureVisibilityTests.swift in Sources */,
 				BEF563E1FB1226500E87E99E /* DashboardViewModelSyncFixtures.swift in Sources */,

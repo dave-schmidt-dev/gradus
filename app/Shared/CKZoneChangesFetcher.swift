@@ -72,8 +72,10 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
                     // diagnostic engine rather than reporting cleanly;
                     // isolated via a standalone `swiftc -typecheck` probe).
                     let newToken = Self.encodeToken(serverChangeToken)
+                    // CloudKit may report one record more than once per fetch.
                     zoneOutcome = .successWithPresence(
-                        changed: changed, deletedProviderNames: deletedProviderNames,
+                        changed: changed.uniquedByProviderName(),
+                        deletedProviderNames: deletedProviderNames,
                         changedPresence: changedPresence,
                         deletedPresenceInstallationIDs: deletedPresenceInstallationIDs,
                         newToken: newToken

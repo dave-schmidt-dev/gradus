@@ -93,7 +93,9 @@ extension DashboardViewModel {
     }
 
     private func reconcile(changed: [ProviderStatus], deletedProviderNames: [String]) {
-        var byName = Dictionary(uniqueKeysWithValues: allProviders.map { ($0.providerName, $0) })
+        var byName = Dictionary(
+            allProviders.map { ($0.providerName, $0) }, uniquingKeysWith: { _, latest in latest }
+        )
         for status in changed {
             if status.isWarning, !(byName[status.providerName]?.isWarning ?? false), notificationsEnabled {
                 warningNotificationScheduler?.scheduleWarningNotification(
@@ -111,7 +113,9 @@ extension DashboardViewModel {
 
     private func notifyForWarningTransitions(from previous: [ProviderStatus], to current: [ProviderStatus]) {
         guard notificationsEnabled else { return }
-        var previousByName = Dictionary(uniqueKeysWithValues: previous.map { ($0.providerName, $0) })
+        var previousByName = Dictionary(
+            previous.map { ($0.providerName, $0) }, uniquingKeysWith: { _, latest in latest }
+        )
         for status in current {
             if status.isWarning, !(previousByName[status.providerName]?.isWarning ?? false) {
                 warningNotificationScheduler?.scheduleWarningNotification(
@@ -157,7 +161,7 @@ extension DashboardViewModel {
         // Compare the complete cached set, not the filtered presentation set,
         // so hiding exhausted providers cannot turn an unchanged warning into
         // a fresh notification on the next full sync.
-        let current = fetched
+        let current = fetched.uniquedByProviderName()
         notifyForWarningTransitions(from: allProviders, to: current)
         allProviders = current
         evaluateResetStatuses(current)

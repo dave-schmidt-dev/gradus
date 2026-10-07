@@ -22,6 +22,9 @@ history from the overnight release train. New releases use
   "Vibe" and "Vibe Code" entries so a router can veto on each independently.
 
 ### Fixed
+- The iPhone and iPad app no longer closes itself when new usage arrives after
+  a provider was received twice in one sync, which left the dashboard stuck on
+  old data.
 - Claude usage no longer goes unavailable when Claude Code's access token expires
   while no Claude Code session is open. Gradus now asks Claude Code to refresh
   its own sign-in directly; the helper flag it used before was retired, so every

@@ -32,3 +32,22 @@ public enum ZoneChangesOutcome: Sendable {
     case zoneDeleted
     case failure
 }
+
+public extension [ProviderStatus] {
+    /// One status per provider name, keeping the last one seen, in the order
+    /// each name first appeared. A zone-changes fetch can report the same
+    /// record more than once when the Mac republishes mid-fetch, and every
+    /// by-name lookup downstream assumes names are unique: on 2026-10-07 a
+    /// duplicate reached the iOS cache and `Dictionary(uniqueKeysWithValues:)`
+    /// trapped on every push, pinning the dashboard to 39-hour-old data.
+    func uniquedByProviderName() -> [ProviderStatus] {
+        var latest: [String: ProviderStatus] = [:]
+        for status in self {
+            latest[status.providerName] = status
+        }
+        var seen: Set<String> = []
+        return map(\.providerName)
+            .filter { seen.insert($0).inserted }
+            .compactMap { latest[$0] }
+    }
+}

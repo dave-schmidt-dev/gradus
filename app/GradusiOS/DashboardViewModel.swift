@@ -354,7 +354,7 @@ public final class DashboardViewModel: ObservableObject {
         widgetExcludedProviderNames = Set(
             userDefaults.stringArray(forKey: Self.widgetExcludedProviderNamesKey) ?? []
         )
-        allProviders = cache.loadCachedStatuses()
+        allProviders = cache.loadCachedStatuses().uniquedByProviderName()
         evaluateResetStatuses(allProviders, schedule: false)
         providers = Self.presentedProviders(
             allProviders,
