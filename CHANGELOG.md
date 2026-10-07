@@ -36,6 +36,7 @@ history from the overnight release train. New releases use
   agent compared a naive local clock against UTC resets, which showed Claude's
   5h window as "51% behind" at 99% left. Snapshot timestamps now carry the local
   UTC offset.
+- `gradus --json` no longer reports a stale snapshot or an ended usage cycle as ok.
 
 ### Changed
 

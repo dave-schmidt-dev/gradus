@@ -200,7 +200,7 @@ Reset displays are normalized before rendering:
 
 ## JSON Output
 
-`--json` prints the canonical, credential-free snapshot and is **machine-safe**: it performs no provider probes, browser launch, token refresh, cache writes, or warning notifications. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`. Antigravity's Claude+GPT fields and windows, and the TUI-only reconstructed C+G keys, are deliberately excluded from `--json`; Gemini output remains unchanged. Router-facing `--json` therefore exposes only the canonical safe provider entries, while the TUI may reconstruct internal display fields from those synthetic entries without changing the persisted or router schema.
+`--json` prints the canonical, credential-free snapshot and is **machine-safe**: it performs no provider probes, browser launch, token refresh, cache writes, or warning notifications. The `data` block is projected through the same `SAFE_DATA_KEYS` allowlist as the persisted snapshot (no `account_email` or other PII), and normalized reset display fields are added under `display`. Antigravity's Claude+GPT fields and windows, and the TUI-only reconstructed C+G keys, are deliberately excluded from `--json`; Gemini output remains unchanged. Router-facing `--json` therefore exposes only the canonical safe provider entries, while the TUI may reconstruct internal display fields from those synthetic entries without changing the persisted or router schema. `--json` reports a provider `ok: false` when the snapshot is older than 5 minutes or its usage cycle has ended.
 
 Example:
 

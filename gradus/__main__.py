@@ -35,6 +35,7 @@ from .history import (
     read_history_evidence,
     recent_auth_failure_count,
 )
+from .json_freshness import mark_unfresh
 from .paths import INSTALLED_MODE, RUNTIME_PATHS
 from .providers import (
     ProviderSnapshot,
@@ -1778,7 +1779,8 @@ def main() -> int:
             sys.stdout.write(render_json([], datetime.now().astimezone()) + "\n")
         else:
             snapshots, updated_at = canonical
-            sys.stdout.write(render_json(snapshots, updated_at) + "\n")
+            fresh = mark_unfresh(snapshots, updated_at, datetime.now().astimezone())
+            sys.stdout.write(render_json(fresh, updated_at) + "\n")
         sys.stdout.flush()
         return 0
     if getattr(args, "once", False):

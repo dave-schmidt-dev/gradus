@@ -597,7 +597,11 @@ class MainJsonTests(unittest.TestCase):
             ),
             patch("gradus.__main__.initialize_providers") as init,
             patch("gradus.__main__.collect_snapshots") as collect,
-            patch("gradus.__main__._read_canonical_snapshots", return_value=(snapshots, NOW)),
+            # A fresh read: `--json` reports an old snapshot as stale (not ok).
+            patch(
+                "gradus.__main__._read_canonical_snapshots",
+                return_value=(snapshots, datetime.now().astimezone()),
+            ),
             patch("gradus.__main__.sys.stdout", buf),
         ):
             rc = main()
