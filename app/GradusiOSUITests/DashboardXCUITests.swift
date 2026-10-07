@@ -176,9 +176,11 @@ final class DashboardXCUITests: XCTestCase {
         let app = launch(.resetAlertsDenied)
         openSettings(in: app)
 
-        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-permission-denied", in: app))
+        // Top to bottom: scrolling only moves down, so the toggles above the
+        // permission row must be found before it.
         XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-banked-toggle", in: app))
         XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-refill-toggle", in: app))
+        XCTAssertTrue(elementAfterScrolling(identifier: "reset-alerts-permission-denied", in: app))
         XCTAssertTrue(app.buttons["Open iOS Settings"].exists)
     }
 
