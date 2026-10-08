@@ -355,3 +355,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         onRemoteRegistrationFailure?()
     }
 }
+
+/// Without a delegate, iOS silently drops every local notification posted
+/// while Gradus is in the foreground. Launch, foreground, and pull-to-refresh
+/// syncs all run in the foreground and advance the reset cursors, so their
+/// warning and reset alerts were consumed without ever being shown.
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    static let foregroundPresentationOptions: UNNotificationPresentationOptions = [.banner, .list, .sound]
+
+    nonisolated func userNotificationCenter(
+        _: UNUserNotificationCenter, willPresent _: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        Self.foregroundPresentationOptions
+    }
+}

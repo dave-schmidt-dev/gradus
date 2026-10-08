@@ -113,6 +113,20 @@ public extension DashboardViewModel {
         systemNotificationAuthorization = await notificationAuthorizationSource.currentAuthorization()
         resetAlertAuthorizationRequestInProgress = false
     }
+
+    /// Entry point for a content-available push. The push can cold-launch the
+    /// app in the background, where the scene's live lifecycle never runs, so
+    /// the iCloud account and notification permission are still unread. Read
+    /// both first: otherwise the delta sync is skipped, or a detected reset
+    /// advances the persisted cursor while the `.notDetermined` permission
+    /// gate drops its notification for good.
+    func handleBackgroundRemoteNotification() async {
+        await refreshNotificationAuthorization()
+        if accountStatus != .available {
+            await refreshAccountStatus()
+        }
+        await handleRemoteNotification()
+    }
 }
 
 extension DashboardViewModel {

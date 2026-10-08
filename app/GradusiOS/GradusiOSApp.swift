@@ -1,6 +1,7 @@
 import CloudKit
 import GradusKit
 import SwiftUI
+import UserNotifications
 
 @main
 struct GradusiOSApp: App {
@@ -251,9 +252,11 @@ extension GradusiOSApp {
         liveActivitySuppressed: Bool
     ) {
         delegate.liveActivitySuppressed = liveActivitySuppressed
+        // Must be set before launch finishes so foreground alerts present.
+        UNUserNotificationCenter.current().delegate = delegate
         delegate.onRemoteNotification = {
             guard !delegate.liveActivitySuppressed else { return }
-            await viewModel.handleRemoteNotification()
+            await viewModel.handleBackgroundRemoteNotification()
         }
 
         delegate.onAuthorizationResolved = {

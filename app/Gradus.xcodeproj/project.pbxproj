@@ -75,6 +75,7 @@
 		43DC352AA091E0028237A8CB /* DevicePresenceLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03541F7DB1003A01A6A8EB3A /* DevicePresenceLifecycle.swift */; };
 		46981DE0A53A0AFBCD9AF70F /* LegacyRuntimeMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82F8CAD1C6EEE048DAE86442 /* LegacyRuntimeMigratorTests.swift */; };
 		46F2DF11651DF8AF4F64C741 /* providerListViewRendersEmptyState.1.png in Resources */ = {isa = PBXBuildFile; fileRef = E9C45956EB90B261C6A0920A /* providerListViewRendersEmptyState.1.png */; };
+		474072C9264829EA05827DDC /* DashboardViewModelResetBackgroundPushTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 626F845A122554826DA3F8BE /* DashboardViewModelResetBackgroundPushTests.swift */; };
 		4771BA35F110C7547385FC0C /* DashboardViewModelWarningNotificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C467A788F24C0E611BF51797 /* DashboardViewModelWarningNotificationTests.swift */; };
 		47A4FDC3A90D1254F83FF66A /* DashboardViewModel+CardLayoutPreference.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A587EF37495C6CA507D80F5 /* DashboardViewModel+CardLayoutPreference.swift */; };
 		49E3656F01697A446DA1A08F /* settingsViewResetAlertsDeniedLight.1.png in Resources */ = {isa = PBXBuildFile; fileRef = FCFBDA437DDE9D6C27914C2A /* settingsViewResetAlertsDeniedLight.1.png */; };
@@ -529,6 +530,7 @@
 		5F2E2CC0663928F8C3501AC7 /* gradusSmallWidgetCurrentDark.1.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = gradusSmallWidgetCurrentDark.1.png; sourceTree = "<group>"; };
 		5F921644EC255B8548BC067E /* CKCloudFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CKCloudFetcher.swift; sourceTree = "<group>"; };
 		6147B3E0BD8061C88B39930A /* GradusiOSAppConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusiOSAppConfiguration.swift; sourceTree = "<group>"; };
+		626F845A122554826DA3F8BE /* DashboardViewModelResetBackgroundPushTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModelResetBackgroundPushTests.swift; sourceTree = "<group>"; };
 		66B9E953E93EBE65901BE779 /* DashboardViewModel+Presentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardViewModel+Presentation.swift"; sourceTree = "<group>"; };
 		6823FF052589D70CBF925382 /* GradusWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GradusWidget.swift; sourceTree = "<group>"; };
 		6B270DAE848461522EEA974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -1277,6 +1279,7 @@
 				2A8149E30488F918DE0FA5C7 /* DashboardSnapshotTests+SampleData.swift */,
 				F981B6544A15FD0B93AA224C /* DashboardViewModelAccountLifecycleTests.swift */,
 				2061B390B51A656EDE2C8ACA /* DashboardViewModelDuplicateProviderTests.swift */,
+				626F845A122554826DA3F8BE /* DashboardViewModelResetBackgroundPushTests.swift */,
 				7C1474EC18E1702B8D04CA9E /* DashboardViewModelResetNotificationTests.swift */,
 				7D321757A9E1A52CCA278762 /* DashboardViewModelSyncFailureVisibilityTests.swift */,
 				A5D5940496F98F78CEBA905C /* DashboardViewModelSyncFixtures.swift */,
@@ -2185,6 +2188,7 @@
 				378D41469CE0E2E6B3EABBA7 /* DashboardSnapshotTests.swift in Sources */,
 				5FCA8E667700958E424A5B8F /* DashboardViewModelAccountLifecycleTests.swift in Sources */,
 				537FEF706B3E399CACF15890 /* DashboardViewModelDuplicateProviderTests.swift in Sources */,
+				474072C9264829EA05827DDC /* DashboardViewModelResetBackgroundPushTests.swift in Sources */,
 				2F38DBC922452BBFA659F9A8 /* DashboardViewModelResetNotificationTests.swift in Sources */,
 				E09908407787BA0E81D44CC7 /* DashboardViewModelSyncFailureVisibilityTests.swift in Sources */,
 				BEF563E1FB1226500E87E99E /* DashboardViewModelSyncFixtures.swift in Sources */,

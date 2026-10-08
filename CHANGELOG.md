@@ -11,6 +11,13 @@ history from the overnight release train. New releases use
 
 ## Unreleased
 
+### Fixed
+
+- iPhone and iPad now show reset and warning alerts while Gradus is open, and a
+  background push that launches Gradus reads the iCloud account and notification
+  permission before syncing, so a banked grant or usage refill is no longer
+  detected and then silently dropped.
+
 ### Added
 
 - Mistral now tracks two allowances: the included API allowance (read from the

@@ -1,6 +1,7 @@
 @testable import GradusiOS
 import Testing
 import UIKit
+import UserNotifications
 
 @MainActor
 struct AppDelegateTests {
@@ -239,5 +240,17 @@ struct AppDelegateTests {
         await liveStart.value
 
         #expect(registrationCount == 0, "\(device) registered after sample entry")
+    }
+
+    /// Foreground syncs consume reset and warning transitions, so a foreground
+    /// notification must be presented rather than dropped by iOS.
+    @Test
+    func presentsLocalAlertsWhileForeground() {
+        let delegate: UNUserNotificationCenterDelegate = AppDelegate(clearBadge: {})
+        #expect(delegate.responds(to: #selector(
+            UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:)
+        )))
+        #expect(AppDelegate.foregroundPresentationOptions.contains(.banner))
+        #expect(AppDelegate.foregroundPresentationOptions.contains(.list))
     }
 }
