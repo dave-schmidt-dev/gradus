@@ -4,6 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -P "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
+# Git exports GIT_DIR to hooks run from a linked worktree. Left set, it
+# leaks into every fixture repository the gate creates, so a fixture's own
+# `git rev-parse` resolves to this checkout instead. The gate already runs
+# from the repository root, which Git resolves on its own.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 base="${GRADUS_STATIC_BASE:-}"
 if [[ -z "$base" ]]; then
