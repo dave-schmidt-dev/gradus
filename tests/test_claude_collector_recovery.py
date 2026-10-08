@@ -63,6 +63,15 @@ class ClaudeCollectorRecoveryTests(unittest.TestCase):
             BASE + timedelta(seconds=3600),
         )
 
+    def test_local_credential_failure_is_due_immediately(self) -> None:
+        payload = _claude_payload(
+            "Claude Code OAuth credentials unavailable "
+            "(keychain item has no access token): run `claude auth login`",
+            attempted_at=BASE.isoformat(),
+        )
+        now = BASE + timedelta(seconds=10)
+        self.assertEqual(main_module._provider_next_probe_at(payload, "Claude", now), now)
+
     def test_uncertain_legacy_claude_then_inactive_probes_and_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_dir = Path(tmp) / "Installed"

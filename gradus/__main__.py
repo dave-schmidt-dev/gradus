@@ -118,6 +118,7 @@ _AUTH_KEYWORDS = (
 # allowed at most once per ten minutes.  This is producer policy, not a second
 # cache: the previous attempt/success timestamps come from snapshot-v2.
 CLAUDE_MIN_PROBE_INTERVAL_SECONDS = 600
+CLAUDE_LOCAL_CREDENTIAL_FAILURE_PREFIX = "Claude Code OAuth credentials unavailable"
 # A real 429 means the endpoint's rolling allowance has not recovered yet.
 # Back off for an hour instead of retrying every normal Claude interval.
 CLAUDE_RATE_LIMIT_BACKOFF_SECONDS = 3600
@@ -251,6 +252,12 @@ def _provider_next_probe_at(
         "provider not enabled",
         LEGACY_CLAUDE_UNAVAILABLE_ERROR,
     ):
+        return now
+    # The failure came from a local Keychain read with no network call, so
+    # re-probing on the next tick is free and lets a fresh login clear the
+    # error immediately.
+    error = entry.get("error")
+    if isinstance(error, str) and error.startswith(CLAUDE_LOCAL_CREDENTIAL_FAILURE_PREFIX):
         return now
     # This field is advanced only by a real probe.  A cooldown projection is
     # carried through the next payload unchanged, so the 120s producer tick

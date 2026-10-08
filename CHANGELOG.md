@@ -22,6 +22,7 @@ history from the overnight release train. New releases use
   "Vibe" and "Vibe Code" entries so a router can veto on each independently.
 
 ### Fixed
+- A Claude Keychain read that fails locally (for example mid `claude auth login`) is re-probed on the next refresh instead of being held for the 10-minute probe cooldown.
 - The iPhone and iPad app no longer closes itself when new usage arrives after
   a provider was received twice in one sync, which left the dashboard stuck on
   old data.
