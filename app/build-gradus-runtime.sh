@@ -206,6 +206,8 @@ PY
 
 build_application() {
   status "Building unsigned GradusRuntime.app (universal2)"
+  # Run the interpreter directly: long checkout paths make uv emit a /bin/sh console-script launcher.
+  # SIP strips DYLD_* variables when they pass through /bin/sh.
   env \
     DYLD_LIBRARY_PATH="$PYTHON_FRAMEWORK_ROOT/Versions/$PYTHON_SERIES/lib" \
     DYLD_FRAMEWORK_PATH="$TOOLCHAIN_ROOT" \
@@ -215,7 +217,7 @@ build_application() {
     PYINSTALLER_CONFIG_DIR="$PYINSTALLER_CONFIG_DIR" \
     PYTHONHASHSEED=0 \
     SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
-    "$VENV_ROOT/bin/pyinstaller" \
+    "$VENV_ROOT/bin/python" -m PyInstaller \
       --noconfirm \
       --clean \
       --distpath "$DIST_ROOT" \
