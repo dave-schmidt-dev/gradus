@@ -1001,14 +1001,20 @@ def project_data(snapshot: ProviderSnapshot) -> dict:
         if key in SAFE_DATA_KEYS and (value := _json_safe_value(raw_value)) is not _UNSAFE_JSON
     }
     if snapshot.name == "Cursor":
-        remaining_cents = data.get("remaining_cents")
+        # Cursor credit is on-demand spend-limit headroom, not included plan usage.
+        limit = data.get("on_demand_limit_cents")
+        used = data.get("on_demand_used_cents")
         if (
-            not isinstance(remaining_cents, bool)
-            and isinstance(remaining_cents, (int, float))
-            and math.isfinite(remaining_cents)
-            and remaining_cents >= 0
+            not isinstance(limit, bool)
+            and isinstance(limit, (int, float))
+            and math.isfinite(limit)
+            and limit > 0
+            and not isinstance(used, bool)
+            and isinstance(used, (int, float))
+            and math.isfinite(used)
+            and used >= 0
         ):
-            projected["credit_balance"] = float(remaining_cents) / 100.0
+            projected["credit_balance"] = max(0.0, float(limit) - float(used)) / 100.0
     return projected
 
 

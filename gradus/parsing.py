@@ -240,6 +240,8 @@ class CursorStatus:
     api_percent_used: float | None
     remaining_cents: int | None
     limit_cents: int | None
+    on_demand_limit_cents: int | None
+    on_demand_used_cents: int | None
     plan_name: str | None
     billing_cycle_start: str | None
     billing_cycle_end: str | None

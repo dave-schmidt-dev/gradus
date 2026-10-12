@@ -17,6 +17,9 @@ history from the overnight release train. New releases use
   background push that launches Gradus reads the iCloud account and notification
   permission before syncing, so a banked grant or usage refill is no longer
   detected and then silently dropped.
+- Cursor's "Credit" line now shows only the remaining on-demand (additional)
+  API spend limit. It no longer shows the plan's included usage left, and it
+  is hidden when no on-demand limit is set.
 
 ### Added
 

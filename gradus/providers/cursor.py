@@ -104,7 +104,7 @@ class CursorProvider:
             return None
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
 
     @staticmethod
@@ -140,12 +140,25 @@ class CursorProvider:
         plan_usage = usage_data.get("planUsage")
         if not isinstance(plan_usage, dict):
             plan_usage = {}
+        spend = usage_data.get("spendLimitUsage")
+        if not isinstance(spend, dict):
+            spend = {}
         plan_info = plan_data.get("planInfo")
         if not isinstance(plan_info, dict):
             plan_info = {}
 
         remaining_cents = self._as_int(plan_usage.get("remaining"))
         limit_cents = self._as_int(plan_usage.get("limit"))
+        on_demand_limit_cents: int | None = None
+        on_demand_used_cents: int | None = None
+        spend_limit = self._as_int(spend.get("individualLimit"))
+        if spend_limit is not None and spend_limit > 0:
+            on_demand_limit_cents = spend_limit
+            spend_used = self._as_int(spend.get("individualUsed"))
+            if spend_used is None:
+                spend_remaining = self._as_int(spend.get("individualRemaining"))
+                spend_used = spend_limit - spend_remaining if spend_remaining is not None else 0
+            on_demand_used_cents = max(0, spend_used)
         credit_percent_left: float | None = None
         if remaining_cents is not None and limit_cents is not None and limit_cents > 0:
             credit_percent_left = round((remaining_cents / limit_cents) * 100.0, 2)
@@ -182,6 +195,8 @@ class CursorProvider:
             api_percent_used=self._as_float(plan_usage.get("apiPercentUsed")),
             remaining_cents=remaining_cents,
             limit_cents=limit_cents,
+            on_demand_limit_cents=on_demand_limit_cents,
+            on_demand_used_cents=on_demand_used_cents,
             plan_name=(plan_name if isinstance(plan_name, str) else None),
             billing_cycle_start=billing_cycle_start,
             billing_cycle_end=billing_cycle_end,

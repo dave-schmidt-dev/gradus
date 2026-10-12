@@ -390,12 +390,13 @@ class TestAllowlist(unittest.TestCase):
         )
         self.assertEqual(snap.project_data(opencode), {"zen_credit": 12.345})
 
-    def test_cursor_dollar_balance_is_projected_as_supplemental_credit(self) -> None:
-        """The router projects remaining dollars separately from usage pools.
+    def test_cursor_on_demand_headroom_is_projected_as_credit(self) -> None:
+        """The router projects on-demand headroom separately from usage pools.
 
         ``credit_percent_left`` remains internal because it is not a usage
-        pool. The raw cents are normalized to ``credit_balance`` for optional
-        supplemental text, while the two real per-pool usage fields remain.
+        pool. On-demand cents are normalized to ``credit_balance`` for
+        optional supplemental text, while the two real per-pool usage fields
+        remain.
         """
         cursor = _ps(
             "Cursor",
@@ -406,6 +407,8 @@ class TestAllowlist(unittest.TestCase):
                 "api_percent_used": 30.0,
                 "remaining_cents": 500,
                 "limit_cents": 1_000,
+                "on_demand_limit_cents": 5_000,
+                "on_demand_used_cents": 1_250,
             },
         )
         self.assertEqual(
@@ -413,14 +416,38 @@ class TestAllowlist(unittest.TestCase):
             {
                 "auto_percent_used": 20.0,
                 "api_percent_used": 30.0,
-                "credit_balance": 5.0,
+                "credit_balance": 37.5,
             },
         )
 
-    def test_invalid_cursor_remaining_cents_is_not_projected(self) -> None:
-        for value in (-1, float("inf"), "500", True):
-            with self.subTest(value=value):
-                cursor = _ps("Cursor", True, data={"remaining_cents": value})
+    def test_cursor_included_plan_remaining_is_never_credit(self) -> None:
+        cursor = _ps("Cursor", True, data={"remaining_cents": 1_041, "limit_cents": 2_000})
+        self.assertNotIn("credit_balance", snap.project_data(cursor))
+
+    def test_cursor_on_demand_overspend_clamps_to_zero(self) -> None:
+        cursor = _ps(
+            "Cursor",
+            True,
+            data={"on_demand_limit_cents": 1_000, "on_demand_used_cents": 1_500},
+        )
+        self.assertEqual(snap.project_data(cursor)["credit_balance"], 0.0)
+
+    def test_invalid_cursor_on_demand_values_are_not_projected(self) -> None:
+        for value in (0, -1, float("inf"), "500", True, None):
+            with self.subTest(limit=value):
+                cursor = _ps(
+                    "Cursor",
+                    True,
+                    data={"on_demand_limit_cents": value, "on_demand_used_cents": 0},
+                )
+                self.assertNotIn("credit_balance", snap.project_data(cursor))
+        for value in (-1, float("nan"), "5", True, None):
+            with self.subTest(used=value):
+                cursor = _ps(
+                    "Cursor",
+                    True,
+                    data={"on_demand_limit_cents": 1_000, "on_demand_used_cents": value},
+                )
                 self.assertNotIn("credit_balance", snap.project_data(cursor))
 
     def test_claude_credit_balance_is_allowlisted(self) -> None:

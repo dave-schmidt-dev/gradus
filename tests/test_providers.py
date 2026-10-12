@@ -3092,6 +3092,8 @@ class SafariFreeProviderTests(unittest.TestCase):
         self.assertEqual(status.credit_percent_left, 49.67)
         self.assertEqual(status.limit_cents, 2000)
         self.assertIsNone(status.remaining_cents)
+        self.assertIsNone(status.on_demand_limit_cents)
+        self.assertIsNone(status.on_demand_used_cents)
         self.assertEqual(status.plan_name, "Pro")
         self.assertTrue(status.billing_cycle_end.startswith("Resets "))
         self.assertIsNotNone(status.billing_cycle_end_iso)
@@ -3104,6 +3106,44 @@ class SafariFreeProviderTests(unittest.TestCase):
         with patch.object(CursorProvider, "_api_post", side_effect=[usage, {}]):
             status = provider.fetch()
         self.assertEqual(status.credit_percent_left, 25.0)
+
+    def test_cursor_live_shape_without_on_demand_limit_has_no_on_demand_fields(self) -> None:
+        usage = {
+            "planUsage": {"remaining": 1041, "limit": 2000, "totalPercentUsed": 10.66},
+            "spendLimitUsage": {"limitType": "user"},
+        }
+        provider = CursorProvider()
+        provider._access_token = "fixture-token"
+        with patch.object(CursorProvider, "_api_post", side_effect=[usage, {}]):
+            status = provider.fetch()
+        self.assertIsNone(status.on_demand_limit_cents)
+        self.assertIsNone(status.on_demand_used_cents)
+        self.assertEqual(status.remaining_cents, 1041)
+
+    def test_cursor_on_demand_limit_parses_used_and_omitted_zero(self) -> None:
+        cases = (
+            (
+                {
+                    "individualLimit": 5000,
+                    "individualUsed": 1250,
+                    "individualRemaining": 3750,
+                    "limitType": "user",
+                },
+                5000,
+                1250,
+            ),
+            ({"individualLimit": 5000, "limitType": "user"}, 5000, 0),
+            ({"individualLimit": 5000, "individualRemaining": 4000}, 5000, 1000),
+        )
+        for spend, expected_limit, expected_used in cases:
+            with self.subTest(spend=spend):
+                usage = {"planUsage": {"totalPercentUsed": 10}, "spendLimitUsage": spend}
+                provider = CursorProvider()
+                provider._access_token = "fixture-token"
+                with patch.object(CursorProvider, "_api_post", side_effect=[usage, {}]):
+                    status = provider.fetch()
+                self.assertEqual(status.on_demand_limit_cents, expected_limit)
+                self.assertEqual(status.on_demand_used_cents, expected_used)
 
     def test_cursor_request_is_connect_post_with_bearer(self) -> None:
         provider = CursorProvider()
