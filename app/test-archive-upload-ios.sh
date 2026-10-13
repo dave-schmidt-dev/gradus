@@ -746,38 +746,9 @@ project_edit_line="$(awk '/bump_ios_build_number "\$NEXT_BUILD"/ {print NR; exit
   exit 1
 }
 
-coordinator_source="$SCRIPT_DIR/GradusMac/PublishCoordinator.swift"
-throw_line="$(awk '/throw PublishCoordinatorError\.recordFailures/ {print NR; exit}' "$coordinator_source")"
-evidence_write_line="$(awk '/try Self\.writeProducerEvidence/ {print NR; exit}' "$coordinator_source")"
-quiet_write_line="$(awk '
-  /guard !toSave\.isEmpty/ {in_quiet=1; next}
-  in_quiet && /try writeProducerEvidenceIfConfigured/ {print NR; exit}
-  in_quiet && /return/ {exit}
-' "$coordinator_source")"
-success_write_line="$(awk '/try writeProducerEvidenceIfConfigured/ {line=NR} END {print line}' "$coordinator_source")"
-success_notice_line="$(awk '/GradusLog\.publish\.notice\("published/ {print NR; exit}' "$coordinator_source")"
-[[ -n "$throw_line" && -n "$evidence_write_line" && -n "$success_write_line" && -n "$success_notice_line" \
-  && -n "$quiet_write_line" && "$quiet_write_line" -lt "$throw_line" \
-  && "$throw_line" -lt "$success_write_line" && "$success_write_line" -lt "$success_notice_line" \
-  && "$evidence_write_line" -gt "$success_notice_line" ]] || {
-  echo "FAIL: producer evidence write is not after failure handling and before success" >&2
-  exit 1
-}
-
-[[ "$(grep -c 'try writeProducerEvidenceIfConfigured' "$coordinator_source")" -eq 2 ]] || {
-  echo "FAIL: producer evidence must refresh on both changed and quiet publish cycles" >&2
-  exit 1
-}
-
-[[ "$(grep -c 'try Self.writeProducerEvidence' "$coordinator_source")" -eq 1 ]] || {
-  echo "FAIL: producer success path must contain exactly one evidence write" >&2
-  exit 1
-}
-
-[[ "$(grep -c 'publishedAt: Date()' "$coordinator_source")" -eq 1 ]] || {
-  echo "FAIL: producer evidence must use a current write timestamp" >&2
-  exit 1
-}
+# Keep the coordinator's evidence refresh and failure ordering coupled to this
+# hermetic upload-boundary regression suite.
+/usr/bin/python3 "$SCRIPT_DIR/publish_evidence_source_contract.py"
 
 set +e
 missing_credentials_output="$(env -u HOME GRADUS_PRODUCER_EVIDENCE_PATH="$TEST_ROOT/matching.json" "$UPLOAD_SCRIPT" 2>&1)"

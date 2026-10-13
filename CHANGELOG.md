@@ -56,6 +56,7 @@ history from the overnight release train. New releases use
 
 - Refine local diagnostics pilot availability warnings and cancellation privacy; classify expected missing-zone waiting as informational.
 - Routine pre-push validation now uses the headless gate, retaining non-UI and image-snapshot checks while reserving host HID and XCUITest journeys for the full milestone gate.
+- The hermetic iOS upload suite now checks producer-evidence refresh ordering and diagnostics-wrapper error propagation against PublishCoordinator.
 
 - iPhone and iPad Settings now keep Warning alerts and the Warning Threshold
   slider together at the top, followed by Reset alerts, Local Display and Widget;

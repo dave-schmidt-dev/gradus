@@ -91,7 +91,8 @@ The milestone gate runs, in order:
 1. the hermetic script suites — Mac notarization and signing, Mac bundle
    structure, local Mac install, credential-bridge install, frozen-runtime build
    and relocation, and iOS upload (inside-out nested signing, separate App Store
-   profile verification, and version/build parity),
+   profile verification, version/build parity, and the diagnostics-aware producer
+   evidence source-flow contract),
 2. `swift test` over the **GradusKit** package (including atomic widget snapshot models),
 3. `pytest` over the **Python producer** suite,
 4. `xcodebuild test` for **GradusMac** unit tests and **GradusMacUITests** against
