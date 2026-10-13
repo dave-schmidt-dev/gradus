@@ -75,10 +75,18 @@ processing evidence.
   or another boundary the automation cannot control; document the reason,
   exact steps, and follow-up in `HISTORY.md`/`TASKS.md`.
 
-Gradus currently uses Swift Testing/XCTest for logic, XCUITest for iOS user
-flows, and swift-snapshot-testing for visual regression. `app/test-gate.sh` is
-the authoritative local app-validation gate used by `app/release_local_gate.py`.
-It runs, in order:
+Gradus uses Swift Testing/XCTest for logic, XCUITest for iOS user flows, and
+swift-snapshot-testing for visual regression. `app/test-gate.sh` is the
+authoritative local app-validation gate used by `app/release_local_gate.py`.
+With no mode option it runs the full milestone gate, including the UI journeys.
+Its `--headless` mode is used for routine pre-push validation and omits exactly
+`GradusMacUI`, `GradusiOS-iPad`, and `GradusiOSUI`. Headless mode retains all
+static, hermetic, SwiftPM, Python, macOS/iOS unit, widget, and phone/pad density
+image-snapshot checks. It does not reset simulator UI sessions or invoke host
+HID, screen capture, or XCUITest. Expected-leg accounting subtracts those three
+omitted legs; it does not mark them as passed.
+
+The milestone gate runs, in order:
 
 1. the hermetic script suites — Mac notarization and signing, Mac bundle
    structure, local Mac install, credential-bridge install, frozen-runtime build
@@ -95,7 +103,7 @@ It runs, in order:
 Routine `xcodebuild test` legs pass `-collect-test-diagnostics never` to avoid
 Xcode's automatic diagnostic collection. Failed legs still preserve their
 command output under `.release-state/evidence/test-gate/` for targeted follow-up.
-The routine GradusMac UI leg also skips window screenshot attachments. Set
+The milestone GradusMac UI leg also skips window screenshot attachments. Set
 `TEST_RUNNER_GRADUS_MAC_UI_SCREENSHOTS=1` on a direct `xcodebuild test` invocation
 to opt into those screenshots.
 
@@ -140,8 +148,9 @@ checkout so Finder metadata cannot make SwiftPM's generated test bundle fail
 codesigning; the scratch directory is removed after the leg.
 
 Pre-commit hooks are kept lightweight and fast (lint, formatting, and dead-code checks),
-while pre-push runs the authoritative full Gradus local gate (`scripts/pre-push-full-gate.sh`).
-Pre-push can take over simulator and UI resources, derives its static comparison base
+while pre-push runs the headless Gradus gate (`scripts/pre-push-full-gate.sh`).
+The full milestone gate remains available through `bash app/test-gate.sh`.
+Pre-push can take over simulator resources, derives its static comparison base
 from the upstream merge base (`git merge-base HEAD "$upstream"`), and supports an explicit
 `GRADUS_STATIC_BASE` override. The wrapper mirrors the gate's output to the controlling
 terminal when available so pre-commit's output capture does not turn the long run into a

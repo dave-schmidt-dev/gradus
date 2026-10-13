@@ -251,6 +251,31 @@ xcodegen_line="$(grep -n '^xcodegen generate$' "$GATE_SCRIPT" | cut -d: -f1)"
 [[ -n "$macos_preflight_line" && -n "$xcodegen_line" && "$macos_preflight_line" -lt "$xcodegen_line" ]] ||
   fail "macOS version preflight does not run before Xcode project generation"
 
+diagnostics_sdk_fixture_gradus_kit="$diagnostic_test_root/projects/gradus/app/GradusKit"
+diagnostics_sdk_fixture_manifest="$(diagnostics_sdk_manifest_path "$diagnostics_sdk_fixture_gradus_kit")"
+mkdir -p "$diagnostics_sdk_fixture_gradus_kit" "$diagnostic_test_root/projects/apple_developer/diagnostics_contracts/swift"
+diagnostics_sdk_resolved_fixture_manifest="$(cd -P "$(dirname "$diagnostics_sdk_fixture_manifest")" && pwd)/$(basename "$diagnostics_sdk_fixture_manifest")"
+diagnostics_sdk_expected_fixture_manifest="$(cd -P "$diagnostic_test_root/projects/apple_developer/diagnostics_contracts/swift" && pwd)/Package.swift"
+[[ "$diagnostics_sdk_resolved_fixture_manifest" == "$diagnostics_sdk_expected_fixture_manifest" ]] ||
+  fail "diagnostics SDK preflight path does not match GradusKit's local package dependency"
+diagnostics_sdk_missing_output="$diagnostic_test_root/diagnostics-sdk-missing.log"
+if preflight_diagnostics_sdk_manifest "$diagnostics_sdk_fixture_manifest" >"$diagnostics_sdk_missing_output" 2>&1; then
+  fail "missing sibling diagnostics SDK manifest unexpectedly passed"
+fi
+grep -Fq "required sibling apple_developer diagnostics SDK Package.swift is missing or unreadable" "$diagnostics_sdk_missing_output" ||
+  fail "missing sibling diagnostics SDK manifest did not report the actionable message"
+mkdir -p "$(dirname "$diagnostics_sdk_fixture_manifest")"
+printf '// hermetic readability fixture\n' >"$diagnostics_sdk_fixture_manifest"
+preflight_diagnostics_sdk_manifest "$diagnostics_sdk_fixture_manifest" ||
+  fail "readable sibling diagnostics SDK manifest was rejected"
+diagnostics_sdk_preflight_line="$(grep -n '^preflight_diagnostics_sdk_manifest "$diagnostics_sdk_manifest"$' "$GATE_SCRIPT" | cut -d: -f1)"
+stale_transcript_sweep_line="$(grep -n '^sweep_stale_test_gate_transcripts$' "$GATE_SCRIPT" | cut -d: -f1)"
+static_checks_line="$(grep -n '^run_changed_swift_static_checks$' "$GATE_SCRIPT" | cut -d: -f1)"
+[[ -n "$diagnostics_sdk_preflight_line" && -n "$stale_transcript_sweep_line" &&
+   -n "$static_checks_line" && "$diagnostics_sdk_preflight_line" -lt "$stale_transcript_sweep_line" &&
+   "$diagnostics_sdk_preflight_line" -lt "$static_checks_line" ]] ||
+  fail "diagnostics SDK preflight does not run before gate work"
+
 emit_failed_diagnostic_fixture() {
   printf 'credential-free failure detail\n'
   return 37
@@ -542,7 +567,7 @@ validate_inv7_staging_contract "$GATE_SCRIPT" ||
 validate_banked_fixture_staging_contract() {
   local gate_path="$1" test_path="$SCRIPT_DIR/GradusMacTests/BankedObservationTests.swift"
   local stage_block mac_leg_block
-  stage_block="$(sed -n '/^# INV-7 runs inside/,/^echo "==> xcodebuild test — GradusMacUITests/p' "$gate_path")"
+  stage_block="$(sed -n '/^# INV-7 runs inside/,/^[[:space:]]*echo "==> xcodebuild test — GradusMacUITests/p' "$gate_path")"
   mac_leg_block="$(sed -n '/assert_counting_leg "GradusMac"/,/assert_counting_leg "GradusiOS-iPhone"/p' "$gate_path")"
 
   grep -Fq "gradus_mac_banked_fixture_path=\"\$derived_data_dir/fixtures/banked-observation-v1.json\"" "$gate_path" || return 1
@@ -840,11 +865,11 @@ sed 's/"\$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- //' "$GATE_SCRIPT"
 if validate_gradus_mac_ui_lock_contract "$mutated_gate"; then
   fail "GradusMacUI lock contract accepted an unserialized leg"
 fi
-sed '/^export -f run_with_deadline/d' "$GATE_SCRIPT" > "$mutated_gate"
+sed '/^[[:space:]]*export -f run_with_deadline/d' "$GATE_SCRIPT" > "$mutated_gate"
 if validate_gradus_mac_ui_lock_contract "$mutated_gate"; then
   fail "GradusMacUI lock contract accepted a leg whose deadline cannot cross the exec"
 fi
-sed 's/^export -f run_with_deadline report_external_termination$/export -f run_with_deadline/' \
+sed 's/^\([[:space:]]*\)export -f run_with_deadline report_external_termination$/\1export -f run_with_deadline/' \
   "$GATE_SCRIPT" > "$mutated_gate"
 if validate_gradus_mac_ui_lock_contract "$mutated_gate"; then
   fail "GradusMacUI lock contract accepted an export missing the termination reporter"
@@ -1134,6 +1159,135 @@ for ((index = 0; index < leg_count - 1; index++)); do
     emit_report "${COUNTING_LEG_REPORTERS[index]}" "${COUNTING_LEG_MINIMUMS[index]}"
 done
 expect_failure "deleted counting leg" assert_counting_legs_complete
+
+# ---- headless / milestone mode contract ----
+# The pre-push wrapper always selects --headless. Headless keeps every static,
+# hermetic, SwiftPM, macOS/iOS unit, widget, and density image-snapshot leg and
+# omits exactly the three screen-seizing legs. The milestone gate (default)
+# keeps all three UI journeys. These checks combine a structural contract with
+# sourced functions and a fake command that records any UI invocation.
+validate_headless_mode_contract() {
+  local gate_path="$1" guard_blocks ui_leg preserved_leg
+  grep -Fq 'GATE_MODE="milestone"' "$gate_path" || return 1
+  grep -Eq '^[[:space:]]*--headless\)' "$gate_path" || return 1
+  grep -Fq 'HEADLESS_SKIPPED_LEG_NAMES=("GradusMacUI" "GradusiOS-iPad" "GradusiOSUI")' "$gate_path" || return 1
+  grep -Fq 'expected_counting_leg_count' "$gate_path" || return 1
+  guard_blocks="$(sed -n '/^if gate_mode_runs_ui_legs; then$/,/^fi$/p' "$gate_path")"
+  [[ "$guard_blocks" == *'reset_simulator_ui_session_for_iphone'* ]] || return 1
+  for ui_leg in GradusMacUI GradusiOS-iPad GradusiOSUI; do
+    [[ "$guard_blocks" == *"assert_counting_leg \"$ui_leg\""* ]] || return 1
+  done
+  # Density snapshots and every non-UI leg stay enabled in headless.
+  for preserved_leg in GradusMac GradusiOS-iPhone GradusiOS-DensityPhone GradusiOS-DensityPad GradusWidget; do
+    [[ "$guard_blocks" != *"assert_counting_leg \"$preserved_leg\""* ]] || return 1
+  done
+}
+
+validate_headless_mode_contract "$GATE_SCRIPT" ||
+  fail "headless mode does not guard exactly the three screen-seizing UI legs"
+
+mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-headless-mode-contract.XXXXXX")"
+grep -v '^if gate_mode_runs_ui_legs; then$' "$GATE_SCRIPT" >"$mutated_gate"
+if validate_headless_mode_contract "$mutated_gate"; then
+  fail "headless mode contract accepted unguarded UI legs"
+fi
+rm -f "$mutated_gate"
+
+# The default (milestone) invocation runs the full manifest; --headless drops
+# exactly the three declared legs and never fakes a pass for them.
+headless_ui_legs=(GradusMacUI GradusiOS-iPad GradusiOSUI)
+saved_gate_mode="$GATE_MODE"
+GATE_MODE="headless"
+headless_expected_count="$(expected_counting_leg_count)"
+GATE_MODE="milestone"
+milestone_expected_count="$(expected_counting_leg_count)"
+GATE_MODE="$saved_gate_mode"
+[[ "$milestone_expected_count" -eq "$leg_count" ]] ||
+  fail "milestone mode expected-leg accounting lost legs"
+[[ "$headless_expected_count" -eq "$((leg_count - ${#headless_ui_legs[@]}))" ]] ||
+  fail "headless mode expected-leg accounting does not omit exactly the three UI legs"
+for ui_leg in "${headless_ui_legs[@]}"; do
+  GATE_MODE="headless"
+  if ! headless_skipped_leg "$ui_leg"; then
+    fail "headless skipped-leg list does not cover '$ui_leg'"
+  fi
+done
+GATE_MODE="headless"
+for preserved_leg in GradusMac GradusiOS-iPhone GradusiOS-DensityPhone GradusiOS-DensityPad GradusWidget; do
+  if headless_skipped_leg "$preserved_leg"; then
+    fail "headless skipped-leg list wrongly covers '$preserved_leg'"
+  fi
+done
+GATE_MODE="$saved_gate_mode"
+
+headless_probe_receipt="$diagnostic_test_root/headless-ui-invocations"
+ui_probe_command() {
+  printf '%s\n' "$1" >>"$headless_probe_receipt"
+  printf 'Executed 232 tests\n** TEST SUCCEEDED **\n'
+}
+
+# Headless must refuse each UI leg before running its command.
+: >"$headless_probe_receipt"
+GATE_MODE="headless"
+for ui_leg in "${headless_ui_legs[@]}"; do
+  expect_failure "headless UI leg '$ui_leg'" \
+    assert_counting_leg "$ui_leg" ui_probe_command "$ui_leg"
+done
+GATE_MODE="$saved_gate_mode"
+[[ ! -s "$headless_probe_receipt" ]] ||
+  fail "headless mode invoked a screen-seizing UI command: $(tr '\n' ' ' <"$headless_probe_receipt")"
+
+# All enabled headless legs must still be accounted, and a missing non-UI leg
+# must still fail rather than hide under the reduced floor.
+# shellcheck disable=SC2034
+COUNTING_LEG_RUN_COUNT=0
+GATE_MODE="headless"
+for ((index = 0; index < leg_count; index++)); do
+  headless_skipped_leg "${COUNTING_LEG_NAMES[index]}" && continue
+  assert_counting_leg \
+    "${COUNTING_LEG_NAMES[index]}" \
+    emit_report "${COUNTING_LEG_REPORTERS[index]}" "${COUNTING_LEG_MINIMUMS[index]}" ||
+    fail "headless-enabled leg '${COUNTING_LEG_NAMES[index]}' did not complete"
+done
+assert_counting_legs_complete ||
+  fail "headless mode did not account for every enabled non-UI leg"
+# shellcheck disable=SC2034
+COUNTING_LEG_RUN_COUNT=0
+for ((index = 0; index < leg_count; index++)); do
+  headless_skipped_leg "${COUNTING_LEG_NAMES[index]}" && continue
+  [[ "${COUNTING_LEG_NAMES[index]}" == "GradusMac" ]] && continue
+  assert_counting_leg \
+    "${COUNTING_LEG_NAMES[index]}" \
+    emit_report "${COUNTING_LEG_REPORTERS[index]}" "${COUNTING_LEG_MINIMUMS[index]}" || true
+done
+expect_failure "missing non-UI leg in headless mode" assert_counting_legs_complete
+GATE_MODE="$saved_gate_mode"
+
+# Milestone mode keeps every UI journey wired through the same counted seam.
+GATE_MODE="milestone"
+for ui_leg in "${headless_ui_legs[@]}"; do
+  : >"$headless_probe_receipt"
+  assert_counting_leg "$ui_leg" ui_probe_command "$ui_leg" ||
+    fail "milestone mode did not run UI leg '$ui_leg'"
+  grep -Fqx "$ui_leg" "$headless_probe_receipt" ||
+    fail "milestone mode did not invoke the UI command for '$ui_leg'"
+done
+# shellcheck disable=SC2034
+COUNTING_LEG_RUN_COUNT=0
+GATE_MODE="$saved_gate_mode"
+
+# The mode option itself fails closed: unknown options are rejected before any
+# gate work and --help documents the one explicit mode.
+unknown_option_status=0
+unknown_option_output="$(bash "$GATE_SCRIPT" --not-a-mode 2>&1)" && unknown_option_status=0 || unknown_option_status=$?
+[[ "$unknown_option_status" -eq 2 &&
+   "$unknown_option_output" == *"unknown test-gate option"* ]] ||
+  fail "unknown test-gate option did not fail closed with status 2"
+bash "$GATE_SCRIPT" --help >/dev/null 2>&1 ||
+  fail "test-gate --help did not succeed"
+help_output="$(bash "$GATE_SCRIPT" --help 2>&1)" || true
+[[ "$help_output" == *"--headless"* ]] ||
+  fail "test-gate --help does not document the headless mode"
 
 # Regression lock: `record()`'s per-pattern comparison must be numeric, not
 # lexicographic (fixed 2026-08-13 -- see HISTORY.md). A smaller-magnitude

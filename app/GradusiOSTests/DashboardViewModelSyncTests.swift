@@ -1,3 +1,5 @@
+import AppDiagnostics
+import Darwin
 import Foundation
 @testable import GradusiOS
 import GradusKit
@@ -225,29 +227,24 @@ private actor DelayedCloudFetcher: CloudFetcher {
 }
 
 @MainActor
-@Test func zoneNotFoundResetsToWaitingForFirstPublish() async {
-    let cache = syncTempCache()
-    try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
-    try? cache.saveChangeToken(Data([1]))
-    let fetcher = MockZoneChangesFetcher(outcomes: [.zoneNotFound])
-    let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
-    await viewModel.handleRemoteNotification()
-
-    #expect(viewModel.providers.isEmpty)
-    #expect(viewModel.lastSyncedAt == nil)
-    #expect(cache.loadChangeToken() == nil)
-    #expect(cache.loadCachedStatuses().isEmpty)
-}
-
-@MainActor
-@Test func zoneDeletedResetsToWaitingForFirstPublish() async {
-    let cache = syncTempCache()
-    try? cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
-    let fetcher = MockZoneChangesFetcher(outcomes: [.zoneDeleted])
-    let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
-    await viewModel.handleRemoteNotification()
-
-    #expect(viewModel.providers.isEmpty)
+@Test func absentZoneResetsToWaitingWithInformationalDiagnostics() async throws {
+    for outcome: ZoneChangesOutcome in [.zoneNotFound, .zoneDeleted] {
+        let (root, adapter) = try syncDiagnosticsFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = syncTempCache()
+        try cache.saveCachedStatuses([makeStatus("codex")], syncedAt: Date())
+        try cache.saveChangeToken(Data([1]))
+        let fetcher = MockZoneChangesFetcher(outcomes: [outcome])
+        let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
+        await viewModel.handleRemoteNotification(diagnostics: adapter)
+        #expect(viewModel.providers.isEmpty && viewModel.lastSyncedAt == nil)
+        #expect(cache.loadChangeToken() == nil && cache.loadCachedStatuses().isEmpty)
+        #expect(await adapter.flush() == .persisted)
+        let events = try syncDiagnosticEvents(root)
+        #expect(events.allSatisfy { $0["severity"] as? String == "INFO" })
+        #expect(events.contains { ($0["attributes"] as? [String: Any])?["outcome"] as? String == "unknown" })
+        _ = await adapter.shutdown()
+    }
 }
 
 @MainActor
@@ -261,4 +258,129 @@ private actor DelayedCloudFetcher: CloudFetcher {
 
     #expect(viewModel.providers.map(\.providerName) == ["codex"])
     #expect(cache.loadChangeToken() == Data([7]))
+}
+
+@MainActor
+@Test func diagnosticsTokenRetryKeepsOperationAndCountsTwoFetchesOnly() async throws {
+    let (root, adapter) = try syncDiagnosticsFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let cache = syncTempCache()
+    let fetcher = MockZoneChangesFetcher(outcomes: [
+        .changeTokenExpired,
+        .success(changed: [], deletedProviderNames: [], newToken: nil)
+    ])
+    let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
+    await viewModel.handleRemoteNotification(diagnostics: adapter)
+    #expect(fetcher.tokensRequested == [nil, nil])
+    #expect(await adapter.flush() == .persisted)
+    let files = try FileManager.default.contentsOfDirectory(
+        at: root.appendingPathComponent("spool"),
+        includingPropertiesForKeys: nil
+    )
+    let events = try files.filter { $0.pathExtension == "ndjson" }
+        .flatMap {
+            try Data(contentsOf: $0).split(separator: 10)
+                .map { try JSONSerialization.jsonObject(with: Data($0)) as? [String: Any] ?? [:] }
+        }
+    #expect(events.count == 3)
+    #expect(Set(events.compactMap { $0["operation_id"] as? String }).count == 1)
+    let attempts = events.compactMap { ($0["attributes"] as? [String: Any])?["attempt"] as? Int }
+    #expect(attempts.sorted() == [1, 2, 2])
+    _ = await adapter.shutdown()
+}
+
+private func syncDiagnosticsFixture() throws -> (URL, GradusDiagnostics) {
+    guard let resolved = realpath(NSTemporaryDirectory(), nil) else { throw DiagnosticsError.io }
+    defer { free(resolved) }
+    let root = URL(fileURLWithPath: String(cString: resolved)).appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(
+        at: root,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let identity = try AppIdentity(
+        project: "gradus",
+        bundleID: "org.example.FetchTest",
+        platform: .ios,
+        appVersion: "1.0",
+        build: "1"
+    )
+    return try (
+        root,
+        GradusDiagnostics(configuration: DiagnosticsConfiguration(
+            identity: identity,
+            directory: root.appendingPathComponent("spool")
+        ))
+    )
+}
+
+private func syncDiagnosticEvents(_ root: URL) throws -> [[String: Any]] {
+    try FileManager.default.contentsOfDirectory(
+        at: root.appendingPathComponent("spool"),
+        includingPropertiesForKeys: nil
+    )
+    .filter { $0.pathExtension == "ndjson" }
+    .flatMap {
+        try Data(contentsOf: $0).split(separator: 10)
+            .map { try JSONSerialization.jsonObject(with: Data($0)) as? [String: Any] ?? [:] }
+    }
+}
+
+@MainActor
+@Test func syncDiagnosticsAttemptPrecedesSuspendedFetchAndStaleEpochTerminatesCancelled() async throws {
+    let (root, adapter) = try syncDiagnosticsFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let cache = syncTempCache()
+    try? cache.saveCachedStatuses([makeStatus("cached")], syncedAt: Date())
+    let oldToken = Data([7])
+    try? cache.saveChangeToken(oldToken)
+    let fetcher = DelayedZoneChangesFetcher()
+    let gate = LiveLifecycleGate()
+    let defaults = syncIsolatedDefaults()
+    defaults.set(true, forKey: DashboardViewModel.syncEnabledKey)
+    let viewModel = DashboardViewModel(
+        cache: cache,
+        zoneChangesFetcher: fetcher,
+        liveLifecycleGate: gate,
+        userDefaults: defaults
+    )
+    viewModel.updateAccountStatus(.available)
+    let task = Task { await viewModel.handleRemoteNotification(diagnostics: adapter) }
+    await fetcher.waitUntilRequestStarts()
+    #expect(await adapter.flush() == .persisted)
+    let before = try syncDiagnosticEvents(root)
+    #expect(before.count == 1)
+    #expect((before.first?["attributes"] as? [String: Any])?["outcome"] == nil)
+    let suspension = Task { await gate.suspend() }
+    while !gate.isSuspended {
+        await Task.yield()
+    }
+    await fetcher.release(.success(changed: [makeStatus("late")], deletedProviderNames: [], newToken: Data([8])))
+    await task.value
+    await suspension.value
+    #expect(viewModel.providers.map(\.providerName) == ["cached"])
+    #expect(cache.loadChangeToken() == oldToken)
+    #expect(await adapter.flush() == .persisted)
+    let events = try syncDiagnosticEvents(root)
+    #expect(events.count == 2)
+    #expect(events.contains { ($0["attributes"] as? [String: Any])?["outcome"] as? String == "cancelled" })
+    _ = await adapter.shutdown()
+}
+
+@MainActor
+@Test func syncDiagnosticsSecondExpiredTokenHasOneFailureTerminal() async throws {
+    let (root, adapter) = try syncDiagnosticsFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let cache = syncTempCache()
+    let fetcher = MockZoneChangesFetcher(outcomes: [.changeTokenExpired, .changeTokenExpired])
+    let viewModel = makeViewModel(cache: cache, fetcher: fetcher)
+    await viewModel.handleRemoteNotification(diagnostics: adapter)
+    #expect(fetcher.tokensRequested == [nil, nil])
+    #expect(await adapter.flush() == .persisted)
+    let events = try syncDiagnosticEvents(root)
+    #expect(events.count == 3)
+    #expect(Set(events.compactMap { $0["operation_id"] as? String }).count == 1)
+    #expect(events.filter { ($0["attributes"] as? [String: Any])?["outcome"] != nil }.count == 1)
+    #expect(events.contains { ($0["attributes"] as? [String: Any])?["outcome"] as? String == "failure" })
+    _ = await adapter.shutdown()
 }

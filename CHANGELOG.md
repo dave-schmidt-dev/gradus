@@ -20,8 +20,11 @@ history from the overnight release train. New releases use
 - Cursor's "Credit" line now shows only the remaining on-demand (additional)
   API spend limit. It no longer shows the plan's included usage left, and it
   is hidden when no on-demand limit is set.
+- Record diagnostics attempts before fetch suspension, terminate each logical operation once and retain publish acknowledgement independently of artifact failure.
 
 ### Added
+
+- Pilot private keyless Mac/iOS diagnostics with stable operation IDs, actual retry counts and isolated synthetic tests.
 
 - Mistral now tracks two allowances: the included API allowance (read from the
   Mistral admin console with the same Safari sign-in) and the included Vibe Code
@@ -50,6 +53,9 @@ history from the overnight release train. New releases use
 - `gradus --json` no longer reports a stale snapshot or an ended usage cycle as ok.
 
 ### Changed
+
+- Refine local diagnostics pilot availability warnings and cancellation privacy; classify expected missing-zone waiting as informational.
+- Routine pre-push validation now uses the headless gate, retaining non-UI and image-snapshot checks while reserving host HID and XCUITest journeys for the full milestone gate.
 
 - iPhone and iPad Settings now keep Warning alerts and the Warning Threshold
   slider together at the top, followed by Reset alerts, Local Display and Widget;

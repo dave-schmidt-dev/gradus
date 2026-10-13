@@ -10,18 +10,25 @@ extension DashboardViewModel {
     /// changed in `GradusZone` since the persisted token and reconciles it
     /// into `providers`, rather than re-fetching everything (`sync()`'s
     /// full-fetch path, used on launch/pull-to-refresh).
-    public func handleRemoteNotification() async {
+    public func handleRemoteNotification(diagnostics: GradusDiagnostics = .shared) async {
         guard syncEnabled, accountStatus == .available, let zoneChangesFetcher else { return }
+        let operation = await diagnostics.operation(.fetch)
+        guard syncEnabled, accountStatus == .available else { return }
         let token = cache.loadChangeToken()
         if let liveLifecycleGate {
             await liveLifecycleGate.withOperation { operationEpoch in
                 await self.performIncrementalSync(
                     using: zoneChangesFetcher, token: token, allowRetryOnExpiredToken: true,
-                    lifecycleEpoch: operationEpoch
+                    lifecycleEpoch: operationEpoch, operation: operation
                 )
             }
         } else {
-            await performIncrementalSync(using: zoneChangesFetcher, token: token, allowRetryOnExpiredToken: true)
+            await performIncrementalSync(
+                using: zoneChangesFetcher,
+                token: token,
+                allowRetryOnExpiredToken: true,
+                operation: operation
+            )
         }
     }
 
@@ -29,16 +36,20 @@ extension DashboardViewModel {
         using fetcher: ZoneChangesFetcher,
         token: Data?,
         allowRetryOnExpiredToken: Bool,
-        lifecycleEpoch: LiveLifecycleGate.Epoch? = nil
+        lifecycleEpoch: LiveLifecycleGate.Epoch? = nil,
+        operation: GradusDiagnosticsOperation
     ) async {
         if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) {
+            operation.finish(.cancelled)
             return
         }
+        operation.attempt()
         let result = await fetcher.fetchZoneChanges(sinceToken: token)
         // `LiveLifecycleGate` is re-entrant around the CloudKit await. Sample
         // entry invalidates the epoch while that request is suspended, so a
         // late result must not reconcile providers or persist cache state.
         if let lifecycleEpoch, let liveLifecycleGate, !liveLifecycleGate.isCurrent(lifecycleEpoch) {
+            operation.finish(.cancelled)
             return
         }
         switch result {
@@ -48,6 +59,7 @@ extension DashboardViewModel {
             evaluateResetStatuses(allProviders)
             try? cache.saveChangeToken(newToken)
             commitCachedProvidersAndWidget(at: Date())
+            operation.finish(.success, count: changed.count)
         case let .successWithPresence(changed, deletedProviderNames, _, _, newToken):
             lastSyncFailed = false
             // Presence is consumed by the Mac directory. Keeping it as a
@@ -57,16 +69,17 @@ extension DashboardViewModel {
             evaluateResetStatuses(allProviders)
             try? cache.saveChangeToken(newToken)
             commitCachedProvidersAndWidget(at: Date())
+            operation.finish(.success, count: changed.count)
         case .changeTokenExpired:
             // PM-3: drop the stale token and do one full refetch from
             // scratch (nil token). Bounded to one retry -- a fetcher that
             // reports `.changeTokenExpired` again for a nil token is broken,
             // not something worth looping on.
             try? cache.saveChangeToken(nil)
-            guard allowRetryOnExpiredToken else { return }
+            guard allowRetryOnExpiredToken else { operation.finish(.failure); return }
             await performIncrementalSync(
                 using: fetcher, token: nil, allowRetryOnExpiredToken: false,
-                lifecycleEpoch: lifecycleEpoch
+                lifecycleEpoch: lifecycleEpoch, operation: operation
             )
         case .zoneNotFound, .zoneDeleted:
             // PM-3: GradusZone is Mac-owned and recreated idempotently on
@@ -83,12 +96,14 @@ extension DashboardViewModel {
             lastSyncedAt = nil
             try? cache.saveChangeToken(nil)
             clearCacheAndWidget()
+            operation.finish(.unknown)
         case .failure:
             // Leave the cached dashboard as-is; the next subscription-triggered
             // sync retries. Both read paths report failure the same way, so the
             // header cannot claim a delta sync succeeded when it did not.
             Self.syncLogger.error("incremental sync failed for GradusZone")
             lastSyncFailed = true
+            operation.finish(.failure)
         }
     }
 
@@ -131,29 +146,36 @@ extension DashboardViewModel {
     /// off or the account isn't ready -- CV-6's "distinct state, not silent
     /// failure" applies to the empty-state copy, not to spamming a fetch
     /// that would just fail.
-    public func sync() async -> Bool {
+    public func sync(diagnostics: GradusDiagnostics = .shared) async -> Bool {
         guard syncEnabled, accountStatus == .available, let fetcher else { return false }
+        let operation = await diagnostics.operation(.fetch)
+        guard syncEnabled, accountStatus == .available else { return false }
         if let liveLifecycleGate {
-            return await liveLifecycleGate.withOperation { _ in await self.performSync(using: fetcher) } ?? false
+            return await liveLifecycleGate.withOperation { _ in await self.performSync(
+                using: fetcher,
+                operation: operation
+            ) } ?? false
         } else {
-            return await performSync(using: fetcher)
+            return await performSync(using: fetcher, operation: operation)
         }
     }
 
     private static let syncLogger = Logger(subsystem: "com.zerodelta.gradus", category: "sync")
 
-    private func performSync(using fetcher: CloudFetcher) async -> Bool {
+    private func performSync(using fetcher: CloudFetcher, operation: GradusDiagnosticsOperation) async -> Bool {
         isSyncing = true
         defer { isSyncing = false }
         let fetched: [ProviderStatus]
         do {
+            operation.attempt()
             fetched = try await fetcher.fetchAll()
         } catch {
             // Leave the cached dashboard as-is (CV-6) but say so. Discarding
             // this error with `try?` is how a full-zone read that never once
             // succeeded could look identical to a quiet zone -- the exact
             // failure mode that hid the Mac's presence bug until 2026-09-08.
-            Self.syncLogger.error("full sync failed: \(String(describing: error), privacy: .public)")
+            operation.finish(.failure, error: error)
+            Self.syncLogger.error("full sync failed")
             lastSyncFailed = true
             return false
         }
@@ -167,6 +189,7 @@ extension DashboardViewModel {
         evaluateResetStatuses(current)
         applyPresentationPreferences()
         commitCachedProvidersAndWidget(at: Date())
+        operation.finish(.success, count: fetched.count)
         return true
     }
 

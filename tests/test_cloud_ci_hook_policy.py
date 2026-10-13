@@ -27,14 +27,14 @@ def _hook_block(hook_id: str) -> str:
 
 
 def test_both_local_hook_stages_are_installed() -> None:
-    """Fast lint runs at commit; the full gate runs at push."""
+    """Fast lint runs at commit; the headless gate runs at push."""
     hook_config = HOOK_CONFIG.read_text()
 
     assert "default_install_hook_types: [pre-commit, pre-push]" in hook_config
 
 
-def test_push_runs_the_full_gate_hook() -> None:
-    """Pre-push is one unconditional serial leg invoking the full gate wrapper."""
+def test_push_runs_the_gate_hook() -> None:
+    """Pre-push is one unconditional serial leg invoking the gate wrapper."""
     hook_config = HOOK_CONFIG.read_text()
     gate_hook = _hook_block("pre-push-full-gate")
 
@@ -86,7 +86,7 @@ def test_full_gate_wrapper_has_no_outer_ui_lock() -> None:
         pytest.skip(f"{WRAPPER} is absent from this checkout")
     content = WRAPPER.read_text()
     assert "apple-ui-test-lock" not in content
-    assert "caffeinate -disu bash app/test-gate.sh" in content
+    assert content.count("caffeinate -disu bash app/test-gate.sh --headless") == 2
 
 
 @pytest.fixture
@@ -173,6 +173,7 @@ def isolated_gate_env(tmp_path: Path) -> dict[str, Any]:
         "set -eu\n"
         'echo "GATE_PROGRESS: started"\n'
         f'echo "GATE_CALLED: GRADUS_STATIC_BASE=${{GRADUS_STATIC_BASE:-<unset>}}" >> "{receipt}"\n'
+        f'printf "GATE_ARGS: %s\\n" "$*" >> "{receipt}"\n'
         'exit "${FAKE_GATE_EXIT:-0}"\n'
     )
     gate_script.chmod(0o755)
@@ -247,7 +248,8 @@ def test_wrapper_preserves_explicit_base(isolated_gate_env: dict[str, Any]) -> N
     assert receipt.exists(), "test-gate.sh was not called"
     receipt_text = receipt.read_text()
     assert f"GATE_CALLED: GRADUS_STATIC_BASE={base_commit}" in receipt_text
-    assert "CAFFEINATE_CALLED: -disu bash app/test-gate.sh" in receipt_text
+    assert "GATE_ARGS: --headless" in receipt_text
+    assert "CAFFEINATE_CALLED: -disu bash app/test-gate.sh --headless" in receipt_text
     assert "Using explicit GRADUS_STATIC_BASE" in res.stderr or base_commit in res.stderr
 
 
@@ -273,7 +275,8 @@ def test_wrapper_derives_base_from_upstream_merge_base(isolated_gate_env: dict[s
     assert receipt.exists(), "test-gate.sh was not called"
     receipt_text = receipt.read_text()
     assert f"GATE_CALLED: GRADUS_STATIC_BASE={base_commit}" in receipt_text
-    assert "CAFFEINATE_CALLED: -disu bash app/test-gate.sh" in receipt_text
+    assert "GATE_ARGS: --headless" in receipt_text
+    assert "CAFFEINATE_CALLED: -disu bash app/test-gate.sh --headless" in receipt_text
     assert res.stderr, "expected progress on stderr"
 
 
@@ -387,7 +390,7 @@ def test_wrapper_sweeps_abandoned_simulators_before_running_gate(
     assert result.returncode == 0, f"wrapper failed:\n{result.stderr}"
     entries = receipt.read_text().splitlines()
     assert entries.index("SWEEP_CALLED") < entries.index(
-        "CAFFEINATE_CALLED: -disu bash app/test-gate.sh"
+        "CAFFEINATE_CALLED: -disu bash app/test-gate.sh --headless"
     )
     assert entries.index("SWEEP_CALLED") < next(
         index for index, entry in enumerate(entries) if entry.startswith("GATE_CALLED:")
@@ -432,14 +435,15 @@ def test_wrapper_preserves_gate_failure_while_mirroring_progress(
 
 
 def test_docs_name_candidate_bound_local_app_gate() -> None:
-    """Docs must describe the candidate-bound local app validation gate and pre-push full gate."""
+    """Docs must distinguish headless pre-push and milestone app validation."""
     docs = " ".join((README.read_text() + "\n" + TESTING.read_text()).lower().split())
 
     assert "candidate-bound local gate" in docs
     assert "authoritative local app-validation gate" in docs
     assert "app-specific candidate evidence is collected by the source-bound local" in docs
     assert "xcode cloud validation is retired" in docs
-    assert "authoritative full gate" in docs or "authoritative full gradus local gate" in docs
+    assert "authoritative headless gradus gate" in docs
+    assert "full milestone gate" in docs
     assert "gradus_static_base" in docs
     assert "merge-base" in docs
 

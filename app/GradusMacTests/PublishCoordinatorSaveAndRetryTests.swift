@@ -1,4 +1,6 @@
+import AppDiagnostics
 import CloudKit
+import Darwin
 import Foundation
 import GradusKit
 @testable import GradusMac
@@ -342,4 +344,47 @@ private actor HoldingCloudDatabase: CloudDatabase {
     #expect(calls.count == 3)
     let lastRecord = try #require(calls.last?.first)
     #expect(lastRecord["snapshotUpdatedAt"] as? String == newerSnapshotAt)
+}
+
+@Test func diagnosticsPublishNoopDoesNotInventAnotherSaveAttempt() async throws {
+    guard let resolved = realpath(NSTemporaryDirectory(), nil) else { throw DiagnosticsError.io }
+    defer { free(resolved) }
+    let root = URL(fileURLWithPath: String(cString: resolved)).appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(
+        at: root,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+    )
+    defer { try? FileManager.default.removeItem(at: root) }
+    let identity = try AppIdentity(
+        project: "gradus",
+        bundleID: "org.example.PublishTest",
+        platform: .macos,
+        appVersion: "1.0",
+        build: "1"
+    )
+    let adapter = try GradusDiagnostics(configuration: DiagnosticsConfiguration(
+        identity: identity,
+        directory: root.appendingPathComponent("spool")
+    ))
+    let database = MockCloudDatabase()
+    let coordinator = PublishCoordinator(database: database, zoneID: zoneID, diagnostics: adapter)
+    try await coordinator.upsert([status(name: "Codex")])
+    try await coordinator.upsert([status(name: "Codex")])
+    #expect(await database.modifyCallCount == 1)
+    #expect(await coordinator.zoneInvocationCount == 2)
+    #expect(await adapter.flush() == .persisted)
+    let files = try FileManager.default.contentsOfDirectory(
+        at: root.appendingPathComponent("spool"),
+        includingPropertiesForKeys: nil
+    )
+    let events = try files.filter { $0.pathExtension == "ndjson" }
+        .flatMap {
+            try Data(contentsOf: $0).split(separator: 10)
+                .map { try JSONSerialization.jsonObject(with: Data($0)) as? [String: Any] ?? [:] }
+        }
+    let publishEvents = events.filter { $0["kind"] as? String == "network" }
+    #expect(publishEvents.count == 2)
+    #expect(Set(publishEvents.compactMap { $0["operation_id"] as? String }).count == 1)
+    _ = await adapter.shutdown()
 }

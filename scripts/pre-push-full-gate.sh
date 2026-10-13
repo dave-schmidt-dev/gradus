@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# Retained under this filename because the installed pre-push hook points here.
+# Authoritative pre-push gate. Every push selects the routine --headless gate:
+# it keeps all static, hermetic, SwiftPM, macOS/iOS unit, widget, and image
+# snapshot legs while never running host HID, screen capture, or XCUITest. The
+# full milestone journeys stay available through `bash app/test-gate.sh` with
+# no mode option.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,7 +46,7 @@ if [[ -z "$progress_device" && ! -t 1 && ! -t 2 ]] && { : > /dev/tty; } 2>/dev/n
 fi
 
 if [[ -n "$progress_device" ]]; then
-  caffeinate -disu bash app/test-gate.sh 2>&1 | tee "$progress_device" || {
+  caffeinate -disu bash app/test-gate.sh --headless 2>&1 | tee "$progress_device" || {
     statuses=("${PIPESTATUS[@]}")
     if [[ "${statuses[0]}" -ne 0 ]]; then
       exit "${statuses[0]}"
@@ -50,4 +56,4 @@ if [[ -n "$progress_device" ]]; then
   exit 0
 fi
 
-exec caffeinate -disu bash app/test-gate.sh
+exec caffeinate -disu bash app/test-gate.sh --headless

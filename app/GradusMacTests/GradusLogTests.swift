@@ -1,4 +1,8 @@
+import AppDiagnostics
+import CloudKit
+import Darwin
 import Foundation
+import GradusKit
 @testable import GradusMac
 import Testing
 
@@ -221,5 +225,103 @@ struct GradusLogTests {
 
         defaults.set(true, forKey: key)
         #expect(GradusLogFile.minimumLevel == .debug)
+    }
+}
+
+@Test func directMenuFixtureKeepsLegacyLogOutOfNormalDirectory() {
+    let directory = GradusLogFile.defaultDirectory(environment: ["GRADUS_UI_TEST_MENU_FIXTURE": "1"], isTestRun: false)
+    #expect(directory.path.contains("gradus-mac-test-logs"))
+}
+
+func publisherDiagnosticsFixture() throws -> (URL, GradusDiagnostics) {
+    guard let resolved = realpath(NSTemporaryDirectory(), nil) else { throw DiagnosticsError.io }
+    defer { free(resolved) }
+    let root = URL(fileURLWithPath: String(cString: resolved)).appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(
+        at: root,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+    )
+    let identity = try AppIdentity(
+        project: "gradus",
+        bundleID: "org.example.PublishTest",
+        platform: .macos,
+        appVersion: "1.0",
+        build: "1"
+    )
+    return try (
+        root,
+        GradusDiagnostics(configuration: DiagnosticsConfiguration(
+            identity: identity,
+            directory: root.appendingPathComponent("spool")
+        ))
+    )
+}
+
+func publisherDiagnosticEvents(_ root: URL) throws -> [[String: Any]] {
+    try FileManager.default.contentsOfDirectory(
+        at: root.appendingPathComponent("spool"),
+        includingPropertiesForKeys: nil
+    )
+    .filter { $0.pathExtension == "ndjson" }
+    .flatMap {
+        try Data(contentsOf: $0).split(separator: 10)
+            .map { try JSONSerialization.jsonObject(with: Data($0)) as? [String: Any] ?? [:] }
+    }
+}
+
+@Test func publishDiagnosticsCountsConflictFetchAndBackoffWithoutNewOperation() async throws {
+    for conflict in [false, true] {
+        let (root, adapter) = try publisherDiagnosticsFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = MockCloudDatabase()
+        let error = conflict ? CKError(.serverRecordChanged) : CKError(
+            .zoneBusy,
+            userInfo: [CKErrorRetryAfterKey: 0.01]
+        )
+        await database.setScriptedResponses([
+            [recordID("A"): .failure(error)],
+            [recordID("A"): .success(CKRecord(recordType: CloudKitConstants.recordType, recordID: recordID("A")))]
+        ])
+        await database.setFetchRecordHandler { _ in CKRecord(
+            recordType: CloudKitConstants.recordType,
+            recordID: recordID("A")
+        ) }
+        let coordinator = PublishCoordinator(database: database, zoneID: zoneID, diagnostics: adapter)
+        try await coordinator.upsert([status(name: "A")])
+        #expect(await adapter.flush() == .persisted)
+        let events = try publisherDiagnosticEvents(root).filter { $0["kind"] as? String == "network" }
+        #expect(Set(events.compactMap { $0["operation_id"] as? String }).count == 1)
+        let attempts = events.compactMap { ($0["attributes"] as? [String: Any])?["attempt"] as? Int }
+        #expect(attempts.sorted() == (conflict ? [1, 2, 3, 3] : [1, 2, 2]))
+        #expect(events.filter { ($0["attributes"] as? [String: Any])?["outcome"] as? String == "success" }.count == 1)
+        _ = await adapter.shutdown()
+    }
+}
+
+@Test func publishDiagnosticsSuccessSurvivesArtifactErrorAndPartialFailureKeepsCode() async throws {
+    for artifactFailure in [false, true] {
+        let (root, adapter) = try publisherDiagnosticsFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = MockCloudDatabase()
+        if !artifactFailure {
+            await database.setScriptedResponses([[recordID("A"): .failure(CKError(.networkUnavailable))]])
+        }
+        let coordinator = PublishCoordinator(database: database, zoneID: zoneID,
+                                             evidencePath: artifactFailure ? root
+                                                 .appendingPathComponent("evidence.json") : nil, diagnostics: adapter)
+        do { try await coordinator.upsert([status(name: "A")]); Issue.record("Expected failure") } catch {}
+        #expect(await adapter.flush() == .persisted)
+        let events = try publisherDiagnosticEvents(root)
+        let terminal = events.filter { $0["kind"] as? String == "network" }
+            .compactMap { $0["attributes"] as? [String: Any] }.first { $0["outcome"] != nil }
+        #expect(terminal?["outcome"] as? String == (artifactFailure ? "success" : "failure"))
+        if artifactFailure {
+            #expect(events.contains { ($0["attributes"] as? [String: Any])?["code"] as? String == "storage-failure" })
+        } else {
+            #expect(terminal?["error_domain"] as? String == "CKErrorDomain")
+            #expect(terminal?["error_code"] as? Int == CKError.Code.networkUnavailable.rawValue)
+        }
+        _ = await adapter.shutdown()
     }
 }

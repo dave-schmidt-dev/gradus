@@ -613,7 +613,7 @@ checkout revision and clean status against its candidate record before any
 upload work, and source drift fails closed.
 
 The central fleet audit reports Gradus as adopted. Pre-commit hooks stay fast and
-lightweight, while pre-push runs the authoritative full Gradus local gate;
+lightweight, while pre-push runs the authoritative headless Gradus gate;
 the candidate-bound local gate is the authoritative app-validation path.
 Optional hosted results remain separate from candidate-bound canary evidence.
 
@@ -903,8 +903,8 @@ The same rule is why product/workflow questions here are settled by
 ### Git hooks (enforcement)
 
 Pre-commit hooks provide fast feedback (lint, format, and dead-code checks), while
-pre-push runs the authoritative full Gradus local gate and the candidate-bound
-local gate provides authoritative app validation before release preparation.
+pre-push runs the authoritative headless Gradus gate and the candidate-bound
+local gate provides app validation before release preparation.
 Python hooks run through [`pre-commit`](https://pre-commit.com) using the project's `uv run`
 tools; SwiftLint, SwiftFormat, and ShellCheck are PATH tools with exact versions
 enforced by `scripts/check-static-tool-versions.sh`.
@@ -926,20 +926,26 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
   rewrites files.
   The hook receives only changed Swift paths, so the current legacy formatting
   debt is not a full-tree waiver and existing sources are not mass-reformatted.
-- **pre-push**: runs the authoritative full Gradus local gate via
-  `scripts/pre-push-full-gate.sh`. The hook is unconditional (`always_run: true`,
-  `pass_filenames: false`, `require_serial: true`), so every push runs the full gate.
-  It can take over simulator and UI resources (running under `caffeinate -disu`
+- **pre-push**: runs the routine headless Gradus gate via
+  `scripts/pre-push-full-gate.sh`. It keeps static, hermetic, SwiftPM,
+  macOS/iOS unit, widget, and phone/pad density image-snapshot checks, while
+  omitting only GradusMacUI, GradusiOS-iPad, and GradusiOSUI. The hook is
+  unconditional (`always_run: true`, `pass_filenames: false`,
+  `require_serial: true`), so every push runs it. The full milestone gate
+  remains available with `bash app/test-gate.sh` and no mode option.
+  The routine gate can take over simulator resources (running under `caffeinate -disu`
   without an outer UI lock), derives its static comparison base from the upstream
   merge base (`git merge-base HEAD "$upstream"`), and supports an explicit
   `GRADUS_STATIC_BASE` override. Because pre-commit buffers hook output, the wrapper
   also mirrors gate output to the controlling terminal when one is available.
   `GRADUS_PROGRESS_DEVICE` is an explicit diagnostic/test override for that mirror.
   Physical-device acceptance and signed-Keychain acceptance remain explicitly separate.
-- **release gate**: `app/test-gate.sh` runs the local macOS and simulator app
-  automation against candidate-bound source. Physical-device acceptance remains
-  a separate owner gate. Supply the commit preceding your changes, for example
+- **milestone gate**: `app/test-gate.sh` runs the full local macOS and
+  simulator test set, including all three UI journeys, against candidate-bound
+  source. Physical-device acceptance remains a separate owner gate. Supply the
+  commit preceding your changes, for example
   `GRADUS_STATIC_BASE=<base-commit> caffeinate -disu bash app/test-gate.sh`.
+  Add `--headless` to run the same gate without host HID or XCUITest.
   Routine Xcode test legs disable automatic diagnostic collection; failed-leg
   command output remains available for targeted follow-up. Direct Xcode test
   invocations can opt into Mac UI screenshot attachments by setting
@@ -976,3 +982,62 @@ Project docs:
   current-debt baseline for the strict pre-commit gate
 - **tests/test_shellcheck_gate.py** — ShellCheck hook contract and clean-script
   self-checks
+
+
+### Local diagnostics pilot
+
+GradusKit now references the local AppDiagnostics product at
+`../../../apple_developer/diagnostics_contracts/swift` relative to its package.
+This is a sibling-checkout pilot dependency, not a portable published release pin.
+GradusKit requires iOS17, matching all current iOS app/widget/test consumers.
+The lazy actor adapter derives production identity/version/build from Bundle.main,
+creates private finite app-support storage off the main actor, and captures keylessly.
+Missing/invalid identity reports a content-free unavailable state; no install,
+candidate, crash or signing evidence is invented. Extensions have no logging hooks.
+Existing Mac unified/rotating warning logs remain; debug opt-in remains explicit.
+
+Publish attempts count actual modify/save and conflict-fetch calls under one operation
+UUID across retries. Zone creation is a separate storage operation, so content-hash
+noops add no publish attempt. Full/delta fetches retain their UUID across token retry;
+waits, token resets and offline guards add no attempt. Typed records contain bounded
+counts/outcomes and allowlisted coded error domains, never raw error text or payloads.
+Adapter status/flush expose admission loss, capacity refusal, uncertainty and unbound
+trust separately from persistence. Full sync per event limits throughput; a withheld
+receipt eventually fills the finite spool. Production receipt trust/transport remains
+unconfigured and owner-gated.
+
+Hosted tests/direct menu fixtures suppress the default typed sink; tests inject private
+canonical temporary SDK configurations. Direct menu fixtures also redirect the legacy
+file log. Synthetic tests do not constitute OS consent or device qualification. See
+[canonical Apple development permissions](../apple_developer/documents/apple-development-permissions.md)
+for host identity/permission boundaries. The relative guide reference was resolved on
+this host; portable checkout availability remains a dependency.
+
+Pilot checks and build evidence are under the sibling apple_developer
+`.logs/observability/collector-phase/swift-producer/gradus-pilot-*` records. Headless
+package tests/unsigned app compilation do not prove app launch, signed installation,
+live CloudKit, crash/dSYM collection, central/Hermes receipt acceptance or full fleet adoption.
+
+
+The corrected pilot prepares its SDK logger on the adapter actor before live lifecycle
+work. Operation handles admit attempts synchronously before transport; short locks own
+only counters/terminal state, with encoding and SDK admission outside those locks.
+No filesystem work or actor suspension is added between a returned fetch and epoch/cache
+reconciliation. Each operation emits at most one terminal: stale epochs cancel and
+exhausted token retries fail. Success means acknowledged CloudKit saves or completed
+fetch/reconciliation, not confirmed cache/token disk durability. First successful zone
+save per coordinator and all failures persist; redundant zone success is suppressed while
+actual-call counters continue. Optional artifact errors are separate storage events after
+publish acknowledgement. Known partial errors retain coded classification. Hosted tests,
+SwiftPM helper and direct fixtures suppress the normal sink; injected tests stay isolated.
+
+Final pilot guards emit one fixed content-free unified-log warning per adapter for
+unavailable production identity/storage or refused/invalid admission; deliberately
+isolated tests stay silent. SDK persistence failures retain their own reporting.
+Cancelled terminals omit error attributes. Expected missing/deleted Mac-owned zones
+remain informational waiting outcomes, preserving cache reset and future notification
+behavior. Attempt counts mean invoked transport calls, not retries scheduled or successful
+persistence. No app lifecycle shutdown hook was added: abrupt termination can lose the
+bounded admitted tail not yet confirmed by SDK flush. The sibling source dependency must
+be pinned or packaged before portable release; signing, receipt trust and live qualification
+remain owner gates.

@@ -179,7 +179,7 @@ final class GradusLogFile: @unchecked Sendable {
         if let override = environment[directoryOverrideKey], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        if isTestRun {
+        if isTestRun || environment["GRADUS_UI_TEST_MENU_FIXTURE"] == "1" {
             return URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("gradus-mac-test-logs", isDirectory: true)
         }

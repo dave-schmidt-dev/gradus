@@ -3,6 +3,13 @@
 # runs `xcodebuild test` for all pinned destinations. Exits non-zero on any
 # failure (preflight mismatch, build failure, or test failure) so it's safe
 # to wire into CI/pre-push as a hard gate.
+#
+# Two modes share this one gate. The default is the full milestone gate, which
+# keeps every host HID and XCUITest UI journey. `--headless` is the routine
+# pre-push mode: it retains all static, hermetic, SwiftPM, macOS/iOS unit,
+# widget, and image-snapshot legs while omitting exactly the three
+# screen-seizing legs in HEADLESS_SKIPPED_LEG_NAMES. Unknown options fail
+# closed.
 
 # Resolve the repository before the executable path can change the working
 # directory.  Functions may run after the main body has cd'd into app/, so a
@@ -145,6 +152,34 @@ DENSITY_PAD_SNAPSHOT_TEST_SELECTORS=(
 )
 COUNTING_LEG_RUN_COUNT=0
 
+# Routine pushes select --headless; the full milestone gate keeps every leg.
+# Headless omits exactly the screen-seizing legs below -- host HID automation
+# (GradusMacUI) and the two simulator XCUITest legs -- and its expected-leg
+# accounting subtracts them instead of pretending they ran. The phone and pad
+# density image snapshots are XCTest unit legs and stay enabled.
+GATE_MODE="milestone"
+HEADLESS_SKIPPED_LEG_NAMES=("GradusMacUI" "GradusiOS-iPad" "GradusiOSUI")
+
+gate_mode_runs_ui_legs() {
+  [[ "$GATE_MODE" != "headless" ]]
+}
+
+headless_skipped_leg() {
+  local leg_name="$1" skipped_leg
+  for skipped_leg in "${HEADLESS_SKIPPED_LEG_NAMES[@]}"; do
+    [[ "$leg_name" == "$skipped_leg" ]] && return 0
+  done
+  return 1
+}
+
+expected_counting_leg_count() {
+  if gate_mode_runs_ui_legs; then
+    printf '%s\n' "$EXPECTED_COUNTING_LEG_COUNT"
+  else
+    printf '%s\n' "$((EXPECTED_COUNTING_LEG_COUNT - ${#HEADLESS_SKIPPED_LEG_NAMES[@]}))"
+  fi
+}
+
 is_canonical_swift_path() {
   local path="$1"
   [[ "$path" == app/*.swift || "$path" == app/**/*.swift ]] || return 1
@@ -226,6 +261,28 @@ validate_counting_leg_declarations() {
   for ((index = 0; index < leg_count; index++)); do
     if ! [[ "${COUNTING_LEG_MINIMUMS[index]}" =~ ^[1-9][0-9]*$ ]]; then
       echo "FAIL: counting leg '${COUNTING_LEG_NAMES[index]}' has invalid minimum '${COUNTING_LEG_MINIMUMS[index]}'" >&2
+      return 1
+    fi
+  done
+
+  if [[ "$GATE_MODE" != "milestone" && "$GATE_MODE" != "headless" ]]; then
+    echo "FAIL: unknown gate mode '$GATE_MODE' (expected milestone or headless)" >&2
+    return 1
+  fi
+
+  # The headless subtraction is only trustworthy while every omitted leg is a
+  # real manifest entry: a typo here would silently lower the expected count.
+  local skipped_leg skipped_found
+  for skipped_leg in "${HEADLESS_SKIPPED_LEG_NAMES[@]}"; do
+    skipped_found=0
+    for ((index = 0; index < leg_count; index++)); do
+      if [[ "${COUNTING_LEG_NAMES[index]}" == "$skipped_leg" ]]; then
+        skipped_found=1
+        break
+      fi
+    done
+    if [[ "$skipped_found" -ne 1 ]]; then
+      echo "FAIL: headless-skipped leg '$skipped_leg' is not a declared counting leg" >&2
       return 1
     fi
   done
@@ -342,6 +399,14 @@ assert_counting_leg() {
     return 1
   fi
 
+  # The mode guard lives at the one seam every counted leg passes through, so
+  # headless mode cannot execute a screen-seizing leg even if a caller forgets
+  # to wrap it. The command is refused before it is invoked.
+  if ! gate_mode_runs_ui_legs && headless_skipped_leg "$leg_name"; then
+    echo "FAIL: counting leg '$leg_name' is screen-seizing and excluded in headless mode" >&2
+    return 1
+  fi
+
   local output_file
   output_file="$(mktemp "${TMPDIR:-/tmp}/gradus-test-gate.XXXXXX")"
   local prior_int_trap prior_term_trap
@@ -436,8 +501,10 @@ assert_counting_leg() {
 }
 
 assert_counting_legs_complete() {
-  if [[ "$COUNTING_LEG_RUN_COUNT" -ne "$EXPECTED_COUNTING_LEG_COUNT" ]]; then
-    echo "FAIL: ran $COUNTING_LEG_RUN_COUNT of $EXPECTED_COUNTING_LEG_COUNT declared counting legs" >&2
+  local expected_count
+  expected_count="$(expected_counting_leg_count)"
+  if [[ "$COUNTING_LEG_RUN_COUNT" -ne "$expected_count" ]]; then
+    echo "FAIL: ran $COUNTING_LEG_RUN_COUNT of $expected_count expected counting legs ($GATE_MODE mode)" >&2
     return 1
   fi
 }
@@ -554,6 +621,23 @@ validate_macos_version_pin() {
   fi
 }
 
+# Must match the local package dependency declared by
+# app/GradusKit/Package.swift.
+GRADUSKIT_DIAGNOSTICS_SDK_MANIFEST_RELATIVE_PATH="../../../apple_developer/diagnostics_contracts/swift/Package.swift"
+
+diagnostics_sdk_manifest_path() {
+  local gradus_kit_dir="$1"
+  printf '%s/%s\n' "$gradus_kit_dir" "$GRADUSKIT_DIAGNOSTICS_SDK_MANIFEST_RELATIVE_PATH"
+}
+
+preflight_diagnostics_sdk_manifest() {
+  local manifest_path="$1"
+  if [[ ! -f "$manifest_path" || ! -r "$manifest_path" ]]; then
+    echo "FAIL: required sibling apple_developer diagnostics SDK Package.swift is missing or unreadable: $manifest_path" >&2
+    return 1
+  fi
+}
+
 run_gradus_kit_tests() {
   local scratch_dir status=0
   scratch_dir="$(mktemp -d "${TMPDIR:-/private/tmp}/gradus-kit-tests.XXXXXX")" || return 1
@@ -576,8 +660,14 @@ set -euo pipefail
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --help)
-      echo "Usage: GRADUS_STATIC_BASE=<git-commit> bash test-gate.sh"
+      echo "Usage: GRADUS_STATIC_BASE=<git-commit> bash test-gate.sh [--headless]"
+      echo "  (no mode option runs the full milestone gate, including the host HID"
+      echo "   and simulator XCUITest UI journeys)"
+      echo "  --headless  routine gate: skip only GradusMacUI, GradusiOS-iPad, GradusiOSUI"
       exit 0
+      ;;
+    --headless)
+      GATE_MODE="headless"
       ;;
     *)
       echo "FAIL: unknown test-gate option '$1'" >&2
@@ -587,6 +677,9 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
+diagnostics_sdk_manifest="$(diagnostics_sdk_manifest_path "$GATE_REPO_ROOT/app/GradusKit")"
+preflight_diagnostics_sdk_manifest "$diagnostics_sdk_manifest"
+
 sweep_stale_test_gate_transcripts
 sweep_stale_gate_derived_data
 
@@ -594,6 +687,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 validate_counting_leg_declarations
 validate_density_image_snapshot_selectors
+
+echo "==> Gradus test gate mode: $GATE_MODE"
+if ! gate_mode_runs_ui_legs; then
+  echo "    Headless mode omits screen-seizing UI legs: ${HEADLESS_SKIPPED_LEG_NAMES[*]}"
+  echo "    Expected counting legs: $(expected_counting_leg_count) of $EXPECTED_COUNTING_LEG_COUNT"
+fi
 
 # Fail closed before any test, simulator, or other disruptive gate work.
 run_changed_swift_static_checks
@@ -670,8 +769,9 @@ assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
 
 PINNED_XCODE_VERSION="$(cat .xcode-version)"
 PINNED_MACOS_VERSION_PATH="$GATE_SCRIPT_DIR/.macos-version"
-# Three legs take this machine-wide lock -- GradusMacUI and both simulator UI
-# legs. The two simulator legs take it through simctl_gate_lib.sh's
+# In the milestone gate three legs take this machine-wide lock -- GradusMacUI
+# and both simulator UI legs; headless mode omits all three and never touches
+# it. The two simulator legs take it through simctl_gate_lib.sh's
 # `gate_ui_test_lock`, which also deletes the XCTestDevices clones xcodebuild
 # creates for them; GradusMacUI calls the binary directly because a macOS UI
 # test runs on the host and produces no simulator clone for that wrapper to
@@ -877,35 +977,37 @@ assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECO
   -only-testing:GradusMacTests \
   CODE_SIGNING_ALLOWED=NO
 
-echo "==> xcodebuild test — GradusMacUITests (platform=macOS; exact GradusMac product)"
-# This leg drives real HID automation against the host's focused window, so it
-# takes the same machine-wide lock the simulator UI legs take; without it a
-# concurrent Apple UI test in another project and this one fight over focus and
-# both fail. The lock is deliberately the OUTER wrapper: waiting for it is
-# unbounded, exactly as on the iOS UI legs, and must not be charged against the
-# deadline. Measured 2026-09-01 -- with the deadline outside instead, a
-# contending run in another repository held the lock past 600s and this leg
-# reported a spurious `exceeded 600s` failure without ever starting xcodebuild.
-# The lock execvp's in place, so `run_with_deadline` still runs as its own
-# process, still governs only xcodebuild, and its TERM still reaches it;
-# `export -f` is what carries the function across that exec -- and it has to
-# carry the helper `run_with_deadline` calls too, or the one leg most likely to
-# be killed by an external TERM (this is the leg that waits on the machine-wide
-# lock) would lose the explanation at exactly the moment it is needed.
-export -f run_with_deadline report_external_termination
-assert_counting_leg "GradusMacUI" \
-  "$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- \
-  bash -c 'run_with_deadline "$@"' gradus-mac-ui-leg \
-  "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env \
-  GRADUS_DISABLE_PIPELINE=1 \
-  TEST_RUNNER_GRADUS_MAC_UI_SCREENSHOTS=0 \
-  xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusMac \
-  -destination 'platform=macOS,arch=arm64' \
-  -only-testing:GradusMacUITests
+if gate_mode_runs_ui_legs; then
+  echo "==> xcodebuild test — GradusMacUITests (platform=macOS; exact GradusMac product)"
+  # This leg drives real HID automation against the host's focused window, so it
+  # takes the same machine-wide lock the simulator UI legs take; without it a
+  # concurrent Apple UI test in another project and this one fight over focus and
+  # both fail. The lock is deliberately the OUTER wrapper: waiting for it is
+  # unbounded, exactly as on the iOS UI legs, and must not be charged against the
+  # deadline. Measured 2026-09-01 -- with the deadline outside instead, a
+  # contending run in another repository held the lock past 600s and this leg
+  # reported a spurious `exceeded 600s` failure without ever starting xcodebuild.
+  # The lock execvp's in place, so `run_with_deadline` still runs as its own
+  # process, still governs only xcodebuild, and its TERM still reaches it;
+  # `export -f` is what carries the function across that exec -- and it has to
+  # carry the helper `run_with_deadline` calls too, or the one leg most likely to
+  # be killed by an external TERM (this is the leg that waits on the machine-wide
+  # lock) would lose the explanation at exactly the moment it is needed.
+  export -f run_with_deadline report_external_termination
+  assert_counting_leg "GradusMacUI" \
+    "$APPLE_UI_TEST_LOCK" --label "GradusMac UI tests" -- \
+    bash -c 'run_with_deadline "$@"' gradus-mac-ui-leg \
+    "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac UI tests" env \
+    GRADUS_DISABLE_PIPELINE=1 \
+    TEST_RUNNER_GRADUS_MAC_UI_SCREENSHOTS=0 \
+    xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusMac \
+    -destination 'platform=macOS,arch=arm64' \
+    -only-testing:GradusMacUITests
+fi
 
 echo "==> xcodebuild test — GradusCredentialBridge (platform=macOS)"
 # These structural tests must not open the checkout below ~/Documents from the
@@ -1024,19 +1126,23 @@ assert_counting_leg "GradusWidget" xcodebuild test \
 # idiom skip, so removing this step would not make it go silently green -- it
 # would just stop covering the multi-column geometry. Kept as a named,
 # separate gate line so that loss is visible if anyone deletes it.
-echo "==> xcodebuild test — GradusiOS UI tests ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOS-iPad" gate_ui_test_lock --label "GradusiOS UI tests ($ipad_udid)" xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusiOS \
-  -destination "platform=iOS Simulator,id=$ipad_udid" \
-  -only-testing:GradusiOSUITests \
-  CODE_SIGNING_ALLOWED=NO
+if gate_mode_runs_ui_legs; then
+  echo "==> xcodebuild test — GradusiOS UI tests ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
+  assert_counting_leg "GradusiOS-iPad" gate_ui_test_lock --label "GradusiOS UI tests ($ipad_udid)" xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusiOS \
+    -destination "platform=iOS Simulator,id=$ipad_udid" \
+    -only-testing:GradusiOSUITests \
+    CODE_SIGNING_ALLOWED=NO
+fi
 
 # A completed iPad XCTest runner can leave testmanagerd's Accessibility session
 # attached to the wrong CoreSimulator device. Restart the iPhone target after
-# retiring the iPad runner so the next AX-loaded notification is fresh.
+# retiring the iPad runner so the next AX-loaded notification is fresh. Only
+# the milestone gate needs this handoff; headless omits both simulator UI legs
+# and must not churn simulator sessions for tests it never runs.
 reset_simulator_ui_session_for_iphone() {
   echo "==> Resetting simulator UI session before iPhone UI tests"
   if is_simulator_booted "$ipad_udid"; then
@@ -1049,18 +1155,22 @@ reset_simulator_ui_session_for_iphone() {
   xcrun simctl bootstatus "$sim_udid" -b
 }
 
-reset_simulator_ui_session_for_iphone
+if gate_mode_runs_ui_legs; then
+  reset_simulator_ui_session_for_iphone
+fi
 
 # Keep both simulator UI legs adjacent.
-echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOSUI" gate_ui_test_lock --label "GradusiOSUITests" xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusiOS \
-  -destination "platform=iOS Simulator,id=$sim_udid" \
-  -only-testing:GradusiOSUITests \
-  CODE_SIGNING_ALLOWED=NO
+if gate_mode_runs_ui_legs; then
+  echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+  assert_counting_leg "GradusiOSUI" gate_ui_test_lock --label "GradusiOSUITests" xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusiOS \
+    -destination "platform=iOS Simulator,id=$sim_udid" \
+    -only-testing:GradusiOSUITests \
+    CODE_SIGNING_ALLOWED=NO
+fi
 
 assert_counting_legs_complete
 

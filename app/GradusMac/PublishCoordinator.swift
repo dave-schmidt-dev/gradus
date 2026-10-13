@@ -37,6 +37,7 @@ private struct ProducerPublishEvidence: Encodable {
 public actor PublishCoordinator: CloudPublisher {
     let database: CloudDatabase
     let zoneID: CKRecordZone.ID
+    private let diagnostics: GradusDiagnostics
     private let evidencePath: URL?
     private let producerBuildNumber: String?
     private let cloudKitEnvironment: String?
@@ -48,6 +49,8 @@ public actor PublishCoordinator: CloudPublisher {
     private var latestBankedEvidence: BankedResetEvidence?
     private var queuedWaiters: [CheckedContinuation<Void, Error>] = []
     private var isPublishing = false
+    private var reportedZoneProgress = false
+    private(set) var zoneInvocationCount = 0
     var retiredProvidersPurged = false
 
     /// Providers whose `isWarning` flipped false→true on the most recently
@@ -65,8 +68,10 @@ public actor PublishCoordinator: CloudPublisher {
         producerBuildNumber: String? = nil,
         cloudKitEnvironment: String? = nil,
         producerSourceRevision: String? = nil,
-        producerProjectSha256: String? = nil
+        producerProjectSha256: String? = nil,
+        diagnostics: GradusDiagnostics = .shared
     ) {
+        self.diagnostics = diagnostics
         self.database = database
         self.zoneID = zoneID
         self.evidencePath = evidencePath
@@ -171,14 +176,28 @@ public actor PublishCoordinator: CloudPublisher {
         data.removeValue(forKey: "banked_reset_observed_at")
     }
 
+    private func ensureZone() async throws {
+        let zoneOperation = await diagnostics.operation(.zone)
+        zoneInvocationCount += 1
+        zoneOperation.attempt(report: !reportedZoneProgress)
+        do {
+            try await database.saveZoneIfNeeded(CKRecordZone(zoneID: zoneID))
+            zoneOperation.finish(.success, report: !reportedZoneProgress)
+            reportedZoneProgress = true
+        } catch {
+            zoneOperation.finish(.failure, error: error)
+            throw error
+        }
+    }
+
     private func publishOnce(_ statuses: [ProviderStatus]) async throws {
-        try await database.saveZoneIfNeeded(CKRecordZone(zoneID: zoneID))
+        try await ensureZone()
 
         let (newlyWarning, toSave) = diffAgainstState(statuses)
         newlyWarningProviders = newlyWarning
 
         guard !toSave.isEmpty else {
-            try writeProducerEvidenceIfConfigured()
+            try await writeProducerEvidenceWithDiagnostics()
             GradusLog.publish.info(
                 "no changes to publish: all \(statuses.count) provider(s) matched their last saved content hash"
             )
@@ -190,15 +209,21 @@ public actor PublishCoordinator: CloudPublisher {
         )
 
         let records = try toSave.map { try $0.status.toCKRecord(zoneID: zoneID) }
+        let operation = await diagnostics.operation(.publish)
+        operation.attempt()
         var outcome = await database.modifyRecords(toSave: records, savePolicy: .changedKeys)
-        outcome = await retryServerRecordChanged(outcome, toSave: toSave)
-        outcome = await retryWithBackoff(outcome, toSave: toSave, attempt: 1)
+        outcome = await retryServerRecordChanged(outcome, toSave: toSave, operation: operation)
+        outcome = await retryWithBackoff(outcome, toSave: toSave, attempt: 1, operation: operation)
 
         var failedRecordCount = 0
+        var representativeError: Error?
         for (status, hash) in toSave {
             let recordID = CKRecord.ID(recordName: status.providerName, zoneID: zoneID)
             guard case .success = outcome.results[recordID] else {
                 failedRecordCount += 1
+                if case let .failure(error) = outcome.results[recordID], representativeError == nil {
+                    representativeError = error
+                }
                 // The only point where a per-record cause is still known.
                 // Everything above has finished retrying it and everything
                 // below collapses it into a bare count, so a line not written
@@ -222,9 +247,11 @@ public actor PublishCoordinator: CloudPublisher {
             GradusLog.publish.error(
                 "publish incomplete: \(failedRecordCount) of \(toSave.count) record(s) failed to save"
             )
+            operation.finish(.failure, count: failedRecordCount, error: representativeError)
             throw PublishCoordinatorError.recordFailures(failedRecordCount)
         }
-        try writeProducerEvidenceIfConfigured()
+        operation.finish(.success, count: toSave.count)
+        try await writeProducerEvidenceWithDiagnostics()
         GradusLog.publish.notice("published \(toSave.count) record(s) successfully")
     }
 
@@ -254,6 +281,15 @@ public actor PublishCoordinator: CloudPublisher {
             toSave.append((status, hash))
         }
         return (newlyWarning, toSave)
+    }
+
+    private func writeProducerEvidenceWithDiagnostics() async throws {
+        do {
+            try writeProducerEvidenceIfConfigured()
+        } catch {
+            await diagnostics.artifactFailure(error)
+            throw error
+        }
     }
 
     private func writeProducerEvidenceIfConfigured() throws {
@@ -311,7 +347,8 @@ public actor PublishCoordinator: CloudPublisher {
     /// current server record (which carries the fresh tag), reapply our
     /// field values onto it, and resave once.
     private func retryServerRecordChanged(
-        _ outcome: RecordSaveOutcome, toSave: [(status: ProviderStatus, hash: String)]
+        _ outcome: RecordSaveOutcome, toSave: [(status: ProviderStatus, hash: String)],
+        operation: GradusDiagnosticsOperation
     ) async -> RecordSaveOutcome {
         let conflicted = toSave.filter { entry in
             let recordID = CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)
@@ -325,6 +362,7 @@ public actor PublishCoordinator: CloudPublisher {
         var merged: [CKRecord] = []
         for entry in conflicted {
             let recordID = CKRecord.ID(recordName: entry.status.providerName, zoneID: zoneID)
+            operation.attempt()
             guard let serverRecord = try? await database.fetchRecord(recordID),
                   let freshRecord = try? entry.status.toCKRecord(zoneID: zoneID)
             else { continue }
@@ -335,6 +373,7 @@ public actor PublishCoordinator: CloudPublisher {
         }
         guard !merged.isEmpty else { return outcome }
 
+        operation.attempt()
         let retryOutcome = await database.modifyRecords(toSave: merged, savePolicy: .changedKeys)
         var combined = outcome.results
         for (id, result) in retryOutcome.results {
@@ -347,7 +386,8 @@ public actor PublishCoordinator: CloudPublisher {
     /// `retryAfterSeconds` hint — sleep that long (or a small exponential
     /// default) and retry the still-failing subset, bounded.
     private func retryWithBackoff(
-        _ outcome: RecordSaveOutcome, toSave: [(status: ProviderStatus, hash: String)], attempt: Int
+        _ outcome: RecordSaveOutcome, toSave: [(status: ProviderStatus, hash: String)], attempt: Int,
+        operation: GradusDiagnosticsOperation
     ) async -> RecordSaveOutcome {
         guard attempt <= Self.maxBackoffAttempts else { return outcome }
 
@@ -374,12 +414,18 @@ public actor PublishCoordinator: CloudPublisher {
         guard let retryRecords = try? retryable.map({ try $0.status.toCKRecord(zoneID: zoneID) }) else {
             return outcome
         }
+        operation.attempt()
         let retryOutcome = await database.modifyRecords(toSave: retryRecords, savePolicy: .changedKeys)
         var combined = outcome.results
         for (id, result) in retryOutcome.results {
             combined[id] = result
         }
-        return await retryWithBackoff(RecordSaveOutcome(results: combined), toSave: toSave, attempt: attempt + 1)
+        return await retryWithBackoff(
+            RecordSaveOutcome(results: combined),
+            toSave: toSave,
+            attempt: attempt + 1,
+            operation: operation
+        )
     }
 
     /// Bounds both server-provided hints and the exponential fallback before
