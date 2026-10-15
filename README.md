@@ -187,6 +187,8 @@ Antigravity card shows (Gemini model group — the pool `agy` consumes):
 
 The TUI hydrates the C+G rows from the canonical schema-v2 `Antigravity (Claude)` synthetic entry at read time; it does not add that internal entry as a second card. Each valid tracked percentage produces its `cg5` (5-hour) or `cg1w` (1-week) row, including an exact 100% value. Missing or malformed sibling rows are omitted. C+G rows participate in the same `[!]` badge and one-shot notification warning membership as other rendered windows.
 
+Either recognized group may be absent from the quota response. The endpoint has been observed returning only the third-party `3p-*` group; in that case the Gemini `5h`/`1w` rows stay unknown (`n/a`) rather than defaulting to 0% or 100%, and the returned C+G values are still tracked. A malformed or missing sibling group never discards the other pool's valid data. A response whose groups match neither `gemini-*` nor `3p-*` bucket IDs (including an empty `groups` list) fails closed as a probe error instead of reporting invented capacity.
+
 Copilot / Cursor / Vibe cards show:
 
 - `mo`: monthly remaining percentage, billing-cycle reset, pace indicator

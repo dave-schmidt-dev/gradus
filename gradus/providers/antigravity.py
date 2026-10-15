@@ -295,15 +295,14 @@ class AntigravityProvider:
             raise ProbeFailure("Antigravity quota response has no groups", raw_text[:500])
 
         gemini_group = self._find_group_by_bucket_prefix(groups, "gemini-")
-        if gemini_group is None:
-            raise ProbeFailure("Antigravity quota: no Gemini group found", raw_text[:500])
+        third_party_group = self._find_group_by_bucket_prefix(groups, "3p-")
+        if gemini_group is None and third_party_group is None:
+            raise ProbeFailure("Antigravity quota: no recognized group found", raw_text[:500])
 
         gemini_buckets = self._buckets_by_window(gemini_group, "gemini-")
         five_hour = gemini_buckets.get("5h")
         weekly = gemini_buckets.get("weekly")
-        third_party_buckets = self._buckets_by_window(
-            self._find_group_by_bucket_prefix(groups, "3p-"), "3p-"
-        )
+        third_party_buckets = self._buckets_by_window(third_party_group, "3p-")
         third_party_five_hour = third_party_buckets.get("5h")
         third_party_weekly = third_party_buckets.get("weekly")
 

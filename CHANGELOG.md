@@ -21,6 +21,7 @@ history from the overnight release train. New releases use
   API spend limit. It no longer shows the plan's included usage left, and it
   is hidden when no on-demand limit is set.
 - Record diagnostics attempts before fetch suspension, terminate each logical operation once and retain publish acknowledgement independently of artifact failure.
+- Antigravity quota parsing now keeps a valid third-party (Claude+GPT) pool when the response omits the Gemini group, showing Gemini as unknown instead of failing the whole probe; a response with no recognized group still fails closed.
 
 ### Added
 

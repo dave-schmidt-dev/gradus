@@ -2429,12 +2429,14 @@ class AntigravityProviderTests(unittest.TestCase):
     # ---- self-heal: nudge `agy` to refresh its OWN token via `agy models` ----
 
     def test_expired_token_nudge_fails_then_raises_run_agy_and_skips_network(self) -> None:
+        # Auth-refresh fixtures must not depend on agy being installed in the test sandbox.
         # Expired token: we nudge `agy` once; if it still can't refresh, surface the
         # run-agy error and never probe the summary endpoint with a dead token.
         provider = self._make_provider()
         expired = self._token(expiry="2000-01-01T00:00:00+00:00")
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
+            patch("gradus.providers.antigravity.shutil.which", return_value="agy"),
             # nudge runs (exit 0) but the re-read token is still expired.
             patch(
                 "gradus.providers.subprocess.run",
@@ -2456,6 +2458,7 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[expired, fresh]),
+            patch("gradus.providers.antigravity.shutil.which", return_value="agy"),
             patch(
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
@@ -2531,6 +2534,7 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired),
+            patch("gradus.providers.antigravity.shutil.which", return_value="agy"),
             patch(
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
@@ -2647,6 +2651,7 @@ class AntigravityProviderTests(unittest.TestCase):
         provider = self._make_provider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", side_effect=[valid, valid]),
+            patch("gradus.providers.antigravity.shutil.which", return_value="agy"),
             patch(
                 "gradus.providers.subprocess.run",
                 return_value=MagicMock(returncode=0),
@@ -2698,15 +2703,20 @@ class AntigravityProviderTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 provider._acquire()
 
-    def test_missing_gemini_group_raises(self) -> None:
+    def test_missing_gemini_group_keeps_third_party_partial_data(self) -> None:
         provider = self._make_provider()
         only_third_party = {"groups": [self.SUMMARY_RESPONSE["groups"][1]]}
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
             patch("gradus.providers._base._http_json", return_value=only_third_party),
         ):
-            with self.assertRaises(ProbeFailure):
-                provider.fetch()
+            status = provider.fetch()
+        self.assertIsNone(status.five_hour_percent_left)
+        self.assertIsNone(status.weekly_percent_left)
+        self.assertIsNone(status.five_hour_reset)
+        self.assertIsNone(status.weekly_reset)
+        self.assertEqual(status.third_party_five_hour_percent_left, 42.1)
+        self.assertEqual(status.third_party_weekly_percent_left, 73.4)
 
 
 def _raise_http_401(*args: object, **kwargs: object) -> None:
