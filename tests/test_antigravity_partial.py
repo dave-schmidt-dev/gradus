@@ -135,6 +135,31 @@ class AntigravityPartialQuotaTests(unittest.TestCase):
         self.assertEqual(status.third_party_five_hour_percent_left, 100.0)
         self.assertEqual(status.third_party_weekly_percent_left, 0.0)
 
+    def test_fetch_uses_production_endpoint_over_partial_daily_response(self) -> None:
+        """The production host returns both pools; the daily host returns 3p only.
+
+        Dispatching the mocked response by the requested URL pins the endpoint:
+        on the old ``daily-`` host this test receives the third-party-only
+        fixture, leaving Gemini unknown and failing the percent assertions.
+        """
+
+        def by_url(url: str, **_: object) -> dict[str, object]:
+            if url == "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary":
+                return BOTH_GROUPS
+            return LIVE_THIRD_PARTY_ONLY
+
+        provider = AntigravityProvider()
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch.object(AntigravityProvider, "_read_account_email", return_value=None),
+            patch("gradus.providers._base._http_json", side_effect=by_url),
+        ):
+            status = provider.fetch()
+        self.assertEqual(status.five_hour_percent_left, 25.0)
+        self.assertEqual(status.weekly_percent_left, 50.0)
+        self.assertEqual(status.third_party_five_hour_percent_left, 100.0)
+        self.assertEqual(status.third_party_weekly_percent_left, 0.0)
+
     def test_zero_and_full_fractions_survive_as_exact_bounds(self) -> None:
         response = {
             "groups": [

@@ -20,7 +20,7 @@ from ._base import ProbeFailure, _format_reset_time, _is_headless, register
 
 log = logging.getLogger(__name__)
 
-HISTORY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+HISTORY_ENDPOINT = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 # These strings are part of the credential-free producer/consumer contract.
 AUTH_REAUTHENTICATION_ERROR = "Antigravity session expired: run `agy` to re-authenticate"
 AUTH_FAILURE_REASON = "auth_failure"

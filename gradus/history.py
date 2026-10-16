@@ -379,7 +379,17 @@ def _valid_history_record(record: object) -> dict[str, Any] | None:
         return None
     for name in names:
         expected_provenance = _PROVENANCE_BY_PROVIDER.get(name, {"provenance_available": False})
-        if provenance.get(name) != expected_provenance:
+        accepted_provenance = [expected_provenance]
+        # Preserve the exact origin of pre-switch records while they remain retained.
+        # Only the endpoint may differ; absent quota windows still remain unknown.
+        if name in {"Antigravity", "Antigravity (Claude)"}:
+            accepted_provenance.append(
+                {
+                    **expected_provenance,
+                    "endpoint": "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+                }
+            )
+        if provenance.get(name) not in accepted_provenance:
             return None
         observation = observations.get(name)
         if not isinstance(observation, Mapping) or set(observation) != {"probe", "capacity"}:
