@@ -13,6 +13,9 @@ history from the overnight release train. New releases use
 
 ### Fixed
 
+- OpenCode Go now reads the existing OpenCode v2 OAuth connection instead of
+  requiring a separate API key, reloads rotated tokens, and distinguishes access
+  blocks from credential rejection.
 - iPhone and iPad now show reset and warning alerts while Gradus is open, and a
   background push that launches Gradus reads the iCloud account and notification
   permission before syncing, so a banked grant or usage refill is no longer

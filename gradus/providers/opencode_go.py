@@ -1,15 +1,25 @@
-"""OpenCode Go provider using the local macOS Keychain and Go API."""
+"""OpenCode Go provider using OpenCode v2 Console OAuth and legacy macOS Keychain API key."""
 
 from __future__ import annotations
 
 import json
 import math
 import subprocess
+from http.client import HTTPException
+from pathlib import Path
 from typing import Any
 
 from ..parsing import OpenCodeGoStatus
 from ..tls import default_ssl_context
 from ._base import ProbeFailure, _auth_required_message, _format_reset_time, _is_headless, register
+from .opencode_oauth import (
+    DEFAULT_OPENCODE_DB_PATH,
+    NoRedirectHandler,
+    OpenCodeOAuthCredential,
+    _is_cloudflare_403,
+    fetch_console_oauth_status,
+    load_opencode_oauth_credential,
+)
 
 USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
 HISTORY_PROVENANCE = {
@@ -22,21 +32,30 @@ HISTORY_PROVENANCE = {
 
 @register("OpenCode Go")
 class OpenCodeGoProvider:
-    """Read Go subscription windows without browser or cookie access."""
+    """Read Go subscription windows from OpenCode Console OAuth or legacy Keychain API key."""
 
     _USAGE_URL = USAGE_URL
     _KEYCHAIN_SERVICE = "OpenCode Go"
     _KEYCHAIN_ACCOUNT = "default"
     _USER_AGENT = "gradus (opencode-go quota probe)"
+    _DB_PATH = DEFAULT_OPENCODE_DB_PATH
 
-    def __init__(self) -> None:
+    def __init__(self, db_path: Path | str | None = None) -> None:
         self._api_key = ""
+        self._oauth_credential: OpenCodeOAuthCredential | None = None
+        self._db_path = Path(db_path) if db_path is not None else None
 
     def _acquire(self) -> None:
         if _is_headless():
             raise ProbeFailure("auth required: no cached credentials", "")
+        db_path = self._db_path or self._DB_PATH
+        oauth_cred = load_opencode_oauth_credential(db_path)
+        self._oauth_credential = oauth_cred
+        if oauth_cred is not None:
+            return
         if self._api_key:
             return
+
         try:
             self._api_key = self._load_keychain_api_key()
         except FileNotFoundError as exc:
@@ -96,10 +115,15 @@ class OpenCodeGoProvider:
         return percent_left, _format_reset_time(window.get("resetsAt"))
 
     def fetch(self) -> OpenCodeGoStatus:
+        self._acquire()
+        if self._oauth_credential is not None:
+            return fetch_console_oauth_status(self._oauth_credential)
+        return self._fetch_legacy_api_key()
+
+    def _fetch_legacy_api_key(self) -> OpenCodeGoStatus:
         import urllib.error
         import urllib.request
 
-        self._acquire()
         try:
             req = urllib.request.Request(
                 self._USAGE_URL,
@@ -110,19 +134,35 @@ class OpenCodeGoProvider:
                 },
                 method="GET",
             )
-            with urllib.request.urlopen(req, timeout=15, context=default_ssl_context()) as response:
-                payload = json.loads(response.read())
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=default_ssl_context()), NoRedirectHandler()
+            )
+            with opener.open(req, timeout=15) as response:
+                raw_bytes = response.read(65537)
+                if len(raw_bytes) > 65536:
+                    raise ProbeFailure("OpenCode Go usage response too large", "")
+                payload = json.loads(raw_bytes.decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
+            if exc.code == 401:
                 self._api_key = ""
                 raise ProbeFailure(
                     "OpenCode Go API key rejected: run `opencode /connect`", ""
                 ) from exc
+            if exc.code == 403:
+                if _is_cloudflare_403(exc):
+                    raise ProbeFailure(
+                        "OpenCode Go access blocked (Cloudflare 403)",
+                        "",
+                    ) from exc
+                self._api_key = ""
+                raise ProbeFailure(
+                    "OpenCode Go API error: HTTP 403 (permission denied)", ""
+                ) from exc
             raise ProbeFailure(f"OpenCode Go API error: HTTP {exc.code}", "") from exc
         except urllib.error.URLError as exc:
-            raise ProbeFailure(f"OpenCode Go network error: {exc.reason}", "") from exc
-        except (TimeoutError, OSError) as exc:
-            raise ProbeFailure(f"OpenCode Go network error: {exc}", "") from exc
+            raise ProbeFailure("OpenCode Go network error", "") from exc
+        except (TimeoutError, OSError, HTTPException) as exc:
+            raise ProbeFailure("OpenCode Go network error", "") from exc
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
             raise ProbeFailure("OpenCode Go usage response is malformed", "") from exc
 

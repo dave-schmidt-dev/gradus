@@ -3005,6 +3005,11 @@ class SerovalDecodeTests(unittest.TestCase):
 
 
 class SafariFreeProviderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        guard = patch.object(OpenCodeGoProvider, "_DB_PATH", Path(os.devnull) / "opencode-test.db")
+        guard.start()
+        self.addCleanup(guard.stop)
+
     def test_cursor_keychain_lookup_uses_cli_item_without_persisting(self) -> None:
         with patch("gradus.providers.cursor.subprocess.run") as run:
             run.return_value = SimpleNamespace(returncode=0, stdout="cursor-token\n")
@@ -3303,7 +3308,7 @@ class SafariFreeProviderTests(unittest.TestCase):
         resp.read.return_value = json.dumps(response).encode()
         resp.__enter__.return_value = resp
         resp.__exit__.return_value = False
-        with patch("urllib.request.urlopen", return_value=resp):
+        with patch("urllib.request.OpenerDirector.open", return_value=resp):
             status = provider.fetch()
         self.assertEqual(status.five_hour_percent_left, 88.0)
         self.assertEqual(status.weekly_percent_left, 66.0)
@@ -3318,7 +3323,7 @@ class SafariFreeProviderTests(unittest.TestCase):
         resp.read.return_value = json.dumps(response).encode()
         resp.__enter__.return_value = resp
         resp.__exit__.return_value = False
-        with patch("urllib.request.urlopen", return_value=resp) as open_url:
+        with patch("urllib.request.OpenerDirector.open", return_value=resp) as open_url:
             status = provider.fetch()
         request = open_url.call_args.args[0]
         self.assertEqual(request.method, "GET")
@@ -3328,19 +3333,27 @@ class SafariFreeProviderTests(unittest.TestCase):
     def test_opencode_http_and_network_failures_are_typed(self) -> None:
         import urllib.error
 
-        for code in (401, 403):
-            provider = OpenCodeGoProvider()
-            provider._api_key = "fixture-key"
-            error = urllib.error.HTTPError("https://opencode.ai", code, "rejected", {}, None)
-            with (
-                patch("urllib.request.urlopen", side_effect=error),
-                self.assertRaisesRegex(ProbeFailure, "API key rejected"),
-            ):
-                provider.fetch()
+        provider = OpenCodeGoProvider()
+        provider._api_key = "fixture-key"
+        error_401 = urllib.error.HTTPError("https://opencode.ai", 401, "rejected", {}, None)
+        with (
+            patch("urllib.request.OpenerDirector.open", side_effect=error_401),
+            self.assertRaisesRegex(ProbeFailure, "API key rejected"),
+        ):
+            provider.fetch()
+
+        provider = OpenCodeGoProvider()
+        provider._api_key = "fixture-key"
+        error_403 = urllib.error.HTTPError("https://opencode.ai", 403, "rejected", {}, None)
+        with (
+            patch("urllib.request.OpenerDirector.open", side_effect=error_403),
+            self.assertRaisesRegex(ProbeFailure, "HTTP 403"),
+        ):
+            provider.fetch()
         provider = OpenCodeGoProvider()
         provider._api_key = "fixture-key"
         with (
-            patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")),
+            patch("urllib.request.OpenerDirector.open", side_effect=TimeoutError("timed out")),
             self.assertRaisesRegex(ProbeFailure, "network error"),
         ):
             provider.fetch()
@@ -3354,7 +3367,7 @@ class SafariFreeProviderTests(unittest.TestCase):
             response.__enter__.return_value = response
             response.__exit__.return_value = False
             with (
-                patch("urllib.request.urlopen", return_value=response),
+                patch("urllib.request.OpenerDirector.open", return_value=response),
                 self.assertRaisesRegex(ProbeFailure, "recognizable windows"),
             ):
                 provider.fetch()
@@ -3367,7 +3380,7 @@ class SafariFreeProviderTests(unittest.TestCase):
         response.__enter__.return_value = response
         response.__exit__.return_value = False
         with (
-            patch("urllib.request.urlopen", return_value=response),
+            patch("urllib.request.OpenerDirector.open", return_value=response),
             self.assertRaisesRegex(ProbeFailure, "malformed"),
         ):
             provider.fetch()
@@ -3380,7 +3393,7 @@ class SafariFreeProviderTests(unittest.TestCase):
         resp.__enter__.return_value = resp
         resp.__exit__.return_value = False
         with (
-            patch("urllib.request.urlopen", return_value=resp),
+            patch("urllib.request.OpenerDirector.open", return_value=resp),
             self.assertRaisesRegex(ProbeFailure, "schema changed"),
         ):
             provider.fetch()

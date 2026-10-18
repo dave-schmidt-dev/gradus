@@ -118,6 +118,10 @@ rationale: Safari-derived provider cookies are read only by the Developer-ID-sig
   SecurityAgent interaction before unattended item access, passes identity only on stdin, and
   returns a generation only. A locked/denied item yields typed private backoff and Unavailable
   banked state without failing normal usage; attended repair requires an explicit user action.
+  OpenCode v2 Console OAuth is read only from its existing SQLite credential store, using the active
+  `opencode` connection and its selected workspace. Only the official Console origin receives the access
+  token; redirects are denied. Each producer cycle reloads the credential; Gradus never refreshes it,
+  stores a refresh token, writes the database, or falls back to another account after a selected OAuth error.
   Retiring the OpenCode Go and Cursor browser transports is one-way by construction: the bridge deletes any
   legacy `cursor_token.json` or `opencode_go_cookies.json` it finds rather than reading it, so the rollback shape
   is a new bridge release plus a fresh Full Disk Access grant, never a flag flip on a dormant browser path.

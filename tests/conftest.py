@@ -29,6 +29,19 @@ def pytest_runtest_setup(item):
     from unittest.mock import patch
 
     from gradus import banked_keychain
+    from gradus.providers import opencode_go, opencode_oauth
+
+    # All default-provider tests must stay off the owner's OAuth database.
+    # A path below the null device cannot exist or create a database.
+    absent_db = Path(os.devnull) / "gradus-test-opencode.db"
+    item._opencode_provider_guard = patch.object(
+        opencode_go.OpenCodeGoProvider, "_DB_PATH", absent_db
+    )
+    item._opencode_default_guard = patch.object(
+        opencode_oauth, "DEFAULT_OPENCODE_DB_PATH", absent_db
+    )
+    item._opencode_provider_guard.start()
+    item._opencode_default_guard.start()
 
     def blocked(*_args, **_kwargs):
         raise AssertionError("live banked Keychain access is forbidden in tests")
@@ -42,7 +55,12 @@ def pytest_runtest_setup(item):
 
 
 def pytest_runtest_teardown(item):
-    for name in ("_banked_helper_guard", "_banked_keychain_guard"):
+    for name in (
+        "_banked_helper_guard",
+        "_banked_keychain_guard",
+        "_opencode_default_guard",
+        "_opencode_provider_guard",
+    ):
         guard = getattr(item, name, None)
         if guard is not None:
             guard.stop()
