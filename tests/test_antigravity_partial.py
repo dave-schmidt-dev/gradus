@@ -135,28 +135,52 @@ class AntigravityPartialQuotaTests(unittest.TestCase):
         self.assertEqual(status.third_party_five_hour_percent_left, 100.0)
         self.assertEqual(status.third_party_weekly_percent_left, 0.0)
 
-    def test_fetch_uses_production_endpoint_over_partial_daily_response(self) -> None:
-        """The production host returns both pools; the daily host returns 3p only.
+    def test_fetch_matches_cli_quota_host_and_product_identity(self) -> None:
+        """Generic identity omits Gemini; the production host reports another pool."""
+        response = {
+            "groups": [
+                {
+                    "buckets": [
+                        {
+                            "bucketId": "gemini-weekly",
+                            "window": "weekly",
+                            "remainingFraction": 0,
+                            "resetTime": "2026-10-23T22:21:36Z",
+                        },
+                        {
+                            "bucketId": "gemini-5h",
+                            "window": "5h",
+                            "remainingFraction": 0.99362427,
+                            "disabled": True,
+                            "resetTime": "2026-10-21T00:12:10Z",
+                        },
+                    ]
+                },
+                LIVE_THIRD_PARTY_ONLY["groups"][0],
+            ]
+        }
 
-        Dispatching the mocked response by the requested URL pins the endpoint:
-        on the old ``daily-`` host this test receives the third-party-only
-        fixture, leaving Gemini unknown and failing the percent assertions.
-        """
-
-        def by_url(url: str, **_: object) -> dict[str, object]:
+        def by_request(url: str, **kwargs: object) -> dict[str, object]:
             if url == "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary":
                 return BOTH_GROUPS
+            self.assertEqual(
+                url, "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+            )
+            self.assertEqual(kwargs["body"], b"{}")
+            if kwargs["headers"]["User-Agent"] == "antigravity/cli/1.4.3 (gradus quota probe)":
+                return response
             return LIVE_THIRD_PARTY_ONLY
 
         provider = AntigravityProvider()
         with (
             patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
             patch.object(AntigravityProvider, "_read_account_email", return_value=None),
-            patch("gradus.providers._base._http_json", side_effect=by_url),
+            patch("gradus.providers._base._http_json", side_effect=by_request),
         ):
             status = provider.fetch()
-        self.assertEqual(status.five_hour_percent_left, 25.0)
-        self.assertEqual(status.weekly_percent_left, 50.0)
+        self.assertAlmostEqual(status.five_hour_percent_left, 99.362427)
+        self.assertEqual(status.weekly_percent_left, 0.0)
+        self.assertIn("Oct 23", status.weekly_reset)
         self.assertEqual(status.third_party_five_hour_percent_left, 100.0)
         self.assertEqual(status.third_party_weekly_percent_left, 0.0)
 

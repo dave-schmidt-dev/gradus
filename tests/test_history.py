@@ -122,7 +122,7 @@ class HistoryRecordTests(unittest.TestCase):
         self.assertEqual(agy["method"], "POST")
         self.assertEqual(
             agy["endpoint"],
-            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
         )
         self.assertEqual(agy["bucket_family"], "gemini-*")
         claude = record["provenance"]["Antigravity (Claude)"]

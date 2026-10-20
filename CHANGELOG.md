@@ -25,7 +25,7 @@ history from the overnight release train. New releases use
   is hidden when no on-demand limit is set.
 - Record diagnostics attempts before fetch suspension, terminate each logical operation once and retain publish acknowledgement independently of artifact failure.
 - Antigravity quota parsing now keeps a valid third-party (Claude+GPT) pool when the response omits the Gemini group, showing Gemini as unknown instead of failing the whole probe; a response with no recognized group still fails closed.
-- Antigravity now queries the production `cloudcode-pa.googleapis.com` `retrieveUserQuotaSummary` host instead of the `daily-cloudcode-pa.googleapis.com` host, which returned only the third-party pool; the production host reports the Gemini group too, so Gemini windows are no longer dropped.
+- Antigravity Gemini usage now matches the CLI by querying the daily quota host with the CLI product/version identity. The prior generic identity and production host could report 62% weekly remaining while the CLI weekly limit was exhausted.
 
 ### Added
 

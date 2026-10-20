@@ -19,15 +19,13 @@ class HistoricalAntigravityEndpointTests(unittest.TestCase):
     """The endpoint switch must not invalidate pre-existing Antigravity records.
 
     ``_valid_history_record`` compares provenance exactly, so moving the live
-    endpoint from ``daily-cloudcode-pa`` to ``cloudcode-pa`` turned every older
+    endpoint between ``daily-cloudcode-pa`` and ``cloudcode-pa`` can turn older
     Antigravity pool record into corruption.  These pin the narrow compatibility
     window: current descriptor OR the identical descriptor with only the prior
     endpoint -- and nothing wider.
     """
 
-    HISTORICAL_ENDPOINT = (
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
-    )
+    HISTORICAL_ENDPOINT = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 
     def _record(self, name: str, when: datetime, endpoint: str) -> dict[str, object]:
         snapshot = ProviderSnapshot(
@@ -51,7 +49,7 @@ class HistoricalAntigravityEndpointTests(unittest.TestCase):
     def test_old_and_current_endpoint_read_and_query_for_both_pools(self) -> None:
         when = datetime(2026, 1, 8, 12, tzinfo=UTC)
         endpoints = {
-            "current": "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+            "current": "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
             "historical": self.HISTORICAL_ENDPOINT,
         }
         for name in ("Antigravity", "Antigravity (Claude)"):

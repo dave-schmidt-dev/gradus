@@ -386,7 +386,7 @@ def _valid_history_record(record: object) -> dict[str, Any] | None:
             accepted_provenance.append(
                 {
                     **expected_provenance,
-                    "endpoint": "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+                    "endpoint": "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
                 }
             )
         if provenance.get(name) not in accepted_provenance:

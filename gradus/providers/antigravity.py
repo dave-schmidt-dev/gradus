@@ -20,7 +20,7 @@ from ._base import ProbeFailure, _format_reset_time, _is_headless, register
 
 log = logging.getLogger(__name__)
 
-HISTORY_ENDPOINT = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+HISTORY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 # These strings are part of the credential-free producer/consumer contract.
 AUTH_REAUTHENTICATION_ERROR = "Antigravity session expired: run `agy` to re-authenticate"
 AUTH_FAILURE_REASON = "auth_failure"
@@ -51,7 +51,8 @@ class AntigravityProvider:
     _REFRESH_TRIGGER_CMD = ("agy", "models")
     _REFRESH_FALLBACK_PATH = Path.home() / ".local" / "bin" / "agy"
     _REFRESH_COOLDOWN_SECONDS = 300
-    _USER_AGENT = "gradus (antigravity quota probe)"
+    # Google selects the CLI Gemini pool by this product/version identity.
+    _USER_AGENT = "antigravity/cli/1.4.3 (gradus quota probe)"
     _ACCOUNTS_PATH = Path.home() / ".gemini" / "google_accounts.json"
 
     def __init__(self) -> None:
