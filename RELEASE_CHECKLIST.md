@@ -39,6 +39,11 @@ Before that trigger, the release owner must verify:
    (`systemSmall`) on a physical iOS device, confirming gallery presentation,
    placeholder, current usage projection, tap-to-open dashboard navigation,
    and clean widget removal.
+7. Diagnostics: the sibling AppDiagnostics source dependency is pinned or
+   replaced and its iOS 17 consumer floor passes the app checks; lifecycle-tail
+   behavior (no shutdown hook exists) and production receipt trust are
+   qualified, with unknown outcomes stated. Fetch success alone does not
+   establish cache or token durability.
 
 No item in this section submits an app; the final submission remains a separate
 release-owner decision after the evidence is reviewed.
