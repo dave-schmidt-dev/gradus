@@ -54,6 +54,16 @@ Planned as 1.11.0.
   banked resets. M available." and "<provider> <window> usage is available
   again.", with readable window names such as "5 Hour" and "Weekly".
 
+### Changed
+
+- Release tooling (no app behavior change): the local test gate now runs every leg
+  and lists all failures in one pass instead of stopping at the first. A passing leg
+  is reused from `<git-common-dir>/release-receipts/gradus-ios` for byte-identical
+  inputs, so pre-push results carry into the release gate and a restart keeps every
+  leg that passed. Prepare, status and upload run from the tool-owned release
+  checkout at a commit, and the screen-seizing UI journeys now run once per release
+  through `app/verify-release-ui` instead of inside the release gate.
+
 ### Fixed
 
 - OpenCode Go now reads the existing OpenCode v2 OAuth connection instead of

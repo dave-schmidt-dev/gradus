@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 BUG_ENTRY = re.compile(r"^\s*[-*]\s+\[bug\]")
 LIST_ITEM = re.compile(r"^\s*[-*]\s+")
@@ -35,5 +37,9 @@ def _bug_entries() -> list[tuple[int, str]]:
 
 
 def test_every_bug_history_entry_has_an_invariant_tag() -> None:
+    # HISTORY.md is gitignored (local-only), so a fresh worktree or release
+    # checkout never has it; the check is meaningful only where it exists.
+    if not (ROOT / "HISTORY.md").exists():
+        pytest.skip("HISTORY.md is gitignored and absent in this checkout")
     missing = [line_number for line_number, entry in _bug_entries() if not INV_TAG.search(entry)]
     assert not missing, f"[bug] entries missing inv: tag at HISTORY.md lines {missing}"

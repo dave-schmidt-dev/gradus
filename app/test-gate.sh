@@ -4,12 +4,21 @@
 # failure (preflight mismatch, build failure, or test failure) so it's safe
 # to wire into CI/pre-push as a hard gate.
 #
-# Two modes share this one gate. The default is the full milestone gate, which
-# keeps every host HID and XCUITest UI journey. `--headless` is the routine
-# pre-push mode: it retains all static, hermetic, SwiftPM, macOS/iOS unit,
-# widget, and image-snapshot legs while omitting exactly the three
-# screen-seizing legs in HEADLESS_SKIPPED_LEG_NAMES. Unknown options fail
-# closed.
+# The gate is a list of legs (declared as `gateLegs` in
+# .release/release-adapter.json). Each leg is a function run through
+# `gate_leg`, so a leg whose inputs are byte-identical to an earlier pass is
+# reused from any worktree instead of rerun. A failing leg never stops the
+# others: every leg runs, and the gate lists every failed leg at the end.
+#
+# Four modes share this one gate. The default is the full milestone gate,
+# which runs every leg including the host HID and XCUITest UI journeys.
+#   --headless          routine pre-push mode; omits exactly the three
+#                       screen-seizing legs in HEADLESS_SKIPPED_LEG_NAMES
+#   --release <id>      candidate-bound release mode: headless legs, and the
+#                       receipts they used are bound into candidate <id>
+#   --ui-verify         only the three screen-seizing legs; the one UI step
+#                       per release (app/verify-release-ui)
+# Unknown options fail closed.
 
 # Resolve the repository before the executable path can change the working
 # directory.  Functions may run after the main body has cd'd into app/, so a
@@ -158,10 +167,20 @@ COUNTING_LEG_RUN_COUNT=0
 # accounting subtracts them instead of pretending they ran. The phone and pad
 # density image snapshots are XCTest unit legs and stay enabled.
 GATE_MODE="milestone"
+GATE_CANDIDATE_ID=""
 HEADLESS_SKIPPED_LEG_NAMES=("GradusMacUI" "GradusiOS-iPad" "GradusiOSUI")
 
 gate_mode_runs_ui_legs() {
-  [[ "$GATE_MODE" != "headless" ]]
+  [[ "$GATE_MODE" == "milestone" || "$GATE_MODE" == "ui-verify" ]]
+}
+
+# The receipt mode gate_leg understands for each gate mode.
+gate_legs_mode() {
+  case "$GATE_MODE" in
+    milestone) printf 'full\n' ;;
+    headless | release | ui-verify) printf '%s\n' "$GATE_MODE" ;;
+    *) return 1 ;;
+  esac
 }
 
 headless_skipped_leg() {
@@ -173,11 +192,11 @@ headless_skipped_leg() {
 }
 
 expected_counting_leg_count() {
-  if gate_mode_runs_ui_legs; then
-    printf '%s\n' "$EXPECTED_COUNTING_LEG_COUNT"
-  else
-    printf '%s\n' "$((EXPECTED_COUNTING_LEG_COUNT - ${#HEADLESS_SKIPPED_LEG_NAMES[@]}))"
-  fi
+  case "$GATE_MODE" in
+    milestone) printf '%s\n' "$EXPECTED_COUNTING_LEG_COUNT" ;;
+    ui-verify) printf '%s\n' "${#HEADLESS_SKIPPED_LEG_NAMES[@]}" ;;
+    *) printf '%s\n' "$((EXPECTED_COUNTING_LEG_COUNT - ${#HEADLESS_SKIPPED_LEG_NAMES[@]}))" ;;
+  esac
 }
 
 is_canonical_swift_path() {
@@ -265,8 +284,8 @@ validate_counting_leg_declarations() {
     fi
   done
 
-  if [[ "$GATE_MODE" != "milestone" && "$GATE_MODE" != "headless" ]]; then
-    echo "FAIL: unknown gate mode '$GATE_MODE' (expected milestone or headless)" >&2
+  if ! gate_legs_mode >/dev/null; then
+    echo "FAIL: unknown gate mode '$GATE_MODE' (expected milestone, headless, release or ui-verify)" >&2
     return 1
   fi
 
@@ -400,10 +419,10 @@ assert_counting_leg() {
   fi
 
   # The mode guard lives at the one seam every counted leg passes through, so
-  # headless mode cannot execute a screen-seizing leg even if a caller forgets
-  # to wrap it. The command is refused before it is invoked.
+  # headless and release modes cannot execute a screen-seizing leg even if a
+  # caller forgets to wrap it. The command is refused before it is invoked.
   if ! gate_mode_runs_ui_legs && headless_skipped_leg "$leg_name"; then
-    echo "FAIL: counting leg '$leg_name' is screen-seizing and excluded in headless mode" >&2
+    echo "FAIL: counting leg '$leg_name' is screen-seizing and excluded in $GATE_MODE mode" >&2
     return 1
   fi
 
@@ -656,215 +675,29 @@ run_gradus_kit_tests() {
   return "$status"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-set -euo pipefail
-
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    --help)
-      echo "Usage: GRADUS_STATIC_BASE=<git-commit> bash test-gate.sh [--headless]"
-      echo "  (no mode option runs the full milestone gate, including the host HID"
-      echo "   and simulator XCUITest UI journeys)"
-      echo "  --headless  routine gate: skip only GradusMacUI, GradusiOS-iPad, GradusiOSUI"
-      exit 0
-      ;;
-    --headless)
-      GATE_MODE="headless"
-      ;;
-    *)
-      echo "FAIL: unknown test-gate option '$1'" >&2
-      exit 2
-      ;;
-  esac
-  shift
-done
-
-diagnostics_sdk_manifest="$(diagnostics_sdk_manifest_path "$GATE_REPO_ROOT/app/GradusKit")"
-preflight_diagnostics_sdk_manifest "$diagnostics_sdk_manifest"
-
-sweep_stale_test_gate_transcripts
-sweep_stale_gate_derived_data
-
-cd "$(dirname "${BASH_SOURCE[0]}")"
-
-validate_counting_leg_declarations
-validate_density_image_snapshot_selectors
-
-echo "==> Gradus test gate mode: $GATE_MODE"
-if ! gate_mode_runs_ui_legs; then
-  echo "    Headless mode omits screen-seizing UI legs: ${HEADLESS_SKIPPED_LEG_NAMES[*]}"
-  echo "    Expected counting legs: $(expected_counting_leg_count) of $EXPECTED_COUNTING_LEG_COUNT"
-fi
-
-# Fail closed before any test, simulator, or other disruptive gate work.
-run_changed_swift_static_checks
-
-echo "==> Hermetic notarization script behavior tests"
-./test-notary-scripts.sh
-
-# Not a counting leg: the counting legs are the four test-*framework* reporters
-# (swift-testing, pytest, xctest, aggregate-xctest-swift), and this is a shell
-# suite like the ones around it. It fails loudly on its own, which is what the
-# floors exist to guarantee for the framework runners.
-echo "==> Hermetic Mac bundle signing and structure tests"
-./test-mac-bundle-structure.sh
-
-echo "==> Hermetic test-count gate behavior tests"
-./test-gate-selfcheck.sh
-
-echo "==> Hermetic iOS upload wrapper behavior tests"
-./test-archive-upload-ios.sh
-
-echo "==> Hermetic local Mac install behavior tests"
-./test-install-mac-local.sh
-
-echo "==> Hermetic local iOS device install behavior tests"
-./test-install-ios-local.sh
-
-echo "==> Hermetic credential bridge install behavior tests"
-./test-install-credential-bridge.sh
-
-echo "==> Hermetic universal2 Gradus runtime build and relocation tests"
-bash ./test-build-gradus-runtime.sh
-
-echo "==> Hermetic release-candidate ledger tests"
-assert_counting_leg "release-candidate" uv run pytest -q test_release_candidate.py
-
-echo "==> Hermetic release-candidate validation tests"
-assert_counting_leg "release-candidate-validation" uv run pytest -q test_release_candidate_validation.py
-
-echo "==> Hermetic App Store Connect client tests"
-assert_counting_leg "asc-api" uv run pytest -q test_asc_api.py
-
-# Transport for the App Store Connect REST build-uploads flow that replaced
-# altool. Hermetic: every test drives a fake transport, so no credential or
-# network access is required to run this leg.
-assert_counting_leg "build-upload" uv run pytest -q test_asc_build_upload.py
-
-echo "==> Hermetic release reconciliation tests"
-assert_counting_leg "release-reconcile" uv run pytest -q test_release_reconcile.py
-
-echo "==> Hermetic TestFlight assignment tests"
-assert_counting_leg "testflight-assignment" uv run pytest -q testflight-setup-tests.py
-
-echo "==> Hermetic candidate walkthrough tests"
-assert_counting_leg "candidate-walkthrough" uv run pytest -q test_walkthrough.py
-
-echo "==> Hermetic release bridge dispatch tests"
-assert_counting_leg "release-bridge" uv run pytest -q test_gradus_release_bridge.py
-
-# INV-11 declares `area:` over app/GradusKit/**, gradus/**, and tests/** with
-# this script as its gate_test -- but the three `xcodebuild test` invocations
-# below cover none of those three. GradusKit is consumed as a SwiftPM package
-# *dependency*, so `xcodebuild test -scheme ...` builds its library product and
-# never its test targets; XcodeGen can't add them to a scheme's `test:` block
-# either, since they aren't project targets. Result (found 2026-08-05): 47
-# passing GradusKit tests -- the reconciliation core both apps import -- sat
-# entirely outside the release gate, and the Python suite only ran via
-# pre-push. Both run here now, ordered before the slow simulator work so the
-# gate fails fast.
-echo "==> swift test — GradusKit package (SwiftPM; not reachable via either app scheme)"
-run_gradus_kit_tests
-
-echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
-assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
-
-PINNED_XCODE_VERSION="$(cat .xcode-version)"
-PINNED_MACOS_VERSION_PATH="$GATE_SCRIPT_DIR/.macos-version"
-# In the milestone gate three legs take this machine-wide lock -- GradusMacUI
-# and both simulator UI legs; headless mode omits all three and never touches
-# it. The two simulator legs take it through simctl_gate_lib.sh's
-# `gate_ui_test_lock`, which also deletes the XCTestDevices clones xcodebuild
-# creates for them; GradusMacUI calls the binary directly because a macOS UI
-# test runs on the host and produces no simulator clone for that wrapper to
-# reap. `flock` is per open-file-description, so a *nested* acquisition is not
-# re-entrant: running this gate underneath an outer `apple-ui-test-lock` hold
-# makes each of those legs wait forever on a lock its own ancestor owns. Run
-# the gate bare -- `GRADUS_STATIC_BASE=<git-commit> caffeinate -disu bash app/test-gate.sh` -- and let the legs
-# take the lock themselves.
-APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"
-GRADUS_MAC_TEST_TIMEOUT_SECONDS="${GRADUS_MAC_TEST_TIMEOUT_SECONDS:-600}"
-if ! [[ "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "FAIL: GRADUS_MAC_TEST_TIMEOUT_SECONDS must be a positive integer" >&2
-  exit 2
-fi
-SIM_OS_VERSION="26.5"
-SIM_RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
-SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
-
-# The iPad destination exists because it is the only one where the adaptive
-# grid resolves to more than one column -- the iPhone runs the same dense
-# cards in a single column (INV-12), so both destinations execute
-# `DensityLayoutXCUITests` for real and neither is proven by the other.
-# Image baselines are iPad-canonical because they require fixed 834x1194 host
-# geometry; iPhone coverage remains UI tests and non-snapshot units.
-# Pinned to the 11-inch (834x1194 points) because that is exactly the geometry
-# `DensityLayoutSnapshotTests` records its baselines at; a different iPad
-# would still be "regular width" but would no longer describe the same layout
-# the snapshots do. The iPad leg selects the UI tests and the 12 canonical
-# image snapshot functions; rerunning the whole iOS suite on a second simulator
-# would roughly double the gate's slowest phase.
-IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
-
-echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
-# One `awk` that reads to EOF, rather than `| head -1 | awk ...`. `head` exits
-# as soon as it has its line, and if `xcodebuild` is still writing it takes
-# SIGPIPE; under `set -euo pipefail` that surfaces as the gate aborting with
-# 141 right here, before a single test runs, and the log just stops after the
-# banner above with no error text -- which reads like a clean run to anything
-# tailing it. Observed once in three runs on 2026-08-06.
+# ---- Leg runner --------------------------------------------------------------
 #
-# Note `awk 'NR==1{print $2; exit}'` would NOT fix it: that `exit` closes the
-# pipe exactly as early as `head` does. Consuming the whole stream is the
-# point, not matching only the first line.
-active_xcode_version="$(xcodebuild -version | awk 'NR==1{print $2}')"
-if [[ "$active_xcode_version" != "$PINNED_XCODE_VERSION" ]]; then
-  echo "FAIL: active Xcode is $active_xcode_version, pinned to $PINNED_XCODE_VERSION (.xcode-version)" >&2
-  echo "      floating minor versions silently break OS-specific snapshot baselines — regenerate deliberately on upgrade." >&2
-  exit 1
-fi
+# Every leg below is a function so its argv is stable: `gate_leg` keys a
+# receipt on the exact argv, and a leg that named a DerivedData directory or a
+# simulator UDID on its command line could never be reused. Everything
+# per-run (DerivedData, simulators, staged sources) is a global the leg
+# functions create on demand, so a reused leg costs no simulator and no build.
+#
+# `set -e` is inert inside a function called from an `||` list, which is how
+# `gate_leg` is called; each step therefore ends `|| return $?` (or collects a
+# status) instead of relying on it.
 
-if ! active_macos_version="$(sw_vers -productVersion)"; then
-  echo "FAIL: could not read the active macOS version with sw_vers -productVersion" >&2
-  exit 1
-fi
-validate_macos_version_pin "$PINNED_MACOS_VERSION_PATH" "$active_macos_version"
-
-if ! xcrun simctl list runtimes | grep -q "iOS $SIM_OS_VERSION "; then
-  echo "FAIL: iOS $SIM_OS_VERSION runtime is not installed (pinned simulator OS)" >&2
-  exit 1
-fi
-echo "    Xcode $active_xcode_version, macOS $active_macos_version, iOS $SIM_OS_VERSION runtime present. OK."
-
-echo "==> Regenerating Xcode project from project.yml"
-xcodegen generate
-
-is_simulator_booted() {
-  local udid="$1"
-  xcrun simctl list devices "$SIM_OS_VERSION" |
-    grep -F "$udid) (Booted)" >/dev/null
-}
-
-# A crashing test (e.g. a segfault inside a snapshot-diffing dependency)
-# still produces a valid, useful .ips in ~/Library/Logs/DiagnosticReports --
-# only the interactive "GradusiOS quit unexpectedly" dialog is suppressed,
-# scoped to this run and restored on exit so it never leaks into the rest
-# of the system.
-prior_dialog_type="$(defaults read com.apple.CrashReporter DialogType 2>/dev/null || true)"
-defaults write com.apple.CrashReporter DialogType none
-
-# All Xcode test legs use one fresh, run-scoped DerivedData directory. This
-# prevents a stale Mac XCTest runner (especially one produced by an older
-# unsigned invocation) from being rediscovered by testmanagerd on the next
-# run. The iOS legs also need isolation so snapshot resources cannot survive a
-# source change. Sharing the directory within this gate keeps package/build
-# reuse while making the entire test run disposable. Declared empty here (set
-# for real via the shared gate lib's gate_derived_data below, once sourced) so
-# the EXIT trap below always has a bound variable to rm -rf even if the run
-# fails before that point -- `rm -rf ""` is a safe no-op, never `rm -rf` of cwd.
+GATE_FAILED_LEGS=()
+GATE_RESULT_RECEIPTS=""
+LEG_RAN=0
+XCODE_ENV_READY=0
+IPHONE_SIM_READY=0
+IPAD_SIM_READY=0
+prior_dialog_type=""
+crash_dialog_changed=0
 derived_data_dir=""
 
-readonly LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 # `rm -rf` on DerivedData does not unregister what LaunchServices already
 # recorded: every gate run built `GradusMac.app` under a fresh temp path,
@@ -885,101 +718,344 @@ gate_unregister_bundles() {
     -type d -name "*.app" -print 2>/dev/null)
 }
 
-# This gate's own EXIT trap only handles state it owns directly (the
-# CrashReporter dialog override and DerivedData). It is set BEFORE sourcing
-# the shared simctl gate lib below, on purpose: the lib's
-# own EXIT-trap installation composes onto whatever trap already exists at
-# source time (see simctl_gate_lib.sh's header) rather than clobbering it, so
-# simulator create/delete lifecycle is entirely the shared lib's
-# responsibility from here on -- this gate no longer tracks whether a device
-# pre-existed, because gate_sim_create always makes a fresh disposable one.
-trap '
-  if [[ -z "$prior_dialog_type" ]]; then
-    defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
-  else
-    defaults write com.apple.CrashReporter DialogType "$prior_dialog_type"
+sim_udid=""
+ipad_udid=""
+
+# The pins every simulator leg shares. They are context for the receipt digest
+# as well as the create arguments, so a runtime or device change reruns them.
+SIM_OS_VERSION="26.5"
+SIM_RUNTIME_ID="com.apple.CoreSimulator.SimRuntime.iOS-26-5"
+SIM_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPhone-16"
+# The iPad destination exists because it is the only one where the adaptive
+# grid resolves to more than one column -- the iPhone runs the same dense
+# cards in a single column (INV-12), so both destinations execute
+# `DensityLayoutXCUITests` for real and neither is proven by the other.
+# Image baselines are iPad-canonical because they require fixed 834x1194 host
+# geometry; iPhone coverage remains UI tests and non-snapshot units.
+# Pinned to the 11-inch (834x1194 points) because that is exactly the geometry
+# `DensityLayoutSnapshotTests` records its baselines at; a different iPad
+# would still be "regular width" but would no longer describe the same layout
+# the snapshots do. The iPad leg selects the UI tests and the 12 canonical
+# image snapshot functions; rerunning the whole iOS suite on a second simulator
+# would roughly double the gate's slowest phase.
+IPAD_DEVICETYPE_ID="com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M5-12GB"
+
+# Print a Python >= 3.11 for release_tools (receipts call it). The release
+# wrappers search the same way: macOS /usr/bin/python3 is 3.9.
+gate_release_python() {
+  local candidate
+  for candidate in \
+    "${GRADUS_RELEASE_PYTHON:-}" \
+    python3 python3.13 python3.12 python3.11 \
+    /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+    /usr/bin/python3; do
+    [[ -n "$candidate" ]] || continue
+    candidate="$(command -v "$candidate" 2>/dev/null)" || continue
+    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+
+# run_leg <leg-id> <counting-legs> [gate_leg options] -- <function>
+#
+# Run or reuse one declared leg and record a failure instead of stopping. A
+# reused leg never executes its counting assertions, so its share of the
+# expected total (<counting-legs>) is added here; a leg `gate_leg` deferred
+# (a UI leg outside milestone and ui-verify) contributes nothing.
+run_leg() {
+  local leg_id="$1" counted="$2" status=0 used_before
+  shift 2
+  LEG_RAN=0
+  used_before="${#GATE_LEGS_USED[@]}"
+  gate_leg "$leg_id" "$@" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    GATE_FAILED_LEGS+=("$leg_id")
+    echo "FAIL: gate leg '$leg_id' failed (status $status)" >&2
+    return 0
   fi
-  gate_unregister_bundles
-  rm -rf "$derived_data_dir"
-' EXIT
+  if [[ "$LEG_RAN" -eq 0 && "${#GATE_LEGS_USED[@]}" -gt "$used_before" ]]; then
+    COUNTING_LEG_RUN_COUNT=$((COUNTING_LEG_RUN_COUNT + counted))
+  fi
+}
 
-# shellcheck source=/dev/null
-source "/Users/dave/Documents/Projects/apple_developer/release_tools/templates/simctl_gate_lib.sh"
+# gate_step <name> <command...>: a check that is not a receipted leg. The
+# changed-Swift static checks depend on GRADUS_STATIC_BASE, a revision the
+# input digest does not cover, so they always run.
+gate_step() {
+  local name="$1" status=0
+  shift
+  "$@" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    GATE_FAILED_LEGS+=("$name")
+    echo "FAIL: gate step '$name' failed (status $status)" >&2
+  fi
+  return 0
+}
 
-echo "==> Sweeping stale Gradus gate simulators (>24h)"
-swept_count="$(gate_sweep gradus)"
-echo "    Swept $swept_count stale gate device(s)."
+# Preflight, project generation and run-scoped state shared by every Xcode
+# leg. It runs once, the first time an Xcode leg actually executes.
+ensure_xcode_env() {
+  [[ "$XCODE_ENV_READY" -eq 0 ]] || return 0
+  local active_xcode_version active_macos_version
 
-derived_data_dir="$(gate_derived_data)"
-gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"
-gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"
-gradus_mac_banked_fixture_path="$derived_data_dir/fixtures/banked-observation-v1.json"
-gradus_bridge_stage_root="$derived_data_dir/bridge-source"
-gradus_bridge_source_root="$gradus_bridge_stage_root/app"
+  echo "==> Preflight: Xcode + simulator OS must match the pins (PM-9)"
+  # One `awk` that reads to EOF, rather than `| head -1 | awk ...`. `head` exits
+  # as soon as it has its line, and if `xcodebuild` is still writing it takes
+  # SIGPIPE; under `set -euo pipefail` that surfaces as the gate aborting with
+  # 141 right here, before a single test runs, and the log just stops after the
+  # banner above with no error text -- which reads like a clean run to anything
+  # tailing it. Observed once in three runs on 2026-08-06.
+  #
+  # Note `awk 'NR==1{print $2; exit}'` would NOT fix it: that `exit` closes the
+  # pipe exactly as early as `head` does. Consuming the whole stream is the
+  # point, not matching only the first line.
+  active_xcode_version="$(xcodebuild -version | awk 'NR==1{print $2}')"
+  if [[ "$active_xcode_version" != "$PINNED_XCODE_VERSION" ]]; then
+    echo "FAIL: active Xcode is $active_xcode_version, pinned to $PINNED_XCODE_VERSION (.xcode-version)" >&2
+    echo "      floating minor versions silently break OS-specific snapshot baselines — regenerate deliberately on upgrade." >&2
+    return 1
+  fi
 
-echo "==> Creating disposable Gradus gate iPhone simulator (iOS $SIM_OS_VERSION)"
-sim_udid="$(gate_sim_create gradus iphone "$SIM_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
-echo "    Simulator UDID: $sim_udid"
+  if ! active_macos_version="$(sw_vers -productVersion)"; then
+    echo "FAIL: could not read the active macOS version with sw_vers -productVersion" >&2
+    return 1
+  fi
+  validate_macos_version_pin "$PINNED_MACOS_VERSION_PATH" "$active_macos_version" || return 1
 
-echo "==> Creating disposable Gradus gate iPad simulator (iOS $SIM_OS_VERSION)"
-ipad_udid="$(gate_sim_create gradus ipad "$IPAD_DEVICETYPE_ID" "$SIM_RUNTIME_ID")"
-echo "    iPad UDID: $ipad_udid"
+  if ! xcrun simctl list runtimes | grep -q "iOS $SIM_OS_VERSION "; then
+    echo "FAIL: iOS $SIM_OS_VERSION runtime is not installed (pinned simulator OS)" >&2
+    return 1
+  fi
+  echo "    Xcode $active_xcode_version, macOS $active_macos_version, iOS $SIM_OS_VERSION runtime present. OK."
 
-echo "==> Booting simulators"
-xcrun simctl bootstatus "$sim_udid" -b || true
-xcrun simctl bootstatus "$ipad_udid" -b || true
+  echo "==> Regenerating Xcode project from project.yml"
+  xcodegen generate || return $?
 
-echo "==> xcodebuild test — GradusMac (platform=macOS)"
-# Tests execute local Debug products and do not produce a distributable artifact.
-# Keeping signing disabled here avoids provisioning/account state becoming a false test gate;
-# archive, export, and notarization scripts retain their normal signing paths.
-# INV-7 runs inside the hosted GradusMac test process. Stage exactly the source
-# tree it scans outside the checkout before launching that host, then pass the
-# staged root explicitly so the test never reads ~/Documents through #filePath.
-mkdir -p "$(dirname "$gradus_mac_inv7_source_root")"
-/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMac/." "$gradus_mac_inv7_source_root"
-staged_gradus_mac_file="$(find "$gradus_mac_inv7_source_root" -type f -print -quit)"
-if [[ ! -d "$gradus_mac_inv7_source_root" ]] ||
-   [[ -z "$staged_gradus_mac_file" ]]; then
-  echo "FAIL: could not stage non-empty GradusMac source for INV-7" >&2
-  exit 1
-fi
-mkdir -p "$(dirname "$gradus_mac_snapshot_root")"
-/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMacTests/__Snapshots__/." "$gradus_mac_snapshot_root"
-staged_gradus_mac_snapshot="$(find "$gradus_mac_snapshot_root" -type f -print -quit)"
-if [[ ! -d "$gradus_mac_snapshot_root" ]] ||
-   [[ -z "$staged_gradus_mac_snapshot" ]]; then
-  echo "FAIL: could not stage non-empty GradusMac snapshot baselines" >&2
-  exit 1
-fi
-gradus_mac_banked_fixture_source="$GATE_REPO_ROOT/tests/fixtures/banked-observation-v1.json"
-if [[ ! -s "$gradus_mac_banked_fixture_source" ]]; then
-  echo "FAIL: GradusMac banked-observation test fixture is missing or empty" >&2
-  exit 1
-fi
-mkdir -p "$(dirname "$gradus_mac_banked_fixture_path")"
-/bin/cp "$gradus_mac_banked_fixture_source" "$gradus_mac_banked_fixture_path"
-if [[ ! -s "$gradus_mac_banked_fixture_path" ]]; then
-  echo "FAIL: could not stage non-empty GradusMac banked-observation test fixture" >&2
-  exit 1
-fi
-assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests" env \
-  TZ="America/New_York" \
-  TEST_RUNNER_TZ="America/New_York" \
-  GRADUS_DISABLE_PIPELINE=1 \
-  TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
-  TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
-  TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH="$gradus_mac_banked_fixture_path" \
-  xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusMac \
-  -destination 'platform=macOS,arch=arm64' \
-  -only-testing:GradusMacTests \
-  CODE_SIGNING_ALLOWED=NO
+  # A crashing test (e.g. a segfault inside a snapshot-diffing dependency)
+  # still produces a valid, useful .ips in ~/Library/Logs/DiagnosticReports --
+  # only the interactive "GradusiOS quit unexpectedly" dialog is suppressed,
+  # scoped to this run and restored on exit so it never leaks into the rest
+  # of the system.
+  prior_dialog_type="$(defaults read com.apple.CrashReporter DialogType 2>/dev/null || true)"
+  crash_dialog_changed=1
+  defaults write com.apple.CrashReporter DialogType none
 
-if gate_mode_runs_ui_legs; then
+  echo "==> Sweeping stale Gradus gate simulators (>24h)"
+  local swept_count
+  swept_count="$(gate_sweep gradus)"
+  echo "    Swept $swept_count stale gate device(s)."
+
+  # All Xcode test legs use one fresh, run-scoped DerivedData directory. This
+  # prevents a stale Mac XCTest runner (especially one produced by an older
+  # unsigned invocation) from being rediscovered by testmanagerd on the next
+  # run. The iOS legs also need isolation so snapshot resources cannot survive a
+  # source change. Sharing the directory within this gate keeps package/build
+  # reuse while making the entire test run disposable.
+  derived_data_dir="$(gate_derived_data)"
+  gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"
+  gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"
+  gradus_mac_banked_fixture_path="$derived_data_dir/fixtures/banked-observation-v1.json"
+  gradus_bridge_stage_root="$derived_data_dir/bridge-source"
+  gradus_bridge_source_root="$gradus_bridge_stage_root/app"
+  XCODE_ENV_READY=1
+}
+
+ensure_iphone_simulator() {
+  [[ "$IPHONE_SIM_READY" -eq 0 ]] || return 0
+  ensure_xcode_env || return $?
+  echo "==> Creating disposable Gradus gate iPhone simulator (iOS $SIM_OS_VERSION)"
+  sim_udid="$(gate_sim_create gradus iphone "$SIM_DEVICETYPE_ID" "$SIM_RUNTIME_ID")" || return $?
+  echo "    Simulator UDID: $sim_udid"
+  xcrun simctl bootstatus "$sim_udid" -b || true
+  IPHONE_SIM_READY=1
+}
+
+ensure_ipad_simulator() {
+  [[ "$IPAD_SIM_READY" -eq 0 ]] || return 0
+  ensure_xcode_env || return $?
+  echo "==> Creating disposable Gradus gate iPad simulator (iOS $SIM_OS_VERSION)"
+  ipad_udid="$(gate_sim_create gradus ipad "$IPAD_DEVICETYPE_ID" "$SIM_RUNTIME_ID")" || return $?
+  echo "    iPad UDID: $ipad_udid"
+  xcrun simctl bootstatus "$ipad_udid" -b || true
+  IPAD_SIM_READY=1
+}
+
+is_simulator_booted() {
+  local udid="$1"
+  xcrun simctl list devices "$SIM_OS_VERSION" |
+    grep -F "$udid) (Booted)" >/dev/null
+}
+
+# A completed iPad XCTest runner can leave testmanagerd's Accessibility session
+# attached to the wrong CoreSimulator device. Restart the iPhone target after
+# retiring the iPad runner so the next AX-loaded notification is fresh. Only
+# the UI legs need this handoff; the unit legs never churn simulator sessions.
+reset_simulator_ui_session_for_iphone() {
+  echo "==> Resetting simulator UI session before iPhone UI tests"
+  if [[ -n "$ipad_udid" ]] && is_simulator_booted "$ipad_udid"; then
+    xcrun simctl shutdown "$ipad_udid" || return $?
+  fi
+  if is_simulator_booted "$sim_udid"; then
+    xcrun simctl shutdown "$sim_udid" || return $?
+  fi
+  xcrun simctl boot "$sim_udid" || return $?
+  xcrun simctl bootstatus "$sim_udid" -b || return $?
+}
+
+# ---- Legs --------------------------------------------------------------------
+
+# Hermetic shell suites. Each one fails loudly on its own; they are not
+# counting legs (the counting legs are the test-*framework* reporters), and
+# one failing never hides the others.
+leg_hermetic_shell() {
+  LEG_RAN=1
+  local status=0
+
+  echo "==> Hermetic notarization script behavior tests"
+  ./test-notary-scripts.sh || status=1
+
+  # Not a counting leg: it is a shell suite like the ones around it.
+  echo "==> Hermetic Mac bundle signing and structure tests"
+  ./test-mac-bundle-structure.sh || status=1
+
+  echo "==> Hermetic test-count gate behavior tests"
+  ./test-gate-selfcheck.sh || status=1
+
+  echo "==> Hermetic iOS upload wrapper behavior tests"
+  ./test-archive-upload-ios.sh || status=1
+
+  echo "==> Hermetic local Mac install behavior tests"
+  ./test-install-mac-local.sh || status=1
+
+  echo "==> Hermetic local iOS device install behavior tests"
+  ./test-install-ios-local.sh || status=1
+
+  echo "==> Hermetic credential bridge install behavior tests"
+  ./test-install-credential-bridge.sh || status=1
+
+  echo "==> Hermetic universal2 Gradus runtime build and relocation tests"
+  bash ./test-build-gradus-runtime.sh || status=1
+
+  return "$status"
+}
+
+# The release-tooling pytest suites, one counting leg each.
+leg_release_python() {
+  LEG_RAN=1
+  local status=0
+
+  echo "==> Hermetic release-candidate ledger tests"
+  assert_counting_leg "release-candidate" uv run pytest -q test_release_candidate.py || status=1
+
+  echo "==> Hermetic release-candidate validation tests"
+  assert_counting_leg "release-candidate-validation" uv run pytest -q test_release_candidate_validation.py || status=1
+
+  echo "==> Hermetic App Store Connect client tests"
+  assert_counting_leg "asc-api" uv run pytest -q test_asc_api.py || status=1
+
+  # Transport for the App Store Connect REST build-uploads flow that replaced
+  # altool. Hermetic: every test drives a fake transport, so no credential or
+  # network access is required to run this leg.
+  assert_counting_leg "build-upload" uv run pytest -q test_asc_build_upload.py || status=1
+
+  echo "==> Hermetic release reconciliation tests"
+  assert_counting_leg "release-reconcile" uv run pytest -q test_release_reconcile.py || status=1
+
+  echo "==> Hermetic TestFlight assignment tests"
+  assert_counting_leg "testflight-assignment" uv run pytest -q testflight-setup-tests.py || status=1
+
+  echo "==> Hermetic candidate walkthrough tests"
+  assert_counting_leg "candidate-walkthrough" uv run pytest -q test_walkthrough.py || status=1
+
+  echo "==> Hermetic release bridge dispatch tests"
+  assert_counting_leg "release-bridge" uv run pytest -q test_gradus_release_bridge.py || status=1
+
+  return "$status"
+}
+
+# INV-11 declares `area:` over app/GradusKit/**, gradus/**, and tests/** with
+# this script as its gate_test -- but the `xcodebuild test` invocations below
+# cover none of those three. GradusKit is consumed as a SwiftPM package
+# *dependency*, so `xcodebuild test -scheme ...` builds its library product and
+# never its test targets; XcodeGen can't add them to a scheme's `test:` block
+# either, since they aren't project targets. Result (found 2026-08-05): 47
+# passing GradusKit tests -- the reconciliation core both apps import -- sat
+# entirely outside the release gate, and the Python suite only ran via
+# pre-push. Both run here now, ordered before the slow simulator work so the
+# gate fails fast.
+leg_graduskit() {
+  LEG_RAN=1
+  echo "==> swift test — GradusKit package (SwiftPM; not reachable via either app scheme)"
+  run_gradus_kit_tests
+}
+
+leg_pytest() {
+  LEG_RAN=1
+  echo "==> pytest — Python producer suite (INV-1..INV-6, INV-8)"
+  assert_counting_leg "pytest" bash -c 'cd .. && uv run pytest -q'
+}
+
+leg_mac_unit() {
+  LEG_RAN=1
+  ensure_xcode_env || return $?
+
+  echo "==> xcodebuild test — GradusMac (platform=macOS)"
+  # Tests execute local Debug products and do not produce a distributable artifact.
+  # Keeping signing disabled here avoids provisioning/account state becoming a false test gate;
+  # archive, export, and notarization scripts retain their normal signing paths.
+  # INV-7 runs inside the hosted GradusMac test process. Stage exactly the source
+  # tree it scans outside the checkout before launching that host, then pass the
+  # staged root explicitly so the test never reads ~/Documents through #filePath.
+  mkdir -p "$(dirname "$gradus_mac_inv7_source_root")"
+  /usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMac/." "$gradus_mac_inv7_source_root"
+  staged_gradus_mac_file="$(find "$gradus_mac_inv7_source_root" -type f -print -quit)"
+  if [[ ! -d "$gradus_mac_inv7_source_root" ]] ||
+     [[ -z "$staged_gradus_mac_file" ]]; then
+    echo "FAIL: could not stage non-empty GradusMac source for INV-7" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$gradus_mac_snapshot_root")"
+  /usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMacTests/__Snapshots__/." "$gradus_mac_snapshot_root"
+  staged_gradus_mac_snapshot="$(find "$gradus_mac_snapshot_root" -type f -print -quit)"
+  if [[ ! -d "$gradus_mac_snapshot_root" ]] ||
+     [[ -z "$staged_gradus_mac_snapshot" ]]; then
+    echo "FAIL: could not stage non-empty GradusMac snapshot baselines" >&2
+    return 1
+  fi
+  gradus_mac_banked_fixture_source="$GATE_REPO_ROOT/tests/fixtures/banked-observation-v1.json"
+  if [[ ! -s "$gradus_mac_banked_fixture_source" ]]; then
+    echo "FAIL: GradusMac banked-observation test fixture is missing or empty" >&2
+    return 1
+  fi
+  mkdir -p "$(dirname "$gradus_mac_banked_fixture_path")"
+  /bin/cp "$gradus_mac_banked_fixture_source" "$gradus_mac_banked_fixture_path"
+  if [[ ! -s "$gradus_mac_banked_fixture_path" ]]; then
+    echo "FAIL: could not stage non-empty GradusMac banked-observation test fixture" >&2
+    return 1
+  fi
+  assert_counting_leg "GradusMac" run_with_deadline "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" "GradusMac unit tests" env \
+    TZ="America/New_York" \
+    TEST_RUNNER_TZ="America/New_York" \
+    GRADUS_DISABLE_PIPELINE=1 \
+    TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
+    TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
+    TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH="$gradus_mac_banked_fixture_path" \
+    xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusMac \
+    -destination 'platform=macOS,arch=arm64' \
+    -only-testing:GradusMacTests \
+    CODE_SIGNING_ALLOWED=NO
+}
+
+# Screen-seizing: host HID automation against the focused window.
+leg_mac_ui() {
+  LEG_RAN=1
+  ensure_xcode_env || return $?
   echo "==> xcodebuild test — GradusMacUITests (platform=macOS; exact GradusMac product)"
   # This leg drives real HID automation against the host's focused window, so it
   # takes the same machine-wide lock the simulator UI legs take; without it a
@@ -1009,61 +1085,69 @@ if gate_mode_runs_ui_legs; then
     -scheme GradusMac \
     -destination 'platform=macOS,arch=arm64' \
     -only-testing:GradusMacUITests
-fi
+}
 
-echo "==> xcodebuild test — GradusCredentialBridge (platform=macOS)"
-# These structural tests must not open the checkout below ~/Documents from the
-# hosted XCTest process. Stage exactly the files and trees they inspect under
-# gate-owned DerivedData, preserving the app/repository layout they validate.
-mkdir -p "$gradus_bridge_source_root/GradusCredentialBridgeCore"
-/bin/cp "$GATE_REPO_ROOT/app/project.yml" "$gradus_bridge_source_root/project.yml"
-/bin/cp "$GATE_REPO_ROOT/app/GradusCredentialBridgeCore/Bridge.swift" \
-  "$gradus_bridge_source_root/GradusCredentialBridgeCore/Bridge.swift"
-for source_directory in GradusMac GradusRefreshAgent packaging; do
-  /usr/bin/ditto "$GATE_REPO_ROOT/app/$source_directory/." \
-    "$gradus_bridge_source_root/$source_directory"
-done
-/usr/bin/ditto "$GATE_REPO_ROOT/gradus/." "$gradus_bridge_stage_root/gradus"
+leg_mac_helpers() {
+  LEG_RAN=1
+  local status=0
+  ensure_xcode_env || return $?
 
-staged_bridge_file="$(find "$gradus_bridge_stage_root" -type f -print -quit)"
-if [[ -z "$staged_bridge_file" ]] ||
-   [[ ! -s "$gradus_bridge_source_root/project.yml" ]] ||
-   [[ ! -s "$gradus_bridge_source_root/GradusCredentialBridgeCore/Bridge.swift" ]]; then
-  echo "FAIL: could not stage non-empty GradusCredentialBridge structural-test inputs" >&2
-  exit 1
-fi
-for staged_directory in \
-  "$gradus_bridge_source_root/GradusMac" \
-  "$gradus_bridge_source_root/GradusRefreshAgent" \
-  "$gradus_bridge_source_root/packaging" \
-  "$gradus_bridge_stage_root/gradus"; do
-  if [[ ! -d "$staged_directory" ]] ||
-     [[ -z "$(find "$staged_directory" -type f -print -quit)" ]]; then
-    echo "FAIL: staged GradusCredentialBridge input is empty: $staged_directory" >&2
-    exit 1
+  echo "==> xcodebuild test — GradusCredentialBridge (platform=macOS)"
+  # These structural tests must not open the checkout below ~/Documents from the
+  # hosted XCTest process. Stage exactly the files and trees they inspect under
+  # gate-owned DerivedData, preserving the app/repository layout they validate.
+  mkdir -p "$gradus_bridge_source_root/GradusCredentialBridgeCore"
+  /bin/cp "$GATE_REPO_ROOT/app/project.yml" "$gradus_bridge_source_root/project.yml"
+  /bin/cp "$GATE_REPO_ROOT/app/GradusCredentialBridgeCore/Bridge.swift" \
+    "$gradus_bridge_source_root/GradusCredentialBridgeCore/Bridge.swift"
+  for source_directory in GradusMac GradusRefreshAgent packaging; do
+    /usr/bin/ditto "$GATE_REPO_ROOT/app/$source_directory/." \
+      "$gradus_bridge_source_root/$source_directory"
+  done
+  /usr/bin/ditto "$GATE_REPO_ROOT/gradus/." "$gradus_bridge_stage_root/gradus"
+
+  staged_bridge_file="$(find "$gradus_bridge_stage_root" -type f -print -quit)"
+  if [[ -z "$staged_bridge_file" ]] ||
+     [[ ! -s "$gradus_bridge_source_root/project.yml" ]] ||
+     [[ ! -s "$gradus_bridge_source_root/GradusCredentialBridgeCore/Bridge.swift" ]]; then
+    echo "FAIL: could not stage non-empty GradusCredentialBridge structural-test inputs" >&2
+    return 1
   fi
-done
+  for staged_directory in \
+    "$gradus_bridge_source_root/GradusMac" \
+    "$gradus_bridge_source_root/GradusRefreshAgent" \
+    "$gradus_bridge_source_root/packaging" \
+    "$gradus_bridge_stage_root/gradus"; do
+    if [[ ! -d "$staged_directory" ]] ||
+       [[ -z "$(find "$staged_directory" -type f -print -quit)" ]]; then
+      echo "FAIL: staged GradusCredentialBridge input is empty: $staged_directory" >&2
+      return 1
+    fi
+  done
 
-assert_counting_leg "GradusCredentialBridge" env \
-  TEST_RUNNER_GRADUS_BRIDGE_SOURCE_ROOT="$gradus_bridge_source_root" \
-  xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusCredentialBridge \
-  -destination 'platform=macOS,arch=arm64' \
-  -only-testing:GradusCredentialBridgeTests \
-  CODE_SIGNING_ALLOWED=NO
+  assert_counting_leg "GradusCredentialBridge" env \
+    TEST_RUNNER_GRADUS_BRIDGE_SOURCE_ROOT="$gradus_bridge_source_root" \
+    xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusCredentialBridge \
+    -destination 'platform=macOS,arch=arm64' \
+    -only-testing:GradusCredentialBridgeTests \
+    CODE_SIGNING_ALLOWED=NO || status=1
 
-echo "==> xcodebuild test — GradusRefreshAgent (platform=macOS)"
-assert_counting_leg "GradusRefreshAgent" xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusRefreshAgent \
-  -destination 'platform=macOS,arch=arm64' \
-  -only-testing:GradusRefreshAgentTests \
-  CODE_SIGNING_ALLOWED=NO
+  echo "==> xcodebuild test — GradusRefreshAgent (platform=macOS)"
+  assert_counting_leg "GradusRefreshAgent" xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusRefreshAgent \
+    -destination 'platform=macOS,arch=arm64' \
+    -only-testing:GradusRefreshAgentTests \
+    CODE_SIGNING_ALLOWED=NO || status=1
+
+  return "$status"
+}
 
 density_snapshot_skip_args=()
 density_phone_only_args=()
@@ -1078,48 +1162,65 @@ for selector in "${DENSITY_PAD_SNAPSHOT_TEST_SELECTORS[@]}"; do
   density_pad_only_args+=("-only-testing:$selector")
 done
 
-echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusiOS \
-  -destination "platform=iOS Simulator,id=$sim_udid" \
-  -skip-testing:GradusiOSUITests \
-  "${density_snapshot_skip_args[@]}" \
-  CODE_SIGNING_ALLOWED=NO
+leg_ios_unit() {
+  LEG_RAN=1
+  ensure_iphone_simulator || return $?
+  echo "==> xcodebuild test — GradusiOS (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+  assert_counting_leg "GradusiOS-iPhone" xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusiOS \
+    -destination "platform=iOS Simulator,id=$sim_udid" \
+    -skip-testing:GradusiOSUITests \
+    "${density_snapshot_skip_args[@]}" \
+    CODE_SIGNING_ALLOWED=NO
+}
 
-echo "==> xcodebuild test — GradusiOS phone density snapshots (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOS-DensityPhone" xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusiOS \
-  -destination "platform=iOS Simulator,id=$sim_udid" \
-  "${density_phone_only_args[@]}" \
-  CODE_SIGNING_ALLOWED=NO
+leg_ios_snapshots() {
+  LEG_RAN=1
+  local status=0
+  ensure_iphone_simulator || return $?
+  ensure_ipad_simulator || return $?
 
-echo "==> xcodebuild test — GradusiOS pad density snapshots ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusiOS-DensityPad" xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusiOS \
-  -destination "platform=iOS Simulator,id=$ipad_udid" \
-  "${density_pad_only_args[@]}" \
-  CODE_SIGNING_ALLOWED=NO
+  echo "==> xcodebuild test — GradusiOS phone density snapshots (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+  assert_counting_leg "GradusiOS-DensityPhone" xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusiOS \
+    -destination "platform=iOS Simulator,id=$sim_udid" \
+    "${density_phone_only_args[@]}" \
+    CODE_SIGNING_ALLOWED=NO || status=1
 
-echo "==> xcodebuild test — GradusWidget (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
-assert_counting_leg "GradusWidget" xcodebuild test \
-  -collect-test-diagnostics never \
-  -project Gradus.xcodeproj \
-  -derivedDataPath "$derived_data_dir" \
-  -scheme GradusWidget \
-  -destination "platform=iOS Simulator,id=$sim_udid" \
-  -only-testing:GradusWidgetTests \
-  CODE_SIGNING_ALLOWED=NO
+  echo "==> xcodebuild test — GradusiOS pad density snapshots ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
+  assert_counting_leg "GradusiOS-DensityPad" xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusiOS \
+    -destination "platform=iOS Simulator,id=$ipad_udid" \
+    "${density_pad_only_args[@]}" \
+    CODE_SIGNING_ALLOWED=NO || status=1
 
-# GradusiOSUITests has its own named iPhone leg below. Keeping it out of this
+  return "$status"
+}
+
+leg_widget() {
+  LEG_RAN=1
+  ensure_iphone_simulator || return $?
+  echo "==> xcodebuild test — GradusWidget (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
+  assert_counting_leg "GradusWidget" xcodebuild test \
+    -collect-test-diagnostics never \
+    -project Gradus.xcodeproj \
+    -derivedDataPath "$derived_data_dir" \
+    -scheme GradusWidget \
+    -destination "platform=iOS Simulator,id=$sim_udid" \
+    -only-testing:GradusWidgetTests \
+    CODE_SIGNING_ALLOWED=NO
+}
+
+# GradusiOSUITests has its own named iPhone leg below. Keeping it out of the
 # broad unit-test pass prevents Xcode from bootstrapping the same UI runner
 # twice, while the dedicated leg still makes loss of UI coverage visible.
 
@@ -1128,7 +1229,9 @@ assert_counting_leg "GradusWidget" xcodebuild test \
 # idiom skip, so removing this step would not make it go silently green -- it
 # would just stop covering the multi-column geometry. Kept as a named,
 # separate gate line so that loss is visible if anyone deletes it.
-if gate_mode_runs_ui_legs; then
+leg_ios_ipad_ui() {
+  LEG_RAN=1
+  ensure_ipad_simulator || return $?
   echo "==> xcodebuild test — GradusiOS UI tests ($ipad_udid / iOS $SIM_OS_VERSION simulator)"
   assert_counting_leg "GradusiOS-iPad" gate_ui_test_lock --label "GradusiOS UI tests ($ipad_udid)" xcodebuild test \
     -collect-test-diagnostics never \
@@ -1138,31 +1241,12 @@ if gate_mode_runs_ui_legs; then
     -destination "platform=iOS Simulator,id=$ipad_udid" \
     -only-testing:GradusiOSUITests \
     CODE_SIGNING_ALLOWED=NO
-fi
-
-# A completed iPad XCTest runner can leave testmanagerd's Accessibility session
-# attached to the wrong CoreSimulator device. Restart the iPhone target after
-# retiring the iPad runner so the next AX-loaded notification is fresh. Only
-# the milestone gate needs this handoff; headless omits both simulator UI legs
-# and must not churn simulator sessions for tests it never runs.
-reset_simulator_ui_session_for_iphone() {
-  echo "==> Resetting simulator UI session before iPhone UI tests"
-  if is_simulator_booted "$ipad_udid"; then
-    xcrun simctl shutdown "$ipad_udid"
-  fi
-  if is_simulator_booted "$sim_udid"; then
-    xcrun simctl shutdown "$sim_udid"
-  fi
-  xcrun simctl boot "$sim_udid"
-  xcrun simctl bootstatus "$sim_udid" -b
 }
 
-if gate_mode_runs_ui_legs; then
-  reset_simulator_ui_session_for_iphone
-fi
-
-# Keep both simulator UI legs adjacent.
-if gate_mode_runs_ui_legs; then
+leg_ios_ui() {
+  LEG_RAN=1
+  ensure_iphone_simulator || return $?
+  reset_simulator_ui_session_for_iphone || return $?
   echo "==> xcodebuild test — GradusiOSUITests target (iPhone 16 / iOS $SIM_OS_VERSION simulator)"
   assert_counting_leg "GradusiOSUI" gate_ui_test_lock --label "GradusiOSUITests" xcodebuild test \
     -collect-test-diagnostics never \
@@ -1172,15 +1256,219 @@ if gate_mode_runs_ui_legs; then
     -destination "platform=iOS Simulator,id=$sim_udid" \
     -only-testing:GradusiOSUITests \
     CODE_SIGNING_ALLOWED=NO
-fi
+}
 
-assert_counting_legs_complete
+# ---- Attempt log and result file ----------------------------------------------
 
-# The release runner supplies READINESS_MANIFEST only for a candidate-bound
-# gate. Ordinary developer and pre-push runs retain their prior behavior.
-if [[ -n "${READINESS_MANIFEST:-}" ]]; then
-  /usr/bin/python3 release_stage_readiness.py --local-gate
-fi
+# Give this attempt its own log (templates/attempt_log.sh) so a retry, a
+# restart or a second run never overwrites another attempt's output.
+gate_open_attempt_log() {
+  local root="${GRADUS_TEST_GATE_DIAGNOSTIC_ROOT:-$GATE_REPO_ROOT/.release-state/evidence/test-gate}"
+  # shellcheck source=/dev/null
+  source "$GATE_CENTRAL_ROOT/release_tools/templates/attempt_log.sh" || return 1
+  mkdir -p "$root" && chmod 700 "$root" || return 1
+  # Attempt logs are kept, pass or fail; only month-old ones are pruned.
+  find "$root" -type f -name 'local-gate-output.attempt-*.log' -mtime +30 -delete 2>/dev/null || true
+  GATE_ATTEMPT_LOG="$(attempt_log_open "$root" local-gate-output)" || return 1
+  chmod 600 "$GATE_ATTEMPT_LOG" || return 1
+}
 
-echo "==> test-gate.sh: all destinations green"
+# Tell release_local_gate.py how the attempt went: the failed legs, the
+# attempt log (repository-relative, as a diagnostic's detailPath must be) and
+# the digest of the receipts bound into the candidate.
+gate_write_result() {
+  local result_file="${GRADUS_GATE_RESULT_FILE:-}" failed_list="" log_path=""
+  [[ -n "$result_file" ]] || return 0
+  if [[ "${#GATE_FAILED_LEGS[@]}" -gt 0 ]]; then
+    failed_list="$(IFS=,; printf '%s' "${GATE_FAILED_LEGS[*]}")"
+  fi
+  case "${GATE_ATTEMPT_LOG:-}" in
+    "$GATE_REPO_ROOT"/*) log_path="${GATE_ATTEMPT_LOG#"$GATE_REPO_ROOT"/}" ;;
+  esac
+  {
+    printf 'failed=%s\n' "$failed_list"
+    printf 'log=%s\n' "$log_path"
+    printf 'receipts=%s\n' "$GATE_RESULT_RECEIPTS"
+  } >"$result_file"
+}
+
+# ---- Gate --------------------------------------------------------------------
+
+gate_main() {
+  local diagnostics_sdk_manifest macos_version phone_context
+  diagnostics_sdk_manifest="$(diagnostics_sdk_manifest_path "$GATE_REPO_ROOT/app/GradusKit")"
+  preflight_diagnostics_sdk_manifest "$diagnostics_sdk_manifest" || return $?
+
+  sweep_stale_test_gate_transcripts
+  sweep_stale_gate_derived_data
+
+  cd "$GATE_SCRIPT_DIR" || return 1
+
+  validate_counting_leg_declarations || return $?
+  validate_density_image_snapshot_selectors || return $?
+
+  PINNED_XCODE_VERSION="$(cat .xcode-version)"
+  PINNED_MACOS_VERSION_PATH="$GATE_SCRIPT_DIR/.macos-version"
+  # In the milestone gate three legs take this machine-wide lock -- GradusMacUI
+  # and both simulator UI legs; headless and release modes omit all three and
+  # never touch it. The two simulator legs take it through simctl_gate_lib.sh's
+  # `gate_ui_test_lock`, which also deletes the XCTestDevices clones xcodebuild
+  # creates for them; GradusMacUI calls the binary directly because a macOS UI
+  # test runs on the host and produces no simulator clone for that wrapper to
+  # reap. `flock` is per open-file-description, so a *nested* acquisition is not
+  # re-entrant: running this gate underneath an outer `apple-ui-test-lock` hold
+  # makes each of those legs wait forever on a lock its own ancestor owns. Run
+  # the gate bare -- `GRADUS_STATIC_BASE=<git-commit> caffeinate -disu bash app/test-gate.sh` -- and let the legs
+  # take the lock themselves.
+  APPLE_UI_TEST_LOCK="${APPLE_UI_TEST_LOCK:-$HOME/.agent/bin/apple-ui-test-lock}"
+  GRADUS_MAC_TEST_TIMEOUT_SECONDS="${GRADUS_MAC_TEST_TIMEOUT_SECONDS:-600}"
+  if ! [[ "$GRADUS_MAC_TEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAIL: GRADUS_MAC_TEST_TIMEOUT_SECONDS must be a positive integer" >&2
+    return 2
+  fi
+
+  # This gate's own EXIT trap only handles state it owns directly (the
+  # CrashReporter dialog override and DerivedData). It is set BEFORE sourcing
+  # the shared simctl gate lib below, on purpose: the lib's
+  # own EXIT-trap installation composes onto whatever trap already exists at
+  # source time (see simctl_gate_lib.sh's header) rather than clobbering it, so
+  # simulator create/delete lifecycle is entirely the shared lib's
+  # responsibility from here on -- this gate no longer tracks whether a device
+  # pre-existed, because gate_sim_create always makes a fresh disposable one.
+  # Declared empty (and bound before any leg) so the trap always has a variable
+  # to rm -rf even if the run fails first -- `rm -rf ""` is a safe no-op, never
+  # `rm -rf` of cwd.
+  derived_data_dir=""
+
+  trap '
+    if [[ "$crash_dialog_changed" -eq 1 ]]; then
+      if [[ -z "$prior_dialog_type" ]]; then
+        defaults delete com.apple.CrashReporter DialogType >/dev/null 2>&1 || true
+      else
+        defaults write com.apple.CrashReporter DialogType "$prior_dialog_type"
+      fi
+    fi
+    gate_unregister_bundles
+    rm -rf "$derived_data_dir"
+  ' EXIT
+
+  # shellcheck source=/dev/null
+  source "$GATE_CENTRAL_ROOT/release_tools/templates/simctl_gate_lib.sh"
+  # shellcheck source=/dev/null
+  source "$GATE_CENTRAL_ROOT/release_tools/templates/gate_receipts.sh"
+
+  RELEASE_TOOLS_PYTHON="$(gate_release_python)" || {
+    echo "FAIL: no Python >= 3.11 is available for release_tools; set GRADUS_RELEASE_PYTHON" >&2
+    return 1
+  }
+  export RELEASE_TOOLS_PYTHON
+  gate_legs_init "$GATE_CENTRAL_ROOT" "$GATE_REPO_ROOT/.release/release-adapter.json" "$(gate_legs_mode)" || return $?
+
+  macos_version="$(sw_vers -productVersion)" || return 1
+  phone_context=(--context "macos=$macos_version" --context "runtime=$SIM_RUNTIME_ID" --context "device=${SIM_DEVICETYPE_ID##*.}")
+
+  echo "==> Gradus test gate mode: $GATE_MODE"
+  if ! gate_mode_runs_ui_legs; then
+    echo "    $GATE_MODE mode omits screen-seizing UI legs: ${HEADLESS_SKIPPED_LEG_NAMES[*]}"
+    echo "    Expected counting legs: $(expected_counting_leg_count) of $EXPECTED_COUNTING_LEG_COUNT"
+  fi
+
+  if [[ "$GATE_MODE" != "ui-verify" ]]; then
+    # Fail closed on drift before any test, simulator, or other disruptive gate
+    # work -- and keep going, so the report lists this with every other failure.
+    gate_step static-checks run_changed_swift_static_checks
+
+    run_leg hermetic-shell 0 -- leg_hermetic_shell
+    run_leg release-python 8 -- leg_release_python
+    run_leg graduskit 1 -- leg_graduskit
+    run_leg pytest 1 -- leg_pytest
+    run_leg mac-unit 1 --context "macos=$macos_version" -- leg_mac_unit
+  fi
+  run_leg mac-ui 1 --context "macos=$macos_version" -- leg_mac_ui
+  if [[ "$GATE_MODE" != "ui-verify" ]]; then
+    run_leg mac-helpers 2 --context "macos=$macos_version" -- leg_mac_helpers
+    run_leg ios-unit 1 "${phone_context[@]}" -- leg_ios_unit
+    run_leg ios-snapshots 2 "${phone_context[@]}" --context "padDevice=${IPAD_DEVICETYPE_ID##*.}" -- leg_ios_snapshots
+    run_leg widget 1 "${phone_context[@]}" -- leg_widget
+  fi
+  run_leg ios-ipad-ui 1 "${phone_context[@]}" --context "padDevice=${IPAD_DEVICETYPE_ID##*.}" -- leg_ios_ipad_ui
+  run_leg ios-ui 1 "${phone_context[@]}" -- leg_ios_ui
+
+  if [[ "${#GATE_FAILED_LEGS[@]}" -eq 0 ]]; then
+    assert_counting_legs_complete || GATE_FAILED_LEGS+=("counting-legs")
+  fi
+
+  if [[ "${#GATE_FAILED_LEGS[@]}" -eq 0 && "$GATE_MODE" == "release" ]]; then
+    gate_legs_finish "$GATE_CANDIDATE_ID" || GATE_FAILED_LEGS+=("leg-receipts")
+    GATE_RESULT_RECEIPTS="${GATE_LEG_RECEIPTS_SHA256:-}"
+  else
+    gate_legs_finish "" || true
+  fi
+  gate_write_result
+
+  if [[ "${#GATE_FAILED_LEGS[@]}" -gt 0 ]]; then
+    echo "FAIL: ${#GATE_FAILED_LEGS[@]} gate leg(s) failed: ${GATE_FAILED_LEGS[*]}" >&2
+    return 1
+  fi
+  echo "==> test-gate.sh: all destinations green"
+}
+
+gate_usage() {
+  echo "Usage: GRADUS_STATIC_BASE=<git-commit> bash test-gate.sh [--headless | --release <candidate-id> | --ui-verify]"
+  echo "  (no mode option runs the full milestone gate, including the host HID"
+  echo "   and simulator XCUITest UI journeys)"
+  echo "  --headless          routine gate: skip only GradusMacUI, GradusiOS-iPad, GradusiOSUI"
+  echo "  --release <id>      candidate-bound headless gate; binds the leg receipts it used to <id>"
+  echo "  --ui-verify         run only the three screen-seizing legs (app/verify-release-ui)"
+}
+
+gate_entry() {
+  set -euo pipefail
+  local status=0
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --help)
+        gate_usage
+        return 0
+        ;;
+      --headless)
+        GATE_MODE="headless"
+        ;;
+      --release)
+        if [[ "$#" -lt 2 || ! "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+          echo "FAIL: --release requires a candidate id" >&2
+          return 2
+        fi
+        GATE_MODE="release"
+        GATE_CANDIDATE_ID="$2"
+        shift
+        ;;
+      --ui-verify)
+        GATE_MODE="ui-verify"
+        ;;
+      *)
+        echo "FAIL: unknown test-gate option '$1'" >&2
+        return 2
+        ;;
+    esac
+    shift
+  done
+
+  GATE_CENTRAL_ROOT="$GATE_REPO_ROOT/../apple_developer"
+  gate_open_attempt_log || {
+    echo "FAIL: could not open an attempt log for this gate run" >&2
+    return 1
+  }
+  echo "==> Gate attempt log: $GATE_ATTEMPT_LOG" >&2
+
+  # The pipeline streams the gate's output live while keeping this attempt's
+  # own copy. `gate_main` runs in the pipeline's subshell, so its EXIT trap
+  # cleanup runs there, before tee closes the log.
+  gate_main 2>&1 | tee -a "$GATE_ATTEMPT_LOG" || status="${PIPESTATUS[0]}"
+  return "$status"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  gate_entry "$@"
 fi

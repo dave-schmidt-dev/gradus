@@ -49,5 +49,13 @@ PYTHON_BIN="$(release_python)" || {
   exit 4
 }
 
+# Report from the release checkout, where the candidate's state and receipts
+# live; "stay" never moves it.
+# shellcheck source=/dev/null
+source "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh"
+export RELEASE_TOOLS_PYTHON="$PYTHON_BIN"
+release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json \
+  app/release-status stay "$@"
+
 exec env PYTHONPATH="$CENTRAL_ROOT" "$PYTHON_BIN" -m release_tools status \
   --adapter "$ADAPTER" --repository "$ROOT"

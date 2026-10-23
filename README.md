@@ -948,6 +948,25 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
   also mirrors gate output to the controlling terminal when one is available.
   `GRADUS_PROGRESS_DEVICE` is an explicit diagnostic/test override for that mirror.
   Physical-device acceptance and signed-Keychain acceptance remain explicitly separate.
+- **verify-once release gate**: `app/test-gate.sh` runs every leg and lists every
+  failure instead of stopping at the first. Its twelve legs are declared in the
+  adapter's `gateLegs`: nine `headless` (`hermetic-shell`, `release-python`,
+  `graduskit`, `pytest`, `mac-unit`, `mac-helpers`, `ios-unit`, `ios-snapshots`,
+  `widget`) and three screen-seizing `ui` legs (`mac-ui`, `ios-ipad-ui`, `ios-ui`).
+  A passing leg records a receipt under `<git-common-dir>/release-receipts/gradus-ios`
+  keyed by its input digest, shared by every worktree; a later pre-push or release
+  run with byte-identical inputs prints `gate-leg <id>: reused` and skips it. Modes:
+  `--headless` (pre-push), `--release <candidate-id>` (used by
+  `app/release_local_gate.py`; binds the receipts it relied on into the candidate and
+  names their digest as `legReceiptsSha256` in the local-gate proof) and `--ui-verify`.
+  A failed release gate leaves `local-gate-diagnostic.json` naming each failed leg and
+  its attempt log (`.release-state/evidence/test-gate/local-gate-output.attempt-N.log`).
+  `app/prepare-testflight-candidate` builds from the tool-owned release checkout under
+  `<git-common-dir>/release-checkouts/gradus-ios` (moved to HEAD); `app/deploy-testflight`
+  and `app/release-status` run there without moving it. `.release/tester-group.json` is
+  copied into it. Upload is blocked with `ui-verification-required` until
+  `app/verify-release-ui` has passed the three UI legs for the candidate's source; run
+  it only when away from the Mac, after walking through the candidate.
 - **milestone gate**: `app/test-gate.sh` runs the full local macOS and
   simulator test set, including all three UI journeys, against candidate-bound
   source. Physical-device acceptance remains a separate owner gate. Supply the

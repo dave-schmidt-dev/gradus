@@ -7,6 +7,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -250,7 +251,16 @@ class GradusAdapterTests(unittest.TestCase):
 
         self.assertEqual(
             operations["localGate"]["environment"]["inputs"],
-            ["READINESS_MANIFEST", "HOME", "PATH", "PYTHONPATH", "USER", "LOGNAME"],
+            [
+                "READINESS_MANIFEST",
+                "HOME",
+                "TMPDIR",
+                "PATH",
+                "PYTHONPATH",
+                "USER",
+                "LOGNAME",
+                "GRADUS_STATIC_BASE",
+            ],
         )
 
     def test_typed_proof_fixture_has_every_workflow_field_and_binding(self) -> None:
@@ -331,6 +341,66 @@ class GradusAdapterTests(unittest.TestCase):
         route["operations"][2]["providerRoute"] = "external-provider"
         self.assertIn("adapter-unknown-field", adapter_rejection_codes(route))
 
+    def test_gate_legs_split_headless_from_screen_seizing_ui_legs(self) -> None:
+        document = json.loads(ADAPTER.read_text(encoding="utf-8"))
+        loaded = load_adapter(document, repository_root=ROOT)
+        legs = document["gateLegs"]["legs"]
+
+        self.assertEqual(
+            sorted(leg for leg, body in legs.items() if body["kind"] == "ui"),
+            ["ios-ipad-ui", "ios-ui", "mac-ui"],
+        )
+        self.assertEqual(
+            sorted(leg for leg, body in legs.items() if body["kind"] == "headless"),
+            [
+                "graduskit",
+                "hermetic-shell",
+                "ios-snapshots",
+                "ios-unit",
+                "mac-helpers",
+                "mac-unit",
+                "pytest",
+                "release-python",
+                "widget",
+            ],
+        )
+        self.assertEqual(loaded.release_checkout.copy_paths, (".release/tester-group.json",))
+        # The sibling files the gate sources are named, so a central commit
+        # that does not touch them cannot invalidate every receipt.
+        self.assertIn(
+            "release_tools/templates/simctl_gate_lib.sh",
+            document["gateLegs"]["siblingInputs"]["apple_developer"],
+        )
+        self.assertIn("PYTEST_ADDOPTS", legs["pytest"]["scopeEnv"])
+
+    def test_every_gate_leg_input_glob_matches_a_tracked_file(self) -> None:
+        import subprocess
+
+        tracked = set(
+            subprocess.run(
+                ["git", "-C", str(ROOT), "ls-files", "-z"],
+                capture_output=True,
+                check=True,
+            )
+            .stdout.decode()
+            .split("\0")
+        )
+        document = json.loads(ADAPTER.read_text(encoding="utf-8"))
+        gate_legs = document["gateLegs"]
+        patterns = list(gate_legs["commonInputs"])
+        for leg in gate_legs["legs"].values():
+            patterns.extend(leg["inputs"])
+        for pattern in sorted(set(patterns)):
+            with self.subTest(pattern=pattern):
+                matches = {
+                    str(path.relative_to(ROOT)) for path in ROOT.glob(pattern) if path.is_file()
+                }
+                self.assertTrue(matches, "matches no file in a fresh checkout")
+                self.assertTrue(
+                    matches & tracked,
+                    "matches only untracked files, which no other worktree has",
+                )
+
     def test_wrappers_are_fixed_and_executable(self) -> None:
         for name in (
             "prepare-testflight-candidate",
@@ -343,7 +413,13 @@ class GradusAdapterTests(unittest.TestCase):
             source = path.read_text(encoding="utf-8")
             self.assertIn('git -C "$ROOT" rev-parse --show-toplevel', source)
             self.assertNotRegex(source, r"(?i)(--executable|secretNames)")
-            self.assertNotIn('"$@"', source)
+            # Arguments are validated before they are handed on, and only to
+            # the release-checkout re-exec of this same script.
+            self.assertEqual(
+                re.findall(r'^.*"\$@".*$', source, flags=re.MULTILINE),
+                [f'  app/{name} {"refresh" if name.startswith("prepare") else "stay"} "$@"'],
+            )
+            self.assertIn("release_checkout_exec", source)
             self.assertIn("../apple_developer", source)
             self.assertIn("python3", source)
             self.assertNotIn("archive-upload-ios.sh", source)

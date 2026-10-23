@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tarfile
@@ -14,16 +15,22 @@ except ImportError:
     import release_local_gate as gate
 
 
+RECEIPTS = "a" * 64
+GATE_ARGV = ["bash", "app/test-gate.sh", "--release", "1.8.3-24"]
+
+
 class Runner:
-    def __init__(self, *, gate_status: int = 0):
+    def __init__(self, *, gate_status: int = 0, result: str | None = None):
         self.gate_status = gate_status
+        self.result = f"failed=\nlog=\nreceipts={RECEIPTS}\n" if result is None else result
         self.calls: list[list[str]] = []
         self.call_kwargs: list[dict] = []
 
     def __call__(self, argv, **kwargs):
         self.calls.append(list(argv))
         self.call_kwargs.append(kwargs)
-        if argv == ["bash", "app/test-gate.sh"]:
+        if argv == GATE_ARGV:
+            Path(kwargs["env"]["GRADUS_GATE_RESULT_FILE"]).write_text(self.result)
             return SimpleNamespace(returncode=self.gate_status)
         raise AssertionError(f"unexpected command: {argv}")
 
@@ -40,11 +47,12 @@ def run_main(
     proof_result: int = 0,
     current_digest: str = "f" * 64,
     checked_digest: str = "f" * 64,
+    result: str | None = None,
 ):
     manifest = valid_manifest(tmp_path / "manifest.json")
     proof_calls: list[list[str]] = []
     stderr = io.StringIO()
-    runner = Runner(gate_status=gate_status)
+    runner = Runner(gate_status=gate_status, result=result)
 
     result = gate.main(
         [],
@@ -58,6 +66,7 @@ def run_main(
             "RELEASE_CONFIGURATION": "Production",
         },
         stderr=stderr,
+        root=tmp_path,
     )
     return result, proof_calls, runner, stderr.getvalue()
 
@@ -66,8 +75,8 @@ def test_main_runs_streaming_local_gate_then_emits_proof(tmp_path: Path) -> None
     result, proof_calls, runner, output = run_main(tmp_path)
 
     assert result == 0
-    assert proof_calls == [["--local-gate"]]
-    assert runner.calls == [["bash", "app/test-gate.sh"]]
+    assert proof_calls == [["--local-gate", f"--leg-receipts-sha256={RECEIPTS}"]]
+    assert runner.calls == [GATE_ARGV]
     child_environment = runner.call_kwargs[0]["env"]
     assert "READINESS_MANIFEST" not in child_environment
     assert child_environment["RELEASE_CONFIGURATION"] == "Production"
@@ -110,15 +119,95 @@ def test_main_rejects_test_gate_failure_without_proof(tmp_path: Path) -> None:
 
     assert result == 4
     assert proof_calls == []
-    assert runner.calls == [["bash", "app/test-gate.sh"]]
+    assert runner.calls == [GATE_ARGV]
     assert "test-gate-failed" in output
+
+
+def test_failed_gate_writes_a_bounded_diagnostic_naming_every_failed_leg(
+    tmp_path: Path,
+) -> None:
+    log_relative = ".release-state/evidence/test-gate/local-gate-output.attempt-1.log"
+    log = tmp_path / log_relative
+    log.parent.mkdir(parents=True)
+    log.write_bytes(b"gate output")
+    result, proof_calls, _runner, output = run_main(
+        tmp_path,
+        gate_status=1,
+        result=f"failed=pytest,mac-unit,widget\nlog={log_relative}\nreceipts=\n",
+    )
+
+    assert result == 4
+    assert proof_calls == []
+    assert "test-gate-failed" in output
+    diagnostic = json.loads(
+        (tmp_path / ".release-state/evidence/1.8.3-24/local-gate-diagnostic.json").read_text()
+    )
+    assert diagnostic == {
+        "schemaVersion": "1.0.0",
+        "proofSchema": "release.diagnostic.v1",
+        "operationId": "local-gate",
+        "failureKind": "local-gate-legs-failed",
+        "summary": "Failed gate legs: pytest, mac-unit, widget",
+        "detailPath": log_relative,
+        "detailSha256": hashlib.sha256(b"gate output").hexdigest(),
+    }
+
+
+def test_failed_gate_without_a_result_file_still_records_a_diagnostic(tmp_path: Path) -> None:
+    result, _proof_calls, _runner, _output = run_main(tmp_path, gate_status=1, result="")
+
+    assert result == 4
+    diagnostic = json.loads(
+        (tmp_path / ".release-state/evidence/1.8.3-24/local-gate-diagnostic.json").read_text()
+    )
+    assert diagnostic["failureKind"] == "local-gate-failed"
+    assert "detailPath" not in diagnostic
+
+
+@pytest.mark.parametrize(
+    ("text", "field"),
+    [
+        ("failed=../etc\n", "failed"),
+        ("log=/abs/path\n", "log"),
+        ("log=a/../b\n", "log"),
+        ("receipts=not-hex\n", "receipts"),
+        ("unknown=1\n", "failed"),
+    ],
+)
+def test_gate_result_rejects_values_outside_its_grammar(
+    tmp_path: Path, text: str, field: str
+) -> None:
+    path = tmp_path / "result"
+    path.write_text(text)
+
+    assert gate.read_gate_result(path) == {"failed": "", "log": "", "receipts": ""}
+    assert gate.read_gate_result(path)[field] == ""
+
+
+def test_successful_gate_removes_a_stale_diagnostic(tmp_path: Path) -> None:
+    stale = tmp_path / ".release-state/evidence/1.8.3-24/local-gate-diagnostic.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}")
+
+    result, _proof_calls, _runner, _output = run_main(tmp_path)
+
+    assert result == 0
+    assert not stale.exists()
+
+
+def test_passing_gate_without_receipts_is_rejected_before_the_proof(tmp_path: Path) -> None:
+    result, proof_calls, _runner, output = run_main(tmp_path, result="failed=\nlog=\nreceipts=\n")
+
+    assert result == 4
+    assert proof_calls == []
+    assert "leg-receipts-unavailable" in output
 
 
 def test_main_rejects_proof_writer_failure(tmp_path: Path) -> None:
     result, proof_calls, _runner, output = run_main(tmp_path, proof_result=4)
 
     assert result == 4
-    assert proof_calls == [["--local-gate"]]
+    assert proof_calls == [["--local-gate", f"--leg-receipts-sha256={RECEIPTS}"]]
     assert "local-gate-proof-failed" in output
 
 

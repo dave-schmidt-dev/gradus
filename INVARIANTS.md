@@ -277,7 +277,10 @@ rationale: Every new behavior has a test at the lowest layer that proves it; new
   the screen-seizing GradusMacUI, GradusiOS-iPad, and GradusiOSUI legs and reduces
   the expected count accordingly without marking them complete; phone and pad
   density image snapshots remain counted. The local GradusMac scheme and
-  `app/test-gate.sh` are the sole GradusMacUITests runner.
+  `app/test-gate.sh` are the sole GradusMacUITests runner. The release gate
+  (`--release`) never runs those three legs: the adapter declares them as `ui` legs and
+  `app/verify-release-ui` (`--ui-verify`) runs them once per release, while the gate
+  collects every headless failure instead of stopping at the first.
   Manual-only verification is an explicit exception for physical-device, Apple-account, push-delivery,
   or other automation boundaries and must be recorded with exact steps and a follow-up.
   Swift widget and cache test fixtures remove their temp dirs on both pass and failure exit paths.

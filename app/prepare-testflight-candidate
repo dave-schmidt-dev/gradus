@@ -52,6 +52,15 @@ fi
   exit 4
 }
 
+# Build the candidate from the tool-owned release checkout, at this checkout's
+# HEAD, so a dirty or moving owner checkout cannot leak into a release. Outside
+# the checkout this execs the same script inside it and never returns.
+# shellcheck source=/dev/null
+source "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh"
+export RELEASE_TOOLS_PYTHON="$PYTHON_BIN"
+release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json \
+  app/prepare-testflight-candidate refresh "$@"
+
 git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
   echo "release-testflight: Git common directory is unavailable" >&2
   exit 4

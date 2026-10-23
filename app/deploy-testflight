@@ -52,6 +52,14 @@ fi
   exit 4
 }
 
+# Upload from the release checkout the candidate was staged in; "stay" never
+# moves it. Outside the checkout this execs the same script inside it.
+# shellcheck source=/dev/null
+source "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh"
+export RELEASE_TOOLS_PYTHON="$PYTHON_BIN"
+release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json \
+  app/deploy-testflight stay "$@"
+
 git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
   echo "release-testflight: Git common directory is unavailable" >&2
   exit 4

@@ -8,6 +8,8 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 try:
     from app.release_stage_readiness import (
         CONTRACT_REVISION,
@@ -17,6 +19,7 @@ try:
         build_local_gate_proof,
         build_proof,
         execution_closure,
+        main,
         resolve_canonical_manifest,
         write_proof,
     )
@@ -29,6 +32,7 @@ except ModuleNotFoundError:  # Direct pytest execution from app/.
         build_local_gate_proof,
         build_proof,
         execution_closure,
+        main,
         resolve_canonical_manifest,
         write_proof,
     )
@@ -193,14 +197,34 @@ def test_execution_closure_is_stable_and_configuration_bound() -> None:
     assert closure_prod == expected_prod
 
 
-def test_gate_emits_candidate_proof_only_after_all_counting_legs_pass() -> None:
+def test_gate_binds_receipts_only_after_all_counting_legs_pass() -> None:
     gate = (Path(__file__).resolve().parent / "test-gate.sh").read_text(encoding="utf-8")
     completion = gate.rindex("assert_counting_legs_complete")
-    emission = gate.rindex("release_stage_readiness.py --local-gate")
+    binding = gate.rindex('gate_legs_finish "$GATE_CANDIDATE_ID"')
     success = gate.rindex("test-gate.sh: all destinations green")
 
-    assert completion < emission < success
-    assert 'if [[ -n "${READINESS_MANIFEST:-}" ]]' in gate[completion:emission]
+    # The proof itself is written by release_local_gate.py after the gate exits
+    # zero; the gate only binds the receipts the proof will name.
+    assert completion < binding < success
+    assert "release_stage_readiness" not in gate
+    failures_clear = 'if [[ "${#GATE_FAILED_LEGS[@]}" -eq 0 && "$GATE_MODE" == "release" ]]'
+    assert failures_clear in gate[completion : binding + 200]
+
+
+def test_local_gate_proof_names_the_bound_leg_receipts() -> None:
+    manifest = Path(tempfile.mkdtemp()) / "manifest.json"
+    manifest.write_text(
+        json.dumps({"candidateId": "1.8.1-21", "sourceSnapshot": {"sha256": "a" * 64}}),
+        encoding="utf-8",
+    )
+    digest = "c" * 64
+
+    proof = build_local_gate_proof(manifest, configuration="Production", leg_receipts_sha256=digest)
+    assert proof["legReceiptsSha256"] == digest
+    assert "legReceiptsSha256" not in build_local_gate_proof(manifest, configuration="Production")
+    with pytest.raises(ValueError, match="local-gate-leg-receipts-invalid"):
+        build_local_gate_proof(manifest, configuration="Production", leg_receipts_sha256="x")
+    assert main(["--local-gate", "--leg-receipts-sha256=nothex"]) == 64
 
 
 def test_canonical_manifest_accepts_linked_worktree_git_common_dir() -> None:

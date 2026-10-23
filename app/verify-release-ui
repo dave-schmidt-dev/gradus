@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Run the screen-seizing UI legs once for the staged candidate, then record
+# their receipts. This takes over the screen, keyboard and simulators: run it
+# only when you are away from the Mac, after walking through the candidate.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+[[ $# -eq 0 ]] || {
+  echo "verify-release-ui: takes no extra arguments" >&2
+  exit 64
+}
+[[ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" == "$ROOT" ]] || {
+  echo "verify-release-ui: checkout root could not be verified" >&2
+  exit 4
+}
+
+CENTRAL_ROOT="$ROOT/../apple_developer"
+ADAPTER="$ROOT/.release/release-adapter.json"
+[[ -f "$CENTRAL_ROOT/release_tools/__main__.py" && -f "$ADAPTER" ]] || {
+  echo "verify-release-ui: central release_tools or adapter is unavailable" >&2
+  exit 4
+}
+
+# release_tools needs Python 3.11+; macOS /usr/bin/python3 is 3.9.
+release_python() {
+  local candidate
+  for candidate in \
+    "${GRADUS_RELEASE_PYTHON:-}" \
+    python3 python3.13 python3.12 python3.11 \
+    /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+    /usr/bin/python3; do
+    [[ -n "$candidate" ]] || continue
+    candidate="$(command -v "$candidate" 2>/dev/null)" || continue
+    "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+  return 1
+}
+RELEASE_TOOLS_PYTHON="$(release_python)" || {
+  echo "verify-release-ui: no Python >= 3.11 is available for release_tools; set GRADUS_RELEASE_PYTHON" >&2
+  exit 4
+}
+export RELEASE_TOOLS_PYTHON
+
+# Verify the staged candidate in the release checkout it was built in.
+# shellcheck source=/dev/null
+source "$CENTRAL_ROOT/release_tools/templates/release_checkout.sh"
+release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json \
+  app/verify-release-ui stay "$@"
+
+# Inside the release checkout the gate runs only the three ui legs, each of
+# which records a receipt for this source on success.
+exec bash "$ROOT/app/test-gate.sh" --ui-verify

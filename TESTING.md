@@ -86,6 +86,15 @@ image-snapshot checks. It does not reset simulator UI sessions or invoke host
 HID, screen capture, or XCUITest. Expected-leg accounting subtracts those three
 omitted legs; it does not mark them as passed.
 
+Every leg runs even after another fails, so one pass lists all failures. A passing
+leg is reused (`gate-leg <id>: reused`) when its inputs are byte-identical to an
+earlier pass in any worktree of this repository; the receipts live under
+`<git-common-dir>/release-receipts/gradus-ios` and expire after 14 days. Edit the
+globs in `.release/release-adapter.json` (`gateLegs`) when a leg starts reading a new
+file, or a stale receipt could be reused. `--release <candidate-id>` is the
+candidate-bound mode `app/release_local_gate.py` invokes, and `--ui-verify` is run
+only through `app/verify-release-ui`.
+
 The milestone gate runs, in order:
 
 1. the hermetic script suites — Mac notarization and signing, Mac bundle

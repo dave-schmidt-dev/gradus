@@ -398,6 +398,7 @@
   ],
   "evidencePaths": [
     {"name": "local-gate-proof", "path": ".release-state/evidence/{candidateId}/local-gate.json", "contentType": "application/json"},
+    {"name": "local-gate-diagnostic", "path": ".release-state/evidence/{candidateId}/local-gate-diagnostic.json", "contentType": "application/json"},
     {"name": "readiness-proof", "path": ".release-state/evidence/{candidateId}/readiness.json", "contentType": "application/json"},
     {"name": "readiness-diagnostic", "path": ".release-state/evidence/{candidateId}/readiness-diagnostic.json", "contentType": "application/json"},
     {"name": "candidate-proof", "path": ".release-state/evidence/{candidateId}/candidate.json", "contentType": "application/json"},
@@ -420,6 +421,389 @@
     {"name": "notification-reconcile-proof", "path": ".release-state/evidence/{candidateId}/notification-reconcile.json", "contentType": "application/json"},
     {"name": "receipt-proof", "path": ".release-state/evidence/{candidateId}/receipt.json", "contentType": "application/json"}
   ],
+  "releaseCheckout": {
+    "copyPaths": [
+      ".release/tester-group.json"
+    ]
+  },
+  "gateLegs": {
+    "commonInputs": [
+      "app/test-gate.sh"
+    ],
+    "siblingInputs": {
+      "apple_developer": [
+        "diagnostics_contracts/swift/Package.swift",
+        "diagnostics_contracts/swift/Sources/**/*.swift",
+        "release_tools/templates/simctl_gate_lib.sh"
+      ]
+    },
+    "legs": {
+      "hermetic-shell": {
+        "kind": "headless",
+        "includeSource": false,
+        "toolchain": [
+          "python",
+          "uv",
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/*.py",
+          "app/release_candidate/*.py",
+          "pyproject.toml",
+          "uv.lock",
+          "app/*.sh",
+          "app/scripts/*",
+          "app/packaging/*.spec",
+          "app/deploy-testflight",
+          "app/prepare-testflight-candidate",
+          "app/release-status",
+          "app/release-testflight",
+          "scripts/*.sh",
+          "app/*.plist",
+          "app/make-mac-appicon.swift",
+          ".swiftlint.yml",
+          ".swiftformat",
+          "app/RELEASE_CHECKLIST.md",
+          "RELEASE_CHECKLIST.md",
+          "app/GradusKit/Package.swift",
+          "app/GradusKit/Sources/**/*.swift",
+          "app/GradusKit/Tests/**/*.swift",
+          "app/GradusKit/Tests/GradusKitTests/Fixtures/*.json",
+          "app/GradusMac/**/*.entitlements",
+          "app/GradusMac/**/*.json",
+          "app/GradusMac/**/*.plist",
+          "app/GradusMac/**/*.png",
+          "app/GradusMac/**/*.swift",
+          "app/GradusMacTests/**/*.png",
+          "app/GradusMacTests/**/*.swift",
+          "app/GradusMacUITests/**/*.swift",
+          "app/GradusiOS/**/*.entitlements",
+          "app/GradusiOS/**/*.json",
+          "app/GradusiOS/**/*.plist",
+          "app/GradusiOS/**/*.png",
+          "app/GradusiOS/**/*.strings",
+          "app/GradusiOS/**/*.swift",
+          "app/GradusiOS/**/*.xcprivacy",
+          "app/GradusiOSTests/**/*.png",
+          "app/GradusiOSTests/**/*.swift",
+          "app/GradusiOSUITests/**/*.swift",
+          "app/GradusWidget/**/*.entitlements",
+          "app/GradusWidget/**/*.plist",
+          "app/GradusWidget/**/*.swift",
+          "app/GradusWidgetTests/**/*.png",
+          "app/GradusWidgetTests/**/*.swift",
+          "app/GradusRefreshAgent/**/*.swift",
+          "app/GradusRefreshAgentTests/**/*.swift",
+          "app/GradusCredentialBridge/**/*.swift",
+          "app/GradusCredentialBridgeCore/**/*.swift",
+          "app/GradusCredentialBridgeTests/**/*.swift",
+          "app/Shared/**/*.swift",
+          "app/project.yml",
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/Gradus.xcodeproj/xcshareddata/xcschemes/*.xcscheme",
+          "tests/fixtures/*.json",
+          "gradus/**/*.py",
+          "*.md",
+          "tests/**/*.py"
+        ]
+      },
+      "release-python": {
+        "kind": "headless",
+        "includeSource": false,
+        "toolchain": [
+          "python",
+          "uv"
+        ],
+        "scopeEnv": [
+          "PYTEST_ADDOPTS"
+        ],
+        "inputs": [
+          "app/*.py",
+          "app/release_candidate/*.py",
+          "pyproject.toml",
+          "uv.lock",
+          "app/*.sh",
+          "app/scripts/*",
+          "app/packaging/*.spec",
+          "app/deploy-testflight",
+          "app/prepare-testflight-candidate",
+          "app/release-status",
+          "app/release-testflight",
+          "scripts/*.sh",
+          "app/*.plist",
+          "app/make-mac-appicon.swift",
+          ".swiftlint.yml",
+          ".swiftformat",
+          "app/RELEASE_CHECKLIST.md",
+          "RELEASE_CHECKLIST.md"
+        ]
+      },
+      "graduskit": {
+        "kind": "headless",
+        "includeSource": false,
+        "toolchain": [
+          "xcode",
+          "swift"
+        ],
+        "inputs": [
+          "app/GradusKit/Package.swift",
+          "app/GradusKit/Sources/**/*.swift",
+          "app/GradusKit/Tests/**/*.swift",
+          "app/GradusKit/Tests/GradusKitTests/Fixtures/*.json"
+        ]
+      },
+      "pytest": {
+        "kind": "headless",
+        "includeSource": true,
+        "toolchain": [
+          "python",
+          "uv"
+        ],
+        "scopeEnv": [
+          "PYTEST_ADDOPTS"
+        ],
+        "inputs": [
+          "app/*.py",
+          "app/release_candidate/*.py",
+          "pyproject.toml",
+          "uv.lock",
+          "app/*.sh",
+          "app/scripts/*",
+          "app/packaging/*.spec",
+          "app/deploy-testflight",
+          "app/prepare-testflight-candidate",
+          "app/release-status",
+          "app/release-testflight",
+          "scripts/*.sh",
+          "app/*.plist",
+          "app/make-mac-appicon.swift",
+          ".swiftlint.yml",
+          ".swiftformat",
+          "app/RELEASE_CHECKLIST.md",
+          "RELEASE_CHECKLIST.md",
+          "app/GradusKit/Package.swift",
+          "app/GradusKit/Sources/**/*.swift",
+          "app/GradusKit/Tests/**/*.swift",
+          "app/GradusKit/Tests/GradusKitTests/Fixtures/*.json",
+          "app/GradusMac/**/*.entitlements",
+          "app/GradusMac/**/*.json",
+          "app/GradusMac/**/*.plist",
+          "app/GradusMac/**/*.png",
+          "app/GradusMac/**/*.swift",
+          "app/GradusMacTests/**/*.png",
+          "app/GradusMacTests/**/*.swift",
+          "app/GradusMacUITests/**/*.swift",
+          "app/GradusiOS/**/*.entitlements",
+          "app/GradusiOS/**/*.json",
+          "app/GradusiOS/**/*.plist",
+          "app/GradusiOS/**/*.png",
+          "app/GradusiOS/**/*.strings",
+          "app/GradusiOS/**/*.swift",
+          "app/GradusiOS/**/*.xcprivacy",
+          "app/GradusiOSTests/**/*.png",
+          "app/GradusiOSTests/**/*.swift",
+          "app/GradusiOSUITests/**/*.swift",
+          "app/GradusWidget/**/*.entitlements",
+          "app/GradusWidget/**/*.plist",
+          "app/GradusWidget/**/*.swift",
+          "app/GradusWidgetTests/**/*.png",
+          "app/GradusWidgetTests/**/*.swift",
+          "app/GradusRefreshAgent/**/*.swift",
+          "app/GradusRefreshAgentTests/**/*.swift",
+          "app/GradusCredentialBridge/**/*.swift",
+          "app/GradusCredentialBridgeCore/**/*.swift",
+          "app/GradusCredentialBridgeTests/**/*.swift",
+          "app/Shared/**/*.swift",
+          "gradus/**/*.py",
+          "tests/**/*.py",
+          "tests/fixtures/*.json",
+          "*.md",
+          "launchd/*.in",
+          "launchd/*.sh",
+          "launchd/lib/*.sh",
+          "monitor",
+          ".file-size-exceptions"
+        ]
+      },
+      "mac-unit": {
+        "kind": "headless",
+        "includeSource": false,
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/project.yml",
+          "app/GradusKit/Package.swift",
+          "app/GradusKit/Sources/**/*.swift",
+          "app/GradusKit/Tests/**/*.swift",
+          "app/GradusKit/Tests/GradusKitTests/Fixtures/*.json",
+          "app/Shared/**/*.swift",
+          "app/GradusMac/**/*.entitlements",
+          "app/GradusMac/**/*.json",
+          "app/GradusMac/**/*.plist",
+          "app/GradusMac/**/*.png",
+          "app/GradusMac/**/*.swift",
+          "app/GradusMacTests/**/*.png",
+          "app/GradusMacTests/**/*.swift",
+          "app/GradusCredentialBridge/**/*.swift",
+          "app/GradusCredentialBridgeCore/**/*.swift",
+          "app/GradusRefreshAgent/**/*.swift",
+          "app/packaging/*.spec",
+          "tests/fixtures/banked-observation-v1.json"
+        ]
+      },
+      "mac-helpers": {
+        "kind": "headless",
+        "includeSource": false,
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/project.yml",
+          "app/GradusKit/Package.swift",
+          "app/GradusKit/Sources/**/*.swift",
+          "app/GradusKit/Tests/**/*.swift",
+          "app/GradusKit/Tests/GradusKitTests/Fixtures/*.json",
+          "app/Shared/**/*.swift",
+          "app/GradusMac/**/*.entitlements",
+          "app/GradusMac/**/*.json",
+          "app/GradusMac/**/*.plist",
+          "app/GradusMac/**/*.png",
+          "app/GradusMac/**/*.swift",
+          "app/GradusCredentialBridge/**/*.swift",
+          "app/GradusCredentialBridgeCore/**/*.swift",
+          "app/GradusCredentialBridgeTests/**/*.swift",
+          "app/GradusRefreshAgent/**/*.swift",
+          "app/GradusRefreshAgentTests/**/*.swift",
+          "app/packaging/*.spec",
+          "gradus/**/*.py"
+        ]
+      },
+      "ios-unit": {
+        "kind": "headless",
+        "includeSource": true,
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/GradusiOSTests/**/*.png",
+          "app/GradusiOSTests/**/*.swift",
+          "app/GradusWidget/**/*.entitlements",
+          "app/GradusWidget/**/*.plist",
+          "app/GradusWidget/**/*.swift"
+        ]
+      },
+      "ios-snapshots": {
+        "kind": "headless",
+        "includeSource": true,
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/GradusiOSTests/**/*.png",
+          "app/GradusiOSTests/**/*.swift",
+          "app/GradusWidget/**/*.entitlements",
+          "app/GradusWidget/**/*.plist",
+          "app/GradusWidget/**/*.swift"
+        ]
+      },
+      "widget": {
+        "kind": "headless",
+        "includeSource": true,
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/GradusWidget/**/*.entitlements",
+          "app/GradusWidget/**/*.plist",
+          "app/GradusWidget/**/*.swift",
+          "app/GradusWidgetTests/**/*.png",
+          "app/GradusWidgetTests/**/*.swift"
+        ]
+      },
+      "mac-ui": {
+        "kind": "ui",
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/GradusMac/**/*.entitlements",
+          "app/GradusMac/**/*.json",
+          "app/GradusMac/**/*.plist",
+          "app/GradusMac/**/*.png",
+          "app/GradusMac/**/*.swift",
+          "app/GradusMacUITests/**/*.swift",
+          "app/Shared/**/*.swift",
+          "app/GradusRefreshAgent/**/*.swift",
+          "app/GradusCredentialBridge/**/*.swift",
+          "app/GradusCredentialBridgeCore/**/*.swift",
+          "app/GradusKit/Package.swift",
+          "app/GradusKit/Sources/**/*.swift",
+          "app/GradusKit/Tests/**/*.swift",
+          "app/GradusKit/Tests/GradusKitTests/Fixtures/*.json"
+        ]
+      },
+      "ios-ipad-ui": {
+        "kind": "ui",
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/GradusiOSUITests/**/*.swift",
+          "app/GradusWidget/**/*.entitlements",
+          "app/GradusWidget/**/*.plist",
+          "app/GradusWidget/**/*.swift"
+        ]
+      },
+      "ios-ui": {
+        "kind": "ui",
+        "toolchain": [
+          "xcode",
+          "xcodegen",
+          "swift"
+        ],
+        "inputs": [
+          "app/.xcode-version",
+          "app/.macos-version",
+          "app/GradusiOSUITests/**/*.swift",
+          "app/GradusWidget/**/*.entitlements",
+          "app/GradusWidget/**/*.plist",
+          "app/GradusWidget/**/*.swift"
+        ]
+      }
+    }
+  },
   "sourcePaths": [
     "app/GradusiOS",
     "app/Shared",

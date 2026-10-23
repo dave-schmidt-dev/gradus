@@ -181,6 +181,17 @@ class BridgeTests(unittest.TestCase):
         release_tools = base / "apple_developer" / "release_tools"
         release_tools.mkdir(parents=True)
         (release_tools / "__init__.py").write_text("", encoding="utf-8")
+        # The real helper re-execs into the tool-owned release checkout; the
+        # stub records its arguments and returns, so each wrapper's remaining
+        # body runs against the fixture exactly as it would inside the checkout.
+        (release_tools / "templates").mkdir()
+        (release_tools / "templates" / "release_checkout.sh").write_text(
+            "release_checkout_exec() {\n"
+            '  printf "%s\\n" "$*" >> "${BASH_SOURCE[0]%/*}/../checkout-exec.log"\n'
+            "  return 0\n"
+            "}\n",
+            encoding="utf-8",
+        )
         (release_tools / "product_state.py").write_text(
             "import hashlib, json, os\n"
             "from pathlib import Path\n"
@@ -517,6 +528,43 @@ class BridgeTests(unittest.TestCase):
                             checkout.parent / "apple_developer" / "release_tools" / "invoked.json"
                         ).exists()
                     )
+
+    def test_wrappers_run_from_the_release_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout, common_dir, bin_dir = self._release_wrapper_fixture(temporary)
+            log = checkout.parent / "apple_developer" / "release_tools" / "checkout-exec.log"
+            central = f"{checkout}/../apple_developer"
+            self._run_fixed_prepare(checkout, common_dir, bin_dir)
+            self.assertEqual(
+                log.read_text(encoding="utf-8").splitlines(),
+                [
+                    f"{central} .release/release-adapter.json app/prepare-testflight-candidate refresh"
+                ],
+            )
+            log.unlink()
+            self._run_fixed_deploy(checkout, common_dir, bin_dir)
+            self.assertEqual(
+                log.read_text(encoding="utf-8").splitlines(),
+                [f"{central} .release/release-adapter.json app/deploy-testflight stay --attended"],
+            )
+
+    def test_status_and_ui_verification_wrappers_stay_in_the_release_checkout(self) -> None:
+        for name, entry in (
+            ("release-status", "app/release-status"),
+            ("verify-release-ui", "app/verify-release-ui"),
+        ):
+            with self.subTest(wrapper=name):
+                path = ROOT / "app" / name
+                self.assertTrue(os.access(path, os.X_OK))
+                subprocess.run(["bash", "-n", str(path)], check=True)
+                source = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    f'release_checkout_exec "$CENTRAL_ROOT" .release/release-adapter.json \\\n'
+                    f'  {entry} stay "$@"',
+                    source,
+                )
+        ui = (ROOT / "app" / "verify-release-ui").read_text(encoding="utf-8")
+        self.assertIn('exec bash "$ROOT/app/test-gate.sh" --ui-verify', ui)
 
     def test_prepare_only_freezes_then_stages_without_upload(self) -> None:
         wrapper = (ROOT / "app" / "prepare-testflight-candidate").read_text(encoding="utf-8")

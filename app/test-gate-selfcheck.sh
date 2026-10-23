@@ -255,7 +255,7 @@ grep -Fq 'sw_vers -productVersion' "$GATE_SCRIPT" ||
 grep -Fq 'validate_macos_version_pin "$PINNED_MACOS_VERSION_PATH" "$active_macos_version"' "$GATE_SCRIPT" ||
   fail "macOS preflight does not validate the active version against its pin"
 macos_preflight_line="$(grep -n 'validate_macos_version_pin "$PINNED_MACOS_VERSION_PATH"' "$GATE_SCRIPT" | cut -d: -f1)"
-xcodegen_line="$(grep -n '^xcodegen generate$' "$GATE_SCRIPT" | cut -d: -f1)"
+xcodegen_line="$(grep -n '^[[:space:]]*xcodegen generate' "$GATE_SCRIPT" | cut -d: -f1)"
 [[ -n "$macos_preflight_line" && -n "$xcodegen_line" && "$macos_preflight_line" -lt "$xcodegen_line" ]] ||
   fail "macOS version preflight does not run before Xcode project generation"
 
@@ -276,9 +276,9 @@ mkdir -p "$(dirname "$diagnostics_sdk_fixture_manifest")"
 printf '// hermetic readability fixture\n' >"$diagnostics_sdk_fixture_manifest"
 preflight_diagnostics_sdk_manifest "$diagnostics_sdk_fixture_manifest" ||
   fail "readable sibling diagnostics SDK manifest was rejected"
-diagnostics_sdk_preflight_line="$(grep -n '^preflight_diagnostics_sdk_manifest "$diagnostics_sdk_manifest"$' "$GATE_SCRIPT" | cut -d: -f1)"
-stale_transcript_sweep_line="$(grep -n '^sweep_stale_test_gate_transcripts$' "$GATE_SCRIPT" | cut -d: -f1)"
-static_checks_line="$(grep -n '^run_changed_swift_static_checks$' "$GATE_SCRIPT" | cut -d: -f1)"
+diagnostics_sdk_preflight_line="$(grep -n '^[[:space:]]*preflight_diagnostics_sdk_manifest "$diagnostics_sdk_manifest"' "$GATE_SCRIPT" | cut -d: -f1)"
+stale_transcript_sweep_line="$(grep -n '^[[:space:]]*sweep_stale_test_gate_transcripts$' "$GATE_SCRIPT" | cut -d: -f1)"
+static_checks_line="$(grep -n '^[[:space:]]*gate_step static-checks run_changed_swift_static_checks$' "$GATE_SCRIPT" | cut -d: -f1)"
 [[ -n "$diagnostics_sdk_preflight_line" && -n "$stale_transcript_sweep_line" &&
    -n "$static_checks_line" && "$diagnostics_sdk_preflight_line" -lt "$stale_transcript_sweep_line" &&
    "$diagnostics_sdk_preflight_line" -lt "$static_checks_line" ]] ||
@@ -537,20 +537,20 @@ validate_widget_contract "$GATE_SCRIPT" "$SCRIPT_DIR/project.yml" "$SCRIPT_DIR" 
 
 validate_inv7_staging_contract() {
   local gate_path="$1" test_path="$SCRIPT_DIR/GradusMacTests/INV7Tests.swift" stage_block mac_leg_block snapshot_files snapshot_assertion_count
-  stage_block="$(sed -n '/^# INV-7 runs inside/,/assert_counting_leg "GradusMac"/p' "$gate_path")"
+  stage_block="$(sed -n '/^[[:space:]]*# INV-7 runs inside/,/assert_counting_leg "GradusMac"/p' "$gate_path")"
   mac_leg_block="$(sed -n '/assert_counting_leg "GradusMac"/,/assert_counting_leg "GradusiOS-iPhone"/p' "$gate_path")"
   grep -Fq 'gradus_mac_inv7_source_root="$derived_data_dir/inv7-source/GradusMac"' "$gate_path" || return 1
   grep -Fq 'gradus_mac_snapshot_root="$derived_data_dir/snapshots/__Snapshots__"' "$gate_path" || return 1
   [[ "$stage_block" == *'/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMac/." "$gradus_mac_inv7_source_root"'* ]] || return 1
   [[ "$stage_block" == *'/usr/bin/ditto "$GATE_REPO_ROOT/app/GradusMacTests/__Snapshots__/." "$gradus_mac_snapshot_root"'* ]] || return 1
   [[ "$mac_leg_block" == *'env \
-  TZ="America/New_York" \
-  TEST_RUNNER_TZ="America/New_York" \
-  GRADUS_DISABLE_PIPELINE=1 \
-  TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
-  TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
-  TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH="$gradus_mac_banked_fixture_path" \
-  xcodebuild test'* ]] || return 1
+    TZ="America/New_York" \
+    TEST_RUNNER_TZ="America/New_York" \
+    GRADUS_DISABLE_PIPELINE=1 \
+    TEST_RUNNER_GRADUS_INV7_SOURCE_ROOT="$gradus_mac_inv7_source_root" \
+    TEST_RUNNER_GRADUS_SNAPSHOT_ROOT="$gradus_mac_snapshot_root" \
+    TEST_RUNNER_GRADUS_BANKED_FIXTURE_PATH="$gradus_mac_banked_fixture_path" \
+    xcodebuild test'* ]] || return 1
   grep -Fq 'environment[inv7SourceRootEnvironmentKey]' "$test_path" || return 1
   grep -Fq '!rawSourceRoot.isEmpty' "$test_path" || return 1
   grep -Fq 'fileExists(atPath: gradusMacDir.path, isDirectory: &isDirectory)' "$test_path" || return 1
@@ -575,7 +575,7 @@ validate_inv7_staging_contract "$GATE_SCRIPT" ||
 validate_banked_fixture_staging_contract() {
   local gate_path="$1" test_path="$SCRIPT_DIR/GradusMacTests/BankedObservationTests.swift"
   local stage_block mac_leg_block
-  stage_block="$(sed -n '/^# INV-7 runs inside/,/^[[:space:]]*echo "==> xcodebuild test — GradusMacUITests/p' "$gate_path")"
+  stage_block="$(sed -n '/^[[:space:]]*# INV-7 runs inside/,/^[[:space:]]*echo "==> xcodebuild test — GradusMacUITests/p' "$gate_path")"
   mac_leg_block="$(sed -n '/assert_counting_leg "GradusMac"/,/assert_counting_leg "GradusiOS-iPhone"/p' "$gate_path")"
 
   grep -Fq "gradus_mac_banked_fixture_path=\"\$derived_data_dir/fixtures/banked-observation-v1.json\"" "$gate_path" || return 1
@@ -596,7 +596,7 @@ validate_bridge_staging_contract() {
   # holds only behaviour tests, which are free to use `#filePath`.
   local test_path="$SCRIPT_DIR/GradusCredentialBridgeTests/BridgeStructureTests.swift"
   local stage_block bridge_leg_block staged_root_call_count
-  stage_block="$(sed -n '/^# These structural tests must not open/,/assert_counting_leg "GradusCredentialBridge"/p' "$gate_path")"
+  stage_block="$(sed -n '/^[[:space:]]*# These structural tests must not open/,/assert_counting_leg "GradusCredentialBridge"/p' "$gate_path")"
   bridge_leg_block="$(sed -n '/assert_counting_leg "GradusCredentialBridge"/,/CODE_SIGNING_ALLOWED=NO/p' "$gate_path")"
 
   grep -Fq 'gradus_bridge_stage_root="$derived_data_dir/bridge-source"' "$gate_path" || return 1
@@ -609,8 +609,8 @@ validate_bridge_staging_contract() {
   [[ "$stage_block" == *'/usr/bin/ditto "$GATE_REPO_ROOT/gradus/." "$gradus_bridge_stage_root/gradus"'* ]] || return 1
   [[ "$stage_block" == *'could not stage non-empty GradusCredentialBridge structural-test inputs'* ]] || return 1
   [[ "$bridge_leg_block" == *'env \
-  TEST_RUNNER_GRADUS_BRIDGE_SOURCE_ROOT="$gradus_bridge_source_root" \
-  xcodebuild test'* ]] || return 1
+    TEST_RUNNER_GRADUS_BRIDGE_SOURCE_ROOT="$gradus_bridge_source_root" \
+    xcodebuild test'* ]] || return 1
 
   grep -Fq 'bridgeSourceRootEnvironmentKey = "GRADUS_BRIDGE_SOURCE_ROOT"' "$test_path" || return 1
   grep -Fq 'environment[Self.bridgeSourceRootEnvironmentKey]' "$test_path" || return 1
@@ -1175,30 +1175,66 @@ expect_failure "deleted counting leg" assert_counting_legs_complete
 # keeps all three UI journeys. These checks combine a structural contract with
 # sourced functions and a fake command that records any UI invocation.
 validate_headless_mode_contract() {
-  local gate_path="$1" guard_blocks ui_leg preserved_leg
+  local gate_path="$1" adapter_path="${2:-$PROJECT_ROOT/.release/release-adapter.json}"
+  local option leg_id leg_kind function_name block ui_assert ui_leg leg_total
   grep -Fq 'GATE_MODE="milestone"' "$gate_path" || return 1
-  grep -Eq '^[[:space:]]*--headless\)' "$gate_path" || return 1
+  for option in headless release ui-verify; do
+    grep -Eq "^[[:space:]]*--${option}\)" "$gate_path" || return 1
+  done
   grep -Fq 'HEADLESS_SKIPPED_LEG_NAMES=("GradusMacUI" "GradusiOS-iPad" "GradusiOSUI")' "$gate_path" || return 1
   grep -Fq 'expected_counting_leg_count' "$gate_path" || return 1
-  guard_blocks="$(sed -n '/^if gate_mode_runs_ui_legs; then$/,/^fi$/p' "$gate_path")"
-  [[ "$guard_blocks" == *'reset_simulator_ui_session_for_iphone'* ]] || return 1
-  for ui_leg in GradusMacUI GradusiOS-iPad GradusiOSUI; do
-    [[ "$guard_blocks" == *"assert_counting_leg \"$ui_leg\""* ]] || return 1
-  done
-  # Density snapshots and every non-UI leg stay enabled in headless.
-  for preserved_leg in GradusMac GradusiOS-iPhone GradusiOS-DensityPhone GradusiOS-DensityPad GradusWidget; do
-    [[ "$guard_blocks" != *"assert_counting_leg \"$preserved_leg\""* ]] || return 1
-  done
+  # The adapter is the single source of truth for which legs seize the screen:
+  # gate_leg defers a `ui` leg in release and headless mode, so a leg is only
+  # safe to omit from headless if the adapter declares it `ui`.
+  leg_total=0
+  while read -r leg_id leg_kind; do
+    leg_total=$((leg_total + 1))
+    function_name="leg_${leg_id//-/_}"
+    grep -Eq "^[[:space:]]*run_leg ${leg_id} [0-9]+ .*-- ${function_name}\$" "$gate_path" || return 1
+    block="$(sed -n "/^${function_name}() {/,/^}/p" "$gate_path")"
+    [[ -n "$block" ]] || return 1
+    case "$leg_id:$leg_kind" in
+      mac-ui:ui) ui_assert='assert_counting_leg "GradusMacUI"' ;;
+      ios-ipad-ui:ui) ui_assert='assert_counting_leg "GradusiOS-iPad"' ;;
+      ios-ui:ui) ui_assert='assert_counting_leg "GradusiOSUI"' ;;
+      *:headless) ui_assert="" ;;
+      *) return 1 ;;
+    esac
+    if [[ -n "$ui_assert" ]]; then
+      [[ "$block" == *"$ui_assert"* ]] || return 1
+    else
+      # Density snapshots and every non-UI leg stay enabled in headless.
+      for ui_leg in GradusMacUI GradusiOS-iPad GradusiOSUI; do
+        [[ "$block" != *"assert_counting_leg \"$ui_leg\""* ]] || return 1
+      done
+    fi
+  done < <(python3 -I - "$adapter_path" <<'PY'
+import json, sys
+for leg_id, leg in json.load(open(sys.argv[1]))["gateLegs"]["legs"].items():
+    print(leg_id, leg["kind"])
+PY
+)
+  # An unreadable adapter yields no legs; that must fail, not pass vacuously.
+  [[ "$leg_total" -eq 12 ]] || return 1
+  [[ "$(grep -c '^[[:space:]]*run_leg ' "$gate_path")" -eq 12 ]] || return 1
 }
 
 validate_headless_mode_contract "$GATE_SCRIPT" ||
   fail "headless mode does not guard exactly the three screen-seizing UI legs"
 
 mutated_gate="$(mktemp "${TMPDIR:-/tmp}/gradus-headless-mode-contract.XXXXXX")"
-grep -v '^if gate_mode_runs_ui_legs; then$' "$GATE_SCRIPT" >"$mutated_gate"
+# A UI journey smuggled into a headless leg's function must be rejected.
+sed 's/^leg_widget() {$/leg_widget() { assert_counting_leg "GradusiOSUI" true;/' "$GATE_SCRIPT" >"$mutated_gate"
 if validate_headless_mode_contract "$mutated_gate"; then
-  fail "headless mode contract accepted unguarded UI legs"
+  fail "headless mode contract accepted a UI journey inside a headless leg"
 fi
+# A UI leg the adapter declares headless would run under pre-push; reject it.
+mutated_adapter="$(mktemp "${TMPDIR:-/tmp}/gradus-headless-adapter.XXXXXX")"
+sed 's/"kind": "ui"/"kind": "headless"/' "$PROJECT_ROOT/.release/release-adapter.json" >"$mutated_adapter"
+if validate_headless_mode_contract "$GATE_SCRIPT" "$mutated_adapter"; then
+  fail "headless mode contract accepted a UI leg declared headless in the adapter"
+fi
+rm -f "$mutated_adapter"
 rm -f "$mutated_gate"
 
 # The default (milestone) invocation runs the full manifest; --headless drops
@@ -1325,8 +1361,8 @@ validate_static_gate_contract() {
   grep -Fq 'scripts/check-static-tool-versions.sh' "$gate_path" || return 1
   grep -Fq 'swiftlint lint --strict --no-cache --force-exclude' "$gate_path" || return 1
   grep -Fq 'swiftformat --lint --cache ignore --config .swiftformat' "$gate_path" || return 1
-  static_line="$(grep -n '^run_changed_swift_static_checks$' "$gate_path" | cut -d: -f1)"
-  first_hermetic_line="$(grep -n '^echo "==> Hermetic notarization' "$gate_path" | cut -d: -f1)"
+  static_line="$(grep -n '^[[:space:]]*gate_step static-checks run_changed_swift_static_checks$' "$gate_path" | cut -d: -f1)"
+  first_hermetic_line="$(grep -n '^[[:space:]]*run_leg hermetic-shell ' "$gate_path" | cut -d: -f1)"
   [[ -n "$static_line" && -n "$first_hermetic_line" && "$static_line" -lt "$first_hermetic_line" ]]
 }
 
@@ -1445,6 +1481,57 @@ expect_failure "focused Mac snapshot zero-selector run" env \
   TZ=UTC PATH="$fake_static_bin:/usr/bin:/bin" FAKE_SNAPSHOT_COUNT=0 \
   GRADUS_MAC_SNAPSHOT_TIMEOUT_SECONDS=10 \
   bash "$SCRIPT_DIR/test-mac-snapshots.sh"
+
+# Verify-once: one failing leg is recorded and the rest still run, so a single
+# gate pass lists every failure instead of stopping at the first.
+fake_gate_leg() {
+  local leg_id="$1"
+  shift
+  [[ "${1:-}" == "--" ]] && shift
+  GATE_LEGS_USED+=("$leg_id=digest")
+  "$@"
+}
+passing_probe_leg() { LEG_RAN=1; return 0; }
+failing_probe_leg() { LEG_RAN=1; return 7; }
+(
+  # shellcheck disable=SC2034
+  GATE_LEGS_USED=()
+  GATE_FAILED_LEGS=()
+  COUNTING_LEG_RUN_COUNT=0
+  gate_leg() { fake_gate_leg "$@"; }
+  run_leg first-leg 2 -- passing_probe_leg
+  run_leg second-leg 3 -- failing_probe_leg 2>/dev/null
+  run_leg third-leg 1 -- passing_probe_leg
+  [[ "${GATE_FAILED_LEGS[*]}" == "second-leg" ]] || exit 1
+  [[ "${#GATE_LEGS_USED[@]}" -eq 3 ]] || exit 1
+  # A reused leg never runs its counting assertions; its share is added instead.
+  reused_probe_leg() { return 0; }
+  run_leg reused-leg 4 -- reused_probe_leg
+  [[ "$COUNTING_LEG_RUN_COUNT" -eq 4 ]] || exit 1
+) || fail "run_leg does not collect failures and keep running the remaining legs"
+
+# Both ui-verify and the deferred UI legs contribute nothing in headless mode.
+(
+  # shellcheck disable=SC2034
+  GATE_LEGS_USED=()
+  GATE_FAILED_LEGS=()
+  COUNTING_LEG_RUN_COUNT=0
+  gate_leg() { return 0; }
+  run_leg deferred-ui-leg 1 -- passing_probe_leg
+  [[ "$COUNTING_LEG_RUN_COUNT" -eq 0 && "${#GATE_FAILED_LEGS[@]}" -eq 0 ]] || exit 1
+) || fail "a deferred UI leg was counted as run"
+
+# The result file names the failed legs and the attempt log for the runner.
+gate_result_probe="$diagnostic_test_root/gate-result"
+(
+  GATE_FAILED_LEGS=(pytest widget)
+  GATE_ATTEMPT_LOG="$GATE_REPO_ROOT/.release-state/evidence/test-gate/local-gate-output.attempt-1.log"
+  GATE_RESULT_RECEIPTS="abc123"
+  GRADUS_GATE_RESULT_FILE="$gate_result_probe"
+  gate_write_result
+) || fail "gate_write_result failed"
+[[ "$(cat "$gate_result_probe")" == $'failed=pytest,widget\nlog=.release-state/evidence/test-gate/local-gate-output.attempt-1.log\nreceipts=abc123' ]] ||
+  fail "gate result file does not carry failed legs, the relative log path and the receipts digest"
 
 if [[ "$failure_count" -ne 0 ]]; then
   echo "FAIL: $failure_count test-gate self-check failure(s)" >&2

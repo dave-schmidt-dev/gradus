@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover - exercised by the adapter entrypoint
 
 _CANDIDATE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_LEG_RECEIPTS_FLAG = "--leg-receipts-sha256="
 
 
 def resolve_canonical_manifest(
@@ -162,8 +163,14 @@ def build_local_gate_proof(
     configuration: str,
     now: datetime | None = None,
     contract_revision: str = CONTRACT_REVISION,
+    leg_receipts_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """Build the authoritative local-gate proof after every gate leg passed."""
+    """Build the authoritative local-gate proof after every gate leg passed.
+
+    ``leg_receipts_sha256`` is the digest of the per-leg receipts the gate
+    copied into the candidate; the central upload check recomputes it from the
+    candidate and refuses a proof that does not name those exact bytes.
+    """
 
     raw, candidate_id, source_digest = _manifest_binding(manifest_path)
     if not configuration or any(character.isspace() for character in configuration):
@@ -182,7 +189,7 @@ def build_local_gate_proof(
             b"authoritative",
         )
     )
-    return {
+    proof: dict[str, Any] = {
         "proofVersion": PROOF_VERSION,
         "proofSchema": LOCAL_GATE_PROOF_SCHEMA,
         "operationClass": "localGate",
@@ -195,6 +202,11 @@ def build_local_gate_proof(
         "environmentClosureSha256": closure,
         "evidenceSha256": hashlib.sha256(evidence).hexdigest(),
     }
+    if leg_receipts_sha256 is not None:
+        if not _HEX64.fullmatch(leg_receipts_sha256):
+            raise ValueError("local-gate-leg-receipts-invalid")
+        proof["legReceiptsSha256"] = leg_receipts_sha256
+    return proof
 
 
 def write_proof(destination: Path, proof: dict[str, Any]) -> None:
@@ -224,6 +236,16 @@ def main(argv: list[str] | None = None) -> int:
     """Read the declared manifest and persist its candidate-bound proof."""
 
     arguments = sys.argv[1:] if argv is None else argv
+    leg_receipts_sha256: str | None = None
+    if (
+        len(arguments) == 2
+        and arguments[0] == "--local-gate"
+        and arguments[1].startswith(_LEG_RECEIPTS_FLAG)
+    ):
+        leg_receipts_sha256 = arguments[1][len(_LEG_RECEIPTS_FLAG) :]
+        if not _HEX64.fullmatch(leg_receipts_sha256):
+            return 64
+        arguments = arguments[:1]
     if arguments not in ([], ["--local-gate"]):
         return 64
     local_gate = arguments == ["--local-gate"]
@@ -256,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
             proof = build_local_gate_proof(
                 manifest_path,
                 configuration=configuration,
+                leg_receipts_sha256=leg_receipts_sha256,
             )
         else:
             proof = build_proof(
