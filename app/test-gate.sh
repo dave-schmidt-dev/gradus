@@ -606,11 +606,13 @@ validate_macos_version_pin() {
     echo "FAIL: could not read macOS version pin: $pin_path" >&2
     return 1
   fi
-  if [[ ! "$pinned_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  # sw_vers omits a zero patch component (macOS 27.2, not 27.2.0), so both
+  # forms are valid; the comparison below stays an exact string match.
+  if [[ ! "$pinned_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
     echo "FAIL: macOS version pin is malformed: '$pinned_version' ($pin_path)" >&2
     return 1
   fi
-  if [[ ! "$active_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [[ ! "$active_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
     echo "FAIL: sw_vers returned a malformed macOS version: '$active_version'" >&2
     return 1
   fi
