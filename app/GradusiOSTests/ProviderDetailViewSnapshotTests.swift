@@ -17,9 +17,9 @@ private let fixedNow = Date(timeIntervalSince1970: 1_785_000_000)
 /// OTHER_SWIFT_FLAGS='$(inherited) -D PROVIDER_DETAIL_SNAPSHOT_RECORD'
 private let providerDetailSnapshotRecording: SnapshotTestingConfiguration.Record = {
     #if PROVIDER_DETAIL_SNAPSHOT_RECORD
-        return .all
+        .all
     #else
-        return .never
+        .never
     #endif
 }()
 

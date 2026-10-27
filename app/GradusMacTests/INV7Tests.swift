@@ -25,10 +25,7 @@ private func publisherSourceFiles(environment: [String: String] = ProcessInfo.pr
     var isDirectory: ObjCBool = false
     guard
         FileManager.default.fileExists(atPath: gradusMacDir.path, isDirectory: &isDirectory),
-        isDirectory.boolValue
-    else { return [] }
-
-    guard
+        isDirectory.boolValue,
         let enumerator = FileManager.default.enumerator(
             at: gradusMacDir, includingPropertiesForKeys: nil
         )

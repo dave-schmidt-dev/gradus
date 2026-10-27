@@ -92,9 +92,9 @@ enum DensitySnapshotFixture {
 /// OTHER_SWIFT_FLAGS='$(inherited) -D DENSITY_SNAPSHOT_RECORD'
 let densitySnapshotRecording: SnapshotTestingConfiguration.Record = {
     #if DENSITY_SNAPSHOT_RECORD
-        return .all
+        .all
     #else
-        return .never
+        .never
     #endif
 }()
 

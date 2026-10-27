@@ -14,9 +14,9 @@ private let widgetTimeZone = TimeZone(identifier: "America/New_York")!
 /// OTHER_SWIFT_FLAGS='$(inherited) -D WIDGET_SNAPSHOT_RECORD'
 private let recordWidgetSnapshots: SnapshotTestingConfiguration.Record = {
     #if WIDGET_SNAPSHOT_RECORD
-        return .all
+        .all
     #else
-        return .never
+        .never
     #endif
 }()
 

@@ -66,10 +66,10 @@ struct GradusMacApp: App {
     /// window because XCUITest cannot click an LSUIElement status item.
     static var uiTestMenuFixtureEnabled: Bool {
         #if DEBUG
-            return CommandLine.arguments.contains("--ui-test-menu-fixture")
+            CommandLine.arguments.contains("--ui-test-menu-fixture")
                 || ProcessInfo.processInfo.environment["GRADUS_UI_TEST_MENU_FIXTURE"] == "1"
         #else
-            return false
+            false
         #endif
     }
 
@@ -341,8 +341,9 @@ final class PublishPipeline {
               let coordinator, let accountMonitor
         else { return }
         let status = await accountMonitor.lastKnownStatus
-        guard AccountStatusMonitor.publishingState(for: status) == .ready else { return }
-        guard let operationID = viewModel.cloudSyncDidStart() else { return }
+        guard AccountStatusMonitor.publishingState(for: status) == .ready,
+              let operationID = viewModel.cloudSyncDidStart()
+        else { return }
         do {
             let publishedAt = Date()
             let syncSource = LocalSyncSource.current

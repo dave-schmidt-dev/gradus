@@ -330,7 +330,6 @@ extension GradusiOSApp {
             await accountMonitor?.start()
         }
         guard !sampleModeActive, liveLifecycleGate.isLive else { return }
-        guard !sampleModeActive, liveLifecycleGate.isLive else { return }
         await viewModel.reconcileLiveLifecycle()
         presenceLifecycle.start(
             liveMode: viewModel.requiredICloudMode.allowsLiveWork,

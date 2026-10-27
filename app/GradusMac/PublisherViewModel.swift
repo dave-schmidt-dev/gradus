@@ -270,8 +270,7 @@ public final class PublisherViewModel: ObservableObject {
     /// This explicit read can run at local watcher startup or when Settings
     /// opens. It never presents the system permission sheet.
     public func refreshResetNotificationAuthorization() async {
-        guard resetGrantAlertsEnabled || resetRefillAlertsEnabled else { return }
-        guard !resetAuthorizationRequestInFlight else { return }
+        guard resetGrantAlertsEnabled || resetRefillAlertsEnabled, !resetAuthorizationRequestInFlight else { return }
         resetNotificationAuthorization = await resetNotificationScheduler.authorization()
     }
 

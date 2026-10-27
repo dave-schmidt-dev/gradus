@@ -9,9 +9,9 @@ import Testing
 /// `OTHER_SWIFT_FLAGS='$(inherited) -D MAC_SETTINGS_SNAPSHOT_RECORD'`
 private let macSettingsSnapshotRecording: SnapshotTestingConfiguration.Record = {
     #if MAC_SETTINGS_SNAPSHOT_RECORD
-        return .all
+        .all
     #else
-        return .never
+        .never
     #endif
 }()
 

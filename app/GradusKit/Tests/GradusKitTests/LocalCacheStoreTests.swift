@@ -15,13 +15,12 @@ private func sweepStaleCacheTestDirectories() {
         guard let values = try? directory.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey]),
               values.isDirectory == true,
               let modifiedAt = values.contentModificationDate,
-              modifiedAt < cutoff else { continue }
-
-        guard let descendants = manager.enumerator(
-            at: directory,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: []
-        ) else { continue }
+              modifiedAt < cutoff,
+              let descendants = manager.enumerator(
+                  at: directory,
+                  includingPropertiesForKeys: [.contentModificationDateKey],
+                  options: []
+              ) else { continue }
         var safeToRemove = true
         while let descendant = descendants.nextObject() as? URL {
             guard let descendantValues = try? descendant.resourceValues(forKeys: [.contentModificationDateKey]),

@@ -234,8 +234,16 @@ validate_macos_version_pin "$macos_pin_fixture" "26.6.2" ||
   fail "matching macOS version pin was rejected"
 expect_failure "mismatching macOS version pin" \
   validate_macos_version_pin "$macos_pin_fixture" "26.6.3"
-printf '26.6\n' >"$macos_pin_fixture"
+printf '27.2\n' >"$macos_pin_fixture"
+validate_macos_version_pin "$macos_pin_fixture" "27.2" ||
+  fail "matching two-component macOS version pin was rejected"
+expect_failure "two-component pin against a patch release" \
+  validate_macos_version_pin "$macos_pin_fixture" "27.2.1"
+printf '26\n' >"$macos_pin_fixture"
 expect_failure "malformed macOS version pin" \
+  validate_macos_version_pin "$macos_pin_fixture" "26.6.2"
+printf '26.6.2.1\n' >"$macos_pin_fixture"
+expect_failure "four-component macOS version pin" \
   validate_macos_version_pin "$macos_pin_fixture" "26.6.2"
 rm -f "$macos_pin_fixture"
 expect_failure "missing macOS version pin" \
@@ -1352,7 +1360,7 @@ FAKE
   fi
   sed "s/@STATUS@/$format_status/" >"$fake_static_bin/swiftformat" <<'FAKE'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--version" ]] && { echo 'SwiftFormat 0.63.1'; exit 0; }
+[[ "${1:-}" == "--version" ]] && { echo 'SwiftFormat 0.64.4'; exit 0; }
 exit @STATUS@
 FAKE
   cat >"$fake_static_bin/shellcheck" <<'FAKE'

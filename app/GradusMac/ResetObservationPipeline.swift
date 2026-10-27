@@ -263,8 +263,8 @@ private extension ResetObservationPipeline {
         var evaluatedCodex = false
         let freshProviders = readFreshProviderNames(for: payload)
         for entry in payload.providers {
-            guard let observation = ResetUsageObservation(entry: entry) else { continue }
-            guard freshProviders.contains(entry.name) else { continue }
+            guard let observation = ResetUsageObservation(entry: entry),
+                  freshProviders.contains(entry.name) else { continue }
             let count = entry.name == "Codex" ? banked.flatMap(resetBanked) : nil
             let result = ResetAlertDetector.evaluate(
                 state: &state, deviceID: deviceID, observation: observation, banked: count

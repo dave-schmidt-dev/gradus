@@ -80,10 +80,8 @@ extension GradusiOSApp {
         bundle: Bundle = .main
     ) -> Bool {
         guard SampleDataMode.isEnabled(arguments: arguments, isDebugBuild: isDebugBuild),
-              let providers = try? SampleDataMode.bundledProviders(bundle: bundle)
-        else { return false }
-
-        guard (try? cache.saveCachedStatuses(providers, syncedAt: SampleDataMode.fixedNow)) != nil else { return false }
+              let providers = try? SampleDataMode.bundledProviders(bundle: bundle),
+              (try? cache.saveCachedStatuses(providers, syncedAt: SampleDataMode.fixedNow)) != nil else { return false }
         return true
     }
 
