@@ -201,7 +201,7 @@ is what changes.
 
 iOS and macOS snapshot/UI baselines are canonical to the pinned local Xcode,
 host macOS, and simulator runtime. The exact host pin is tracked in
-`app/.macos-version` (currently `26.6.2`); `app/test-gate.sh` compares it to
+`app/.macos-version` (currently `27.2`); `app/test-gate.sh` compares it to
 `sw_vers -productVersion` before Xcode project generation or native tests.
 Refresh baselines only from an exact local result bundle after reviewing every
 rendered image. For a deliberate OS upgrade, verify the intended Xcode and iOS
