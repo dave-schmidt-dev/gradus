@@ -1,7 +1,7 @@
 # Changelog
 
 User-facing release notes for Gradus. Each semantic product version gets one
-entry here, including a concise `### TestFlight focus` list. This file is the
+entry here, including a concise **TestFlight focus** list. This file is the
 tester-facing source for that list. Individual TestFlight candidate builds and
 re-upload reasons stay in `HISTORY.md`.
 
@@ -9,7 +9,7 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
-## Unreleased
+## [Unreleased]
 
 ### Fixed
 
@@ -26,20 +26,6 @@ history from the overnight release train. New releases use
 - Record diagnostics attempts before fetch suspension, terminate each logical operation once and retain publish acknowledgement independently of artifact failure.
 - Antigravity quota parsing now keeps a valid third-party (Claude+GPT) pool when the response omits the Gemini group, showing Gemini as unknown instead of failing the whole probe; a response with no recognized group still fails closed.
 - Antigravity Gemini usage now matches the CLI by querying the daily quota host with the CLI product/version identity. The prior generic identity and production host could report 62% weekly remaining while the CLI weekly limit was exhausted.
-
-### Added
-
-- Pilot private keyless Mac/iOS diagnostics with stable operation IDs, actual retry counts and isolated synthetic tests.
-
-- Mistral now tracks two allowances: the included API allowance (read from the
-  Mistral admin console with the same Safari sign-in) and the included Vibe Code
-  allowance (what the old "Vibe" card showed). The terminal dashboard, Mac menu
-  and iPhone/iPad show them as one "Mistral" card with two bars, "API" and
-  "Vibe". An exhausted API allowance no longer marks the whole card depleted
-  while Vibe has capacity. The published snapshot keeps them as separate
-  "Vibe" and "Vibe Code" entries so a router can veto on each independently.
-
-### Fixed
 - A Claude Keychain read that fails locally (for example mid `claude auth login`) is re-probed on the next refresh instead of being held for the 10-minute probe cooldown.
 - The iPhone and iPad app no longer closes itself when new usage arrives after
   a provider was received twice in one sync, which left the dashboard stuck on
@@ -56,6 +42,18 @@ history from the overnight release train. New releases use
   5h window as "51% behind" at 99% left. Snapshot timestamps now carry the local
   UTC offset.
 - `gradus --json` no longer reports a stale snapshot or an ended usage cycle as ok.
+
+### Added
+
+- Pilot private keyless Mac/iOS diagnostics with stable operation IDs, actual retry counts and isolated synthetic tests.
+
+- Mistral now tracks two allowances: the included API allowance (read from the
+  Mistral admin console with the same Safari sign-in) and the included Vibe Code
+  allowance (what the old "Vibe" card showed). The terminal dashboard, Mac menu
+  and iPhone/iPad show them as one "Mistral" card with two bars, "API" and
+  "Vibe". An exhausted API allowance no longer marks the whole card depleted
+  while Vibe has capacity. The published snapshot keeps them as separate
+  "Vibe" and "Vibe Code" entries so a router can veto on each independently.
 
 ### Changed
 
@@ -96,7 +94,7 @@ history from the overnight release train. New releases use
   snapshot and source-root branches in the test targets. The local gate is the
   only validation path.
 
-## 1.11.0 — 2026-09-24
+## [1.11.0] - 2026-09-24
 
 ### Added
 
@@ -104,14 +102,14 @@ history from the overnight release train. New releases use
   reset credits and usage-window refills. Claude banked-credit arrival remains
   unavailable; mobile alerts may wait until Gradus opens and CloudKit syncs.
 
-### TestFlight focus
+**TestFlight focus**
 
 - On Mac and iPhone/iPad, opt in to each alert kind separately and verify both
   new Codex banked reset credit and usage-window refill alerts.
 - Test denied notification permission, requesting permission again, and the
   recovery path.
 
-## 1.10.3 — 2026-09-05
+## [1.10.3] - 2026-09-05
 
 ### Fixed
 
@@ -119,38 +117,38 @@ history from the overnight release train. New releases use
   but unassigned 1.10.2 candidate after release-adapter reconciliation was
   repaired.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm Cursor remains active when Auto/Composer is depleted and API usage
   remains available.
 - Confirm Cursor appears exhausted when both pools are depleted.
 
-## 1.10.2 — 2026-09-05
+## [1.10.2] - 2026-09-05
 
 ### Fixed
 
 - Cursor is no longer reported exhausted while either its Auto/Composer or API
   pool still has capacity.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm Cursor remains active when Auto/Composer is depleted and API usage
   remains available.
 - Confirm Cursor appears exhausted when both pools are depleted.
 
-## 1.10.1 — 2026-08-29
+## [1.10.1] - 2026-08-29
 
 ### Fixed
 
 - Clarified widget sizing and removed the normal Settings Explore Sample path.
 
-### TestFlight focus
+**TestFlight focus**
 
 - In the iOS widget gallery, select the actual small and medium Gradus widgets
   and confirm each renders the expected provider layout.
 - Filter providers in Settings and confirm the widget follows that filtering.
 
-## 1.10.0 — 2026-08-29
+## [1.10.0] - 2026-08-29
 
 ### Added
 
@@ -162,7 +160,7 @@ history from the overnight release train. New releases use
 - A medium Home Screen widget shows up to three eligible providers, ranked by
   urgency, alongside the existing single-provider small widget.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm available credits match the provider source and providers without a
   reported balance do not show a fabricated value.
@@ -171,7 +169,7 @@ history from the overnight release train. New releases use
 - Add both small and medium widgets; confirm the small widget shows one urgent
   provider and the medium widget shows up to three in the expected order.
 
-## 1.9.0 — 2026-08-23
+## [1.9.0] - 2026-08-23
 
 ### Added
 
@@ -180,14 +178,14 @@ history from the overnight release train. New releases use
   Tapping it opens Gradus. Empty or unavailable data directs the user back to
   the app without exposing stale or sample usage.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Add the small Gradus widget after opening the app once and confirm its
   provider, percentage, reset, and sync age match the dashboard's live data.
 - Confirm the widget remains readable in light/dark mode and larger text, and
   that tapping it opens the Gradus dashboard.
 
-## 1.8.1 — 2026-08-19
+## [1.8.1] - 2026-08-19
 
 ### Added
 
@@ -202,7 +200,7 @@ history from the overnight release train. New releases use
   half the screen unused. It now picks the richest rung the available width
   supports and that rung's own maximum column count.
 
-### TestFlight focus
+**TestFlight focus**
 
 - On iPad, rotate to landscape with Automatic density selected and confirm
   cards use the full width instead of stopping at a narrow column count.
@@ -210,7 +208,7 @@ history from the overnight release train. New releases use
   pace percentage under its bar, and that it matches the Mac menu bar for the
   same account.
 
-## 1.8.0 — 2026-08-17
+## [1.8.0] - 2026-08-17
 
 ### Added
 
@@ -263,7 +261,7 @@ history from the overnight release train. New releases use
   since 2026-07). It's hidden again until OpenAI restores the window, matching
   how the new Codex (Spark) `sp1w` row already behaves.
 
-### TestFlight focus
+**TestFlight focus**
 
 - On iPad, confirm Automatic disables the manual slider; turn it off and move
   Small to Large, confirming columns and cards change without losing a provider
@@ -275,7 +273,7 @@ history from the overnight release train. New releases use
 - Confirm the low-provider count in the iPhone badge matches what the Mac menu
   bar shows at the same moment.
 
-## 1.6.0 — 2026-08-05
+## [1.6.0] - 2026-08-05
 
 The iPhone half of the layout 1.5.0 shipped on iPad. Same artifact, same
 version: an iPhone-only or iPad-only release is not a thing (INV-12).
@@ -301,7 +299,7 @@ version: an iPhone-only or iPad-only release is not a thing (INV-12).
   no longer a window to choose, and an exhausted provider reads as a card whose
   bars are all red, still sorted last.
 
-### TestFlight focus
+**TestFlight focus**
 
 - On iPhone, confirm every provider and every window is visible with a bar
   each, and that the list is more compact than before rather than less.
@@ -311,7 +309,7 @@ version: an iPhone-only or iPad-only release is not a thing (INV-12).
 - Confirm the sync status line at the top names the publishing Mac, and that
   Settings still shows the full connected-computer detail.
 
-## 1.5.0 — 2026-08-05
+## [1.5.0] - 2026-08-05
 
 First three-component version on this train. The build number is allocated at
 upload time and recorded in `HISTORY.md`, not here.
@@ -338,7 +336,7 @@ upload time and recorded in `HISTORY.md`, not here.
 - A window sitting at exactly 0.5% is no longer reported as depleted; it
   displays as 1% remaining and is still counted as spendable.
 
-### TestFlight focus
+**TestFlight focus**
 
 - On iPad, confirm all providers and all of their windows are visible without
   scrolling, in both portrait and landscape.
@@ -347,20 +345,22 @@ upload time and recorded in `HISTORY.md`, not here.
   that a fuller provider being spent too fast is.
 - Confirm the iPhone layout is unchanged by this release.
 
-## 1.4 (10) — 2026-08-04
+## Legacy version and build history
 
-### Fixed
+### 1.4 (10) — 2026-08-04
+
+#### Fixed
 
 - Hardened the Home Screen badge reset so stale notification counts are cleared
   through UserNotifications as well as the legacy application badge property.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm opening Gradus or returning to it clears any stale Home Screen badge.
 
-## 1.4 (9) — 2026-08-04
+### 1.4 (9) — 2026-08-04
 
-### Fixed
+#### Fixed
 
 - The main usage bar now follows the current worst bucket by default; tapping
   an alternate bucket badge explicitly selects it and keeps that choice across
@@ -368,7 +368,7 @@ upload time and recorded in `HISTORY.md`, not here.
 - Hardened pace-marker and reset rendering so malformed provider metadata cannot
   crash the dashboard or strip the bar's signal coloring.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm the main bar changes when an alternate bucket badge is tapped.
 - Confirm an unselected provider follows whichever valid bucket is currently
@@ -376,9 +376,9 @@ upload time and recorded in `HISTORY.md`, not here.
 - Confirm the connected Mac card, compact exhausted section, and red pace
   marker remain visible.
 
-## 1.4 (8) — 2026-08-04
+### 1.4 (8) — 2026-08-04
 
-### Fixed
+#### Fixed
 
 - Fixed the connected-computer card to show the current publishing Mac, local
   user, and friendly publish time.
@@ -386,7 +386,7 @@ upload time and recorded in `HISTORY.md`, not here.
   alternate-window badges to prevent visual overlap while preserving the
   compact provider spacing.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm the Connected Mac card shows the current computer and user.
 - Tap an alternate-window badge and confirm it sits below, rather than on top
@@ -394,9 +394,9 @@ upload time and recorded in `HISTORY.md`, not here.
 - Confirm the red pace marker remains visible and the provider list stays
   compact.
 
-## 1.4 (7) — 2026-08-04
+### 1.4 (7) — 2026-08-04
 
-### Fixed
+#### Fixed
 
 - Added a connected-computer card and matching Settings rows showing the Mac
   name and short local username that most recently published the dashboard.
@@ -407,7 +407,7 @@ upload time and recorded in `HISTORY.md`, not here.
 - Made the expected-pace marker thicker and taller across TUI, Mac, and iOS,
   and replaced raw reset ISO strings with friendly local dates and times.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm the connected Mac card shows the current computer and user.
 - Verify the Home Screen badge disappears after opening or returning to
@@ -416,9 +416,9 @@ upload time and recorded in `HISTORY.md`, not here.
   and reset text reads like “Today 10:00 PM” or “Tomorrow 7:30 AM”.
 - Confirm the tighter provider list shows more active providers per screen.
 
-## 1.4 (6) — 2026-08-04
+### 1.4 (6) — 2026-08-04
 
-### Fixed
+#### Fixed
 
 - Active providers are sorted first; exhausted providers are grouped compactly
   at the bottom and can be hidden from Settings.
@@ -433,7 +433,7 @@ upload time and recorded in `HISTORY.md`, not here.
 - A stale home-screen badge clears when the app becomes active, and repeated
   ordinary sync updates no longer repeat warning notifications.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Check sorting and the Show exhausted setting on iPhone and iPad.
 - Tap each provider's bucket badges and confirm the headline bar changes.
@@ -441,14 +441,14 @@ upload time and recorded in `HISTORY.md`, not here.
   is not.
 - Confirm a Mac publish syncs normally without duplicate warning notifications.
 
-## 1.3 (5) — 2026-08-04
+### 1.3 (5) — 2026-08-04
 
-### Fixed
+#### Fixed
 
 - Improved Mac-to-iOS sync handoff and reduced repeated warning notifications
   during ordinary usage updates.
 
-### TestFlight focus
+**TestFlight focus**
 
 - Confirm that a Mac publish reaches the iPhone and iPad, and that a warning
   notification appears once per warning episode.

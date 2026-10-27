@@ -896,7 +896,13 @@ The same rule is why product/workflow questions here are settled by
 - `gradus/snapshot.py` — snapshot normalization and persistence
 - `gradus/ui.py` — terminal dashboard
 - `gradus/__main__.py` — CLI entry, provider registry iteration
-- `tests/test_providers.py` — provider unit tests
+- `tests/test_providers.py` — provider base helpers, snapshot fetch, failure classification, reset formatting, HTTP, and seroval tests
+- `tests/test_provider_copilot.py` — Copilot HTTP provider tests
+- `tests/test_provider_vibe.py` — Vibe provider, API, cookie cache, and cache resilience tests
+- `tests/test_provider_codex.py` — Codex window classification and HTTP provider tests
+- `tests/test_provider_claude.py` — Claude HTTP provider tests
+- `tests/test_provider_antigravity.py` — Antigravity provider tests
+- `tests/test_provider_credentials.py` — JWT expiry, headless/read-only, lazy acquire, credential cache permissions, Safari-free, and Keychain documentation contract tests
 - `tests/test_snapshot.py` — normalization tests
 - `tests/test_snapshot_property.py` — Hypothesis property tests
 - `tests/test_ui.py` — UI tests
