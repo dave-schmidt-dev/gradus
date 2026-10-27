@@ -82,9 +82,9 @@ enum CloudKitRuntimeConfiguration {
     /// generated simulator debug app is intentionally treated as offline.
     static var currentValue: Bool {
         #if targetEnvironment(simulator)
-            return shouldUseCloudKit(isSimulator: true, hasCloudKitEntitlement: false)
+            shouldUseCloudKit(isSimulator: true, hasCloudKitEntitlement: false)
         #else
-            return shouldUseCloudKit(isSimulator: false, hasCloudKitEntitlement: true)
+            shouldUseCloudKit(isSimulator: false, hasCloudKitEntitlement: true)
         #endif
     }
 }

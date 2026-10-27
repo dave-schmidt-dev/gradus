@@ -121,9 +121,9 @@ let dashboardSnapshotFixedNow = Date(timeIntervalSince1970: 1_786_219_200)
 /// OTHER_SWIFT_FLAGS='$(inherited) -D DASHBOARD_SNAPSHOT_RECORD'
 let dashboardSnapshotRecording: SnapshotTestingConfiguration.Record = {
     #if DASHBOARD_SNAPSHOT_RECORD
-        return .all
+        .all
     #else
-        return .never
+        .never
     #endif
 }()
 

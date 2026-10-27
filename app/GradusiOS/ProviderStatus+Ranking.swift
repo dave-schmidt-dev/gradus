@@ -58,8 +58,8 @@ enum IOSProviderRetryAccessibility {
            carryLabels.contains(error) {
             return error
         }
-        guard provider.providerName == "Antigravity" else { return nil }
-        guard let error = provider.errorMessage?.lowercased(),
+        guard provider.providerName == "Antigravity",
+              let error = provider.errorMessage?.lowercased(),
               error.contains("session expired") || error.contains("re-authenticate") || error.contains("run `agy`")
         else { return nil }
         return reauthenticationLabel

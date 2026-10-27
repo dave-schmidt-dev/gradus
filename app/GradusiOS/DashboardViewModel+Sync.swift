@@ -197,8 +197,9 @@ extension DashboardViewModel {
     /// bootstrap, and foreground recovery all call this method so fixed
     /// subscription IDs and the cached data converge together.
     public func reconcileLiveLifecycle() async {
-        guard requiredICloudMode.allowsLiveWork, syncEnabled, accountStatus == .available else { return }
-        guard !isReconcilingLiveLifecycle else { return }
+        guard requiredICloudMode.allowsLiveWork, syncEnabled, accountStatus == .available,
+              !isReconcilingLiveLifecycle
+        else { return }
         isReconcilingLiveLifecycle = true
         defer { isReconcilingLiveLifecycle = false }
 

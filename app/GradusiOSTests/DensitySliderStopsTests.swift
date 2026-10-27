@@ -107,17 +107,17 @@ private func feasibleStops(
     #expect(
         try DashboardViewModel.resolvedCardColumnCount(
             preference: 0, maximum: #require(phoneStops.last)
-        ) == phoneStops.last!
+        ) == #require(phoneStops.last)
     )
     #expect(
         try DashboardViewModel.resolvedCardColumnCount(
             preference: 0, maximum: #require(padStops.last)
-        ) == padStops.last!
+        ) == #require(padStops.last)
     )
     #expect(
         try DashboardViewModel.resolvedCardColumnCount(
             preference: 1, maximum: #require(padStops.last)
-        ) == padStops.last!
+        ) == #require(padStops.last)
     )
 }
 
