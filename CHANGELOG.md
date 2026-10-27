@@ -9,7 +9,48 @@ The `1.4 (8)` through `1.4 (10)` entries are retained as legacy candidate
 history from the overnight release train. New releases use
 `MAJOR.MINOR.PATCH`; build numbers do not become patch components.
 
-## Unreleased
+## 1.11.0 — Unreleased
+
+### Added
+
+- Mac and iPhone/iPad offer separate opt-in local alerts for new Codex banked
+  reset credits and usage-window refills. Claude banked-credit arrival remains
+  unavailable; mobile alerts may wait until Gradus opens and CloudKit syncs.
+- Pilot private keyless Mac/iOS diagnostics with stable operation IDs, actual retry counts and isolated synthetic tests.
+- Mistral now tracks two allowances: the included API allowance (read from the
+  Mistral admin console with the same Safari sign-in) and the included Vibe Code
+  allowance (what the old "Vibe" card showed). The terminal dashboard, Mac menu
+  and iPhone/iPad show them as one "Mistral" card with two bars, "API" and
+  "Vibe". An exhausted API allowance no longer marks the whole card depleted
+  while Vibe has capacity. The published snapshot keeps them as separate
+  "Vibe" and "Vibe Code" entries so a router can veto on each independently.
+
+### Changed
+
+- Refine local diagnostics pilot availability warnings and cancellation privacy; classify expected missing-zone waiting as informational.
+- Routine pre-push validation now uses the headless gate, retaining non-UI and image-snapshot checks while reserving host HID and XCUITest journeys for the full milestone gate.
+- The hermetic iOS upload suite now checks producer-evidence refresh ordering and diagnostics-wrapper error propagation against PublishCoordinator.
+- iPhone and iPad Settings now keep Warning alerts and the Warning Threshold
+  slider together at the top, followed by Reset alerts, Local Display and Widget;
+  the read-only Connected Computer and About sections come last.
+- Usage-refill alerts now cover the weekly window only by default. A new
+  "Include 5-hour refills" toggle in Mac and iPhone Settings brings the 5-hour
+  alerts back; it is off by default and applies only while "Usage refilled" is
+  on.
+- The local Warning Threshold on Mac and iPhone/iPad is now points behind
+  expected pace (0-10, default 10) instead of percent left. Gradus always warns
+  at 10 points behind, so lowering it only warns sooner. Local warning
+  notifications now report the pace ("30% behind, 20% remaining") instead of a
+  percent-left threshold. The saved value resets to the default; the old
+  percent setting is not carried over. The reset-alert explanations on
+  iPhone/iPad moved behind an info button.
+- Removed the retired "Codex (Spark)" bucket everywhere: the monitor no longer
+  probes or emits it, the TUI drops its `sp5h`/`sp1w` rows, and the Mac and
+  iPhone/iPad no longer show it. The Mac deletes its old iCloud record once,
+  which removes the card from iPhone and iPad.
+- The Mac reset-alert notifications now use the iPhone wording: "Codex added N
+  banked resets. M available." and "<provider> <window> usage is available
+  again.", with readable window names such as "5 Hour" and "Weekly".
 
 ### Fixed
 
@@ -26,20 +67,6 @@ history from the overnight release train. New releases use
 - Record diagnostics attempts before fetch suspension, terminate each logical operation once and retain publish acknowledgement independently of artifact failure.
 - Antigravity quota parsing now keeps a valid third-party (Claude+GPT) pool when the response omits the Gemini group, showing Gemini as unknown instead of failing the whole probe; a response with no recognized group still fails closed.
 - Antigravity now queries the production `cloudcode-pa.googleapis.com` `retrieveUserQuotaSummary` host instead of the `daily-cloudcode-pa.googleapis.com` host, which returned only the third-party pool; the production host reports the Gemini group too, so Gemini windows are no longer dropped.
-
-### Added
-
-- Pilot private keyless Mac/iOS diagnostics with stable operation IDs, actual retry counts and isolated synthetic tests.
-
-- Mistral now tracks two allowances: the included API allowance (read from the
-  Mistral admin console with the same Safari sign-in) and the included Vibe Code
-  allowance (what the old "Vibe" card showed). The terminal dashboard, Mac menu
-  and iPhone/iPad show them as one "Mistral" card with two bars, "API" and
-  "Vibe". An exhausted API allowance no longer marks the whole card depleted
-  while Vibe has capacity. The published snapshot keeps them as separate
-  "Vibe" and "Vibe Code" entries so a router can veto on each independently.
-
-### Fixed
 - A Claude Keychain read that fails locally (for example mid `claude auth login`) is re-probed on the next refresh instead of being held for the 10-minute probe cooldown.
 - The iPhone and iPad app no longer closes itself when new usage arrives after
   a provider was received twice in one sync, which left the dashboard stuck on
@@ -50,43 +77,11 @@ history from the overnight release train. New releases use
   refresh attempt had been failing.
 - Claude usage now recovers on the next normal refresh after a temporary collector-check failure, instead of waiting through the ten-minute API cooldown.
 - The Mac and iOS apps no longer hide the Mistral card when only one of its two allowances (API or Vibe) is exhausted; it counts as exhausted only when both are.
-
 - Reset times and pace are now computed and emitted in local time. The refresh
   agent compared a naive local clock against UTC resets, which showed Claude's
   5h window as "51% behind" at 99% left. Snapshot timestamps now carry the local
   UTC offset.
 - `gradus --json` no longer reports a stale snapshot or an ended usage cycle as ok.
-
-### Changed
-
-- Refine local diagnostics pilot availability warnings and cancellation privacy; classify expected missing-zone waiting as informational.
-- Routine pre-push validation now uses the headless gate, retaining non-UI and image-snapshot checks while reserving host HID and XCUITest journeys for the full milestone gate.
-- The hermetic iOS upload suite now checks producer-evidence refresh ordering and diagnostics-wrapper error propagation against PublishCoordinator.
-
-- iPhone and iPad Settings now keep Warning alerts and the Warning Threshold
-  slider together at the top, followed by Reset alerts, Local Display and Widget;
-  the read-only Connected Computer and About sections come last.
-
-- Usage-refill alerts now cover the weekly window only by default. A new
-  "Include 5-hour refills" toggle in Mac and iPhone Settings brings the 5-hour
-  alerts back; it is off by default and applies only while "Usage refilled" is
-  on.
-
-- The local Warning Threshold on Mac and iPhone/iPad is now points behind
-  expected pace (0-10, default 10) instead of percent left. Gradus always warns
-  at 10 points behind, so lowering it only warns sooner. Local warning
-  notifications now report the pace ("30% behind, 20% remaining") instead of a
-  percent-left threshold. The saved value resets to the default; the old
-  percent setting is not carried over. The reset-alert explanations on
-  iPhone/iPad moved behind an info button.
-- Removed the retired "Codex (Spark)" bucket everywhere: the monitor no longer
-  probes or emits it, the TUI drops its `sp5h`/`sp1w` rows, and the Mac and
-  iPhone/iPad no longer show it. The Mac deletes its old iCloud record once,
-  which removes the card from iPhone and iPad.
-
-- The Mac reset-alert notifications now use the iPhone wording: "Codex added N
-  banked resets. M available." and "<provider> <window> usage is available
-  again.", with readable window names such as "5 Hour" and "Weekly".
 
 ### Removed
 
@@ -96,20 +91,18 @@ history from the overnight release train. New releases use
   snapshot and source-root branches in the test targets. The local gate is the
   only validation path.
 
-## 1.11.0 — 2026-09-24
-
-### Added
-
-- Mac and iPhone/iPad offer separate opt-in local alerts for new Codex banked
-  reset credits and usage-window refills. Claude banked-credit arrival remains
-  unavailable; mobile alerts may wait until Gradus opens and CloudKit syncs.
-
 ### TestFlight focus
 
 - On Mac and iPhone/iPad, opt in to each alert kind separately and verify both
   new Codex banked reset credit and usage-window refill alerts.
 - Test denied notification permission, requesting permission again, and the
   recovery path.
+- On Mac and iPhone/iPad, check the Mistral card's two bars (API and Vibe)
+  and that it is marked exhausted only when both allowances are.
+- Set the Warning Threshold (points behind pace) and the "Include 5-hour
+  refills" toggle, and confirm the new iPhone/iPad Settings order.
+- Confirm Codex (Spark) is gone everywhere and the Cursor "Credit" line shows
+  only the on-demand limit.
 
 ## 1.10.3 — 2026-09-05
 
