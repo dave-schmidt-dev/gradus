@@ -79,12 +79,15 @@ class CopilotHttpProvider:
             ) from exc
 
     @staticmethod
-    def _monthly_reset_label() -> str:
+    def _monthly_reset_instant() -> datetime:
         now = datetime.now(timezone.utc)
         year = now.year + (1 if now.month == 12 else 0)
         month = 1 if now.month == 12 else now.month + 1
-        reset = datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
-        return f"Resets {reset.astimezone().strftime('%b %d at %I:%M %p')}"
+        return datetime(year, month, 1, 0, 0, tzinfo=timezone.utc)
+
+    @classmethod
+    def _monthly_reset_label(cls) -> str:
+        return f"Resets {cls._monthly_reset_instant().astimezone().strftime('%b %d at %I:%M %p')}"
 
     def fetch(self) -> CopilotStatus:
         token = self._get_token()
@@ -128,9 +131,11 @@ class CopilotHttpProvider:
 
         reset_at = payload.get("quota_reset_date_utc") or payload.get("quota_reset_date")
         premium_reset = _format_reset_time(reset_at) if reset_at else None
+        premium_instant = _base._source_reset_instant(reset_at) if reset_at else None
 
         if premium_reset is None:
             premium_reset = self._monthly_reset_label()
+            premium_instant = self._monthly_reset_instant()
 
         return CopilotStatus(
             premium_percent_left=premium_percent_left,
@@ -138,6 +143,9 @@ class CopilotHttpProvider:
             sample_duration_seconds=None,
             premium_reset=premium_reset,
             raw_text=raw_text,
+            source_reset_instants=(
+                {"premium_reset": premium_instant} if premium_instant is not None else {}
+            ),
         )
 
     def close(self) -> None:

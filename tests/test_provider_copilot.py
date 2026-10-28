@@ -158,6 +158,37 @@ class CopilotHttpProviderTests(unittest.TestCase):
         self.assertEqual(status.premium_requests, 285)
         self.assertIsNotNone(status.premium_reset)
 
+    def test_reset_instant_survives_a_december_to_january_rollover(self) -> None:
+        from datetime import timezone
+
+        provider = self._make_provider()
+        response = dict(self.PAID_RESPONSE, quota_reset_date_utc="2027-01-01T00:00:00Z")
+        with (
+            patch("gradus.providers._base._http_json", return_value=response),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+            status = provider.fetch()
+        assert status.source_reset_instants is not None
+        self.assertEqual(
+            status.source_reset_instants["premium_reset"],
+            datetime(2027, 1, 1, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertNotIn("source_reset_instants", status.to_dict())
+
+    def test_monthly_fallback_reset_carries_its_instant(self) -> None:
+        provider = self._make_provider()
+        response = {k: v for k, v in self.PAID_RESPONSE.items() if "reset" not in k}
+        with (
+            patch("gradus.providers._base._http_json", return_value=response),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="gho_testtoken\n")
+            status = provider.fetch()
+        assert status.source_reset_instants is not None
+        self.assertEqual(status.source_reset_instants["premium_reset"].day, 1)
+        self.assertIsNotNone(status.premium_reset)
+
     def test_free_tier_field_mapping(self) -> None:
         provider = self._make_provider()
         with (

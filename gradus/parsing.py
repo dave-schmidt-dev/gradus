@@ -19,6 +19,12 @@ def _clamp_percent(value: object) -> float | None:
     return max(0.0, min(100.0, float(value)))
 
 
+def _without_probe_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    """Drop probe-only fields so they never enter serialized provider data."""
+    data.pop("source_reset_instants", None)
+    return data
+
+
 @dataclass(slots=True)
 class CodexStatus:
     credits: float | None
@@ -118,6 +124,7 @@ class AntigravityStatus:
     account_email: str | None
     account_tier: str | None
     raw_text: str
+    source_reset_instants: dict[str, datetime] | None = dataclass_field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for field in (
@@ -141,7 +148,7 @@ class AntigravityStatus:
             object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _without_probe_metadata(asdict(self))
 
 
 @dataclass(slots=True)
@@ -151,6 +158,7 @@ class CopilotStatus:
     premium_percent_left: float | None
     premium_reset: str | None
     raw_text: str
+    source_reset_instants: dict[str, datetime] | None = dataclass_field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for field in ("premium_percent_left",):
@@ -164,7 +172,7 @@ class CopilotStatus:
             object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _without_probe_metadata(asdict(self))
 
 
 @dataclass(slots=True)
@@ -208,6 +216,7 @@ class OpenCodeGoStatus:
     monthly_reset: str | None
     zen_credit: float | None
     raw_text: str
+    source_reset_instants: dict[str, datetime] | None = dataclass_field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for field in ("five_hour_percent_left", "weekly_percent_left", "monthly_percent_left"):
@@ -230,7 +239,7 @@ class OpenCodeGoStatus:
             object.__setattr__(self, "raw_text", str(self.raw_text))
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return _without_probe_metadata(asdict(self))
 
 
 @dataclass(slots=True)

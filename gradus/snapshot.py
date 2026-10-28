@@ -375,6 +375,23 @@ def _is_headless_deferred_probe(snapshot: ProviderSnapshot) -> bool:
     return _HEADLESS_DEFERRED_PROBE_MESSAGE in snapshot.error.lower()
 
 
+# A dated reset string carries no year. One that parses this many days before
+# ``now`` is read as next year's date (a "Resets Jan 15" seen in December); a
+# smaller gap is a stale-but-recent reset and stays in the past.
+_YEARLESS_ROLL_FORWARD_DAYS = 60
+
+
+def _roll_yearless_target(target: datetime, now: datetime) -> datetime:
+    """Move a year-stamped reset to next year when it parses far in the past."""
+    reference = now.replace(tzinfo=None) if now.tzinfo is not None else now
+    if (reference - target) <= timedelta(days=_YEARLESS_ROLL_FORWARD_DAYS):
+        return target
+    try:
+        return target.replace(year=target.year + 1)
+    except ValueError:  # Feb 29 into a non-leap year: leave the parsed instant.
+        return target
+
+
 def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None:
     """Parse a human reset string into a concrete future ``datetime``.
 
@@ -432,7 +449,7 @@ def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None
                     parsed = datetime.strptime(stamped, fmt)
                 except ValueError:
                     continue
-                target = parsed
+                target = _roll_yearless_target(parsed, now)
                 break
             if target is not None:
                 break
@@ -450,7 +467,7 @@ def parse_reset_target(reset_text: str | None, now: datetime) -> datetime | None
                 parsed = datetime.strptime(stamped, fmt)
             except ValueError:
                 continue
-            target = parsed
+            target = _roll_yearless_target(parsed, now)
             break
     elif lower.startswith("resets "):
         for fmt in ("%H:%M", "%I %p", "%I:%M %p"):
@@ -878,7 +895,13 @@ def _build_windows(
                         delta = pace_delta(pct, end, total_seconds, now)
                 elif spec.reset_key and data.get(spec.reset_key):
                     reset_raw = str(data[spec.reset_key])
-                    target = parse_reset_target(reset_raw, now)
+                    source_target = (snapshot.source_reset_instants or {}).get(spec.reset_key)
+                    target = (
+                        source_target
+                        if isinstance(source_target, datetime)
+                        and source_target.utcoffset() is not None
+                        else parse_reset_target(reset_raw, now)
+                    )
                     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                     if target:
                         start, target = reconcile(start, target)

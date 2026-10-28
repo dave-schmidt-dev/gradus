@@ -11,7 +11,14 @@ from typing import Any
 
 from ..parsing import OpenCodeGoStatus
 from ..tls import default_ssl_context
-from ._base import ProbeFailure, _auth_required_message, _format_reset_time, _is_headless, register
+from ._base import (
+    ProbeFailure,
+    _auth_required_message,
+    _format_reset_time,
+    _is_headless,
+    _source_reset_instant,
+    register,
+)
 from .opencode_oauth import (
     DEFAULT_OPENCODE_DB_PATH,
     NoRedirectHandler,
@@ -182,6 +189,16 @@ class OpenCodeGoProvider:
             monthly_reset=windows[2][1],
             zen_credit=None,
             raw_text=raw_text,
+            source_reset_instants={
+                key: instant
+                for key, name in (
+                    ("five_hour_reset", "rolling"),
+                    ("weekly_reset", "weekly"),
+                    ("monthly_reset", "monthly"),
+                )
+                if isinstance(usage.get(name), dict)
+                and (instant := _source_reset_instant(usage[name].get("resetsAt")))
+            },
         )
 
     def close(self) -> None:

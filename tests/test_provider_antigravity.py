@@ -91,6 +91,33 @@ class AntigravityProviderTests(unittest.TestCase):
         self.assertIn("antigravity", kwargs["headers"]["User-Agent"].lower())
         self.assertTrue(kwargs["headers"]["Authorization"].startswith("Bearer "))
 
+    def test_publishes_upstream_reset_instants_outside_status_data(self) -> None:
+        from datetime import datetime, timezone
+
+        provider = self._make_provider()
+        response = json.loads(json.dumps(self.SUMMARY_RESPONSE))
+        response["groups"][0]["buckets"][0]["resetTime"] = "2027-01-15T09:00:00Z"
+        with (
+            patch.object(AntigravityProvider, "_load_keychain_token", return_value=self._token()),
+            patch("gradus.providers._base._http_json", return_value=response),
+        ):
+            status = provider.fetch()
+        assert status.source_reset_instants is not None
+        self.assertEqual(
+            status.source_reset_instants["weekly_reset"],
+            datetime(2027, 1, 15, 9, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            set(status.source_reset_instants),
+            {
+                "five_hour_reset",
+                "weekly_reset",
+                "third_party_five_hour_reset",
+                "third_party_weekly_reset",
+            },
+        )
+        self.assertNotIn("source_reset_instants", status.to_dict())
+
     def test_percent_left_fields_are_float(self) -> None:
         provider = self._make_provider()
         with (

@@ -15,7 +15,7 @@ from typing import Any
 
 from ..parsing import OpenCodeGoStatus
 from ..tls import default_ssl_context
-from ._base import ProbeFailure, _format_reset_time
+from ._base import ProbeFailure, _format_reset_time, _source_reset_instant
 
 OPENCODE_CONSOLE_DEFAULT_SERVER = "https://opencode.ai/console"
 OPENCODE_CONSOLE_STATUS_URL = "https://opencode.ai/console/api/go/status"
@@ -200,6 +200,19 @@ def _is_cloudflare_403(exc: urllib.error.HTTPError) -> bool:
     return False
 
 
+def _meter_reset_value(meter: Any, fallback_reset: Any = None) -> Any:
+    """Return the raw upstream reset value for a meter, or the fallback."""
+    if not isinstance(meter, dict):
+        return fallback_reset
+    return (
+        meter.get("resetsAt")
+        or meter.get("resetAt")
+        or meter.get("reset")
+        or meter.get("endsAt")
+        or fallback_reset
+    )
+
+
 def _parse_oauth_meter(
     meter: Any,
     fallback_reset: Any = None,
@@ -226,14 +239,7 @@ def _parse_oauth_meter(
     used_ratio = float(used_raw) / float(limit_raw)
     percent_left = round(max(0.0, min(100.0, (1.0 - used_ratio) * 100.0)), 2)
 
-    reset_val = (
-        meter.get("resetsAt")
-        or meter.get("resetAt")
-        or meter.get("reset")
-        or meter.get("endsAt")
-        or fallback_reset
-    )
-    reset_str = _format_reset_time(reset_val)
+    reset_str = _format_reset_time(_meter_reset_value(meter, fallback_reset))
     return percent_left, reset_str
 
 
@@ -274,6 +280,23 @@ def parse_console_status_payload(payload: Any) -> OpenCodeGoStatus:
         monthly_reset=r_month,
         zen_credit=None,
         raw_text="",
+        source_reset_instants={
+            key: instant
+            for key, raw in (
+                (
+                    "five_hour_reset",
+                    _meter_reset_value(five_hour_meter) if p_5h is not None else None,
+                ),
+                ("weekly_reset", _meter_reset_value(week_meter) if p_week is not None else None),
+                (
+                    "monthly_reset",
+                    _meter_reset_value(month_meter, access.get("endsAt"))
+                    if p_month is not None
+                    else None,
+                ),
+            )
+            if (instant := _source_reset_instant(raw)) is not None
+        },
     )
 
 

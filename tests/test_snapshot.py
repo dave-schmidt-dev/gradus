@@ -909,6 +909,67 @@ class TestBuildWindows(unittest.TestCase):
         self.assertIsNotNone(delta)
         self.assertFalse(snap.window_warns({"percent_left": 5.0, "pace_delta": delta}))
 
+    def test_december_to_january_reset_rolls_into_the_next_year(self) -> None:
+        december = datetime(2026, 12, 20, 12, 0)
+        for reset in (
+            "Resets Jan 15 at 09:00 AM",
+            "Resets Jan 15 at 9:00 AM",
+            "Resets 15 Jan at 09:00",
+        ):
+            with self.subTest(reset=reset):
+                target = snap.parse_reset_target(reset, december)
+                self.assertEqual(target, datetime(2027, 1, 15, 9, 0))
+                delta = snap.pace_delta(3.0, target, 30 * 86400.0, december)
+                self.assertIsNotNone(delta)
+                self.assertLess(delta, 0.03)
+
+    def test_year_end_boundary_keeps_recent_past_and_near_future(self) -> None:
+        # Just-passed December reset seen on Jan 2 stays in the past (this year's
+        # stamp is Dec of the *current* year, 11 months ahead, so it must not be
+        # rolled backwards); a Dec 29 reset seen on Dec 29 stays in this year.
+        late = datetime(2026, 12, 29, 12, 0)
+        self.assertEqual(
+            snap.parse_reset_target("Resets Dec 29 at 11:00 AM", late),
+            datetime(2026, 12, 29, 11, 0),
+        )
+        self.assertEqual(
+            snap.parse_reset_target("Resets Dec 31 at 11:00 PM", late),
+            datetime(2026, 12, 31, 23, 0),
+        )
+        # 30 days in the past is still plausibly stale-but-recent, not next year.
+        self.assertEqual(
+            snap.parse_reset_target("Resets Nov 29 at 12:00 PM", late),
+            datetime(2026, 11, 29, 12, 0),
+        )
+
+    def test_december_january_window_is_published_in_the_future(self) -> None:
+        december = datetime(2026, 12, 20, 12, 0)
+        snapshot = ProviderSnapshot(
+            name="OpenCode Go",
+            ok=True,
+            source="http",
+            data={"monthly_percent_left": 3.0, "monthly_reset": "Resets Jan 15 at 09:00 AM"},
+        )
+        windows = {w["id"]: w for w in snap.build_windows(snapshot, december)}
+        self.assertTrue(windows["monthly"]["reset_iso"].startswith("2027-01-15"))
+        self.assertLess(windows["monthly"]["pace_delta"], 0.03)
+
+    def test_source_instant_wins_over_the_reset_string(self) -> None:
+        december = datetime(2026, 12, 20, 12, 0)
+        instant = datetime(2027, 1, 1, 0, 0, tzinfo=timezone.utc)
+        snapshot = ProviderSnapshot(
+            name="Copilot",
+            ok=True,
+            source="http",
+            data={"premium_percent_left": 40.0, "premium_reset": "Resets Dec 31 at 07:00 PM"},
+            source_reset_instants={"premium_reset": instant},
+        )
+        windows = {w["id"]: w for w in snap.build_windows(snapshot, december)}
+        self.assertEqual(
+            datetime.fromisoformat(windows["premium"]["reset_iso"]).astimezone(timezone.utc),
+            instant,
+        )
+
     def test_relative_reset_overflow_is_unparseable(self) -> None:
         reset = "Resets in 999999999999999999999999999999999999d"
         self.assertIsNone(snap.parse_reset_target(reset, NOW))

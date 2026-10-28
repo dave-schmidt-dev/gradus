@@ -16,7 +16,13 @@ from typing import Any
 
 from ..parsing import AntigravityStatus
 from . import _base
-from ._base import ProbeFailure, _format_reset_time, _is_headless, register
+from ._base import (
+    ProbeFailure,
+    _format_reset_time,
+    _is_headless,
+    _source_reset_instant,
+    register,
+)
 
 log = logging.getLogger(__name__)
 
@@ -323,6 +329,16 @@ class AntigravityProvider:
             account_email=self._read_account_email(),
             account_tier=None,
             raw_text=raw_text,
+            source_reset_instants={
+                key: instant
+                for key, bucket in (
+                    ("five_hour_reset", five_hour),
+                    ("weekly_reset", weekly),
+                    ("third_party_five_hour_reset", third_party_five_hour),
+                    ("third_party_weekly_reset", third_party_weekly),
+                )
+                if bucket and (instant := _source_reset_instant(bucket.get("resetTime")))
+            },
         )
 
     def close(self) -> None:

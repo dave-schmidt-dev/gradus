@@ -66,6 +66,11 @@ Planned as 1.11.0.
 
 ### Fixed
 
+- Resets that fall in January are no longer published a year in the past when
+  Gradus runs in December. Antigravity, Copilot and OpenCode Go now pass the
+  provider's own reset time through instead of re-parsing the display text, and
+  a dated reset without a year that parses more than 60 days back is read as
+  next year's.
 - OpenCode Go now reads the existing OpenCode v2 OAuth connection instead of
   requiring a separate API key, reloads rotated tokens, and distinguishes access
   blocks from credential rejection.

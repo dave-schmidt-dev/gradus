@@ -443,6 +443,53 @@ class OpenCodeOAuthTests(unittest.TestCase):
         self.assertIsNotNone(status.monthly_reset)
         self.assertIsNone(status.zen_credit)
 
+    def test_opencode_oauth_publishes_reset_instants_for_year_end_windows(self) -> None:
+        payload = {
+            "access": {
+                "meters": {
+                    "fiveHour": {
+                        "usedMicroCents": 1,
+                        "limitMicroCents": 10,
+                        "resetsAt": "2027-01-01T01:00:00Z",
+                    },
+                    "month": {"usedMicroCents": 9, "limitMicroCents": 10},
+                },
+                "endsAt": "2027-01-15T09:00:00Z",
+            }
+        }
+        status = parse_console_status_payload(payload)
+        instants = status.source_reset_instants
+        assert instants is not None
+        self.assertEqual(instants["five_hour_reset"].isoformat(), "2027-01-01T01:00:00+00:00")
+        self.assertEqual(instants["monthly_reset"].isoformat(), "2027-01-15T09:00:00+00:00")
+        self.assertNotIn("weekly_reset", instants)
+        self.assertNotIn("source_reset_instants", status.to_dict())
+
+    def test_opencode_legacy_usage_publishes_reset_instants(self) -> None:
+        body = json.dumps(
+            {
+                "usage": {
+                    "rolling": {"percent": 10, "resetsAt": "2027-01-01T01:00:00Z"},
+                    "weekly": {"percent": 20},
+                    "monthly": {"percent": 97, "resetsAt": "2027-01-15T09:00:00Z"},
+                }
+            }
+        ).encode()
+        response = MagicMock()
+        response.read.return_value = body
+        response.__enter__.return_value = response
+        opener = MagicMock()
+        opener.open.return_value = response
+        provider = OpenCodeGoProvider(Path("/nonexistent/opencode.db"))
+        provider._api_key = "k"
+        with patch("urllib.request.build_opener", return_value=opener):
+            status = provider._fetch_legacy_api_key()
+        instants = status.source_reset_instants
+        assert instants is not None
+        self.assertEqual(instants["monthly_reset"].isoformat(), "2027-01-15T09:00:00+00:00")
+        self.assertEqual(instants["five_hour_reset"].isoformat(), "2027-01-01T01:00:00+00:00")
+        self.assertNotIn("weekly_reset", instants)
+
     def test_opencode_oauth_partial_and_invalid_windows(self) -> None:
         # Partial window: only fiveHour present
         partial_payload = {
