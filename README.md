@@ -55,6 +55,7 @@ Probes provider APIs directly using locally authenticated credentials — no PTY
 - Shows compact single-line error cards to reduce vertical noise when a provider is unavailable
 - Retains cached usage data during transient network errors with an `(offline Xm)` title indicator; shows a `stale` panel after 5 minutes of continuous failure
 - Supports live keyboard shortcuts (`q` quit, `r` refresh now, `s` cycle provider sorting, `t` toggle the read-only history tab)
+- Numbered sign-in shortcuts open a normal iTerm shell so shell configuration is loaded and login errors remain visible.
 - The history tab reads only the credential-free v2 journal and plots one provider/window at a time with actual remaining capacity, the canonical pace guide, and bounded `[1-9]` provider, `[/]` window, and `[j/k]` point controls. It reports missing, empty, and corrupt history explicitly; `--once` remains the bars-only reader.
 - Supports `.gradus.json` (legacy `.ai_monitor.json` also read as a fallback) for provider selection and interval configuration
 - Sends one-shot macOS pace/depletion notifications and marks warning providers with a `[!]` badge

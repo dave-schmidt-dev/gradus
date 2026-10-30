@@ -555,11 +555,20 @@ def _launch_fix(kind: str, target: str) -> None:
         return
     _last_fix_launch[key] = now
     if kind == "cli":
+        # Use the profile's shell so PATH/startup files are loaded and errors
+        # remain visible after login exits, even when iTerm closes exited jobs.
+        escaped_target = target.replace("\\", "\\\\").replace('"', '\\"')
+        script = (
+            'tell application "iTerm2"\n'
+            "set loginWindow to (create window with default profile)\n"
+            f'tell current session of loginWindow to write text "{escaped_target}"\n'
+            "end tell"
+        )
         subprocess.Popen(
             [
                 "osascript",
                 "-e",
-                f'tell application "iTerm2" to create window with default profile command "{target}"',
+                script,
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

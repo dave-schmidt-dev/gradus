@@ -66,6 +66,8 @@ Planned as 1.11.0.
 
 ### Fixed
 
+- Terminal sign-in shortcuts now use a normal iTerm shell, preserving login errors instead of closing the window immediately.
+
 - Resets that fall in January are no longer published a year in the past when
   Gradus runs in December. Antigravity, Copilot and OpenCode Go now pass the
   provider's own reset time through instead of re-parsing the display text, and

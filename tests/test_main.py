@@ -924,18 +924,33 @@ class LaunchFixTests(unittest.TestCase):
         args = mock_popen.call_args[0][0]
         self.assertEqual(args[0], "osascript")
         self.assertEqual(args[1], "-e")
-        # One iTerm2 command creates the window and runs the auth command.
+        # Keep the profile's interactive shell alive after the login exits.
         # A separate activate statement can create a startup window, causing
         # two windows on a cold launch.
         self.assertIn('tell application "iTerm2"', args[2])
-        self.assertIn("create window with default profile command", args[2])
-        self.assertIn("gh auth login", args[2])
+        self.assertIn("set loginWindow to (create window with default profile)", args[2])
+        self.assertIn('tell current session of loginWindow to write text "gh auth login"', args[2])
+        self.assertNotIn("profile command", args[2])
         self.assertNotIn("activate", args[2])
         self.assertEqual(args[2].count("create window"), 1)
         # stdout/stderr suppressed
         kwargs = mock_popen.call_args[1]
         self.assertEqual(kwargs.get("stdout"), subprocess.DEVNULL)
         self.assertEqual(kwargs.get("stderr"), subprocess.DEVNULL)
+
+    def test_cli_command_is_escaped_as_one_applescript_string(self) -> None:
+        target = 'printf "%s\\n" "login failed"'
+        with patch("gradus.__main__.subprocess.Popen") as mock_popen:
+            _launch_fix("cli", target)
+        script = mock_popen.call_args.args[0][2]
+        self.assertIn('write text "printf \\"%s\\\\n\\" \\"login failed\\""', script)
+
+    def test_cursor_login_runs_in_persistent_shell(self) -> None:
+        with patch("gradus.__main__.subprocess.Popen") as mock_popen:
+            _launch_fix(*AUTH_ACTIONS["Cursor"])
+        script = mock_popen.call_args.args[0][2]
+        self.assertIn('write text "cursor-agent login"', script)
+        self.assertNotIn("profile command", script)
 
     def test_safari_action_opens_explicit_safari(self) -> None:
         with patch("gradus.__main__.subprocess.Popen") as mock_popen:
