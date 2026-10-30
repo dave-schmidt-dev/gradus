@@ -29,6 +29,8 @@ Planned as 1.11.0.
 
 ### Changed
 
+- Align the local validation toolchain pin with installed Xcode 27.2.
+
 - CloudKit zone reads request user-initiated scheduling with explicit network timeouts.
 
 - Refine local diagnostics pilot availability warnings and cancellation privacy; classify expected missing-zone waiting as informational.
