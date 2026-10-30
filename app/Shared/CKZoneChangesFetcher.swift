@@ -21,12 +21,26 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
         self.zoneID = zoneID
     }
 
+    /// Dashboard reads must run promptly instead of waiting for discretionary networking.
+    static func makeOperation(
+        zoneID: CKRecordZone.ID, previousToken: CKServerChangeToken?
+    ) -> CKFetchRecordZoneChangesOperation {
+        let config = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
+        config.previousServerChangeToken = previousToken
+        let operation = CKFetchRecordZoneChangesOperation(
+            recordZoneIDs: [zoneID], configurationsByRecordZoneID: [zoneID: config]
+        )
+        operation.fetchAllChanges = true
+        operation.configuration.qualityOfService = .userInitiated
+        operation.configuration.timeoutIntervalForRequest = 30
+        operation.configuration.timeoutIntervalForResource = 60
+        return operation
+    }
+
     // The CloudKit operation's callbacks and typed routing must stay together.
     // swiftlint:disable:next function_body_length cyclomatic_complexity
     public func fetchZoneChanges(sinceToken token: Data?) async -> ZoneChangesOutcome {
         let previousToken = token.flatMap(Self.decodeToken)
-        let config = CKFetchRecordZoneChangesOperation.ZoneConfiguration()
-        config.previousServerChangeToken = previousToken
 
         var changed: [ProviderStatus] = []
         var deletedProviderNames: [String] = []
@@ -34,10 +48,7 @@ public struct CKZoneChangesFetcher: ZoneChangesFetcher {
         var deletedPresenceInstallationIDs: [String] = []
 
         return await withCheckedContinuation { continuation in
-            let operation = CKFetchRecordZoneChangesOperation(
-                recordZoneIDs: [zoneID], configurationsByRecordZoneID: [zoneID: config]
-            )
-            operation.fetchAllChanges = true
+            let operation = Self.makeOperation(zoneID: zoneID, previousToken: previousToken)
 
             operation.recordWasChangedBlock = { _, result in
                 guard case let .success(record) = result else { return }

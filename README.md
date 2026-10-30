@@ -672,6 +672,10 @@ cd app
 
 ### Installing Gradus on an iOS device
 
+CloudKit zone reads use user-initiated scheduling, a 30-second request timeout,
+and a 60-second resource timeout. These are CloudKit network settings, not an
+application-level deadline for every queued operation.
+
 `install-ios-local.sh` is the iOS counterpart and the local alternative to
 `archive-upload-ios.sh`: it builds for a physical device, installs, and launches, with no
 App Store Connect and no TestFlight. Automatic signing needs an Apple ID in Xcode's

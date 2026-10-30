@@ -4,6 +4,17 @@ import Foundation
 import GradusKit
 import Testing
 
+@Test func zoneReadsRunPromptlyAndHaveBoundedNetworkWaits() {
+    let zoneID = CKRecordZone.ID(zoneName: "GradusZone", ownerName: CKCurrentUserDefaultName)
+    let operation = CKZoneChangesFetcher.makeOperation(zoneID: zoneID, previousToken: nil)
+    #expect(operation.configuration.qualityOfService == .userInitiated)
+    #expect(operation.configuration.timeoutIntervalForRequest == 30)
+    #expect(operation.configuration.timeoutIntervalForResource == 60)
+    #expect(operation.fetchAllChanges)
+    #expect(operation.recordZoneIDs == [zoneID])
+    #expect(operation.configurationsByRecordZoneID?[zoneID]?.previousServerChangeToken == nil)
+}
+
 private actor PresenceSaverProbe {
     private(set) var policies: [CKModifyRecordsOperation.RecordSavePolicy] = []
 

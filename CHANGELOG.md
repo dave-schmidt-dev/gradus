@@ -29,6 +29,8 @@ Planned as 1.11.0.
 
 ### Changed
 
+- CloudKit zone reads request user-initiated scheduling with explicit network timeouts.
+
 - Refine local diagnostics pilot availability warnings and cancellation privacy; classify expected missing-zone waiting as informational.
 - Routine pre-push validation now uses the headless gate, retaining non-UI and image-snapshot checks while reserving host HID and XCUITest journeys for the full milestone gate.
 - The hermetic iOS upload suite now checks producer-evidence refresh ordering and diagnostics-wrapper error propagation against PublishCoordinator.
