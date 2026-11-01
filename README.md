@@ -179,7 +179,7 @@ Codex and Claude cards show:
 - `5h`: remaining usage for the current 5-hour window, reset time, pace indicator
 - `1w`: remaining usage for the current 1-week window, weekly reset time, pace indicator
 
-Codex's `5h` row is omitted entirely when the API doesn't report that window (as OpenAI has done since 2026-07) and reappears automatically once it does. Codex's `1w` row is always shown.
+Codex and Claude omit the `5h` row when the API doesn't report that window and show it again when a value returns, including 0%. Their `1w` row remains visible.
 
 Antigravity card shows (Gemini model group — the pool `agy` consumes):
 

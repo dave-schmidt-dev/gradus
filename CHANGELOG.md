@@ -29,6 +29,8 @@ Planned as 1.11.0.
 
 ### Changed
 
+- Hide Claude’s five-hour terminal usage bar when that allowance is unavailable.
+
 - Align the local validation toolchain pin with installed Xcode 27.2.
 
 - CloudKit zone reads request user-initiated scheduling with explicit network timeouts.

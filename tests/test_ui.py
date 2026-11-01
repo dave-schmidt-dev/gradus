@@ -1131,6 +1131,33 @@ class ProviderPanelTests(unittest.TestCase):
         self.assertIn("to fix", output)
         self.assertNotIn("▓", output)
 
+    def test_claude_panel_hides_absent_five_hour_row(self) -> None:
+        for weekly in (91, 0):
+            for include_key in (False, True):
+                with self.subTest(weekly=weekly, include_key=include_key):
+                    data = {"weekly_percent_left": weekly, "secondary_reset": "Resets 9 PM"}
+                    if include_key:
+                        data["session_percent_left"] = None
+                    snap = ProviderSnapshot(name="Claude", ok=True, source="cli", data=data)
+                    output = _capture(build_provider_panel(snap, self.now), width=44)
+                    self.assertIn("Claude", output)
+                    self.assertIn("1w", output)
+                    self.assertNotRegex(output, r"\b5h\b")
+                    self.assertNotIn("n/a", output)
+
+    def test_claude_panel_keeps_reported_five_hour_row(self) -> None:
+        for percent in (0, 80, 100):
+            with self.subTest(percent=percent):
+                snap = ProviderSnapshot(
+                    name="Claude",
+                    ok=True,
+                    source="cli",
+                    data={"session_percent_left": percent, "weekly_percent_left": 91},
+                )
+                output = _capture(build_provider_panel(snap, self.now), width=44)
+                self.assertRegex(output, r"\b5h\b")
+                self.assertIn("1w", output)
+
     def test_codex_panel_hides_absent_five_hour_row(self) -> None:
         # When the provider reports no 5h data (percent is None), the row is
         # omitted entirely rather than rendered as "n/a".

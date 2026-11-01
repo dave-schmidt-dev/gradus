@@ -147,6 +147,7 @@ PROVIDER_RENDER_SPECS = {
                 "session_percent_left",
                 "primary_reset",
                 5.0,
+                omit_when_empty=True,
             ),
             WindowRenderSpec(
                 "weekly",
