@@ -527,6 +527,63 @@ class ClaudeHttpProviderTests(unittest.TestCase):
         self.assertIsNone(status.account_organization)
         self.assertIsNone(status.login_method)
 
+    @staticmethod
+    def _fable_limit(percent: object, name: object = "Fable") -> dict[str, object]:
+        return {
+            "kind": "weekly_scoped",
+            "group": "weekly",
+            "percent": percent,
+            "resets_at": "2026-04-21T00:00:00Z",
+            "scope": {"model": {"id": None, "display_name": name}, "surface": None},
+        }
+
+    def test_fable_weekly_limit_maps_from_scoped_limits(self) -> None:
+        response = {
+            **self.NORMAL_RESPONSE,
+            "limits": [
+                {"kind": "weekly_all", "percent": 45, "scope": None},
+                self._fable_limit(100),
+            ],
+        }
+        with patch("gradus.providers._base._http_json", return_value=response):
+            status = self._make_provider().fetch()
+        self.assertEqual(status.fable_percent_left, 0.0)
+        self.assertIsInstance(status.fable_percent_left, float)
+        self.assertIsNotNone(status.fable_reset)
+        self.assertIn("fable_reset", status.source_reset_instants)
+        self.assertEqual(status.to_dict()["fable_percent_left"], 0.0)
+
+    def test_fable_absent_or_malformed_stays_none(self) -> None:
+        cases = {
+            "no limits": None,
+            "not a list": {"kind": "weekly_scoped"},
+            "other model": [self._fable_limit(20, "Opus")],
+            "wrong kind": [{**self._fable_limit(20), "kind": "weekly_all"}],
+            "non-dict entry": ["Fable"],
+            "null scope": [{**self._fable_limit(20), "scope": None}],
+            "over 100": [self._fable_limit(150)],
+            "negative": [self._fable_limit(-1)],
+            "non-numeric": [self._fable_limit("lots")],
+            "bool": [self._fable_limit(True)],
+            "nan": [self._fable_limit(float("nan"))],
+        }
+        for label, limits in cases.items():
+            with self.subTest(label):
+                response = dict(self.NORMAL_RESPONSE)
+                if limits is not None:
+                    response["limits"] = limits
+                with patch("gradus.providers._base._http_json", return_value=response):
+                    status = self._make_provider().fetch()
+                self.assertIsNone(status.fable_percent_left)
+                self.assertEqual(status.weekly_percent_left, 55)
+
+    def test_fable_only_response_does_not_raise(self) -> None:
+        response = {"limits": [self._fable_limit(" 40 ".strip(), " fable ")]}
+        with patch("gradus.providers._base._http_json", return_value=response):
+            status = self._make_provider().fetch()
+        self.assertEqual(status.fable_percent_left, 60.0)
+        self.assertIsNone(status.weekly_percent_left)
+
     def test_percent_left_fields_are_float(self) -> None:
         provider = self._make_provider()
         with patch("gradus.providers._base._http_json", return_value=self.NORMAL_RESPONSE):

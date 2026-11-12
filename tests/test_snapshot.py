@@ -2006,10 +2006,26 @@ class TestPathContract(unittest.TestCase):
 
 
 class TestConsistencyGuard(unittest.TestCase):
+    def test_claude_fable_is_display_only_not_a_router_window(self) -> None:
+        """An exhausted Fable allowance must not veto Claude routing."""
+        fable = [
+            w
+            for w in ui.PROVIDER_RENDER_SPECS["Claude"].windows
+            if w.percent_key == "fable_percent_left"
+        ]
+        self.assertEqual(len(fable), 1)
+        self.assertTrue(fable[0].display_only)
+        self.assertNotIn("fable_percent_left", {w.percent_key for w in snap.WINDOW_SPECS["Claude"]})
+        self.assertTrue({"fable_percent_left", "fable_reset"} <= snap.SAFE_DATA_KEYS)
+
     def test_window_specs_match_render_specs(self) -> None:
         """CR-5: WINDOW_SPECS agree with ui render/row definitions."""
         for name in ("Codex", "Claude", "Antigravity"):
-            render_windows = ui.PROVIDER_RENDER_SPECS[name].windows
+            render_windows = tuple(
+                window
+                for window in ui.PROVIDER_RENDER_SPECS[name].windows
+                if not window.display_only
+            )
             spec_windows = snap.WINDOW_SPECS[name]
             self.assertEqual(len(render_windows), len(spec_windows))
             for render_win, spec_win in zip(render_windows, spec_windows):

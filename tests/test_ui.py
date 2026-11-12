@@ -13,6 +13,7 @@ from io import StringIO
 from rich.console import Console
 from rich.text import Text
 
+from gradus import ui as ui_module
 from gradus.providers import ProviderSnapshot
 from gradus.snapshot import (
     ANTIGRAVITY_AUTH_RETRY_MESSAGE,
@@ -1157,6 +1158,58 @@ class ProviderPanelTests(unittest.TestCase):
                 output = _capture(build_provider_panel(snap, self.now), width=44)
                 self.assertRegex(output, r"\b5h\b")
                 self.assertIn("1w", output)
+
+    def test_claude_panel_shows_fable_weekly_row_when_reported(self) -> None:
+        for percent in (0, 55, 100):
+            with self.subTest(percent=percent):
+                snap = ProviderSnapshot(
+                    name="Claude",
+                    ok=True,
+                    source="cli",
+                    data={
+                        "weekly_percent_left": 42,
+                        "fable_percent_left": percent,
+                        "fable_reset": "Resets 9 PM",
+                    },
+                )
+                output = _capture(build_provider_panel(snap, self.now), width=44)
+                self.assertIn("1w", output)
+                self.assertRegex(output, rf"│ Fab +{percent}(\.0)?%")
+
+    def test_exhausted_fable_does_not_deplete_or_delay_claude(self) -> None:
+        snap = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={
+                "weekly_percent_left": 42,
+                "secondary_reset": "2026-04-21T00:00:00Z",
+                "fable_percent_left": 0,
+                "fable_reset": "2026-05-30T00:00:00Z",
+            },
+        )
+        self.assertFalse(ui_module._provider_is_empty(snap, self.now))
+        depleted = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={**snap.data, "weekly_percent_left": 0},
+        )
+        self.assertTrue(ui_module._provider_is_empty(depleted, self.now))
+        self.assertEqual(
+            ui_module._extract_depleted_reset_str(depleted, self.now), "2026-04-21T00:00:00Z"
+        )
+
+    def test_claude_panel_hides_absent_fable_row(self) -> None:
+        snap = ProviderSnapshot(
+            name="Claude",
+            ok=True,
+            source="cli",
+            data={"weekly_percent_left": 42, "fable_percent_left": None},
+        )
+        output = _capture(build_provider_panel(snap, self.now), width=44)
+        self.assertIn("1w", output)
+        self.assertNotIn("Fab", output)
 
     def test_codex_panel_hides_absent_five_hour_row(self) -> None:
         # When the provider reports no 5h data (percent is None), the row is

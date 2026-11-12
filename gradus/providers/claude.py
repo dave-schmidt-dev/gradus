@@ -37,6 +37,41 @@ def _epoch_ms(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _percent_left(used: Any) -> float | None:
+    """Convert a 0-100 percent-used value to percent left; reject anything else."""
+    if used is None or isinstance(used, bool):
+        return None
+    try:
+        utilization = float(used)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(utilization) or not 0 <= utilization <= 100:
+        return None
+    return 100.0 - utilization
+
+
+def _scoped_model_limit(payload: dict[str, Any], model: str) -> dict[str, Any] | None:
+    """Return the weekly model-scoped entry from ``limits`` for ``model``.
+
+    The usage endpoint reports per-model weekly allowances (e.g. Fable) only in
+    its ``limits`` list, as ``kind: "weekly_scoped"`` with the model named in
+    ``scope.model.display_name`` (``scope.model.id`` is null), not as a
+    ``seven_day_*`` bucket.
+    """
+    limits = payload.get("limits")
+    if not isinstance(limits, list):
+        return None
+    for entry in limits:
+        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped":
+            continue
+        scope = entry.get("scope")
+        scoped_model = scope.get("model") if isinstance(scope, dict) else None
+        name = scoped_model.get("display_name") if isinstance(scoped_model, dict) else None
+        if isinstance(name, str) and name.strip().casefold() == model:
+            return entry
+    return None
+
+
 class _KeychainCredential(NamedTuple):
     """Claude Code's cached OAuth grant, minus anything that must not be logged.
 
@@ -352,20 +387,13 @@ class ClaudeHttpProvider:
         primary_reset: str | None = None
         secondary_reset: str | None = None
         opus_reset: str | None = None
+        fable_percent_left: float | None = None
+        fable_reset: str | None = None
         credit_balance: float | None = None
 
         def _util(key: str) -> float | None:
             bucket = payload.get(key) or {}
-            val = bucket.get("utilization") if isinstance(bucket, dict) else None
-            if val is None:
-                return None
-            try:
-                utilization = float(val)
-            except (TypeError, ValueError):
-                return None
-            if not math.isfinite(utilization) or not 0 <= utilization <= 100:
-                return None
-            return 100.0 - utilization
+            return _percent_left(bucket.get("utilization") if isinstance(bucket, dict) else None)
 
         def _reset(key: str) -> str | None:
             bucket = payload.get(key) or {}
@@ -387,6 +415,10 @@ class ClaudeHttpProvider:
         secondary_reset = _reset("seven_day")
         opus_percent_left = _util("seven_day_opus")
         opus_reset = _reset("seven_day_opus")
+        fable_limit = _scoped_model_limit(payload, "fable")
+        if fable_limit is not None:
+            fable_percent_left = _percent_left(fable_limit.get("percent"))
+            fable_reset = _format_reset_time(fable_limit.get("resets_at"))
 
         extra_usage = payload.get("extra_usage") or {}
         if isinstance(extra_usage, dict) and extra_usage.get("is_enabled") is True:
@@ -403,7 +435,12 @@ class ClaudeHttpProvider:
 
         if all(
             value is None
-            for value in (session_percent_left, weekly_percent_left, opus_percent_left)
+            for value in (
+                session_percent_left,
+                weekly_percent_left,
+                opus_percent_left,
+                fable_percent_left,
+            )
         ):
             raise ProbeFailure("Claude usage data not available yet", "")
 
@@ -414,6 +451,8 @@ class ClaudeHttpProvider:
             primary_reset=primary_reset,
             secondary_reset=secondary_reset,
             opus_reset=opus_reset,
+            fable_percent_left=fable_percent_left,
+            fable_reset=fable_reset,
             account_email=None,
             account_organization=None,
             login_method=None,
@@ -425,6 +464,12 @@ class ClaudeHttpProvider:
                     ("primary_reset", _reset_instant("five_hour")),
                     ("secondary_reset", _reset_instant("seven_day")),
                     ("opus_reset", _reset_instant("seven_day_opus")),
+                    (
+                        "fable_reset",
+                        _base._source_reset_instant(fable_limit.get("resets_at"))
+                        if fable_limit is not None
+                        else None,
+                    ),
                 )
                 if instant is not None
             },

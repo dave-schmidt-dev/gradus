@@ -19,6 +19,8 @@ private func allProducerKeysData() -> [String: JSONValue] {
         "primary_reset": .string("2026-09-01T00:00:00Z"),
         "secondary_reset": .string("2026-09-02T00:00:00Z"),
         "opus_reset": .string("2026-09-03T00:00:00Z"),
+        "fable_percent_left": .double(25),
+        "fable_reset": .string("2026-09-03T00:00:00Z"),
         "usage_percent": .double(10),
         "reset_at": .string("2026-09-04T00:00:00Z"),
         "payg_enabled": .bool(true),
@@ -50,6 +52,8 @@ private func expectedProducerKeys() -> Set<String> {
         "primary_reset",
         "secondary_reset",
         "opus_reset",
+        "fable_percent_left",
+        "fable_reset",
         "usage_percent",
         "reset_at",
         "payg_enabled",
@@ -70,7 +74,7 @@ private func expectedProducerKeys() -> Set<String> {
 @Test func snapshotDataValidationAcceptsExactProducerKeys() throws {
     let data = allProducerKeysData()
 
-    #expect(data.count == 26)
+    #expect(data.count == 28)
     #expect(Set(data.keys) == expectedProducerKeys())
     #expect(try validatedSnapshotData(data) == data)
 }

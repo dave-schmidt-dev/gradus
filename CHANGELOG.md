@@ -26,6 +26,9 @@ Planned as 1.11.0.
   "Vibe". An exhausted API allowance no longer marks the whole card depleted
   while Vibe has capacity. The published snapshot keeps them as separate
   "Vibe" and "Vibe Code" entries so a router can veto on each independently.
+- The Claude card shows Claude Fable's separate weekly allowance as a "Fab"
+  bar when Anthropic reports one. It is informational: running out of Fable
+  does not mark Claude depleted or block routing.
 
 ### Changed
 

@@ -27,6 +27,8 @@ private let snapshotDataAllowedKeys: Set<String> = [
     "primary_reset",
     "secondary_reset",
     "opus_reset",
+    "fable_percent_left",
+    "fable_reset",
     "usage_percent",
     "reset_at",
     "payg_enabled",

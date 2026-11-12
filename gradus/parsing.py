@@ -74,13 +74,20 @@ class ClaudeStatus:
     login_method: str | None
     raw_text: str
     credit_balance: float | None = None
+    fable_percent_left: float | None = None
+    fable_reset: str | None = None
     source_reset_instants: dict[str, datetime] | None = dataclass_field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        for field in ("session_percent_left", "weekly_percent_left", "opus_percent_left"):
+        for field in (
+            "session_percent_left",
+            "weekly_percent_left",
+            "opus_percent_left",
+            "fable_percent_left",
+        ):
             val = _clamp_percent(getattr(self, field))
             object.__setattr__(self, field, val)
-        for field in ("primary_reset", "secondary_reset", "opus_reset"):
+        for field in ("primary_reset", "secondary_reset", "opus_reset", "fable_reset"):
             val = getattr(self, field)
             if val is not None and not isinstance(val, str):
                 object.__setattr__(self, field, None)

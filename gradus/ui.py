@@ -100,6 +100,11 @@ class WindowRenderSpec:
     # window, which OpenAI removed in 2026-07 but may restore; the row reappears
     # automatically once the API reports the window again.
     omit_when_empty: bool = False
+    # When True, the row is shown in the dashboard but has no router window in
+    # snapshot.WINDOW_SPECS. Used for model-scoped allowances (Claude Fable):
+    # the router vetoes on an entry's minimum window, so an exhausted
+    # single-model allowance must not block the whole provider.
+    display_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +162,17 @@ PROVIDER_RENDER_SPECS = {
                 "weekly_percent_left",
                 "secondary_reset",
                 24.0 * 7.0,
+            ),
+            WindowRenderSpec(
+                "fable_weekly",
+                "Fab",
+                "Fab ↻",
+                None,
+                "fable_percent_left",
+                "fable_reset",
+                24.0 * 7.0,
+                omit_when_empty=True,
+                display_only=True,
             ),
         ),
     ),
@@ -1562,7 +1578,10 @@ def _extract_depleted_reset_str(snapshot: ProviderSnapshot, now: datetime) -> st
                     depleted_raw, key=lambda raw: _parse_reset_target(raw, now) or far_future
                 )
         else:
-            reset = _pool_free_reset(spec.windows, data, now)
+            # A display-only window (Claude Fable) never blocks the provider,
+            # so it must not push the provider's free-again time later.
+            routed = tuple(window for window in spec.windows if not window.display_only)
+            reset = _pool_free_reset(routed, data, now)
             if reset is not None:
                 return reset
     for key in (
