@@ -27,7 +27,7 @@
 # round for the one machine that runs this.
 #
 # Usage:
-#   ./install-mac-local.sh                 archive, export, install, relaunch
+#   ./install-mac-local.sh                 rebuild runtime, archive, export, install, relaunch
 #   ./install-mac-local.sh --dry-run       build and verify only; touch nothing
 #   ./install-mac-local.sh --skip-build    reuse the existing export
 #
@@ -86,6 +86,7 @@ RUNTIME_APP="$BUILD_DIR/gradus-runtime/dist/GradusRuntime.app"
 MANIFEST_PATH="$BUILD_DIR/gradus-mac-bundle-manifest.json"
 SIGN_SCRIPT="${INSTALL_SIGN_SCRIPT:-./sign-mac-bundle.sh}"
 VERIFY_SCRIPT="${INSTALL_VERIFY_SCRIPT:-./verify-mac-bundle.sh}"
+RUNTIME_BUILD_SCRIPT="${INSTALL_RUNTIME_BUILD_SCRIPT:-./build-gradus-runtime.sh}"
 SIGNING_IDENTITY="${INSTALL_SIGNING_IDENTITY:-Developer ID Application}"
 ALLOWED_UNTRACKED_SOURCE_REPORT="verifications/2026-08-09-internal-testflight-candidate-migration-verification.md"
 assert_source_checkout_clean() {
@@ -266,15 +267,19 @@ verify_provenance() {
 sweep_stale_mac_derived_data "$STAGE_BASE"
 
 if ((skip_build == 0)); then
-  # The frozen Python runtime is a prerequisite, not a build step: producing it
-  # downloads a pinned CPython package. Xcode hard-fails the Release embed
-  # phase without it, but minutes into the archive and naming a build setting
-  # rather than the command to run.
+  # Rebuild the frozen Python runtime from this clean checkout on every build.
+  # The archive embeds whatever sits in $RUNTIME_APP, so reusing an older one
+  # silently ships an older refresh agent: new producer fields never reach the
+  # snapshot even though the Swift app is current. The pinned CPython package
+  # is cached and digest-verified, so only the first build downloads it.
+  echo "==> Rebuilding the frozen Python runtime from $SOURCE_REVISION"
+  progress "Starting $RUNTIME_BUILD_SCRIPT"
+  if ! "$RUNTIME_BUILD_SCRIPT"; then
+    echo "FAIL: $RUNTIME_BUILD_SCRIPT failed; nothing was archived or installed." >&2
+    exit 66
+  fi
   if [[ ! -d "$RUNTIME_APP" ]]; then
-    echo "FAIL: the frozen Python runtime is missing at $RUNTIME_APP." >&2
-    echo "      Build it first (it downloads a pinned CPython, so it is deliberately" >&2
-    echo "      not run for you):" >&2
-    echo "      ./build-gradus-runtime.sh" >&2
+    echo "FAIL: $RUNTIME_BUILD_SCRIPT finished but the runtime is missing at $RUNTIME_APP." >&2
     exit 66
   fi
 
@@ -283,7 +288,7 @@ if ((skip_build == 0)); then
   xcodegen generate
 
   # Deliberately not `rm -rf "$BUILD_DIR"`: it holds gradus-runtime, the
-  # prerequisite checked for immediately above.
+  # runtime rebuilt immediately above.
   rm -rf "$ARCHIVE_PATH" "$EXPORT_PATH" "$MANIFEST_PATH"
   mkdir -p "$BUILD_DIR"
 

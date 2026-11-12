@@ -171,7 +171,7 @@ separate. App-specific candidate evidence is collected by the source-bound local
 ### Mac bundle signing: hermetic tests are necessary and not sufficient
 
 `test-mac-bundle-structure.sh` (34 assertions), `test-notary-scripts.sh` (80
-assertions), and `test-install-mac-local.sh` (21 cases) fake every Xcode and system
+assertions), and `test-install-mac-local.sh` (32 cases) fake every Xcode and system
 tool, so they run anywhere and touch nothing. They carry negative fixtures for
 unsigned nested code, an ad-hoc signature, a wrong Team ID, a non-Developer-ID
 identity, a missing hardened runtime, an absent secure timestamp, an unexpected

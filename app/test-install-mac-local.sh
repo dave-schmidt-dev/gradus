@@ -255,6 +255,16 @@ printf '%s\n' "$*" >>"${FAKE_RUNTIME:?}/sign-calls"
 exit "${FAKE_SIGN_EXIT:-0}"
 FAKE
 
+cat >"$FAKE_BIN/runtime-build-stub" <<'FAKE'
+#!/usr/bin/env bash
+printf 'built\n' >>"${FAKE_RUNTIME:?}/runtime-build-calls"
+[[ -n "${FAKE_RUNTIME_BUILD_EXIT:-}" ]] && exit "$FAKE_RUNTIME_BUILD_EXIT"
+if [[ -z "${FAKE_RUNTIME_BUILD_SKIP_OUTPUT:-}" ]]; then
+  mkdir -p "${BUILD_DIR:?}/gradus-runtime/dist/GradusRuntime.app/Contents/MacOS"
+fi
+exit 0
+FAKE
+
 cat >"$FAKE_BIN/verify-stub" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_RUNTIME:?}/verify-calls"
@@ -303,6 +313,7 @@ setup_case() {
   export FAKE_LSREGISTER_DUMP
   export INSTALL_SIGN_SCRIPT="$FAKE_BIN/sign-stub"
   export INSTALL_VERIFY_SCRIPT="$FAKE_BIN/verify-stub"
+  export INSTALL_RUNTIME_BUILD_SCRIPT="$FAKE_BIN/runtime-build-stub"
   export QUIT_TIMEOUT_SECONDS=1
   # Present by default because the build path refuses to archive without it.
   # The case that removes it is the one testing that refusal.
@@ -312,7 +323,7 @@ setup_case() {
   unset FAKE_ARCHIVE_SOURCE_REVISION FAKE_ARCHIVE_PROJECT_SHA256
   unset FAKE_INCOMING_SOURCE_REVISION FAKE_INCOMING_PROJECT_SHA256
   unset FAKE_OPEN_EXIT FAKE_PKILL_EXIT FAKE_BUNDLE_IDENTIFIER
-  unset FAKE_XCODEBUILD_EXIT
+  unset FAKE_XCODEBUILD_EXIT FAKE_RUNTIME_BUILD_EXIT FAKE_RUNTIME_BUILD_SKIP_OUTPUT
   unset FAKE_DERIVED_DATA_OPEN_PATH
   # The legacy-job notice must not depend on whether this developer's own Mac
   # still runs local.gradus-snapshot.
@@ -443,15 +454,43 @@ no_staging_artifacts
 unset FAKE_SIGN_EXIT
 end
 
-begin "the build path refuses to archive without the frozen runtime"
-setup_case missing-runtime
+begin "the build path rebuilds the frozen runtime before archiving"
+setup_case runtime-rebuilt
+run_install || fail "build path exited non-zero"
+expect_eq "$(wc -l <"$FAKE_RUNTIME/runtime-build-calls" | tr -d ' ')" "1" \
+  "the runtime was not rebuilt exactly once"
+[[ -e "$FAKE_RUNTIME/xcodebuild-calls" ]] || fail "xcodebuild did not run after the rebuild"
+end
+
+begin "--skip-build reuses the export without rebuilding the runtime"
+setup_case runtime-skip-build
+make_bundle "$GRADUS_EXPORT_ROOT/export/Gradus.app"
+run_install --skip-build || fail "install exited non-zero"
+[[ ! -e "$FAKE_RUNTIME/runtime-build-calls" ]] || fail "--skip-build rebuilt the runtime"
+end
+
+begin "a failed runtime rebuild stops before archiving with the old app in place"
+setup_case runtime-build-fails
+make_bundle "$INSTALL_DIR/Gradus.app" "untouched"
+export FAKE_RUNTIME_BUILD_EXIT=3
+if run_install; then
+  fail "the build path archived after a failed runtime rebuild"
+fi
+grep -q "nothing was archived" "$FAKE_RUNTIME/stderr" || fail "the failure was not explained"
+[[ ! -e "$FAKE_RUNTIME/xcodebuild-calls" ]] || fail "xcodebuild ran after a failed runtime rebuild"
+marker_is "$INSTALL_DIR/Gradus.app" "untouched" || fail "a failed rebuild replaced the installed app"
+unset FAKE_RUNTIME_BUILD_EXIT
+end
+
+begin "a rebuild that leaves no runtime stops before archiving"
+setup_case runtime-build-missing-output
 rm -rf "$BUILD_DIR/gradus-runtime"
+export FAKE_RUNTIME_BUILD_SKIP_OUTPUT=1
 if run_install; then
   fail "the build path archived without the frozen runtime"
 fi
-grep -q "build-gradus-runtime.sh" "$FAKE_RUNTIME/stderr" ||
-  fail "the refusal did not name the command that produces the runtime"
-[[ ! -e "$FAKE_RUNTIME/xcodebuild-calls" ]] || fail "xcodebuild ran before the prerequisite check"
+[[ ! -e "$FAKE_RUNTIME/xcodebuild-calls" ]] || fail "xcodebuild ran without the runtime"
+unset FAKE_RUNTIME_BUILD_SKIP_OUTPUT
 end
 
 begin "the build path keeps the frozen runtime it was told to check for"

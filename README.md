@@ -638,8 +638,10 @@ report `verifications/2026-08-09-internal-testflight-candidate-migration-verific
 
 ### Installing Gradus locally
 
-`install-mac-local.sh` archives, exports, signs inside out, audits, installs into
-`/Applications`, and relaunches. This is the path for putting a build on this machine;
+`install-mac-local.sh` rebuilds the frozen Python runtime (`build-gradus-runtime.sh`) from
+the clean checkout, then archives, exports, signs inside out, audits, installs into
+`/Applications`, and relaunches. The rebuild is unconditional so the bundled refresh agent
+always matches the source; `--skip-build` skips it along with the archive. This is the path for putting a build on this machine;
 notarization is only for handing the app to someone else, since Gatekeeper enforces it on
 quarantined files and a bundle built here never carries `com.apple.quarantine`.
 
@@ -666,7 +668,7 @@ and remove those directories when the command exits.
 cd app
 ./test-install-mac-local.sh   # hermetic; every Xcode/system tool faked, never touches /Applications
 ./install-mac-local.sh --dry-run     # archive, export, verify; stop before installing
-./install-mac-local.sh               # the real thing
+./install-mac-local.sh               # the real thing (rebuilds the Python runtime first)
 ./install-mac-local.sh --skip-build  # reuse the existing export
 ```
 
