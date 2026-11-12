@@ -1396,7 +1396,7 @@ FAKE
   fi
   sed "s/@STATUS@/$format_status/" >"$fake_static_bin/swiftformat" <<'FAKE'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--version" ]] && { echo 'SwiftFormat 0.64.4'; exit 0; }
+[[ "${1:-}" == "--version" ]] && { echo 'SwiftFormat 0.64.6'; exit 0; }
 exit @STATUS@
 FAKE
   cat >"$fake_static_bin/shellcheck" <<'FAKE'
@@ -1491,7 +1491,9 @@ fake_gate_leg() {
   GATE_LEGS_USED+=("$leg_id=digest")
   "$@"
 }
+# shellcheck disable=SC2034 # LEG_RAN is read by the sourced gate_leg.
 passing_probe_leg() { LEG_RAN=1; return 0; }
+# shellcheck disable=SC2034
 failing_probe_leg() { LEG_RAN=1; return 7; }
 (
   # shellcheck disable=SC2034
@@ -1523,6 +1525,7 @@ failing_probe_leg() { LEG_RAN=1; return 7; }
 
 # The result file names the failed legs and the attempt log for the runner.
 gate_result_probe="$diagnostic_test_root/gate-result"
+# shellcheck disable=SC2034 # read by the sourced gate_write_result
 (
   GATE_FAILED_LEGS=(pytest widget)
   GATE_ATTEMPT_LOG="$GATE_REPO_ROOT/.release-state/evidence/test-gate/local-gate-output.attempt-1.log"
