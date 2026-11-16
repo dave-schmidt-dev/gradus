@@ -1396,7 +1396,7 @@ FAKE
   fi
   sed "s/@STATUS@/$format_status/" >"$fake_static_bin/swiftformat" <<'FAKE'
 #!/usr/bin/env bash
-[[ "${1:-}" == "--version" ]] && { echo 'SwiftFormat 0.64.6'; exit 0; }
+[[ "${1:-}" == "--version" ]] && { echo 'SwiftFormat 0.64.7'; exit 0; }
 exit @STATUS@
 FAKE
   cat >"$fake_static_bin/shellcheck" <<'FAKE'

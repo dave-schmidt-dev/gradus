@@ -35,7 +35,7 @@ Planned as 1.11.0.
 - Hide Claude’s five-hour terminal usage bar when that allowance is unavailable.
 
 - Align the local validation toolchain pin with installed Xcode 27.2.
-- Align the local validation pins with macOS 27.2.1 and SwiftFormat 0.64.6.
+- Align the local validation pins with macOS 27.2.1 and SwiftFormat 0.64.7.
 - The local Mac installer now rebuilds the bundled Python runtime before archiving, so a
   reinstall can no longer ship a stale refresh agent that omits new snapshot fields.
 

@@ -931,7 +931,7 @@ uv run pre-commit install   # installs the pre-commit and pre-push hooks
 ```
 
 - **pre-commit** (fast): `ruff check` + `ruff format --check` on changed Python files,
-  plus a fail-closed check requiring SwiftLint 0.65.1, SwiftFormat 0.64.6, and
+  plus a fail-closed check requiring SwiftLint 0.65.1, SwiftFormat 0.64.7, and
   ShellCheck 0.11.0,
   plus strict SwiftLint and non-mutating SwiftFormat checks on changed Swift
   files, plus ShellCheck on changed shell scripts. SwiftLint uses the committed `.swiftlint-baseline.json` for the
@@ -1043,7 +1043,7 @@ unconfigured and owner-gated.
 Hosted tests/direct menu fixtures suppress the default typed sink; tests inject private
 canonical temporary SDK configurations. Direct menu fixtures also redirect the legacy
 file log. Synthetic tests do not constitute OS consent or device qualification. See
-[canonical Apple development permissions](../apple_developer/documents/apple-development-permissions.md)
+the owner's private Apple development permissions guide (`apple_developer/documents/apple-development-permissions.md`)
 for host identity/permission boundaries. The relative guide reference was resolved on
 this host; portable checkout availability remains a dependency.
 
