@@ -112,8 +112,14 @@ class AntigravityProvider:
                 or st.st_size > cls._TOKEN_FILE_MAX_BYTES
             ):
                 return {}
-            # One byte past the limit catches a file that grew after fstat().
-            raw = os.read(fd, cls._TOKEN_FILE_MAX_BYTES + 1)
+            # Read to EOF, stopping one byte past the limit: that catches a
+            # file that grew after fstat() even when a read returns short.
+            raw = b""
+            while len(raw) <= cls._TOKEN_FILE_MAX_BYTES:
+                chunk = os.read(fd, cls._TOKEN_FILE_MAX_BYTES + 1 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
             if len(raw) > cls._TOKEN_FILE_MAX_BYTES:
                 return {}
             outer = json.loads(raw.decode("utf-8"))

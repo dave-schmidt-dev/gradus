@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import stat
 import tempfile
 import unittest
@@ -243,7 +244,25 @@ class AntigravityTokenFileTests(unittest.TestCase):
 
     def test_load_file_token_rejects_fifo_without_blocking(self) -> None:
         os.mkfifo(self._token_path, 0o600)
-        self.assertEqual(AntigravityProvider._load_file_token(), {})
+
+        def timed_out(*_args: object) -> None:
+            raise AssertionError("token-file open blocked on a FIFO")
+
+        # A blocking open() would hang the suite; the alarm turns it into a failure.
+        previous = signal.signal(signal.SIGALRM, timed_out)
+        signal.alarm(5)
+        try:
+            self.assertEqual(AntigravityProvider._load_file_token(), {})
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+
+    def test_load_file_token_rejects_growth_seen_across_short_reads(self) -> None:
+        self._write_token_file(self._token())
+        limit = AntigravityProvider._TOKEN_FILE_MAX_BYTES
+        chunks = [b'{"token": {"access_token": "ya29.x"}}', b" " * limit, b" ", b""]
+        with patch("gradus.providers.antigravity.os.read", side_effect=chunks):
+            self.assertEqual(AntigravityProvider._load_file_token(), {})
 
     def test_load_file_token_rejects_unusable_access_token(self) -> None:
         for bad in (True, 7, "", "ya29 with space", "ya29\r\nX-Injected: 1", ["ya29"]):
