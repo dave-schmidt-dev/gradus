@@ -120,16 +120,9 @@ class AntigravityProvider:
             token = outer.get("token") if isinstance(outer, dict) else None
             if not isinstance(token, dict):
                 return {}
-            access_token = token.get("access_token")
-            if not (
-                isinstance(access_token, str)
-                and access_token
-                and access_token.isascii()
-                and access_token.isprintable()
-                and " " not in access_token
-            ):
+            if not cls._has_usable_access_token(token):
                 return {}
-            loaded: dict[str, Any] = {"access_token": access_token}
+            loaded: dict[str, Any] = {"access_token": token["access_token"]}
             if isinstance(token.get("expiry"), str):
                 loaded["expiry"] = token["expiry"]
             return loaded
@@ -142,6 +135,22 @@ class AntigravityProvider:
                     os.close(fd)
                 except OSError:
                     pass
+
+    @staticmethod
+    def _has_usable_access_token(token: dict[str, Any]) -> bool:
+        """Return whether ``token`` carries an access token safe to send as a bearer.
+
+        Rejects a non-string, empty, non-ASCII, or whitespace/control-bearing
+        value so neither store can inject into the ``Authorization`` header.
+        """
+        access_token = token.get("access_token")
+        return (
+            isinstance(access_token, str)
+            and bool(access_token)
+            and access_token.isascii()
+            and access_token.isprintable()
+            and " " not in access_token
+        )
 
     @classmethod
     def _load_token(cls) -> dict[str, Any]:
@@ -166,16 +175,16 @@ class AntigravityProvider:
             missing = exc
             keychain_token = {}
 
-        if keychain_token.get("access_token") and not cls._token_expired(keychain_token):
+        keychain_usable = cls._has_usable_access_token(keychain_token)
+        if keychain_usable and not cls._token_expired(keychain_token):
             return keychain_token
 
+        # _load_file_token returns only a validated token or an empty dict.
         file_token = cls._load_file_token()
-        if file_token.get("access_token") and (
-            not keychain_token.get("access_token") or not cls._token_expired(file_token)
-        ):
+        if file_token and (not keychain_usable or not cls._token_expired(file_token)):
             return file_token
 
-        if keychain_token.get("access_token"):
+        if keychain_usable:
             return keychain_token
 
         if missing is not None:

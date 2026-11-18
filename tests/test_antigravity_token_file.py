@@ -264,6 +264,20 @@ class AntigravityTokenFileTests(unittest.TestCase):
         with patch.object(AntigravityProvider, "_load_keychain_token", return_value=expired):
             self.assertEqual(AntigravityProvider._load_token(), expired)
 
+    def test_unusable_keychain_token_is_never_selected(self) -> None:
+        for bad in (True, "ya29\r\nX-Injected: 1"):
+            with self.subTest(access_token=bad):
+                keychain = {"access_token": bad, "expiry": "2999-01-01T00:00:00+00:00"}
+                with patch.object(
+                    AntigravityProvider, "_load_keychain_token", return_value=keychain
+                ):
+                    self.assertEqual(AntigravityProvider._load_token(), {})
+                    self._write_token_file(self._token())
+                    self.assertEqual(
+                        AntigravityProvider._load_token()["access_token"], "ya29.file-token"
+                    )
+                os.unlink(self._token_path)
+
 
 class AntigravityTokenFileGuardTests(unittest.TestCase):
     def test_suite_guard_keeps_tests_off_the_live_token_file(self) -> None:
