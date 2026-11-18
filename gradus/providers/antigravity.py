@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 HISTORY_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 # These strings are part of the credential-free producer/consumer contract.
 AUTH_REAUTHENTICATION_ERROR = "Antigravity session expired: run `agy` to re-authenticate"
+AUTH_SIGN_IN_ERROR = "Antigravity token not found: run `agy` to sign in"
 AUTH_FAILURE_REASON = "auth_failure"
 HISTORY_PROVENANCE = {
     "provenance_available": True,
@@ -60,6 +61,8 @@ class AntigravityProvider:
     # Google selects the CLI Gemini pool by this product/version identity.
     _USER_AGENT = "antigravity/cli/1.4.3 (gradus quota probe)"
     _ACCOUNTS_PATH = Path.home() / ".gemini" / "google_accounts.json"
+    _TOKEN_FILE_PATH = Path.home() / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+    _TOKEN_FILE_MAX_BYTES = 65536
 
     def __init__(self) -> None:
         self._token: dict[str, Any] = {}
@@ -69,9 +72,115 @@ class AntigravityProvider:
         if _is_headless():
             self._token = {}
             raise FileNotFoundError("auth required: no cached credentials")
-        self._token = self._load_keychain_token()
+        try:
+            self._token = self._load_token()
+        except FileNotFoundError as exc:
+            self._token = {}
+            raise ProbeFailure(
+                AUTH_SIGN_IN_ERROR,
+                f"antigravity token unavailable ({type(exc).__name__})",
+            ) from None
         if not self._token.get("access_token"):
-            raise FileNotFoundError("Antigravity token not found in Keychain: run `agy` to sign in")
+            self._token = {}
+            raise ProbeFailure(AUTH_SIGN_IN_ERROR, "antigravity token unavailable")
+
+    @classmethod
+    def _load_file_token(cls) -> dict[str, Any]:
+        """Load the Antigravity OAuth token from the private file, if safe.
+
+        Opens the configured path read-only and non-blocking, accepts only a
+        regular file owned by the current user with no group/other bits, and
+        keeps only the access token and its expiry. ``agy``'s refresh token is
+        dropped here: only ``agy`` ever uses it. Every failure mode yields an
+        empty dict.
+
+        Returns:
+            ``access_token`` (and ``expiry`` when present) when the file is
+            well-formed; otherwise an empty dict. Never raises and never writes.
+        """
+        path = cls._TOKEN_FILE_PATH
+        fd = -1
+        try:
+            # O_NONBLOCK: a FIFO at this path must fail the regular-file check
+            # below, not block the probe inside open().
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            st = os.fstat(fd)
+            if (
+                not stat.S_ISREG(st.st_mode)
+                or st.st_uid != os.getuid()
+                or (st.st_mode & 0o077) != 0
+                or st.st_size > cls._TOKEN_FILE_MAX_BYTES
+            ):
+                return {}
+            # One byte past the limit catches a file that grew after fstat().
+            raw = os.read(fd, cls._TOKEN_FILE_MAX_BYTES + 1)
+            if len(raw) > cls._TOKEN_FILE_MAX_BYTES:
+                return {}
+            outer = json.loads(raw.decode("utf-8"))
+            token = outer.get("token") if isinstance(outer, dict) else None
+            if not isinstance(token, dict):
+                return {}
+            access_token = token.get("access_token")
+            if not (
+                isinstance(access_token, str)
+                and access_token
+                and access_token.isascii()
+                and access_token.isprintable()
+                and " " not in access_token
+            ):
+                return {}
+            loaded: dict[str, Any] = {"access_token": access_token}
+            if isinstance(token.get("expiry"), str):
+                loaded["expiry"] = token["expiry"]
+            return loaded
+        except (OSError, ValueError, RecursionError):
+            # ValueError covers bad UTF-8 and bad JSON; deep nesting recurses.
+            return {}
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    @classmethod
+    def _load_token(cls) -> dict[str, Any]:
+        """Load the Antigravity OAuth token from Keychain, then the private file.
+
+        Prefers a non-expired Keychain token. When the Keychain item is absent
+        or expired, accepts a usable file token. An expired Keychain token is
+        returned so the existing ``agy models`` nudge path can run.
+
+        Returns:
+            A token dict when one source supplies an ``access_token``, otherwise
+            an empty dict when Keychain returned no token without raising.
+
+        Raises:
+            FileNotFoundError: Keychain raised this and no usable file token
+                was available.
+        """
+        missing: FileNotFoundError | None = None
+        try:
+            keychain_token = cls._load_keychain_token()
+        except FileNotFoundError as exc:
+            missing = exc
+            keychain_token = {}
+
+        if keychain_token.get("access_token") and not cls._token_expired(keychain_token):
+            return keychain_token
+
+        file_token = cls._load_file_token()
+        if file_token.get("access_token") and (
+            not keychain_token.get("access_token") or not cls._token_expired(file_token)
+        ):
+            return file_token
+
+        if keychain_token.get("access_token"):
+            return keychain_token
+
+        if missing is not None:
+            raise missing
+        return {}
 
     @classmethod
     def _load_keychain_token(cls) -> dict[str, Any]:
@@ -161,7 +270,7 @@ class AntigravityProvider:
         if result.returncode != 0:
             return False
         try:
-            self._token = self._load_keychain_token()
+            self._token = self._load_token()
         except FileNotFoundError:
             return False
         return bool(self._token.get("access_token")) and not self._token_expired(self._token)

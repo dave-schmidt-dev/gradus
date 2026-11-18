@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -14,9 +15,21 @@ from gradus.providers import (
     AntigravityProvider,
     ProbeFailure,
 )
+from gradus.providers.antigravity import AUTH_SIGN_IN_ERROR
 
 
 class AntigravityProviderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._token_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._token_dir.cleanup)
+        self._token_path_patch = patch.object(
+            AntigravityProvider,
+            "_TOKEN_FILE_PATH",
+            Path(self._token_dir.name) / "antigravity-oauth-token",
+        )
+        self._token_path_patch.start()
+        self.addCleanup(self._token_path_patch.stop)
+
     # Real shape of retrieveUserQuotaSummary: grouped quota, two windows per group.
     SUMMARY_RESPONSE = {
         "groups": [
@@ -632,12 +645,13 @@ class AntigravityProviderTests(unittest.TestCase):
                 AntigravityProvider._load_keychain_token()
 
     def test_acquire_raises_when_no_access_token(self) -> None:
-        # Construction no longer raises (it does no credential I/O); the same
-        # FileNotFoundError now surfaces from _acquire(), called lazily from fetch().
+        # Construction no longer raises (it does no credential I/O); a missing
+        # token now surfaces as ProbeFailure(AUTH_SIGN_IN_ERROR) from _acquire().
         provider = AntigravityProvider()
         with patch.object(AntigravityProvider, "_load_keychain_token", return_value={}):
-            with self.assertRaises(FileNotFoundError):
+            with self.assertRaises(ProbeFailure) as ctx:
                 provider._acquire()
+        self.assertEqual(str(ctx.exception), AUTH_SIGN_IN_ERROR)
 
     def test_missing_gemini_group_keeps_third_party_partial_data(self) -> None:
         provider = self._make_provider()

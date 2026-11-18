@@ -29,7 +29,7 @@ def pytest_runtest_setup(item):
     from unittest.mock import patch
 
     from gradus import banked_keychain
-    from gradus.providers import opencode_go, opencode_oauth
+    from gradus.providers import antigravity, opencode_go, opencode_oauth
 
     # All default-provider tests must stay off the owner's OAuth database.
     # A path below the null device cannot exist or create a database.
@@ -42,6 +42,15 @@ def pytest_runtest_setup(item):
     )
     item._opencode_provider_guard.start()
     item._opencode_default_guard.start()
+
+    # No test may read the owner's live `agy` token file; a test that needs
+    # the fallback points this at its own temporary file.
+    item._antigravity_token_file_guard = patch.object(
+        antigravity.AntigravityProvider,
+        "_TOKEN_FILE_PATH",
+        Path(os.devnull) / "gradus-test-agy-token",
+    )
+    item._antigravity_token_file_guard.start()
 
     def blocked(*_args, **_kwargs):
         raise AssertionError("live banked Keychain access is forbidden in tests")
@@ -58,6 +67,7 @@ def pytest_runtest_teardown(item):
     for name in (
         "_banked_helper_guard",
         "_banked_keychain_guard",
+        "_antigravity_token_file_guard",
         "_opencode_default_guard",
         "_opencode_provider_guard",
     ):

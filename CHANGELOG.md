@@ -78,6 +78,7 @@ Planned as 1.11.0.
 
 ### Fixed
 
+- Antigravity probing falls back read-only to `agy`'s private OAuth token file when the Keychain item is absent or expired, and a missing token now shows "run `agy` to sign in".
 - Terminal sign-in shortcuts now use a normal iTerm shell, preserving login errors instead of closing the window immediately.
 
 - Resets that fall in January are no longer published a year in the past when

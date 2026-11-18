@@ -10,9 +10,11 @@ with no recognized group still fails closed.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 
 from rich.console import Console
@@ -80,6 +82,17 @@ BOTH_GROUPS = {"groups": [GEMINI_ONLY["groups"][0], LIVE_THIRD_PARTY_ONLY["group
 
 
 class AntigravityPartialQuotaTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._token_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._token_dir.cleanup)
+        self._token_path_patch = patch.object(
+            AntigravityProvider,
+            "_TOKEN_FILE_PATH",
+            Path(self._token_dir.name) / "antigravity-oauth-token",
+        )
+        self._token_path_patch.start()
+        self.addCleanup(self._token_path_patch.stop)
+
     def _token(self) -> dict[str, str]:
         return {
             "access_token": "ya29.agy-token",
